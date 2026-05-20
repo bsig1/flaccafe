@@ -1,0 +1,101 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #121417;
+  color: #f4f6f8;
+  font-family: Inter, "Segoe UI", system-ui, sans-serif;
+}
+
+* {
+  scrollbar-color: #3b424b #15181d;
+  scrollbar-width: thin;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #15181d;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 2px solid #15181d;
+  border-radius: 999px;
+  background: #3b424b;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #53606b;
+}
+
+::-webkit-scrollbar-corner {
+  background: #15181d;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+input[type="range"].player-progress {
+  height: 16px;
+  cursor: pointer;
+  appearance: none;
+  background: transparent;
+}
+
+input[type="range"].player-progress:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+input[type="range"].player-progress::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, #79d98f 0 var(--progress, 0%), #30353d var(--progress, 0%) 100%);
+}
+
+input[type="range"].player-progress::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  margin-top: -4px;
+  appearance: none;
+  border: 2px solid #15181d;
+  border-radius: 999px;
+  background: #f4f6f8;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.16);
+}
+
+input[type="range"].player-progress:disabled::-webkit-slider-thumb {
+  opacity: 0;
+}
+
+@layer components {
+  .icon-button {
+    @apply grid h-9 w-9 place-items-center rounded border border-line bg-panel text-muted transition hover:border-moss/60 hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-line disabled:hover:text-muted;
+  }
+
+  .primary-button {
+    @apply inline-flex h-9 items-center gap-2 rounded bg-moss px-3 text-sm font-medium text-ink transition hover:bg-[#85dfa0] disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .secondary-button {
+    @apply inline-flex h-9 items-center gap-2 rounded border border-line bg-panel px-3 text-sm font-medium text-white transition hover:border-ember/60 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-line;
+  }
+}

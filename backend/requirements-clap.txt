@@ -1,0 +1,8 @@
+# Optional. The base app runs without these packages.
+# Install this when you want CLAP audio embeddings, zero-shot genre tags,
+# and sound-similarity nudges in AutoDJ.
+# Torch is installed separately by the app so users can choose CPU or NVIDIA CUDA.
+transformers
+librosa
+soundfile
+numpy

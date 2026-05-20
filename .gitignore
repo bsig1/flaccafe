@@ -1,0 +1,41 @@
+.venv/
+.tools/
+.idea/
+logs/*
+node_modules/
+frontend/dist/
+.tmp-*/
+build-backend/
+build-backend-console/
+dist-backend/
+dist-backend-console/
+src-tauri/target/
+backend/data/*.sqlite3
+backend/data/*.sqlite3-*
+backend/exports/*.m3u
+backend/ml-runtime/
+backend/models/clap/*
+!backend/models/clap/.gitkeep
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.DS_Store
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Python tooling
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Frontend caches
+.vite/
+
+# Windows
+Thumbs.db
+Desktop.ini
