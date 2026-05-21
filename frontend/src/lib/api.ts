@@ -9,12 +9,18 @@ import type {
   AutoDjResponse,
   AutoDjSettings,
   BackupResponse,
+  CacheClearResponse,
+  CacheClearTarget,
   ClapConfigRequest,
   ClapInstallProgress,
   ClapInstallRequest,
   ClapInstallStartResponse,
   ClapStatusResponse,
   ExportResponse,
+  FileOrganizationRequest,
+  FileOrganizationResponse,
+  FilenameTagInferenceRequest,
+  FilenameTagInferenceResponse,
   LibraryHealthResponse,
   LibraryStatsResponse,
   LogTailResponse,
@@ -22,17 +28,17 @@ import type {
   LyricsUpdateRequest,
   PlayEventEntry,
   PlaylistSummary,
-  RecommendationProfileComparison,
   RecommendationProfile,
+  RecommendationProfileComparison,
   RecommendationRun,
   ScanProgress,
   ScanResult,
   ScanStartResponse,
   SettingsResponse,
   SettingsUpdateRequest,
+  SimilarTrack,
   SmartPlaylistRule,
   SmartPlaylistSummary,
-  SimilarTrack,
   StartupDiagnosticsResponse,
   SupportBundleResponse,
   Track,
@@ -40,7 +46,7 @@ import type {
   TrackMetadataUpdate,
   TrackPage,
   TrackRestoreRequest,
-} from "./types";
+} from "../types/api";
 
 export const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8765";
 
@@ -107,6 +113,27 @@ export function fetchLibraryStats(): Promise<LibraryStatsResponse> {
 
 export function fetchLibraryHealth(limit = 80): Promise<LibraryHealthResponse> {
   return request<LibraryHealthResponse>(`/library/health?limit=${limit}`);
+}
+
+export function clearLibraryCaches(targets: CacheClearTarget[]): Promise<CacheClearResponse> {
+  return request<CacheClearResponse>("/library/maintenance/clear", {
+    method: "POST",
+    body: JSON.stringify({ targets }),
+  });
+}
+
+export function inferFilenameTags(requestBody: FilenameTagInferenceRequest): Promise<FilenameTagInferenceResponse> {
+  return request<FilenameTagInferenceResponse>("/library/tools/infer-tags", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function organizeFiles(requestBody: FileOrganizationRequest): Promise<FileOrganizationResponse> {
+  return request<FileOrganizationResponse>("/library/tools/organize-files", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
 }
 
 export function fetchClapStatus(): Promise<ClapStatusResponse> {

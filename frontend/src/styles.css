@@ -6,13 +6,25 @@
   --color-ink: 19 15 13;
   --color-panel: 33 26 21;
   --color-line: 58 48 40;
-  --color-moss: 143 215 189;
+  --color-moss: 118 171 150;
   --color-ember: 217 154 78;
   --color-muted: 185 170 151;
   --color-paper: 249 241 229;
   --color-hover-panel: 43 34 27;
+  --color-sidebar: 25 19 15;
+  --color-strip: 24 19 15;
+  --color-subtle: 21 16 13;
+  --color-popover: 33 26 21;
+  --color-quiet: 23 17 14;
+  --color-mini: 17 16 15;
+  --color-mini-panel: 15 13 11;
+  --color-surface-glow: 39 29 22;
+  --color-primary-hover: 239 182 111;
+  --color-soft-accent: 216 176 119;
   --color-scroll-track: 24 19 15;
   --color-scroll-thumb: 107 87 72;
+  --color-scroll-thumb-hover: 138 113 92;
+  --font-sans: Inter, "Segoe UI", system-ui, sans-serif;
 }
 
 * {
@@ -28,10 +40,10 @@ body,
 body {
   margin: 0;
   background:
-    linear-gradient(180deg, rgb(39 29 22 / 0.5), rgb(var(--color-ink) / 0) 32%),
+    linear-gradient(180deg, rgb(var(--color-surface-glow) / 0.5), rgb(var(--color-ink) / 0) 32%),
     rgb(var(--color-ink));
   color: rgb(var(--color-paper));
-  font-family: Inter, "Segoe UI", system-ui, sans-serif;
+  font-family: var(--font-sans);
 }
 
 * {
@@ -55,7 +67,7 @@ body {
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgb(138 113 92);
+  background: rgb(var(--color-scroll-thumb-hover));
 }
 
 ::-webkit-scrollbar-corner {
@@ -65,6 +77,18 @@ body {
 button,
 input {
   font: inherit;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+  appearance: none;
 }
 
 input[type="checkbox"].accent-moss,
@@ -108,13 +132,32 @@ input[type="range"].player-progress:disabled::-webkit-slider-thumb {
   opacity: 0;
 }
 
+@keyframes cafe-cup {
+  0%, 100% {
+    transform: translateY(0) rotate(0deg) scale(1);
+  }
+  20% {
+    transform: translateY(-2px) rotate(-8deg) scale(1.04);
+  }
+  45% {
+    transform: translateY(1px) rotate(7deg) scale(1.02);
+  }
+  70% {
+    transform: translateY(-1px) rotate(-4deg) scale(1.03);
+  }
+}
+
+.animate-cafe-cup {
+  animation: cafe-cup 620ms ease both;
+}
+
 @layer components {
   .icon-button {
     @apply grid h-9 w-9 place-items-center rounded border border-line bg-panel text-muted shadow-sm transition hover:border-ember/70 hover:bg-[rgb(var(--color-hover-panel))] hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-line disabled:hover:text-muted;
   }
 
   .primary-button {
-    @apply inline-flex h-9 items-center gap-2 rounded bg-ember px-3 text-sm font-medium text-ink shadow-sm transition hover:bg-[rgb(239_182_111)] disabled:cursor-not-allowed disabled:opacity-60;
+    @apply inline-flex h-9 items-center gap-2 rounded bg-ember px-3 text-sm font-medium text-ink shadow-sm transition hover:bg-[rgb(var(--color-primary-hover))] disabled:cursor-not-allowed disabled:opacity-60;
   }
 
   .secondary-button {

@@ -28,6 +28,11 @@ from mutagen.mp4 import MP4Cover
 from .config import APP_STORAGE_ROOT, EXPORT_DIR, MODEL_DIR, database_path
 from .database import connect, get_setting, init_db, rows_to_dicts, set_setting
 from .file_tags import write_track_lyrics, write_track_metadata, write_track_rating
+from .library_tools import (
+    changed_metadata,
+    infer_metadata_from_filename,
+    organization_target_path,
+)
 from .analysis_jobs import (
     cancel_audio_analysis_job,
     get_audio_analysis_job,
@@ -64,6 +69,8 @@ from .schemas import (
     AutoDjAvoidRule,
     AutoDjResponse,
     BackupResponse,
+    CacheClearRequest,
+    CacheClearResponse,
     ClapInstallProgress,
     ClapInstallRequest,
     ClapInstallStartResponse,
@@ -71,6 +78,12 @@ from .schemas import (
     DiagnosticItem,
     ExportRequest,
     ExportResponse,
+    FileOrganizationChange,
+    FileOrganizationRequest,
+    FileOrganizationResponse,
+    FilenameTagInferencePreview,
+    FilenameTagInferenceRequest,
+    FilenameTagInferenceResponse,
     LogTailResponse,
     ClapConfigRequest,
     ClapStatusResponse,
@@ -130,6 +143,16 @@ IMAGE_MEDIA_TYPES = {
 }
 
 TRUE_SETTING_VALUES = {"1", "true", "yes", "on"}
+EDITABLE_METADATA_FIELDS = {
+    "title",
+    "artist",
+    "album",
+    "album_artist",
+    "track_number",
+    "disc_number",
+    "genre",
+    "year",
+}
 
 TRACK_COLUMNS = """
     id, path, title, artist, album, album_artist, track_number,
@@ -636,6 +659,7 @@ SMART_PRESETS: dict[str, SmartPlaylistRule] = {
     "discovery": SmartPlaylistRule(unrated_only=True, limit=200),
     "deep_cuts": SmartPlaylistRule(min_rating=3, max_play_count=1, not_played_days=14, limit=200),
     "recently_added": SmartPlaylistRule(recently_added_days=45, limit=200),
+    "inbox": SmartPlaylistRule(recently_added_days=30, max_play_count=0, limit=300),
     "unrated": SmartPlaylistRule(unrated_only=True, limit=200),
     "missing_metadata": SmartPlaylistRule(missing_metadata=True, limit=200),
     "duplicates": SmartPlaylistRule(duplicate_only=True, limit=300),
@@ -784,6 +808,59 @@ def track_response(conn, track_id: int) -> dict:
     if row is None:
         raise HTTPException(status_code=404, detail="Track not found")
     return dict(row)
+
+
+def current_metadata(track: dict) -> dict[str, object | None]:
+    return {field: track.get(field) for field in EDITABLE_METADATA_FIELDS}
+
+
+def apply_track_metadata_update(conn, track_id: int, updates: dict[str, object]) -> dict:
+    clean_updates = {key: value for key, value in updates.items() if key in EDITABLE_METADATA_FIELDS}
+    row = conn.execute(f"SELECT {TRACK_COLUMNS} FROM tracks WHERE id = ?", (track_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Track not found")
+    if not clean_updates:
+        return dict(row)
+
+    current = dict(row)
+    merged = {**current, **clean_updates}
+    file_modified_at = None
+    if get_write_ratings_to_files(conn):
+        try:
+            path = Path(current["path"])
+            write_track_metadata(path, {field: merged.get(field) for field in EDITABLE_METADATA_FIELDS})
+            if path.exists():
+                file_modified_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).replace(microsecond=0).isoformat()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=f"Could not write metadata to file: {exc}") from exc
+
+    merged["album_id"] = ensure_album_for_track(conn, merged)
+    conn.execute(
+        """
+        UPDATE tracks
+        SET title = :title,
+            artist = :artist,
+            album = :album,
+            album_artist = :album_artist,
+            album_id = :album_id,
+            track_number = :track_number,
+            disc_number = :disc_number,
+            genre = :genre,
+            year = :year,
+            file_modified_at = coalesce(:file_modified_at, file_modified_at),
+            updated_at = datetime('now')
+        WHERE id = :id
+        """,
+        {
+            **merged,
+            "file_modified_at": file_modified_at,
+            "id": track_id,
+        },
+    )
+    delete_orphan_albums(conn)
+    return track_response(conn, track_id)
 
 
 def first_tag_value(value: object) -> object | None:
@@ -1644,67 +1721,16 @@ def similar_tracks(track_id: int, limit: int = Query(default=12, ge=1, le=50)) -
 
 @app.patch("/tracks/{track_id}/metadata", response_model=Track)
 def update_track_metadata(track_id: int, request: TrackMetadataUpdateRequest) -> dict:
-    editable_fields = {
-        "title",
-        "artist",
-        "album",
-        "album_artist",
-        "track_number",
-        "disc_number",
-        "genre",
-        "year",
-    }
     requested = request.model_dump(exclude_unset=True)
-    updates = {key: value for key, value in requested.items() if key in editable_fields}
+    updates = {key: value for key, value in requested.items() if key in EDITABLE_METADATA_FIELDS}
     if not updates:
         with connect() as conn:
             return track_response(conn, track_id)
 
     with connect() as conn:
-        row = conn.execute(f"SELECT {TRACK_COLUMNS} FROM tracks WHERE id = ?", (track_id,)).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="Track not found")
-
-        current = dict(row)
-        merged = {**current, **updates}
-        file_modified_at = None
-        if get_write_ratings_to_files(conn):
-            try:
-                path = Path(current["path"])
-                write_track_metadata(path, {field: merged.get(field) for field in editable_fields})
-                if path.exists():
-                    file_modified_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).replace(microsecond=0).isoformat()
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            except OSError as exc:
-                raise HTTPException(status_code=400, detail=f"Could not write metadata to file: {exc}") from exc
-
-        merged["album_id"] = ensure_album_for_track(conn, merged)
-        conn.execute(
-            """
-            UPDATE tracks
-            SET title = :title,
-                artist = :artist,
-                album = :album,
-                album_artist = :album_artist,
-                album_id = :album_id,
-                track_number = :track_number,
-                disc_number = :disc_number,
-                genre = :genre,
-                year = :year,
-                file_modified_at = coalesce(:file_modified_at, file_modified_at),
-                updated_at = datetime('now')
-            WHERE id = :id
-            """,
-            {
-                **merged,
-                "file_modified_at": file_modified_at,
-                "id": track_id,
-            },
-        )
-        delete_orphan_albums(conn)
+        updated = apply_track_metadata_update(conn, track_id, updates)
         conn.commit()
-        return track_response(conn, track_id)
+        return updated
 
 
 @app.delete("/tracks/{track_id}", response_model=TrackDeleteResponse)
@@ -1953,6 +1979,151 @@ def library_health(limit: int = Query(default=80, ge=1, le=500)) -> LibraryHealt
         missing_metadata=missing,
         duplicate_groups=duplicates,
         unrated_tracks=unrated,
+    )
+
+
+def tool_track_rows(conn, track_ids: list[int] | None, limit: int) -> list[dict]:
+    if track_ids:
+        unique_ids = list(dict.fromkeys(track_ids))
+        placeholders = ",".join("?" for _ in unique_ids)
+        return rows_to_dicts(
+            conn.execute(
+                f"""
+                SELECT {TRACK_COLUMNS}
+                FROM tracks
+                WHERE id IN ({placeholders})
+                ORDER BY lower(coalesce(artist, '')), lower(coalesce(album, '')),
+                         coalesce(disc_number, 0), coalesce(track_number, 0),
+                         lower(coalesce(title, ''))
+                LIMIT ?
+                """,
+                [*unique_ids, limit],
+            )
+        )
+    return rows_to_dicts(
+        conn.execute(
+            f"""
+            SELECT {TRACK_COLUMNS}
+            FROM tracks
+            ORDER BY datetime(date_added) DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+    )
+
+
+@app.post("/library/maintenance/clear", response_model=CacheClearResponse)
+def clear_library_caches(request: CacheClearRequest) -> CacheClearResponse:
+    table_by_target = {
+        "artist": "artist_info_cache",
+        "artwork": "artwork_cache",
+        "metadata": "track_metadata_cache",
+        "recommendation_history": "recommendation_runs",
+        "scan_errors": "scan_error_samples",
+    }
+    cleared: dict[str, int] = {}
+    with connect() as conn:
+        for target in dict.fromkeys(request.targets):
+            table = table_by_target[target]
+            cursor = conn.execute(f"DELETE FROM {table}")
+            cleared[target] = int(cursor.rowcount if cursor.rowcount is not None else 0)
+        conn.commit()
+    return CacheClearResponse(cleared=cleared)
+
+
+@app.post("/library/tools/infer-tags", response_model=FilenameTagInferenceResponse)
+def infer_tags_from_filenames(request: FilenameTagInferenceRequest) -> FilenameTagInferenceResponse:
+    previews: list[FilenameTagInferencePreview] = []
+    matches = 0
+    applied = 0
+    with connect() as conn:
+        library_path = get_setting(conn, "library_path")
+        library_root = Path(library_path).expanduser().resolve() if library_path else None
+        rows = tool_track_rows(conn, request.track_ids, request.limit)
+        for track in rows:
+            inferred = infer_metadata_from_filename(Path(track["path"]), request.pattern, library_root) or {}
+            changes = changed_metadata(track, inferred, request.missing_only) if inferred else {}
+            preview = FilenameTagInferencePreview(
+                track_id=int(track["id"]),
+                path=track["path"],
+                matched=bool(inferred),
+                current=current_metadata(track),
+                inferred=inferred,
+                changed_fields=sorted(changes.keys()),
+            )
+            if inferred:
+                matches += 1
+            if request.apply and changes:
+                try:
+                    apply_track_metadata_update(conn, int(track["id"]), changes)
+                    preview.applied = True
+                    applied += 1
+                except HTTPException as exc:
+                    preview.error = str(exc.detail)
+            previews.append(preview)
+        if request.apply:
+            conn.commit()
+    return FilenameTagInferenceResponse(total=len(previews), matches=matches, applied=applied, previews=previews)
+
+
+@app.post("/library/tools/organize-files", response_model=FileOrganizationResponse)
+def organize_files_from_tags(request: FileOrganizationRequest) -> FileOrganizationResponse:
+    with connect() as conn:
+        library_path = get_setting(conn, "library_path")
+        base_folder = Path(request.base_folder or library_path or APP_STORAGE_ROOT / "organized-library").expanduser().resolve()
+        rows = tool_track_rows(conn, request.track_ids, request.limit)
+        changes: list[FileOrganizationChange] = []
+        applied = 0
+        for track in rows:
+            current_path = Path(track["path"])
+            target_path = organization_target_path(track, base_folder, request.template)
+            changed = path_key(current_path) != path_key(target_path)
+            collision = target_path.exists() and path_key(current_path) != path_key(target_path)
+            change = FileOrganizationChange(
+                track_id=int(track["id"]),
+                title=track.get("title"),
+                artist=track.get("artist"),
+                current_path=str(current_path),
+                target_path=str(target_path),
+                changed=changed,
+                collision=collision,
+            )
+            if request.apply and changed:
+                if not current_path.exists():
+                    change.error = "Source file is missing"
+                elif collision:
+                    change.error = "Target file already exists"
+                else:
+                    try:
+                        target_path.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.move(str(current_path), str(target_path))
+                        modified_at = datetime.fromtimestamp(target_path.stat().st_mtime, timezone.utc).replace(microsecond=0).isoformat()
+                        old_key = track["path_key"] if "path_key" in track else path_key(current_path)
+                        new_key = path_key(target_path)
+                        conn.execute(
+                            """
+                            UPDATE tracks
+                            SET path = ?, path_key = ?, file_modified_at = ?, updated_at = datetime('now')
+                            WHERE id = ?
+                            """,
+                            (str(target_path), new_key, modified_at, int(track["id"])),
+                        )
+                        conn.execute("DELETE FROM track_metadata_cache WHERE path_key IN (?, ?)", (old_key, new_key))
+                        change.applied = True
+                        applied += 1
+                    except OSError as exc:
+                        change.error = f"Could not move file: {exc}"
+            changes.append(change)
+        if request.apply:
+            conn.commit()
+    return FileOrganizationResponse(
+        template=request.template,
+        base_folder=str(base_folder),
+        total=len(changes),
+        changes=changes,
+        changed_count=sum(1 for change in changes if change.changed),
+        applied=applied,
     )
 
 

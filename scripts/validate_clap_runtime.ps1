@@ -10,7 +10,7 @@ if (-not (Test-Path $Python)) {
     $Python = "python"
 }
 
-$env:LOCAL_AUTODJ_USE_ML_RUNTIME = "1"
+$env:FLAC_CAFE_USE_ML_RUNTIME = "1"
 $PreviousPythonPath = $env:PYTHONPATH
 if ($PreviousPythonPath) {
     $env:PYTHONPATH = "$Root$([System.IO.Path]::PathSeparator)$PreviousPythonPath"

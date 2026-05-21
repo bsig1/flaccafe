@@ -1,44 +1,82 @@
+# Local developer environments
 .venv/
 .tools/
 .idea/
-logs/*
-backend/logs/*
-node_modules/
-frontend/dist/
-.tmp-*/
-build-backend/
-build-backend-console/
-dist-backend/
-dist-backend-console/
-src-tauri/target/
-backend/data/*.sqlite3
-backend/data/*.sqlite3-*
-backend/exports/*.m3u
-backend/exports/*.zip
-docs/release-notes/preview.md
-backend/ml-runtime/
-backend/models/clap/*
-!backend/models/clap/.gitkeep
-__pycache__/
-*.pyc
-*.pyo
-.pytest_cache/
-.DS_Store
+.vscode/
 
 # Environment / secrets
 .env
 .env.*
 !.env.example
 
-# Python tooling
+# Logs
+logs/
+backend/logs/
+*.log
+
+# Python caches and tooling
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .coverage
+coverage.xml
 htmlcov/
 
-# Frontend caches
+# Node / frontend dependencies and generated output
+node_modules/
+frontend/node_modules/
+frontend/dist/
+dist/
 .vite/
+*.tsbuildinfo
 
-# Windows
+# Frontend/browser test output
+coverage/
+frontend/coverage/
+playwright-report/
+test-results/
+
+# Tauri / Rust generated output
+src-tauri/target/
+
+# Backend local app data
+backend/data/*
+!backend/data/.gitkeep
+backend/exports/*
+!backend/exports/.gitkeep
+
+# Local ML/runtime caches
+backend/ml-runtime/
+backend/models/*
+!backend/models/.gitkeep
+!backend/models/clap/
+backend/models/clap/*
+!backend/models/clap/.gitkeep
+
+# Packaging and installer output
+build-backend/
+build-backend-console/
+dist-backend/
+dist-backend-console/
+.tmp-*/
+*.msi
+*.wixpdb
+
+# Generated docs/previews
+docs/release-notes/preview.md
+
+# Scratch files
+*.tmp
+*.bak
+*.old
+*.orig
+*.rej
+*~
+
+# OS files
+.DS_Store
 Thumbs.db
 Desktop.ini

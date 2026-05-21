@@ -1,40 +1,37 @@
 # FLAC Cafe
 
-Open-source local music recommendation prototype for downloaded music collections.
+FLAC Cafe is an open-source, Windows-first desktop app for local music collections. It is built to prove a better local AutoDJ: scan downloaded files, keep ratings and play history in SQLite, analyze similarity when optional ML is installed, and generate useful queues without becoming a full MusicBee replacement overnight.
 
-This a very alpha prototype, expect bugs.
+This is still an alpha prototype. Expect sharp edges.
 
-## Demo
+## What Works
 
-A very early Windows demo build is available here:
+- Local library scanning with progress, missing-file cleanup, duplicate review, and messy metadata tolerance.
+- SQLite-backed ratings, play history, playlists, smart playlists, lyrics, and recommendation history.
+- Optional metadata and rating writes back to files when the setting is enabled.
+- MusicBee-inspired library tools for filename-to-tag inference, tag-based file organization previews, and cache cleanup.
+- Local playback through the Tauri WebView with queue controls, fade/crossfade, sleep timer, lyrics, artist info, and media-key integration.
+- AutoDJ with beginner and advanced controls, temperature sampling, cooldowns, unrated exploration, seed-track similarity, and optional CLAP audio embeddings.
+- Theme and font customization through JSON theme files plus in-app settings.
+- MSI packaging helpers for Windows.
 
-...
+## Stack
 
-This is an alpha prototype. Expect bugs. Linux support is not available yet.
+- Desktop shell: Tauri v2
+- Frontend: React, TypeScript, Vite, Tailwind CSS
+- Backend: Python, FastAPI, mutagen, SQLite
+- Optional analysis: CLAP through Transformers and Torch
 
-## Architecture Overview
+The MVP uses FastAPI because it keeps the music logic in Python, keeps React focused on UI state, and allows the backend to be tested independently. Tauri launches the packaged backend for desktop builds.
 
-This first slice uses:
-
-- Tauri v2 for the desktop shell
-- React, TypeScript, and Vite for the UI
-- Python, FastAPI, mutagen, and SQLite for library scanning and recommendations
-
-It scans local files, stores metadata and ratings, generates an AutoDJ queue, and exports that queue as an `.m3u` playlist.
-It also has an optional CLAP analysis path for audio embeddings, zero-shot genre tags, and seed-track similarity.
-
-## Why FastAPI First
-
-FastAPI is the simplest bridge for this MVP because the music logic stays in Python, the frontend stays clean, and each side can be run independently while the app shape is still changing. A Tauri sidecar is a good later packaging step.
-
-## Structure
+## Repo Layout
 
 ```text
-backend/       Python API, SQLite schema, scanner, recommender, playlist export
-frontend/      React/TypeScript UI
-src-tauri/     Tauri v2 shell
-scripts/       Windows helper scripts
-docs/          architecture notes
+backend/       Python API, database, scanner, recommender, ML runtime, playlist export
+frontend/      React/TypeScript app, grouped by app, lib, config, and types
+src-tauri/     Tauri v2 shell, backend launcher, Windows media controls
+scripts/       Windows dev, test, packaging, and runtime helper scripts
+docs/          architecture, playback, themes, CLAP, and release notes
 ```
 
 ## Development
@@ -46,57 +43,68 @@ python -m venv .venv
 .\.venv\Scripts\python -m pip install -r backend\requirements.txt
 ```
 
-Optional CLAP audio analysis:
-
-```powershell
-.\.venv\Scripts\python -m pip install -r backend\requirements-clap.txt
-```
-
 Install frontend dependencies:
 
 ```powershell
 npm install
 ```
 
-Run the app in browser-dev mode:
+Run the browser preview:
 
 ```powershell
 npm run dev
 ```
 
-This starts FastAPI and serves a freshly built Vite preview at `http://127.0.0.1:1420`.
-
-If the preview port is already in use from an earlier run, the script will report the existing URL. To stop the dev servers:
-
-```powershell
-.\scripts\stop_dev.ps1
-```
-
-Or run each side separately when debugging backend logs:
-
-```powershell
-npm run backend:dev
-npm run frontend:dev
-```
-
-Run the Tauri shell:
+Run the desktop shell:
 
 ```powershell
 npm run desktop
 ```
 
-The backend listens on `http://127.0.0.1:8765`. The frontend dev server listens on `http://127.0.0.1:1420`.
+The backend listens on `http://127.0.0.1:8765`. The Vite preview uses `http://127.0.0.1:1420`. If an old dev server is still running:
 
-## Supported Audio Extensions
-
-`.flac`, `.mp3`, `.m4a`, `.ogg`, `.opus`, `.wav`, `.aiff`, and `.aif`.
-
-## Recommendation MVP
-
-The recommender scores each track from rating, recency, skip count, unrated exploration, cooldowns, optional CLAP similarity, and a small random component. It samples with:
-
-```text
-P(track) proportional to exp(score / temperature)
+```powershell
+.\scripts\stop_dev.ps1
 ```
 
-Lower temperature leans safer. Higher temperature explores more.
+## Optional CLAP Runtime
+
+The base app does not need Torch or CLAP. From the Analysis page, use **Install CLAP** and choose CPU or NVIDIA CUDA. Packaged builds create an app-managed runtime under `%LOCALAPPDATA%\FLAC Cafe\ml-runtime`.
+
+Manual dev install:
+
+```powershell
+# CPU Torch
+.\.venv\Scripts\python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+.\.venv\Scripts\python.exe -m pip install -r backend\requirements-clap.txt
+
+# NVIDIA CUDA Torch
+.\.venv\Scripts\python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cu128
+.\.venv\Scripts\python.exe -m pip install -r backend\requirements-clap.txt
+```
+
+## Checks
+
+```powershell
+npm run check
+npm run test
+npm run build
+Set-Location src-tauri
+cargo check
+```
+
+## Packaging
+
+```powershell
+npm run package:msi
+```
+
+Before publishing, follow [docs/release-checklist.md](docs/release-checklist.md).
+
+## More Docs
+
+- [Architecture](docs/architecture.md)
+- [Playback](docs/playback.md)
+- [Themes](docs/themes.md)
+- [CLAP Analysis](docs/clap-analysis.md)
+- [Testing](docs/testing.md)

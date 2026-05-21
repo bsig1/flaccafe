@@ -147,7 +147,7 @@ def _run_job(job_id: str) -> None:
             if bootstrap is None:
                 raise RuntimeError(
                     f"CLAP needs Python {sys.version_info.major}.{sys.version_info.minor} on PATH to create "
-                    "the ML runtime. Install matching Python or set LOCAL_AUTODJ_BOOTSTRAP_PYTHON."
+                    "the ML runtime. Install matching Python or set FLAC_CAFE_BOOTSTRAP_PYTHON."
                 )
             runtime_root = ml_runtime_dir()
             runtime_python = str(ml_runtime_python())

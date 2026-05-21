@@ -147,6 +147,67 @@ export interface LibraryStatsResponse {
   skipped_events: number;
 }
 
+export type CacheClearTarget = "artist" | "artwork" | "metadata" | "recommendation_history" | "scan_errors";
+
+export interface CacheClearResponse {
+  cleared: Partial<Record<CacheClearTarget, number>>;
+}
+
+export interface FilenameTagInferenceRequest {
+  pattern: string;
+  track_ids?: number[] | null;
+  missing_only?: boolean;
+  apply?: boolean;
+  limit?: number;
+}
+
+export interface FilenameTagInferencePreview {
+  track_id: number;
+  path: string;
+  matched: boolean;
+  current: Record<string, unknown>;
+  inferred: Record<string, unknown>;
+  changed_fields: string[];
+  applied: boolean;
+  error: string | null;
+}
+
+export interface FilenameTagInferenceResponse {
+  total: number;
+  matches: number;
+  applied: number;
+  previews: FilenameTagInferencePreview[];
+}
+
+export interface FileOrganizationRequest {
+  template: string;
+  base_folder?: string | null;
+  track_ids?: number[] | null;
+  apply?: boolean;
+  limit?: number;
+}
+
+export interface FileOrganizationChange {
+  track_id: number;
+  title: string | null;
+  artist: string | null;
+  current_path: string;
+  target_path: string;
+  changed: boolean;
+  collision: boolean;
+  applied: boolean;
+  error: string | null;
+}
+
+export interface FileOrganizationResponse {
+  template: string;
+  base_folder: string;
+  total: number;
+  changes: FileOrganizationChange[];
+  changed_count: number;
+  applied: number;
+}
+
 export interface AudioAnalysisCoverage {
   total_tracks: number;
   analyzed_tracks: number;

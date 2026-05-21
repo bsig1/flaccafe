@@ -23,6 +23,8 @@ def insert_track(path: Path, **overrides: object) -> int:
         "artist": overrides.get("artist", "API Artist"),
         "album": overrides.get("album", "API Album"),
         "album_artist": overrides.get("album_artist", "API Artist"),
+        "track_number": overrides.get("track_number"),
+        "disc_number": overrides.get("disc_number"),
         "genre": overrides.get("genre", "Rock"),
         "year": overrides.get("year", 2024),
         "duration_seconds": overrides.get("duration_seconds", 180.0),
@@ -35,11 +37,11 @@ def insert_track(path: Path, **overrides: object) -> int:
         cursor = conn.execute(
             """
             INSERT INTO tracks(
-              path, path_key, title, artist, album, album_artist, genre, year,
+              path, path_key, title, artist, album, album_artist, track_number, disc_number, genre, year,
               duration_seconds, bitrate, audio_fingerprint, analysis_embedding, rating, updated_at
             )
             VALUES(
-              :path, :path_key, :title, :artist, :album, :album_artist, :genre,
+              :path, :path_key, :title, :artist, :album, :album_artist, :track_number, :disc_number, :genre,
               :year, :duration_seconds, :bitrate, :audio_fingerprint, :analysis_embedding, :rating, datetime('now')
             )
             """,
@@ -136,6 +138,133 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(body["title"], "New Title")
         self.assertEqual(body["album"], "New Album")
         self.assertEqual(body["year"], 2025)
+
+    def test_infer_tags_from_filename_preview_and_apply(self) -> None:
+        music_dir = self.root / "Music"
+        audio_file = music_dir / "Daft Punk - Random Access Memories [2013]" / "01 - Daft Punk - Give Life Back To Music.mp3"
+        audio_file.parent.mkdir(parents=True)
+        audio_file.write_bytes(b"audio")
+        track_id = insert_track(
+            audio_file,
+            title=None,
+            artist=None,
+            album=None,
+            album_artist=None,
+            genre=None,
+            year=None,
+        )
+        with connect() as conn:
+            conn.execute("INSERT INTO settings(key, value) VALUES('library_path', ?)", (str(music_dir),))
+            conn.commit()
+
+        response = self.client.post(
+            "/library/tools/infer-tags",
+            json={
+                "track_ids": [track_id],
+                "pattern": "<Album Artist> - <Album> [<Year>]/<Track#> - <Artist> - <Title>",
+                "missing_only": True,
+                "apply": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["matches"], 1)
+        self.assertEqual(body["applied"], 1)
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT title, artist, album, album_artist, track_number, year FROM tracks WHERE id = ?",
+                (track_id,),
+            ).fetchone()
+        self.assertEqual(row["title"], "Give Life Back To Music")
+        self.assertEqual(row["artist"], "Daft Punk")
+        self.assertEqual(row["album"], "Random Access Memories")
+        self.assertEqual(row["album_artist"], "Daft Punk")
+        self.assertEqual(row["track_number"], 1)
+        self.assertEqual(row["year"], 2013)
+
+    def test_organize_files_preview_and_apply_moves_file_and_updates_path(self) -> None:
+        source = self.root / "loose.mp3"
+        source.write_bytes(b"audio")
+        track_id = insert_track(
+            source,
+            title="A Good Song",
+            artist="The Artist",
+            album="The Album",
+            album_artist="The Artist",
+            track_number=3,
+            year=2025,
+        )
+        target_root = self.root / "Organized"
+
+        preview = self.client.post(
+            "/library/tools/organize-files",
+            json={
+                "track_ids": [track_id],
+                "base_folder": str(target_root),
+                "template": "<Album Artist>/<Album> (<Year>)/<Track#> - <Title>",
+            },
+        )
+        self.assertEqual(preview.status_code, 200)
+        self.assertTrue(preview.json()["changes"][0]["changed"])
+
+        response = self.client.post(
+            "/library/tools/organize-files",
+            json={
+                "track_ids": [track_id],
+                "base_folder": str(target_root),
+                "template": "<Album Artist>/<Album> (<Year>)/<Track#> - <Title>",
+                "apply": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["applied"], 1)
+        new_path = target_root / "The Artist" / "The Album (2025)" / "03 - A Good Song.mp3"
+        self.assertFalse(source.exists())
+        self.assertTrue(new_path.exists())
+        with connect() as conn:
+            row = conn.execute("SELECT path FROM tracks WHERE id = ?", (track_id,)).fetchone()
+        self.assertEqual(Path(row["path"]), new_path)
+
+    def test_clear_library_caches_endpoint_removes_derived_rows(self) -> None:
+        audio_file = self.root / "cached.mp3"
+        audio_file.write_bytes(b"audio")
+        with connect() as conn:
+            conn.execute(
+                "INSERT INTO artist_info_cache(artist_key, artist_name, summary) VALUES('artist', 'Artist', 'Summary')"
+            )
+            conn.execute(
+                """
+                INSERT INTO track_metadata_cache(path_key, path, file_modified_at, file_size, metadata_json)
+                VALUES('cache-key', ?, 'now', 1, '{}')
+                """,
+                (str(audio_file),),
+            )
+            conn.execute(
+                """
+                INSERT INTO artwork_cache(path_key, path, file_modified_at, file_size, media_type, data)
+                VALUES('art-key', ?, 'now', 1, 'image/jpeg', ?)
+                """,
+                (str(audio_file), b"art"),
+            )
+            conn.execute(
+                "INSERT INTO recommendation_runs(settings_json, drift_json, track_ids_json) VALUES('{}', '{}', '[]')"
+            )
+            conn.commit()
+
+        response = self.client.post(
+            "/library/maintenance/clear",
+            json={"targets": ["artist", "artwork", "metadata", "recommendation_history"]},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        cleared = response.json()["cleared"]
+        self.assertEqual(cleared["artist"], 1)
+        self.assertEqual(cleared["artwork"], 1)
+        self.assertEqual(cleared["metadata"], 1)
+        self.assertEqual(cleared["recommendation_history"], 1)
 
     def test_delete_endpoint_can_remove_file(self) -> None:
         audio_file = self.root / "delete-me.mp3"

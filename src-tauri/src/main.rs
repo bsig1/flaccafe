@@ -11,6 +11,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::process::Stdio;
 use std::process::Command;
 use std::process::Child;
+use std::path::PathBuf;
 use std::sync::Mutex;
 #[cfg(not(debug_assertions))]
 use std::thread;
@@ -158,8 +159,8 @@ fn start_packaged_backend(app: &tauri::AppHandle) -> Option<Child> {
 
     let mut command = Command::new(backend_path);
     command
-        .env("LOCAL_AUTODJ_PACKAGED", "1")
-        .env("LOCAL_AUTODJ_PORT", "8765")
+        .env("FLAC_CAFE_PACKAGED", "1")
+        .env("FLAC_CAFE_PORT", "8765")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -233,6 +234,21 @@ fn reveal_in_file_explorer(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_source_folder(kind: Option<String>) -> Result<(), String> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let source_root = manifest_dir
+        .parent()
+        .ok_or_else(|| "Could not resolve source folder".to_string())?;
+    // Developer-facing convenience: Settings can reveal either the repo root or editable theme files.
+    let target = match kind.as_deref() {
+        Some("themes") => source_root.join("frontend").join("src").join("config").join("themes"),
+        _ => source_root.to_path_buf(),
+    };
+
+    reveal_in_file_explorer(target.display().to_string())
+}
+
+#[tauri::command]
 fn backend_restart(app: tauri::AppHandle) -> Result<String, String> {
     stop_packaged_backend(&app);
     #[cfg(not(debug_assertions))]
@@ -262,6 +278,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             backend_restart,
+            open_source_folder,
             reveal_in_file_explorer,
             smtc::smtc_update_state,
             smtc::smtc_clear

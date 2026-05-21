@@ -23,7 +23,11 @@ def storage_root() -> Path:
     if configured:
         return Path(configured).expanduser().resolve()
 
-    if getattr(sys, "frozen", False) or os.environ.get("LOCAL_AUTODJ_PACKAGED") == "1":
+    if (
+        getattr(sys, "frozen", False)
+        or os.environ.get("FLAC_CAFE_PACKAGED") == "1"
+        or os.environ.get("LOCAL_AUTODJ_PACKAGED") == "1"
+    ):
         current = app_data_root(APP_NAME)
         legacy = app_data_root(LEGACY_APP_NAME)
         return legacy if legacy.exists() and not current.exists() else current

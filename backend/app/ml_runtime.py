@@ -45,7 +45,7 @@ class BootstrapPython:
 
 
 def ml_runtime_dir() -> Path:
-    configured = os.environ.get("LOCAL_AUTODJ_ML_RUNTIME_DIR")
+    configured = os.environ.get("FLAC_CAFE_ML_RUNTIME_DIR") or os.environ.get("LOCAL_AUTODJ_ML_RUNTIME_DIR")
     if configured:
         return Path(configured).expanduser().resolve()
     return APP_STORAGE_ROOT / RUNTIME_DIR_NAME
@@ -70,7 +70,9 @@ def ml_runtime_site_packages() -> Path | None:
 def use_managed_ml_runtime() -> bool:
     return (
         getattr(sys, "frozen", False)
+        or os.environ.get("FLAC_CAFE_USE_ML_RUNTIME") == "1"
         or os.environ.get("LOCAL_AUTODJ_USE_ML_RUNTIME") == "1"
+        or bool(os.environ.get("FLAC_CAFE_ML_RUNTIME_DIR"))
         or bool(os.environ.get("LOCAL_AUTODJ_ML_RUNTIME_DIR"))
     )
 
@@ -81,7 +83,7 @@ def _creationflags() -> int:
 
 def _candidate_commands() -> list[list[str]]:
     candidates: list[list[str]] = []
-    configured = os.environ.get("LOCAL_AUTODJ_BOOTSTRAP_PYTHON")
+    configured = os.environ.get("FLAC_CAFE_BOOTSTRAP_PYTHON") or os.environ.get("LOCAL_AUTODJ_BOOTSTRAP_PYTHON")
     if configured:
         candidates.append([configured])
 

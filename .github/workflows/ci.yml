@@ -44,6 +44,9 @@ jobs:
       - name: Backend tests
         run: python -m unittest discover backend/tests
 
+      - name: Frontend production build
+        run: npm run build
+
       - name: Changelog preview
         run: powershell -ExecutionPolicy Bypass -File scripts/changelog_preview.ps1
 

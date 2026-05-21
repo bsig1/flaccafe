@@ -180,6 +180,73 @@ class LibraryStatsResponse(BaseModel):
     skipped_events: int = 0
 
 
+class CacheClearRequest(BaseModel):
+    targets: list[Literal["artist", "artwork", "metadata", "recommendation_history", "scan_errors"]] = Field(
+        default_factory=lambda: ["artist", "artwork", "metadata", "recommendation_history", "scan_errors"],
+        min_length=1,
+        max_length=5,
+    )
+
+
+class CacheClearResponse(BaseModel):
+    cleared: dict[str, int] = Field(default_factory=dict)
+
+
+class FilenameTagInferenceRequest(BaseModel):
+    pattern: str = Field(default="<Album Artist> - <Album> [<Year>]/<Track#> - <Artist> - <Title>", max_length=500)
+    track_ids: list[int] | None = Field(default=None, max_length=10000)
+    missing_only: bool = True
+    apply: bool = False
+    limit: int = Field(default=200, ge=1, le=10000)
+
+
+class FilenameTagInferencePreview(BaseModel):
+    track_id: int
+    path: str
+    matched: bool = False
+    current: dict[str, Any] = Field(default_factory=dict)
+    inferred: dict[str, Any] = Field(default_factory=dict)
+    changed_fields: list[str] = Field(default_factory=list)
+    applied: bool = False
+    error: str | None = None
+
+
+class FilenameTagInferenceResponse(BaseModel):
+    total: int = 0
+    matches: int = 0
+    applied: int = 0
+    previews: list[FilenameTagInferencePreview] = Field(default_factory=list)
+
+
+class FileOrganizationRequest(BaseModel):
+    template: str = Field(default="<Album Artist>/<Album> (<Year>)/<Track#> - <Title>", max_length=500)
+    base_folder: str | None = None
+    track_ids: list[int] | None = Field(default=None, max_length=10000)
+    apply: bool = False
+    limit: int = Field(default=200, ge=1, le=10000)
+
+
+class FileOrganizationChange(BaseModel):
+    track_id: int
+    title: str | None = None
+    artist: str | None = None
+    current_path: str
+    target_path: str
+    changed: bool = False
+    collision: bool = False
+    applied: bool = False
+    error: str | None = None
+
+
+class FileOrganizationResponse(BaseModel):
+    template: str
+    base_folder: str
+    total: int = 0
+    changes: list[FileOrganizationChange] = Field(default_factory=list)
+    changed_count: int = 0
+    applied: int = 0
+
+
 class ScanRequest(BaseModel):
     folder_path: str
 

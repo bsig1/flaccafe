@@ -216,7 +216,7 @@ def status() -> dict[str, Any]:
         elif use_managed_ml_runtime() and not runtime["install_supported"]:
             message = (
                 f"CLAP needs Python {runtime['required_python']} to create the ML runtime. "
-                "Install matching Python or set LOCAL_AUTODJ_BOOTSTRAP_PYTHON."
+                "Install matching Python or set FLAC_CAFE_BOOTSTRAP_PYTHON."
             )
         else:
             message = f"CLAP dependencies are not installed yet: {missing}."

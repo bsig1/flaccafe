@@ -1,4 +1,4 @@
-import type { Track } from "./types";
+import type { Track } from "../types/api";
 
 export interface SmtcButtonPayload {
   command: "play" | "pause" | "stop" | "previous" | "next" | "seek";

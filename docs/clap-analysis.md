@@ -19,6 +19,8 @@ In packaged MSI builds, FLAC Cafe creates an app-managed Python virtual environm
 
 The bundled backend stays small and fixed. The optional CLAP/Torch packages are installed into that runtime so the user can choose CPU or NVIDIA CUDA after installing the app. The runtime creator needs a matching Python version available through the Windows Python launcher or `python` on PATH. This build uses Python 3.12.
 
+Development and packaged runners use `FLAC_CAFE_ML_RUNTIME_DIR`, `FLAC_CAFE_USE_ML_RUNTIME`, and `FLAC_CAFE_BOOTSTRAP_PYTHON` when overriding the managed runtime. Older `LOCAL_AUTODJ_*` names are still accepted only as migration fallbacks.
+
 For manual development installs, use one of these:
 
 ```powershell
