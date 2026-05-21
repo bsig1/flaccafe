@@ -152,6 +152,14 @@ CREATE TABLE IF NOT EXISTS recommendation_runs (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS track_lyrics (
+  track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+  lyrics TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'database:manual',
+  is_synced INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS artwork_cache (
   path_key TEXT PRIMARY KEY,
   path TEXT NOT NULL,
@@ -176,6 +184,7 @@ CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_track_id ON recommendatio
 CREATE INDEX IF NOT EXISTS idx_scan_error_samples_created_at ON scan_error_samples(created_at);
 CREATE INDEX IF NOT EXISTS idx_recommendation_profiles_default ON recommendation_profiles(is_default);
 CREATE INDEX IF NOT EXISTS idx_recommendation_runs_created_at ON recommendation_runs(created_at);
+CREATE INDEX IF NOT EXISTS idx_track_lyrics_updated_at ON track_lyrics(updated_at);
 """
 
 

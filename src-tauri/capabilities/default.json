@@ -8,6 +8,7 @@
     "core:webview:allow-create-webview-window",
     "core:window:allow-set-always-on-top",
     "core:window:allow-set-size",
+    "core:window:allow-set-skip-taskbar",
     "dialog:allow-open"
   ]
 }

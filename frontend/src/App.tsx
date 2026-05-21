@@ -74,6 +74,7 @@ import {
   fetchLibraryHealth,
   fetchLibraryStats,
   fetchLyrics,
+  fetchLyricsOnline,
   fetchPlaylists,
   fetchPlaylistTracks,
   fetchRecommendationHistory,
@@ -106,6 +107,7 @@ import {
   setDefaultRecommendationProfile,
   updateClapConfig,
   deleteRecommendationProfile,
+  updateLyrics,
   updateTrackMetadata,
   updateSettings,
   updateTrackRating,
@@ -127,6 +129,7 @@ import type {
   LibraryStatsResponse,
   LogTailResponse,
   LyricsResponse,
+  LyricsUpdateRequest,
   PlayEventEntry,
   PlaylistSummary,
   QueueTrack,
@@ -2386,12 +2389,12 @@ function LibraryPage({
               </div>
             </section>
             <section className="min-w-0">
-              <div className="sticky top-0 z-10 flex h-12 items-center justify-between border-b border-line bg-ink px-4">
-                <div>
+              <div className="sticky top-0 z-10 flex min-h-14 flex-wrap items-center justify-between gap-3 border-b border-line bg-ink px-4 py-3">
+                <div className="min-w-[180px]">
                   <div className="text-sm font-semibold text-white">Smart Preview</div>
                   <div className="text-xs text-muted">{smartTracks.length} matching tracks</div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center justify-end gap-2">
                   <button className="secondary-button" type="button" disabled={smartTracks.length === 0} onClick={() => onAddTracksToPlaylist(smartTracks.map((track) => track.id))}>
                     <Plus size={15} />
                     Add All
@@ -2891,11 +2894,13 @@ function LibraryPage({
 function MetadataEditorModal({
   track,
   writeToFiles,
+  onWriteToFilesChange,
   onClose,
   onSave,
 }: {
   track: Track;
   writeToFiles: boolean;
+  onWriteToFilesChange: (value: boolean) => void;
   onClose: () => void;
   onSave: (trackId: number, metadata: TrackMetadataUpdate) => void | Promise<void>;
 }) {
@@ -2991,12 +2996,23 @@ function MetadataEditorModal({
             ))}
           </div>
 
-          <div className={`rounded border px-3 py-2 text-xs ${writeToFiles ? "border-ember/40 bg-ember/10 text-ember" : "border-line bg-ink text-muted"}`}>
-            {writeToFiles && tagWritable
-              ? "File tag writing is enabled. Saving will update SQLite and supported audio file tags."
-              : writeToFiles
-                ? `${fileExtension(track.path).toUpperCase() || "This format"} may not support safe tag writing yet. Saving will try the file write and stop if mutagen rejects it.`
-                : "File tag writing is off. Saving will update SQLite only."}
+          <div className={`flex items-center justify-between gap-3 rounded border px-3 py-2 text-xs ${writeToFiles ? "border-ember/40 bg-ember/10 text-ember" : "border-line bg-ink text-muted"}`}>
+            <span>
+              {writeToFiles && tagWritable
+                ? "File tag writing is enabled. Saving will update SQLite and supported audio file tags."
+                : writeToFiles
+                  ? `${fileExtension(track.path).toUpperCase() || "This format"} may not support safe tag writing yet. Saving will try the file write and stop if mutagen rejects it.`
+                  : "File tag writing is off. Saving will update SQLite only."}
+            </span>
+            <label className="flex shrink-0 items-center gap-2 text-[11px] uppercase">
+              File writes
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-ember"
+                checked={writeToFiles}
+                onChange={(event) => onWriteToFilesChange(event.target.checked)}
+              />
+            </label>
           </div>
 
           <div className="rounded border border-line/70 bg-ink p-3 text-xs">
@@ -5406,6 +5422,10 @@ function NowPlayingPage({
   isLyricsLoading,
   playbackTime,
   queue,
+  writeRatingsToFiles,
+  onWriteRatingsToFilesChange,
+  onFetchLyrics,
+  onSaveLyrics,
   onPlayTrack,
   onMoveQueueTrack,
   onReorderQueueTrack,
@@ -5420,6 +5440,10 @@ function NowPlayingPage({
   isLyricsLoading: boolean;
   playbackTime: number;
   queue: Track[];
+  writeRatingsToFiles: boolean;
+  onWriteRatingsToFilesChange: (value: boolean) => void;
+  onFetchLyrics: (trackId: number) => Promise<LyricsResponse>;
+  onSaveLyrics: (trackId: number, requestBody: LyricsUpdateRequest) => Promise<LyricsResponse>;
   onPlayTrack: (track: Track, queue: Track[]) => void;
   onMoveQueueTrack: (index: number, direction: "up" | "down") => void;
   onReorderQueueTrack: (fromIndex: number, toIndex: number) => void;
@@ -5431,10 +5455,22 @@ function NowPlayingPage({
 }) {
   const [artworkFailed, setArtworkFailed] = useState(false);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [isEditingLyrics, setIsEditingLyrics] = useState(false);
+  const [lyricsDraft, setLyricsDraft] = useState("");
+  const [lyricsTarget, setLyricsTarget] = useState<"database" | "file">("database");
+  const [lyricsSynced, setLyricsSynced] = useState(false);
+  const [lyricsBusy, setLyricsBusy] = useState(false);
 
   useEffect(() => {
     setArtworkFailed(false);
   }, [currentTrack?.id]);
+
+  useEffect(() => {
+    setLyricsDraft(lyrics?.lyrics ?? "");
+    setLyricsSynced(Boolean(lyrics?.is_synced));
+    setIsEditingLyrics(false);
+    setLyricsTarget("database");
+  }, [currentTrack?.id, lyrics?.lyrics, lyrics?.is_synced]);
 
   const artworkSrc = currentTrack && !artworkFailed ? albumArtworkUrl(currentTrack.id) : null;
   const lyricLines = lyrics?.lyrics?.split("\n") ?? [];
@@ -5446,6 +5482,39 @@ function NowPlayingPage({
     }
     return active;
   }, -1);
+
+  async function handleFetchLyrics() {
+    if (!currentTrack) {
+      return;
+    }
+    setLyricsBusy(true);
+    try {
+      const fetched = await onFetchLyrics(currentTrack.id);
+      setLyricsDraft(fetched.lyrics ?? "");
+      setLyricsSynced(fetched.is_synced);
+      setIsEditingLyrics(true);
+    } finally {
+      setLyricsBusy(false);
+    }
+  }
+
+  async function handleSaveLyrics() {
+    if (!currentTrack) {
+      return;
+    }
+    setLyricsBusy(true);
+    try {
+      await onSaveLyrics(currentTrack.id, {
+        lyrics: lyricsDraft,
+        is_synced: lyricsSynced,
+        target: lyricsTarget,
+        source: lyricsTarget === "database" ? "database:manual" : null,
+      });
+      setIsEditingLyrics(false);
+    } finally {
+      setLyricsBusy(false);
+    }
+  }
 
   return (
     <main className="flex min-w-0 flex-1 flex-col">
@@ -5503,9 +5572,21 @@ function NowPlayingPage({
         </section>
 
         <section className="min-h-0 min-w-0 rounded border border-line bg-panel">
-          <div className="flex h-12 items-center justify-between border-b border-line px-4">
-            <div className="text-sm font-semibold text-white">Lyrics</div>
-            {lyrics?.source && <div className="truncate text-xs text-muted">{lyrics.source}</div>}
+          <div className="flex min-h-12 flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2">
+            <div>
+              <div className="text-sm font-semibold text-white">Lyrics</div>
+              {lyrics?.source && <div className="truncate text-xs text-muted">{lyrics.source}</div>}
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-2 text-xs">
+              <button className="secondary-button h-8" type="button" disabled={!currentTrack || lyricsBusy} onClick={() => void handleFetchLyrics()}>
+                <Download size={14} />
+                Fetch
+              </button>
+              <button className="secondary-button h-8" type="button" disabled={!currentTrack} onClick={() => setIsEditingLyrics((current) => !current)}>
+                <Pencil size={14} />
+                {isEditingLyrics ? "Preview" : "Edit"}
+              </button>
+            </div>
           </div>
 
           <div className="h-[calc(100%-3rem)] overflow-auto px-7 py-6">
@@ -5513,12 +5594,79 @@ function NowPlayingPage({
             {!isLyricsLoading && !currentTrack && (
               <div className="grid h-full place-items-center text-sm text-muted">No track selected.</div>
             )}
-            {!isLyricsLoading && currentTrack && !hasLyrics && (
-              <div className="grid h-full place-items-center text-center text-sm text-muted">
-                No embedded or sidecar lyrics found for this track.
+            {!isLyricsLoading && currentTrack && isEditingLyrics && (
+              <div className="mx-auto grid h-full max-w-3xl grid-rows-[auto_minmax(0,1fr)_auto] gap-3">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded border border-line/70 bg-ink px-3 py-2 text-xs">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className="flex items-center gap-2 text-muted">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 accent-moss"
+                        checked={lyricsSynced}
+                        onChange={(event) => setLyricsSynced(event.target.checked)}
+                      />
+                      Synced LRC
+                    </label>
+                    <label className="flex items-center gap-2 text-muted">
+                      Save to
+                      <select
+                        className="h-8 rounded border border-line bg-panel px-2 text-white outline-none"
+                        value={lyricsTarget}
+                        onChange={(event) => setLyricsTarget(event.target.value as "database" | "file")}
+                      >
+                        <option value="database">Database</option>
+                        <option value="file">Audio file + database</option>
+                      </select>
+                    </label>
+                  </div>
+                  <label className="flex items-center gap-2 text-muted">
+                    File writes
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-ember"
+                      checked={writeRatingsToFiles}
+                      onChange={(event) => onWriteRatingsToFilesChange(event.target.checked)}
+                    />
+                  </label>
+                </div>
+                <textarea
+                  className="min-h-0 resize-none rounded border border-line bg-ink p-4 font-mono text-sm leading-6 text-neutral-100 outline-none ring-moss/40 focus:ring-2"
+                  value={lyricsDraft}
+                  placeholder="Paste lyrics here, or fetch them first."
+                  onChange={(event) => setLyricsDraft(event.target.value)}
+                />
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="text-xs text-muted">
+                    {lyricsTarget === "file" && !writeRatingsToFiles
+                      ? "File writing is off; enable it here before saving to the audio file."
+                      : lyricsTarget === "file"
+                        ? "Saving will update the file tags and keep a database copy."
+                        : "Saving will keep lyrics in the FLAC Cafe database only."}
+                  </div>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    disabled={!currentTrack || lyricsBusy || (lyricsTarget === "file" && !writeRatingsToFiles)}
+                    onClick={() => void handleSaveLyrics()}
+                  >
+                    <Pencil size={15} />
+                    Save Lyrics
+                  </button>
+                </div>
               </div>
             )}
-            {!isLyricsLoading && hasLyrics && (
+            {!isLyricsLoading && currentTrack && !isEditingLyrics && !hasLyrics && (
+              <div className="grid h-full place-items-center text-center text-sm text-muted">
+                <div>
+                  <div>No embedded, database, or sidecar lyrics found for this track.</div>
+                  <button className="primary-button mx-auto mt-4" type="button" disabled={lyricsBusy} onClick={() => void handleFetchLyrics()}>
+                    <Download size={15} />
+                    Fetch Lyrics
+                  </button>
+                </div>
+              </div>
+            )}
+            {!isLyricsLoading && !isEditingLyrics && hasLyrics && (
               <div className="mx-auto max-w-3xl space-y-3 text-lg leading-8 text-neutral-100">
                 {lyricLines.map((line, index) => (
                   line.trim().length > 0 ? (
@@ -5946,9 +6094,33 @@ function MiniPlayerWindow() {
     setArtworkFailed(false);
   }, [track?.id]);
 
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    import("@tauri-apps/api/window")
+      .then(({ getCurrentWindow }) => getCurrentWindow().onCloseRequested(() => restoreMainTaskbar()))
+      .then((handler) => {
+        unlisten = handler;
+      })
+      .catch(() => {});
+    return () => {
+      unlisten?.();
+      void restoreMainTaskbar();
+    };
+  }, []);
+
+  async function restoreMainTaskbar() {
+    try {
+      const { Window } = await import("@tauri-apps/api/window");
+      await (await Window.getByLabel("main"))?.setSkipTaskbar(false);
+    } catch {
+      // Browser preview has no Tauri window to restore.
+    }
+  }
+
   async function closeMiniPlayer() {
     try {
       const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+      await restoreMainTaskbar();
       await getCurrentWebviewWindow().close();
     } catch {
       window.close();
@@ -5977,9 +6149,9 @@ function MiniPlayerWindow() {
   }
 
   return (
-    <main className="flex h-screen min-h-0 flex-col overflow-hidden bg-[#19130f] text-white">
-      <div className="grid h-full grid-cols-[84px_minmax(0,1fr)_92px] items-center gap-3 p-3">
-        <div className="grid h-[72px] w-[72px] place-items-center overflow-hidden rounded border border-line bg-panel text-moss shadow-inner">
+    <main className="flex h-screen min-h-0 flex-col overflow-hidden bg-[#11100f] text-white">
+      <div className="grid h-full grid-cols-[82px_minmax(0,1fr)_132px] items-center gap-3 border border-white/5 bg-[#17120f] p-3 shadow-2xl">
+        <div className="grid h-[72px] w-[72px] place-items-center overflow-hidden rounded-lg border border-white/10 bg-[#0f0d0b] text-moss shadow-lg shadow-black/30">
           {artworkSrc && !artworkFailed ? (
             <img alt="" className="h-full w-full object-cover" src={artworkSrc} onError={() => setArtworkFailed(true)} />
           ) : (
@@ -5988,9 +6160,9 @@ function MiniPlayerWindow() {
         </div>
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <div className="truncate text-sm font-semibold">{track ? display(track.title, "Untitled") : "Nothing playing"}</div>
+            <div className="truncate text-[15px] font-semibold tracking-normal">{track ? display(track.title, "Untitled") : "Nothing playing"}</div>
             {track?.rating !== null && track?.rating !== undefined && (
-              <span className="shrink-0 rounded border border-moss/40 px-1.5 py-0.5 text-[10px] text-moss">
+              <span className="shrink-0 rounded-full border border-moss/40 bg-moss/10 px-2 py-0.5 text-[10px] text-moss">
                 {track.rating} star
               </span>
             )}
@@ -6016,7 +6188,7 @@ function MiniPlayerWindow() {
           </div>
         </div>
         <div className="flex h-full flex-col items-end justify-between">
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 rounded-full border border-white/10 bg-black/20 p-0.5">
             <button
               className={`icon-button h-7 w-7 ${alwaysOnTop ? "border-moss text-moss" : ""}`}
               type="button"
@@ -6035,7 +6207,7 @@ function MiniPlayerWindow() {
               <X size={13} />
             </button>
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 rounded-full border border-white/10 bg-[#0f0d0b] p-1 shadow-inner">
             <button
               className="icon-button h-8 w-8"
               type="button"
@@ -6046,7 +6218,7 @@ function MiniPlayerWindow() {
               <SkipBack size={14} />
             </button>
             <button
-              className="grid h-9 w-9 place-items-center rounded-full bg-ember text-ink shadow-sm shadow-black/25 disabled:opacity-50"
+              className="grid h-9 w-9 place-items-center rounded-full bg-ember text-ink shadow-md shadow-black/30 transition hover:bg-[#efb66f] disabled:opacity-50"
               type="button"
               title={snapshot.isPlaying ? "Pause" : "Play"}
               disabled={!track}
@@ -7099,24 +7271,35 @@ export default function App() {
   async function handleOpenDetachedMiniPlayer() {
     try {
       const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+      const { Window } = await import("@tauri-apps/api/window");
+      const mainWindow = await Window.getByLabel("main");
       const existing = await WebviewWindow.getByLabel("mini-player");
       if (existing) {
+        await mainWindow?.setSkipTaskbar(true);
         await existing.setFocus();
         return;
       }
       const miniWindow = new WebviewWindow("mini-player", {
         title: "FLAC Cafe Mini Player",
         url: "/index.html?miniPlayer=1",
-        width: 560,
-        height: 128,
+        width: 640,
+        height: 138,
         minWidth: 420,
         minHeight: 118,
         resizable: true,
         decorations: true,
       });
+      miniWindow.once("tauri://created", () => {
+        void mainWindow?.setSkipTaskbar(true);
+      });
+      miniWindow.once("tauri://destroyed", () => {
+        void mainWindow?.setSkipTaskbar(false);
+      });
       miniWindow.once("tauri://error", (event) => {
+        void mainWindow?.setSkipTaskbar(false);
         setStatus(`Could not open mini player: ${String(event.payload)}`);
       });
+      setStatus("Mini player owns the taskbar preview while it is open");
     } catch {
       setStatus("Detached mini player is available in the Tauri desktop app.");
     }
@@ -8094,6 +8277,32 @@ export default function App() {
     }
   }
 
+  async function handleFetchLyrics(trackId: number): Promise<LyricsResponse> {
+    try {
+      const response = await fetchLyricsOnline(trackId);
+      setLyrics(response);
+      setStatus(response.is_synced ? "Fetched synced lyrics" : "Fetched lyrics");
+      return response;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not fetch lyrics";
+      setStatus(message);
+      throw error;
+    }
+  }
+
+  async function handleSaveLyrics(trackId: number, requestBody: LyricsUpdateRequest): Promise<LyricsResponse> {
+    try {
+      const response = await updateLyrics(trackId, requestBody);
+      setLyrics(response);
+      setStatus(requestBody.target === "file" ? "Lyrics saved to file and database" : "Lyrics saved to database");
+      return response;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not save lyrics";
+      setStatus(message);
+      throw error;
+    }
+  }
+
   async function handleBackupDatabase() {
     try {
       const response = await backupDatabase();
@@ -8437,6 +8646,7 @@ export default function App() {
         <MetadataEditorModal
           track={metadataEditTrack}
           writeToFiles={writeRatingsToFiles}
+          onWriteToFilesChange={(value) => void handleWriteRatingsToFiles(value)}
           onClose={() => setMetadataEditTrack(null)}
           onSave={handleSaveTrackMetadata}
         />
@@ -8590,6 +8800,10 @@ export default function App() {
               isLyricsLoading={isLyricsLoading}
               playbackTime={playbackTime}
               queue={playbackQueue}
+              writeRatingsToFiles={writeRatingsToFiles}
+              onWriteRatingsToFilesChange={(value) => void handleWriteRatingsToFiles(value)}
+              onFetchLyrics={handleFetchLyrics}
+              onSaveLyrics={handleSaveLyrics}
               onPlayTrack={handlePlayTrack}
               onMoveQueueTrack={handleMovePlaybackQueueTrack}
               onReorderQueueTrack={handleReorderPlaybackQueueTrack}

@@ -163,6 +163,13 @@ export interface LyricsResponse {
   is_synced: boolean;
 }
 
+export interface LyricsUpdateRequest {
+  lyrics: string | null;
+  is_synced?: boolean;
+  target?: "database" | "file";
+  source?: string | null;
+}
+
 export interface ArtistInfoResponse {
   artist_name: string;
   query: string;

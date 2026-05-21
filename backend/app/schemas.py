@@ -118,6 +118,13 @@ class LyricsResponse(BaseModel):
     is_synced: bool = False
 
 
+class LyricsUpdateRequest(BaseModel):
+    lyrics: str | None = Field(default=None, max_length=500_000)
+    is_synced: bool = False
+    target: Literal["database", "file"] = "database"
+    source: str | None = Field(default=None, max_length=120)
+
+
 class ArtistInfoResponse(BaseModel):
     artist_name: str
     query: str

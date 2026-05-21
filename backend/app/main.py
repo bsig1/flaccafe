@@ -27,7 +27,7 @@ from mutagen.mp4 import MP4Cover
 
 from .config import APP_STORAGE_ROOT, EXPORT_DIR, MODEL_DIR, database_path
 from .database import connect, get_setting, init_db, rows_to_dicts, set_setting
-from .file_tags import write_track_metadata, write_track_rating
+from .file_tags import write_track_lyrics, write_track_metadata, write_track_rating
 from .analysis_jobs import (
     cancel_audio_analysis_job,
     get_audio_analysis_job,
@@ -77,6 +77,7 @@ from .schemas import (
     LibraryHealthResponse,
     LibraryStatsResponse,
     LyricsResponse,
+    LyricsUpdateRequest,
     PlaylistCreateRequest,
     PlaylistImportRequest,
     PlaylistMoveRequest,
@@ -182,6 +183,8 @@ TRACK_SORTS = {
 }
 
 WIKIPEDIA_API_URL = "https://en.wikipedia.org/w/api.php"
+LRCLIB_API_URL = "https://lrclib.net/api/get"
+LRCLIB_SEARCH_URL = "https://lrclib.net/api/search"
 WIKIPEDIA_USER_AGENT = "FLACCafe/0.1 (local desktop music app)"
 LOGGER = logging.getLogger("flac_cafe.backend")
 
@@ -1023,6 +1026,121 @@ def sidecar_lyrics(path: Path) -> tuple[str, str, bool] | None:
         if normalized:
             return normalized, f"sidecar:{candidate.name}", candidate.suffix.lower() == ".lrc" or looks_synced(normalized)
     return None
+
+
+def database_lyrics(track_id: int) -> tuple[str, str, bool] | None:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT lyrics, source, is_synced
+            FROM track_lyrics
+            WHERE track_id = ?
+            """,
+            (track_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    text = normalize_lyrics(row["lyrics"])
+    if not text:
+        return None
+    return text, row["source"] or "database:manual", bool(row["is_synced"])
+
+
+def save_database_lyrics(track_id: int, lyrics: str, source: str, is_synced: bool) -> LyricsResponse:
+    text = normalize_lyrics(lyrics)
+    if not text:
+        with connect() as conn:
+            conn.execute("DELETE FROM track_lyrics WHERE track_id = ?", (track_id,))
+            conn.commit()
+        return LyricsResponse(track_id=track_id)
+
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO track_lyrics(track_id, lyrics, source, is_synced, updated_at)
+            VALUES(?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(track_id) DO UPDATE SET
+              lyrics = excluded.lyrics,
+              source = excluded.source,
+              is_synced = excluded.is_synced,
+              updated_at = excluded.updated_at
+            """,
+            (track_id, text, source, 1 if is_synced else 0),
+        )
+        conn.commit()
+    return LyricsResponse(track_id=track_id, lyrics=text, source=source, is_synced=is_synced)
+
+
+def lrclib_payload_response(track_id: int, payload: dict) -> LyricsResponse | None:
+    synced = normalize_lyrics(payload.get("syncedLyrics"))
+    plain = normalize_lyrics(payload.get("plainLyrics"))
+    text = synced or plain
+    if not text:
+        return None
+    return LyricsResponse(
+        track_id=track_id,
+        lyrics=text,
+        source="lrclib:synced" if synced else "lrclib:plain",
+        is_synced=bool(synced),
+    )
+
+
+def lrclib_read_json(url: str, params: dict[str, object]) -> object:
+    api_request = request.Request(
+        f"{url}?{parse.urlencode(params)}",
+        headers={"User-Agent": WIKIPEDIA_USER_AGENT},
+    )
+    with request.urlopen(api_request, timeout=10) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def lrclib_fetch(track: dict) -> LyricsResponse:
+    params: dict[str, object] = {
+        "track_name": display_track_title(track),
+        "artist_name": primary_artist_name(track.get("artist") or ""),
+    }
+    if track.get("album"):
+        params["album_name"] = track["album"]
+    if track.get("duration_seconds"):
+        params["duration"] = round(float(track["duration_seconds"]))
+
+    last_error: Exception | None = None
+    if params.get("album_name") and params.get("duration"):
+        try:
+            payload = lrclib_read_json(LRCLIB_API_URL, params)
+            response = lrclib_payload_response(int(track["id"]), payload if isinstance(payload, dict) else {})
+            if response:
+                return response
+        except urlerror.HTTPError as exc:
+            if exc.code != 404:
+                raise HTTPException(status_code=502, detail=f"Lyric lookup failed: HTTP {exc.code}") from exc
+            last_error = exc
+        except Exception as exc:
+            last_error = exc
+
+    search_params = {key: value for key, value in params.items() if key != "duration"}
+    try:
+        payload = lrclib_read_json(LRCLIB_SEARCH_URL, search_params)
+    except urlerror.HTTPError as exc:
+        if exc.code == 404:
+            raise HTTPException(status_code=404, detail="No matching lyrics found")
+        raise HTTPException(status_code=502, detail=f"Lyric lookup failed: HTTP {exc.code}") from exc
+    except Exception as exc:
+        detail = exc if last_error is None else last_error
+        raise HTTPException(status_code=502, detail=f"Lyric lookup failed: {detail}") from exc
+
+    candidates = payload if isinstance(payload, list) else [payload]
+    for candidate in candidates:
+        if isinstance(candidate, dict):
+            response = lrclib_payload_response(int(track["id"]), candidate)
+            if response:
+                return response
+    raise HTTPException(status_code=404, detail="No lyrics text found")
+
+
+def display_track_title(track: dict) -> str:
+    title = str(track.get("title") or Path(str(track.get("path") or "")).stem).strip()
+    return title or "Untitled"
 
 
 def primary_artist_name(value: str) -> str:
@@ -2323,12 +2441,42 @@ def track_artwork(track_id: int) -> Response:
 @app.get("/tracks/{track_id}/lyrics", response_model=LyricsResponse)
 def track_lyrics(track_id: int) -> LyricsResponse:
     path = get_track_path(track_id)
-    found = embedded_lyrics(path) or sidecar_lyrics(path)
+    found = database_lyrics(track_id) or embedded_lyrics(path) or sidecar_lyrics(path)
     if found is None:
         return LyricsResponse(track_id=track_id)
 
     lyrics, source, is_synced = found
     return LyricsResponse(track_id=track_id, lyrics=lyrics, source=source, is_synced=is_synced)
+
+
+@app.post("/tracks/{track_id}/lyrics/fetch", response_model=LyricsResponse)
+def fetch_track_lyrics(track_id: int) -> LyricsResponse:
+    with connect() as conn:
+        row = conn.execute(f"SELECT {TRACK_COLUMNS} FROM tracks WHERE id = ?", (track_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Track not found")
+    return lrclib_fetch(dict(row))
+
+
+@app.patch("/tracks/{track_id}/lyrics", response_model=LyricsResponse)
+def update_track_lyrics(track_id: int, request_body: LyricsUpdateRequest) -> LyricsResponse:
+    path = get_track_path(track_id)
+    text = normalize_lyrics(request_body.lyrics)
+    if not text:
+        with connect() as conn:
+            conn.execute("DELETE FROM track_lyrics WHERE track_id = ?", (track_id,))
+            conn.commit()
+        return LyricsResponse(track_id=track_id)
+
+    source = request_body.source or ("database:synced" if request_body.is_synced else "database:manual")
+    if request_body.target == "file":
+        try:
+            write_track_lyrics(path, text, request_body.is_synced)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        source = f"embedded:{path.suffix.lower() or 'audio'}"
+
+    return save_database_lyrics(track_id, text, source, request_body.is_synced)
 
 
 @app.get("/artists/info", response_model=ArtistInfoResponse)

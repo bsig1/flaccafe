@@ -19,6 +19,7 @@ import type {
   LibraryStatsResponse,
   LogTailResponse,
   LyricsResponse,
+  LyricsUpdateRequest,
   PlayEventEntry,
   PlaylistSummary,
   RecommendationProfileComparison,
@@ -358,6 +359,17 @@ export function albumArtworkUrl(trackId: number): string {
 
 export function fetchLyrics(trackId: number): Promise<LyricsResponse> {
   return request<LyricsResponse>(`/tracks/${trackId}/lyrics`);
+}
+
+export function fetchLyricsOnline(trackId: number): Promise<LyricsResponse> {
+  return request<LyricsResponse>(`/tracks/${trackId}/lyrics/fetch`, { method: "POST" });
+}
+
+export function updateLyrics(trackId: number, requestBody: LyricsUpdateRequest): Promise<LyricsResponse> {
+  return request<LyricsResponse>(`/tracks/${trackId}/lyrics`, {
+    method: "PATCH",
+    body: JSON.stringify(requestBody),
+  });
 }
 
 export function fetchArtistInfo(artistName: string, refresh = false): Promise<ArtistInfoResponse> {

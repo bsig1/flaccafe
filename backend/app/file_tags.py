@@ -4,7 +4,7 @@ from pathlib import Path
 
 from mutagen import File as MutagenFile
 from mutagen.flac import FLAC
-from mutagen.id3 import ID3NoHeaderError, POPM, TXXX
+from mutagen.id3 import ID3NoHeaderError, POPM, TXXX, USLT
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4, MP4FreeForm
 from mutagen.oggopus import OggOpus
@@ -180,3 +180,78 @@ def write_track_metadata(path: Path, metadata: dict[str, object]) -> None:
             raise ValueError(f"Could not write {field} to {path.suffix or 'this file type'}") from exc
 
     audio.save()
+
+
+def _write_vorbis_lyrics(audio: FLAC | OggVorbis | OggOpus, lyrics: str, is_synced: bool) -> None:
+    if audio.tags is None:
+        audio.add_tags()
+    if audio.tags is None:
+        raise ValueError("Could not create Vorbis-style tags")
+
+    _remove_text_keys(audio.tags, ["LYRICS", "lyrics", "UNSYNCEDLYRICS", "unsyncedlyrics", "SYNCEDLYRICS", "syncedlyrics"])
+    audio.tags["SYNCEDLYRICS" if is_synced else "LYRICS"] = [lyrics]
+    audio.save()
+
+
+def _write_mp3_lyrics(audio: MP3, lyrics: str, is_synced: bool) -> None:
+    try:
+        tags = audio.tags
+        if tags is None:
+            audio.add_tags()
+            tags = audio.tags
+    except ID3NoHeaderError:
+        audio.add_tags()
+        tags = audio.tags
+
+    if tags is None:
+        raise ValueError("Could not create ID3 tags")
+
+    tags.delall("USLT")
+    for frame in list(tags.getall("TXXX")):
+        if "lyric" in str(frame.desc).lower():
+            tags.delall(f"TXXX:{frame.desc}")
+
+    if is_synced:
+        tags.add(TXXX(encoding=3, desc="SYNCEDLYRICS", text=[lyrics]))
+    else:
+        tags.add(USLT(encoding=3, lang="eng", desc="", text=lyrics))
+    audio.save()
+
+
+def _write_mp4_lyrics(audio: MP4, lyrics: str, is_synced: bool) -> None:
+    if audio.tags is None:
+        audio.add_tags()
+    if audio.tags is None:
+        raise ValueError("Could not create MP4 tags")
+
+    _remove_text_keys(audio.tags, ["\xa9lyr", "----:com.apple.iTunes:SYNCEDLYRICS"])
+    if is_synced:
+        audio.tags["----:com.apple.iTunes:SYNCEDLYRICS"] = [MP4FreeForm(lyrics.encode("utf-8"))]
+    else:
+        audio.tags["\xa9lyr"] = [lyrics]
+    audio.save()
+
+
+def write_track_lyrics(path: Path, lyrics: str, is_synced: bool = False) -> None:
+    if not path.exists() or not path.is_file():
+        raise ValueError("Audio file is missing on disk")
+
+    cleaned = lyrics.strip()
+    if not cleaned:
+        raise ValueError("Lyrics are empty")
+
+    audio = MutagenFile(path)
+    if audio is None:
+        raise ValueError("Could not read audio tags")
+
+    if isinstance(audio, (FLAC, OggVorbis, OggOpus)):
+        _write_vorbis_lyrics(audio, cleaned, is_synced)
+        return
+    if isinstance(audio, MP3):
+        _write_mp3_lyrics(audio, cleaned, is_synced)
+        return
+    if isinstance(audio, MP4):
+        _write_mp4_lyrics(audio, cleaned, is_synced)
+        return
+
+    raise ValueError(f"Writing lyrics is not supported for {path.suffix or 'this file type'} yet")

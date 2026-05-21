@@ -327,6 +327,44 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(first.content, b"image-bytes")
         artwork.assert_called_once()
 
+    def test_lyrics_endpoint_prefers_database_edits(self) -> None:
+        audio_file = self.root / "lyrics.mp3"
+        audio_file.write_bytes(b"audio")
+        track_id = insert_track(audio_file)
+
+        saved = self.client.patch(
+            f"/tracks/{track_id}/lyrics",
+            json={"lyrics": "line one\nline two", "target": "database", "is_synced": False},
+        )
+        fetched = self.client.get(f"/tracks/{track_id}/lyrics")
+
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(fetched.status_code, 200)
+        self.assertEqual(fetched.json()["lyrics"], "line one\nline two")
+        self.assertEqual(fetched.json()["source"], "database:manual")
+
+    def test_lyrics_fetch_endpoint_returns_lrclib_text(self) -> None:
+        audio_file = self.root / "fetch-lyrics.mp3"
+        audio_file.write_bytes(b"audio")
+        track_id = insert_track(audio_file, title="Fetch Song", artist="Fetch Artist", album="Fetch Album")
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self) -> bytes:
+                return json.dumps({"syncedLyrics": "[00:01.00] hello", "plainLyrics": "hello"}).encode("utf-8")
+
+        with patch("backend.app.main.request.urlopen", return_value=FakeResponse()):
+            response = self.client.post(f"/tracks/{track_id}/lyrics/fetch")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["lyrics"], "[00:01.00] hello")
+        self.assertTrue(response.json()["is_synced"])
+
 
 if __name__ == "__main__":
     unittest.main()
