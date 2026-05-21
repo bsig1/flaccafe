@@ -5,6 +5,7 @@ import type {
   AudioAnalysisProgress,
   AudioAnalysisStartRequest,
   AudioAnalysisStartResponse,
+  AutoDjAvoidRule,
   AutoDjResponse,
   AutoDjSettings,
   BackupResponse,
@@ -16,6 +17,7 @@ import type {
   ExportResponse,
   LibraryHealthResponse,
   LibraryStatsResponse,
+  LogTailResponse,
   LyricsResponse,
   PlayEventEntry,
   PlaylistSummary,
@@ -26,9 +28,14 @@ import type {
   SettingsUpdateRequest,
   SmartPlaylistRule,
   SmartPlaylistSummary,
+  SimilarTrack,
+  StartupDiagnosticsResponse,
+  SupportBundleResponse,
   Track,
   TrackDeleteResponse,
+  TrackMetadataUpdate,
   TrackPage,
+  TrackRestoreRequest,
 } from "./types";
 
 export const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8765";
@@ -57,6 +64,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function fetchSettings(): Promise<SettingsResponse> {
   return request<SettingsResponse>("/settings");
+}
+
+export function fetchBackendHealth(): Promise<{ status: string }> {
+  return request<{ status: string }>("/health");
+}
+
+export function fetchStartupDiagnostics(): Promise<StartupDiagnosticsResponse> {
+  return request<StartupDiagnosticsResponse>("/diagnostics/startup");
+}
+
+export function fetchBackendLog(limit = 200): Promise<LogTailResponse> {
+  return request<LogTailResponse>(`/diagnostics/logs/backend?limit=${limit}`);
+}
+
+export function createSupportBundle(): Promise<SupportBundleResponse> {
+  return request<SupportBundleResponse>("/diagnostics/support-bundle", { method: "POST" });
 }
 
 export function backupDatabase(): Promise<BackupResponse> {
@@ -146,9 +169,27 @@ export function fetchTrack(trackId: number): Promise<Track> {
   return request<Track>(`/tracks/${trackId}`);
 }
 
+export function fetchSimilarTracks(trackId: number, limit = 12): Promise<SimilarTrack[]> {
+  return request<SimilarTrack[]>(`/tracks/${trackId}/similar?limit=${limit}`);
+}
+
 export function deleteTrack(trackId: number, deleteFile = false): Promise<TrackDeleteResponse> {
   const params = new URLSearchParams({ delete_file: String(deleteFile) });
   return request<TrackDeleteResponse>(`/tracks/${trackId}?${params.toString()}`, { method: "DELETE" });
+}
+
+export function updateTrackMetadata(trackId: number, metadata: TrackMetadataUpdate): Promise<Track> {
+  return request<Track>(`/tracks/${trackId}/metadata`, {
+    method: "PATCH",
+    body: JSON.stringify(metadata),
+  });
+}
+
+export function restoreTrack(requestBody: TrackRestoreRequest): Promise<Track> {
+  return request<Track>("/tracks/restore", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
 }
 
 export function fetchTrackPage({
@@ -344,6 +385,36 @@ export function fetchArtistLocalTracks(artistName: string): Promise<Track[]> {
 export function clearArtistCache(): Promise<{ deleted: number }> {
   return request<{ deleted: number }>("/artists/cache", {
     method: "DELETE",
+  });
+}
+
+export function fetchAutoDjAvoidRules(): Promise<AutoDjAvoidRule[]> {
+  return request<AutoDjAvoidRule[]>("/autodj/avoid");
+}
+
+export function createAutoDjAvoidRule(requestBody: {
+  scope: "track" | "artist" | "album" | "genre";
+  track_id?: number | null;
+  value?: string | null;
+}): Promise<AutoDjAvoidRule> {
+  return request<AutoDjAvoidRule>("/autodj/avoid", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function deleteAutoDjAvoidRule(ruleId: number): Promise<AutoDjAvoidRule[]> {
+  return request<AutoDjAvoidRule[]>(`/autodj/avoid/${ruleId}`, { method: "DELETE" });
+}
+
+export function recordRecommendationFeedback(requestBody: {
+  track_id: number;
+  event_type: "play_next" | "add_to_queue" | "manual_play";
+  weight?: number;
+}): Promise<{ status: string }> {
+  return request<{ status: string }>("/autodj/feedback", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
   });
 }
 

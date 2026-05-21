@@ -24,6 +24,8 @@ class Track(BaseModel):
     analysis_updated_at: str | None = None
     year: int | None = None
     duration_seconds: float | None = None
+    bitrate: int | None = None
+    audio_fingerprint: str | None = None
     rating: float | None = None
     play_count: int = 0
     skip_count: int = 0
@@ -141,6 +143,15 @@ class PlayEventEntry(BaseModel):
 class DuplicateGroup(BaseModel):
     key: str
     tracks: list[Track]
+    match_reason: str = "matching title and artist"
+    recommended_keep_id: int | None = None
+    recommendation_reason: str | None = None
+    duration_spread_seconds: float | None = None
+    bitrate_spread: int | None = None
+    shared_fingerprint: bool = False
+    average_audio_similarity: float | None = None
+    path_roots: list[str] = Field(default_factory=list)
+    analyzed_tracks: int = 0
 
 
 class LibraryHealthResponse(BaseModel):
@@ -329,11 +340,35 @@ class RatingRequest(BaseModel):
         return value
 
 
+class TrackMetadataUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=300)
+    artist: str | None = Field(default=None, max_length=300)
+    album: str | None = Field(default=None, max_length=300)
+    album_artist: str | None = Field(default=None, max_length=300)
+    track_number: int | None = Field(default=None, ge=1, le=999)
+    disc_number: int | None = Field(default=None, ge=1, le=99)
+    genre: str | None = Field(default=None, max_length=300)
+    year: int | None = Field(default=None, ge=1000, le=9999)
+
+    @field_validator("title", "artist", "album", "album_artist", "genre", mode="before")
+    @classmethod
+    def empty_text_to_none(cls, value: object) -> object | None:
+        if isinstance(value, str):
+            cleaned = value.strip()
+            return cleaned or None
+        return value
+
+
 class TrackDeleteResponse(BaseModel):
     track_id: int
     removed_from_library: bool
     deleted_file: bool = False
     file_missing: bool = False
+
+
+class TrackRestoreRequest(BaseModel):
+    path: str
+    rating: float | None = Field(default=None, ge=0.5, le=5)
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -349,12 +384,52 @@ class AutoDjRequest(BaseModel):
     recently_played_cooldown_days: int = Field(default=14, ge=0, le=3650)
     seed_track_id: int | None = None
     similarity_weight: float = Field(default=0.0, ge=0.0, le=5.0)
+    rating_weight: float = Field(default=1.0, ge=0.0, le=5.0)
+    recency_weight: float = Field(default=1.0, ge=0.0, le=5.0)
+    skip_weight: float = Field(default=1.0, ge=0.0, le=5.0)
+    exploration_weight: float = Field(default=1.0, ge=0.0, le=5.0)
+    play_history_weight: float = Field(default=0.7, ge=0.0, le=5.0)
+    feedback_weight: float = Field(default=0.8, ge=0.0, le=5.0)
+    audio_similarity_weight: float = Field(default=2.2, ge=0.0, le=5.0)
+    artist_similarity_weight: float = Field(default=1.6, ge=0.0, le=5.0)
+    album_similarity_weight: float = Field(default=0.9, ge=0.0, le=5.0)
+    genre_similarity_weight: float = Field(default=0.85, ge=0.0, le=5.0)
+    year_similarity_weight: float = Field(default=0.45, ge=0.0, le=5.0)
+    rating_similarity_weight: float = Field(default=0.25, ge=0.0, le=5.0)
     seed: int | None = None
 
 
 class QueueTrack(Track):
     score: float
     reason: str
+    score_breakdown: dict[str, float] = Field(default_factory=dict)
+
+
+class SimilarTrack(Track):
+    similarity_score: float
+    similarity_reason: str
+    audio_similarity: float | None = None
+
+
+class AutoDjAvoidRule(BaseModel):
+    id: int
+    scope: Literal["track", "artist", "album", "genre"]
+    target_key: str
+    label: str
+    created_at: str
+    updated_at: str
+
+
+class AutoDjAvoidRequest(BaseModel):
+    scope: Literal["track", "artist", "album", "genre"]
+    track_id: int | None = None
+    value: str | None = Field(default=None, max_length=500)
+
+
+class RecommendationFeedbackRequest(BaseModel):
+    track_id: int
+    event_type: Literal["play_next", "add_to_queue", "manual_play"]
+    weight: float = Field(default=1.0, ge=0.0, le=5.0)
 
 
 class AutoDjResponse(BaseModel):
@@ -376,8 +451,36 @@ class BackupResponse(BaseModel):
     backup_path: str
 
 
+class DiagnosticItem(BaseModel):
+    key: str
+    label: str
+    ok: bool
+    message: str
+    path: str | None = None
+
+
+class StartupDiagnosticsResponse(BaseModel):
+    ok: bool
+    generated_at: str
+    items: list[DiagnosticItem]
+    log_path: str
+    app_data_path: str
+
+
+class LogTailResponse(BaseModel):
+    path: str
+    exists: bool
+    lines: list[str] = Field(default_factory=list)
+
+
+class SupportBundleResponse(BaseModel):
+    bundle_path: str
+    file_count: int
+
+
 class SettingsResponse(BaseModel):
     library_path: str | None = None
     database_path: str
+    suggested_music_path: str | None = None
     write_ratings_to_files: bool = False
     extra: dict[str, Any] = Field(default_factory=dict)

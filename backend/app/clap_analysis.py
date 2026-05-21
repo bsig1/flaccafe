@@ -122,12 +122,21 @@ def save_config(
 
 
 def dependency_status() -> dict[str, bool]:
-    activate_ml_runtime()
+    activated = activate_ml_runtime()
+    if use_managed_ml_runtime() and not activated:
+        return {
+            "torch": False,
+            "transformers": False,
+            "librosa": False,
+            "soundfile": False,
+            "soxr": False,
+        }
     return {
         "torch": importlib.util.find_spec("torch") is not None,
         "transformers": importlib.util.find_spec("transformers") is not None,
         "librosa": importlib.util.find_spec("librosa") is not None,
         "soundfile": importlib.util.find_spec("soundfile") is not None,
+        "soxr": importlib.util.find_spec("soxr") is not None,
     }
 
 
@@ -137,9 +146,11 @@ def dependencies_installed() -> bool:
 
 
 def dependency_errors() -> dict[str, str]:
-    activate_ml_runtime()
+    activated = activate_ml_runtime()
+    if use_managed_ml_runtime() and not activated:
+        return {}
     errors: dict[str, str] = {}
-    for name in ("torch", "transformers", "librosa", "soundfile"):
+    for name in ("torch", "transformers", "librosa", "soundfile", "soxr"):
         if importlib.util.find_spec(name) is None:
             continue
         try:
@@ -250,6 +261,17 @@ def _processor_call(processor: Any, audio: Any | None = None, **kwargs: Any) -> 
         return processor(audios=audio, **kwargs)
 
 
+def _exception_chain_message(exc: BaseException) -> str:
+    messages: list[str] = []
+    current: BaseException | None = exc
+    while current is not None:
+        text = f"{type(current).__name__}: {current}"
+        if text not in messages:
+            messages.append(text)
+        current = current.__cause__ or current.__context__
+    return " -> ".join(messages)
+
+
 class ClapAnalyzer:
     def __init__(self, config: ClapConfig | None = None) -> None:
         activate_ml_runtime()
@@ -265,14 +287,19 @@ class ClapAnalyzer:
         self.librosa = librosa
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.config.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.processor = transformers.ClapProcessor.from_pretrained(
-            self.config.model_id,
-            cache_dir=str(self.config.cache_dir),
-        )
-        self.model = transformers.ClapModel.from_pretrained(
-            self.config.model_id,
-            cache_dir=str(self.config.cache_dir),
-        ).to(self.device)
+        try:
+            processor_class = transformers.ClapProcessor
+            model_class = transformers.ClapModel
+            self.processor = processor_class.from_pretrained(
+                self.config.model_id,
+                cache_dir=str(self.config.cache_dir),
+            )
+            self.model = model_class.from_pretrained(
+                self.config.model_id,
+                cache_dir=str(self.config.cache_dir),
+            ).to(self.device)
+        except Exception as exc:
+            raise RuntimeError(f"Could not load CLAP model runtime: {_exception_chain_message(exc)}") from exc
         self.model.eval()
         self.sample_rate = int(
             getattr(getattr(self.processor, "feature_extractor", None), "sampling_rate", 48000)

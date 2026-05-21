@@ -65,11 +65,47 @@ function Stop-Port {
   }
 }
 
+function Get-PortProcesses {
+  param([int]$Port)
+
+  $connections = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+  $processIds = $connections |
+    Where-Object { $_.OwningProcess -and $_.OwningProcess -ne 0 } |
+    Select-Object -ExpandProperty OwningProcess -Unique
+
+  foreach ($processId in $processIds) {
+    Get-CimInstance Win32_Process -Filter "ProcessId = $processId" -ErrorAction SilentlyContinue
+  }
+}
+
+function Test-BackendDevProcess {
+  $processes = @(Get-PortProcesses -Port 8765)
+  if ($processes.Count -eq 0) {
+    return $false
+  }
+
+  foreach ($process in $processes) {
+    $name = [string]$process.Name
+    $commandLine = [string]$process.CommandLine
+    if ($name -notmatch "python" -or $commandLine -notmatch "uvicorn" -or $commandLine -notmatch "backend\.app\.main:app") {
+      return $false
+    }
+  }
+
+  return $true
+}
+
 Set-Location $Root
+
+$DefaultMlRuntime = Join-Path $env:LOCALAPPDATA "FLAC Cafe\ml-runtime"
+if (-not $env:LOCAL_AUTODJ_ML_RUNTIME_DIR) {
+  $env:LOCAL_AUTODJ_ML_RUNTIME_DIR = $DefaultMlRuntime
+}
+$env:LOCAL_AUTODJ_USE_ML_RUNTIME = "1"
 
 $BackendProcess = $null
 $BackendStartedThisRun = $false
-if ((Test-Backend) -and -not (Test-BackendCurrent)) {
+if ((Test-Backend) -and ((-not (Test-BackendCurrent)) -or (-not (Test-BackendDevProcess)))) {
   Write-Host "Restarting stale backend on http://127.0.0.1:8765."
   Stop-Port -Port 8765
   Start-Sleep -Milliseconds 500

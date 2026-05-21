@@ -15,6 +15,17 @@ APP_RATING_EMAIL = "rating@flaccafe.local"
 FMPS_RATING = "FMPS_Rating"
 PLAIN_RATING = "RATING"
 
+METADATA_KEY_MAP = {
+    "title": "title",
+    "artist": "artist",
+    "album": "album",
+    "album_artist": "albumartist",
+    "track_number": "tracknumber",
+    "disc_number": "discnumber",
+    "genre": "genre",
+    "year": "date",
+}
+
 
 def normalize_rating(value: float | None) -> float | None:
     if value is None:
@@ -131,3 +142,41 @@ def write_track_rating(path: Path, rating: float | None) -> None:
         return
 
     raise ValueError(f"Writing ratings is not supported for {path.suffix or 'this file type'} yet")
+
+
+def _metadata_value(value: object) -> list[str] | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return [text] if text else None
+
+
+def write_track_metadata(path: Path, metadata: dict[str, object]) -> None:
+    if not path.exists() or not path.is_file():
+        raise ValueError("Audio file is missing on disk")
+
+    audio = MutagenFile(path, easy=True)
+    if audio is None:
+        raise ValueError("Could not read audio tags")
+
+    if audio.tags is None:
+        try:
+            audio.add_tags()
+        except Exception as exc:
+            raise ValueError(f"Writing metadata is not supported for {path.suffix or 'this file type'} yet") from exc
+    if audio.tags is None:
+        raise ValueError("Could not create audio tags")
+
+    for field, tag_key in METADATA_KEY_MAP.items():
+        if field not in metadata:
+            continue
+        value = _metadata_value(metadata[field])
+        try:
+            if value is None:
+                audio.tags.pop(tag_key, None)
+            else:
+                audio.tags[tag_key] = value
+        except Exception as exc:
+            raise ValueError(f"Could not write {field} to {path.suffix or 'this file type'}") from exc
+
+    audio.save()

@@ -1,6 +1,6 @@
 {
   "name": "flac-cafe",
-  "version": "0.1.4",
+  "version": "0.1.11",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,6 +8,8 @@
     "frontend:dev": "tsc -p frontend/tsconfig.json && vite build --outDir ./frontend/dist --emptyOutDir && vite preview --host 127.0.0.1 --port 1420 --strictPort --outDir ./frontend/dist",
     "build": "tsc -p frontend/tsconfig.json && vite build --outDir ./frontend/dist --emptyOutDir",
     "check": "tsc -p frontend/tsconfig.json --noEmit",
+    "test:backend": "powershell -ExecutionPolicy Bypass -File scripts/test_backend.ps1",
+    "test": "npm run check && npm run test:backend",
     "backend:dev": "powershell -ExecutionPolicy Bypass -File scripts/run_backend.ps1",
     "desktop": "tauri dev",
     "package:msi": "powershell -ExecutionPolicy Bypass -File scripts/build_msi.ps1",

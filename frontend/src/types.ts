@@ -17,6 +17,8 @@ export interface Track {
   analysis_updated_at: string | null;
   year: number | null;
   duration_seconds: number | null;
+  bitrate: number | null;
+  audio_fingerprint: string | null;
   rating: number | null;
   play_count: number;
   skip_count: number;
@@ -29,6 +31,7 @@ export interface Track {
 export interface QueueTrack extends Track {
   score: number;
   reason: string;
+  score_breakdown: Record<string, number>;
 }
 
 export interface TrackPage {
@@ -36,6 +39,17 @@ export interface TrackPage {
   total: number;
   limit: number;
   offset: number;
+}
+
+export interface TrackMetadataUpdate {
+  title?: string | null;
+  artist?: string | null;
+  album?: string | null;
+  album_artist?: string | null;
+  track_number?: number | null;
+  disc_number?: number | null;
+  genre?: string | null;
+  year?: number | null;
 }
 
 export interface AlbumSummary {
@@ -97,6 +111,21 @@ export interface PlayEventEntry {
 export interface DuplicateGroup {
   key: string;
   tracks: Track[];
+  match_reason: string;
+  recommended_keep_id: number | null;
+  recommendation_reason: string | null;
+  duration_spread_seconds: number | null;
+  bitrate_spread: number | null;
+  shared_fingerprint: boolean;
+  average_audio_similarity: number | null;
+  path_roots: string[];
+  analyzed_tracks: number;
+}
+
+export interface SimilarTrack extends Track {
+  similarity_score: number;
+  similarity_reason: string;
+  audio_similarity: number | null;
 }
 
 export interface LibraryHealthResponse {
@@ -283,6 +312,7 @@ export interface AudioAnalysisProgress {
 export interface SettingsResponse {
   library_path: string | null;
   database_path: string;
+  suggested_music_path?: string | null;
   write_ratings_to_files: boolean;
   extra: Record<string, unknown>;
 }
@@ -291,11 +321,43 @@ export interface SettingsUpdateRequest {
   write_ratings_to_files?: boolean;
 }
 
+export interface DiagnosticItem {
+  key: string;
+  label: string;
+  ok: boolean;
+  message: string;
+  path: string | null;
+}
+
+export interface StartupDiagnosticsResponse {
+  ok: boolean;
+  generated_at: string;
+  items: DiagnosticItem[];
+  log_path: string;
+  app_data_path: string;
+}
+
+export interface LogTailResponse {
+  path: string;
+  exists: boolean;
+  lines: string[];
+}
+
+export interface SupportBundleResponse {
+  bundle_path: string;
+  file_count: number;
+}
+
 export interface TrackDeleteResponse {
   track_id: number;
   removed_from_library: boolean;
   deleted_file: boolean;
   file_missing: boolean;
+}
+
+export interface TrackRestoreRequest {
+  path: string;
+  rating?: number | null;
 }
 
 export interface AutoDjSettings {
@@ -307,11 +369,27 @@ export interface AutoDjSettings {
   recently_played_cooldown_days: number;
   seed_track_id?: number | null;
   similarity_weight?: number;
+  rating_weight?: number;
+  recency_weight?: number;
+  skip_weight?: number;
+  exploration_weight?: number;
+  play_history_weight?: number;
+  feedback_weight?: number;
+  audio_similarity_weight?: number;
   artist_similarity_weight?: number;
   album_similarity_weight?: number;
   genre_similarity_weight?: number;
   year_similarity_weight?: number;
   rating_similarity_weight?: number;
+}
+
+export interface AutoDjAvoidRule {
+  id: number;
+  scope: "track" | "artist" | "album" | "genre";
+  target_key: string;
+  label: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface AutoDjResponse {

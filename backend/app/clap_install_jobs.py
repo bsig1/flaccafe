@@ -13,6 +13,7 @@ from .ml_runtime import (
     find_bootstrap_python,
     ml_runtime_dir,
     ml_runtime_python,
+    repair_runtime_python_dlls,
     use_managed_ml_runtime,
     write_runtime_metadata,
 )
@@ -184,6 +185,7 @@ def _run_job(job_id: str) -> None:
 
         if use_managed_ml_runtime():
             write_runtime_metadata(_jobs[job_id].device, bootstrap)
+            repair_runtime_python_dlls(bootstrap)
             activate_ml_runtime(force=True)
 
         deps = dependency_status()

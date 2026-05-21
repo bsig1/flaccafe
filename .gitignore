@@ -2,6 +2,7 @@
 .tools/
 .idea/
 logs/*
+backend/logs/*
 node_modules/
 frontend/dist/
 .tmp-*/
@@ -13,6 +14,7 @@ src-tauri/target/
 backend/data/*.sqlite3
 backend/data/*.sqlite3-*
 backend/exports/*.m3u
+backend/exports/*.zip
 backend/ml-runtime/
 backend/models/clap/*
 !backend/models/clap/.gitkeep

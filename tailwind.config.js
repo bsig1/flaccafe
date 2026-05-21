@@ -4,12 +4,12 @@ export default {
   theme: {
     extend: {
       colors: {
-        ink: "#121417",
-        panel: "#191d22",
-        line: "#2a3038",
-        moss: "#6fd08c",
-        ember: "#f1b65c",
-        muted: "#9aa4b2",
+        ink: "rgb(var(--color-ink) / <alpha-value>)",
+        panel: "rgb(var(--color-panel) / <alpha-value>)",
+        line: "rgb(var(--color-line) / <alpha-value>)",
+        moss: "rgb(var(--color-moss) / <alpha-value>)",
+        ember: "rgb(var(--color-ember) / <alpha-value>)",
+        muted: "rgb(var(--color-muted) / <alpha-value>)",
       },
       fontFamily: {
         sans: ["Inter", "Segoe UI", "system-ui", "sans-serif"],
@@ -18,4 +18,3 @@ export default {
   },
   plugins: [],
 };
-

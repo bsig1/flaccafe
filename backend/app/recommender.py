@@ -85,6 +85,14 @@ def album_token(value: str | None) -> str:
     return normalize_token(value)
 
 
+def genre_tokens(track: dict[str, Any]) -> set[str]:
+    return text_tokens(combined_genre(track))
+
+
+def avoid_track_key(track_id: int | str | None) -> str:
+    return str(track_id or "").strip()
+
+
 def base_rating_score(rating: float | None) -> float:
     # Ratings matter, but the curve is intentionally not steep enough to turn
     # AutoDJ into "all 5-star songs forever." Unrated tracks start near a weak
@@ -126,35 +134,72 @@ def score_track(
     now: datetime,
     rng: random.Random,
     seed_track: dict[str, Any] | None,
-) -> tuple[float, str]:
-    score = base_rating_score(track.get("rating"))
+) -> tuple[float, str, dict[str, float]]:
+    breakdown: dict[str, float] = {}
+    rating_delta = base_rating_score(track.get("rating")) * request.rating_weight
+    score = rating_delta
+    breakdown["rating"] = round(rating_delta, 3)
     reason_parts = [f"rating {track.get('rating') or 'unrated'}"]
 
     recency_score, recency_reason = recently_played_adjustment(
         track, request.recently_played_cooldown_days, now
     )
-    score += recency_score
+    recency_delta = recency_score * request.recency_weight
+    score += recency_delta
+    breakdown["recency"] = round(recency_delta, 3)
     reason_parts.append(recency_reason)
 
     skip_count = int(track.get("skip_count") or 0)
     if skip_count:
-        score -= min(1.75, skip_count * 0.25)
+        skip_delta = -min(1.75, skip_count * 0.25) * request.skip_weight
+        score += skip_delta
+        breakdown["skips"] = round(skip_delta, 3)
         reason_parts.append("skip penalty")
 
+    last_skipped = parse_timestamp(track.get("last_skipped_at"))
+    if last_skipped is not None:
+        age = now - last_skipped.astimezone(timezone.utc)
+        if age < timedelta(days=14):
+            recent_skip_delta = -1.2 * (1 - age.total_seconds() / timedelta(days=14).total_seconds()) * request.skip_weight
+            score += recent_skip_delta
+            breakdown["recent_skip"] = round(recent_skip_delta, 3)
+            reason_parts.append("recent skip")
+
+    play_count = int(track.get("play_count") or 0)
+    if play_count:
+        play_delta = min(0.9, math.log1p(play_count) * 0.18) * request.play_history_weight
+        score += play_delta
+        breakdown["plays"] = round(play_delta, 3)
+        reason_parts.append("play history")
+
+    feedback_score = float(track.get("feedback_score") or 0)
+    if feedback_score:
+        feedback_delta = min(1.4, math.log1p(max(0.0, feedback_score)) * 0.45) * request.feedback_weight
+        score += feedback_delta
+        breakdown["manual_queue"] = round(feedback_delta, 3)
+        reason_parts.append("manual queue memory")
+
     if track.get("rating") is None:
-        score += 0.65
+        exploration_delta = 0.65 * request.exploration_weight
+        score += exploration_delta
+        breakdown["exploration"] = round(exploration_delta, 3)
         reason_parts.append("exploration")
 
     if seed_track and request.similarity_weight > 0:
-        similarity, similarity_reason = similarity_adjustment(track, seed_track)
+        similarity, similarity_reason = similarity_adjustment(track, seed_track, request)
         if similarity:
-            score += similarity * request.similarity_weight
+            similarity_delta = similarity * request.similarity_weight
+            score += similarity_delta
+            breakdown["similarity"] = round(similarity_delta, 3)
             reason_parts.append(similarity_reason)
 
     # A small jitter prevents the same library from producing identical queues
     # every time while still letting temperature control most of the surprise.
-    score += rng.uniform(-0.35, 0.35)
-    return score, ", ".join(reason_parts)
+    random_delta = rng.uniform(-0.35, 0.35)
+    score += random_delta
+    breakdown["random"] = round(random_delta, 3)
+    breakdown["total"] = round(score, 3)
+    return score, ", ".join(reason_parts), breakdown
 
 
 @dataclass
@@ -162,6 +207,19 @@ class Candidate:
     track: dict[str, Any]
     score: float
     reason: str
+    breakdown: dict[str, float]
+
+
+def track_matches_avoid(track: dict[str, Any], avoid_rules: dict[str, set[str]]) -> bool:
+    if avoid_track_key(track.get("id")) in avoid_rules.get("track", set()):
+        return True
+    if artist_tokens(track.get("artist")) & avoid_rules.get("artist", set()):
+        return True
+    if album_token(track.get("album")) in avoid_rules.get("album", set()):
+        return True
+    if genre_tokens(track) & avoid_rules.get("genre", set()):
+        return True
+    return False
 
 
 def weighted_choice(candidates: list[Candidate], temperature: float, rng: random.Random) -> Candidate:
@@ -192,11 +250,18 @@ def conflicts_with_cooldown(
     return artist_conflict or album_conflict
 
 
-def similarity_adjustment(track: dict[str, Any], seed_track: dict[str, Any]) -> tuple[float, str]:
+def similarity_adjustment(
+    track: dict[str, Any],
+    seed_track: dict[str, Any],
+    request: AutoDjRequest | None = None,
+) -> tuple[float, str]:
     # Similarity is a nudge, not a hard filter. CLAP embeddings compare the
     # actual audio when available; metadata still helps for unanalyzed tracks.
     if track["id"] == seed_track["id"]:
         return 0.0, ""
+
+    def weight(name: str, fallback: float) -> float:
+        return getattr(request, name, fallback) if request is not None else fallback
 
     score = 0.0
     reasons: list[str] = []
@@ -205,21 +270,21 @@ def similarity_adjustment(track: dict[str, Any], seed_track: dict[str, Any]) -> 
         parse_embedding(seed_track.get("analysis_embedding")),
     )
     if audio_similarity is not None and audio_similarity > 0:
-        score += audio_similarity * 2.2
+        score += audio_similarity * weight("audio_similarity_weight", 2.2)
         reasons.append(f"audio similarity {audio_similarity:.2f}")
 
     if artist_tokens(track.get("artist")) & artist_tokens(seed_track.get("artist")):
-        score += 1.6
+        score += weight("artist_similarity_weight", 1.6)
         reasons.append("similar artist")
 
     album = album_token(track.get("album"))
     if album and album == album_token(seed_track.get("album")):
-        score += 0.9
+        score += weight("album_similarity_weight", 0.9)
         reasons.append("same album")
 
     genre_overlap = text_tokens(combined_genre(track)) & text_tokens(combined_genre(seed_track))
     if genre_overlap:
-        score += 0.85
+        score += weight("genre_similarity_weight", 0.85)
         reasons.append("similar genre")
 
     year = track.get("year")
@@ -227,16 +292,16 @@ def similarity_adjustment(track: dict[str, Any], seed_track: dict[str, Any]) -> 
     if isinstance(year, int) and isinstance(seed_year, int):
         distance = abs(year - seed_year)
         if distance <= 2:
-            score += 0.45
+            score += weight("year_similarity_weight", 0.45)
             reasons.append("same era")
         elif distance <= 6:
-            score += 0.2
+            score += weight("year_similarity_weight", 0.45) * (0.2 / 0.45)
             reasons.append("nearby era")
 
     rating = track.get("rating")
     seed_rating = seed_track.get("rating")
     if isinstance(rating, (int, float)) and isinstance(seed_rating, (int, float)) and abs(rating - seed_rating) <= 1:
-        score += 0.25
+        score += weight("rating_similarity_weight", 0.25)
         reasons.append("rating match")
 
     return score, "seed " + "/".join(reasons) if reasons else ""
@@ -249,17 +314,25 @@ def generate_queue(request: AutoDjRequest) -> list[dict[str, Any]]:
         tracks = rows_to_dicts(
             conn.execute(
                 """
-                SELECT id, path, title, artist, album, album_artist, track_number,
-                       disc_number, genre, analysis_provider, analysis_model, analysis_genre,
-                       analysis_genre_confidence, analysis_genre_tags, analysis_embedding,
-                       analysis_updated_at, year, duration_seconds,
-                       rating, play_count, skip_count, last_played_at, last_skipped_at,
-                       date_added, file_modified_at
+                SELECT
+                    tracks.id, tracks.path, tracks.title, tracks.artist, tracks.album,
+                    tracks.album_artist, tracks.track_number, tracks.disc_number, tracks.genre,
+                    tracks.analysis_provider, tracks.analysis_model, tracks.analysis_genre,
+                    tracks.analysis_genre_confidence, tracks.analysis_genre_tags,
+                    tracks.analysis_embedding, tracks.analysis_updated_at, tracks.year,
+                    tracks.duration_seconds, tracks.bitrate, tracks.audio_fingerprint,
+                    tracks.rating, tracks.play_count, tracks.skip_count,
+                    tracks.last_played_at, tracks.last_skipped_at, tracks.date_added,
+                    tracks.file_modified_at,
+                    COALESCE(SUM(recommendation_feedback.weight), 0) AS feedback_score
                 FROM tracks
-                ORDER BY artist, album, disc_number, track_number, title
+                LEFT JOIN recommendation_feedback ON recommendation_feedback.track_id = tracks.id
+                GROUP BY tracks.id
+                ORDER BY tracks.artist, tracks.album, tracks.disc_number, tracks.track_number, tracks.title
                 """
             )
         )
+        avoid_rows = rows_to_dicts(conn.execute("SELECT scope, target_key FROM autodj_avoid_rules"))
         seed_track = None
         if request.seed_track_id is not None:
             seed_track = conn.execute(
@@ -267,7 +340,7 @@ def generate_queue(request: AutoDjRequest) -> list[dict[str, Any]]:
                 SELECT id, path, title, artist, album, album_artist, track_number,
                        disc_number, genre, analysis_provider, analysis_model, analysis_genre,
                        analysis_genre_confidence, analysis_genre_tags, analysis_embedding,
-                       analysis_updated_at, year, duration_seconds,
+                       analysis_updated_at, year, duration_seconds, bitrate, audio_fingerprint,
                        rating, play_count, skip_count, last_played_at, last_skipped_at,
                        date_added, file_modified_at
                 FROM tracks
@@ -280,7 +353,12 @@ def generate_queue(request: AutoDjRequest) -> list[dict[str, Any]]:
     if not tracks:
         return []
 
+    avoid_rules: dict[str, set[str]] = {"track": set(), "artist": set(), "album": set(), "genre": set()}
+    for row in avoid_rows:
+        avoid_rules.setdefault(row["scope"], set()).add(row["target_key"])
+
     remaining = tracks[:]
+    remaining = [track for track in remaining if not track_matches_avoid(track, avoid_rules)]
     if seed_track and len(remaining) > 1:
         remaining = [track for track in remaining if track["id"] != seed_track["id"]]
     queue: list[dict[str, Any]] = []
@@ -311,9 +389,9 @@ def generate_queue(request: AutoDjRequest) -> list[dict[str, Any]]:
             pool = strict_pool
 
         candidates = [
-            Candidate(track=track, score=score, reason=reason)
+            Candidate(track=track, score=score, reason=reason, breakdown=breakdown)
             for track in pool
-            for score, reason in [score_track(track, request, now, rng, seed_track)]
+            for score, reason, breakdown in [score_track(track, request, now, rng, seed_track)]
         ]
 
         if not strict_pool:
@@ -329,7 +407,12 @@ def generate_queue(request: AutoDjRequest) -> list[dict[str, Any]]:
                     candidate.reason += ", cooldown penalty"
 
         picked = weighted_choice(candidates, request.temperature, rng)
-        selected = {**picked.track, "score": round(picked.score, 3), "reason": picked.reason}
+        selected = {
+            **picked.track,
+            "score": round(picked.score, 3),
+            "reason": picked.reason,
+            "score_breakdown": picked.breakdown,
+        }
         queue.append(selected)
         remaining = [track for track in remaining if track["id"] != picked.track["id"]]
 

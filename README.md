@@ -2,13 +2,25 @@
 
 Open-source local music recommendation prototype for downloaded music collections.
 
+This a very alpha prototype, expect bugs.
+
+## Demo
+
+A very early Windows demo build is available here:
+
+...
+
+This is an alpha prototype. Expect bugs. Linux support is not available yet.
+
+## Architecture Overview
+
 This first slice uses:
 
 - Tauri v2 for the desktop shell
 - React, TypeScript, and Vite for the UI
 - Python, FastAPI, mutagen, and SQLite for library scanning and recommendations
 
-The prototype is intentionally not a full player. It scans local files, stores metadata and ratings, generates an AutoDJ queue, and exports that queue as an `.m3u` playlist.
+It scans local files, stores metadata and ratings, generates an AutoDJ queue, and exports that queue as an `.m3u` playlist.
 It also has an optional CLAP analysis path for audio embeddings, zero-shot genre tags, and seed-track similarity.
 
 ## Why FastAPI First

@@ -2,6 +2,19 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --color-ink: 19 15 13;
+  --color-panel: 33 26 21;
+  --color-line: 58 48 40;
+  --color-moss: 143 215 189;
+  --color-ember: 217 154 78;
+  --color-muted: 185 170 151;
+  --color-paper: 249 241 229;
+  --color-hover-panel: 43 34 27;
+  --color-scroll-track: 24 19 15;
+  --color-scroll-thumb: 107 87 72;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -14,13 +27,15 @@ body,
 
 body {
   margin: 0;
-  background: #121417;
-  color: #f4f6f8;
+  background:
+    linear-gradient(180deg, rgb(39 29 22 / 0.5), rgb(var(--color-ink) / 0) 32%),
+    rgb(var(--color-ink));
+  color: rgb(var(--color-paper));
   font-family: Inter, "Segoe UI", system-ui, sans-serif;
 }
 
 * {
-  scrollbar-color: #3b424b #15181d;
+  scrollbar-color: rgb(var(--color-scroll-thumb)) rgb(var(--color-scroll-track));
   scrollbar-width: thin;
 }
 
@@ -30,26 +45,33 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: #15181d;
+  background: rgb(var(--color-scroll-track));
 }
 
 ::-webkit-scrollbar-thumb {
-  border: 2px solid #15181d;
+  border: 2px solid rgb(var(--color-scroll-track));
   border-radius: 999px;
-  background: #3b424b;
+  background: rgb(var(--color-scroll-thumb));
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #53606b;
+  background: rgb(138 113 92);
 }
 
 ::-webkit-scrollbar-corner {
-  background: #15181d;
+  background: rgb(var(--color-scroll-track));
 }
 
 button,
 input {
   font: inherit;
+}
+
+input[type="checkbox"].accent-moss,
+input[type="checkbox"].accent-ember {
+  width: 0.875rem;
+  height: 0.875rem;
+  accent-color: rgb(var(--color-ember));
 }
 
 input[type="range"].player-progress {
@@ -68,7 +90,7 @@ input[type="range"].player-progress::-webkit-slider-runnable-track {
   height: 6px;
   border-radius: 999px;
   background:
-    linear-gradient(90deg, #79d98f 0 var(--progress, 0%), #30353d var(--progress, 0%) 100%);
+    linear-gradient(90deg, rgb(var(--color-ember)) 0 var(--progress, 0%), rgb(var(--color-line)) var(--progress, 0%) 100%);
 }
 
 input[type="range"].player-progress::-webkit-slider-thumb {
@@ -76,9 +98,9 @@ input[type="range"].player-progress::-webkit-slider-thumb {
   height: 14px;
   margin-top: -4px;
   appearance: none;
-  border: 2px solid #15181d;
+  border: 2px solid rgb(var(--color-scroll-track));
   border-radius: 999px;
-  background: #f4f6f8;
+  background: rgb(var(--color-paper));
   box-shadow: 0 0 0 1px rgb(255 255 255 / 0.16);
 }
 
@@ -88,14 +110,14 @@ input[type="range"].player-progress:disabled::-webkit-slider-thumb {
 
 @layer components {
   .icon-button {
-    @apply grid h-9 w-9 place-items-center rounded border border-line bg-panel text-muted transition hover:border-moss/60 hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-line disabled:hover:text-muted;
+    @apply grid h-9 w-9 place-items-center rounded border border-line bg-panel text-muted shadow-sm transition hover:border-ember/70 hover:bg-[rgb(var(--color-hover-panel))] hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-line disabled:hover:text-muted;
   }
 
   .primary-button {
-    @apply inline-flex h-9 items-center gap-2 rounded bg-moss px-3 text-sm font-medium text-ink transition hover:bg-[#85dfa0] disabled:cursor-not-allowed disabled:opacity-60;
+    @apply inline-flex h-9 items-center gap-2 rounded bg-ember px-3 text-sm font-medium text-ink shadow-sm transition hover:bg-[rgb(239_182_111)] disabled:cursor-not-allowed disabled:opacity-60;
   }
 
   .secondary-button {
-    @apply inline-flex h-9 items-center gap-2 rounded border border-line bg-panel px-3 text-sm font-medium text-white transition hover:border-ember/60 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-line;
+    @apply inline-flex h-9 items-center gap-2 rounded border border-line bg-panel px-3 text-sm font-medium text-white shadow-sm transition hover:border-moss/60 hover:bg-[rgb(var(--color-hover-panel))] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-line;
   }
 }

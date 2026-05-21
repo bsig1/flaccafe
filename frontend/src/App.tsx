@@ -5,6 +5,7 @@ import {
   BarChart3,
   CheckCircle2,
   Clock3,
+  Coffee,
   Download,
   EyeOff,
   ExternalLink,
@@ -16,8 +17,11 @@ import {
   ListMusic,
   ChevronDown,
   Pause,
+  Pencil,
   Play,
   Plus,
+  Repeat,
+  CircleStop,
   MoreHorizontal,
   RefreshCw,
   ShieldCheck,
@@ -35,7 +39,7 @@ import {
   Wand2,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type { CSSProperties, ChangeEvent, MouseEvent as ReactMouseEvent, ReactNode, UIEvent as ReactUIEvent } from "react";
 
 import {
@@ -44,13 +48,18 @@ import {
   audioUrl,
   backupDatabase,
   clearArtistCache,
+  createSupportBundle,
+  createAutoDjAvoidRule,
   createPlaylist,
   createSmartPlaylist,
+  deleteAutoDjAvoidRule,
   deleteTrack,
   deletePlaylist,
   deleteSmartPlaylist,
   exportQueue,
   exportPlaylist,
+  fetchBackendHealth,
+  fetchBackendLog,
   fetchClapAudioAnalysis,
   fetchClapCoverage,
   fetchClapInstall,
@@ -59,6 +68,7 @@ import {
   fetchAlbums,
   fetchArtistInfo,
   fetchArtistLocalTracks,
+  fetchAutoDjAvoidRules,
   fetchHistory,
   fetchLibraryHealth,
   fetchLibraryStats,
@@ -66,10 +76,12 @@ import {
   fetchPlaylists,
   fetchPlaylistTracks,
   fetchSettings,
+  fetchSimilarTracks,
   fetchScanProgress,
   fetchSmartPlaylistPresets,
   fetchSmartPlaylistTracks,
   fetchSmartPlaylists,
+  fetchStartupDiagnostics,
   fetchTrack,
   fetchTrackPage,
   generateAutoDj,
@@ -81,11 +93,14 @@ import {
   pauseClapAudioAnalysis,
   previewSmartPlaylist,
   removeTrackFromPlaylist,
+  restoreTrack,
   resumeClapAudioAnalysis,
   startClapAudioAnalysis,
   startClapInstall,
   startScanLibrary,
+  recordRecommendationFeedback,
   updateClapConfig,
+  updateTrackMetadata,
   updateSettings,
   updateTrackRating,
 } from "./api";
@@ -93,6 +108,7 @@ import { clearSmtcState, listenForSmtcButtons, updateSmtcState } from "./tauriMe
 import type { SmtcButtonPayload } from "./tauriMedia";
 import type {
   AlbumSummary,
+  AutoDjAvoidRule,
   ArtistInfoResponse,
   AudioAnalysisCoverage,
   AudioAnalysisProgress,
@@ -102,6 +118,7 @@ import type {
   ClapStatusResponse,
   LibraryHealthResponse,
   LibraryStatsResponse,
+  LogTailResponse,
   LyricsResponse,
   PlayEventEntry,
   PlaylistSummary,
@@ -111,12 +128,21 @@ import type {
   SettingsResponse,
   SmartPlaylistRule,
   SmartPlaylistSummary,
+  SimilarTrack,
+  StartupDiagnosticsResponse,
   Track,
+  TrackMetadataUpdate,
 } from "./types";
 
 type Page = "library" | "analysis" | "nowPlaying" | "artist" | "history" | "autodj" | "settings";
 type LibraryView = "tracks" | "albums" | "playlists" | "smart" | "health";
+type BackendStatus = "unknown" | "ok" | "down" | "restarting";
+type PlaybackMode = "normal" | "repeatOne" | "repeatQueue" | "stopAfterCurrent";
 type SortDirection = "asc" | "desc";
+type ThemeAccent = "cafe" | "mint" | "rose" | "blue";
+type UiDensity = "comfortable" | "compact";
+type FontScale = "small" | "default" | "large";
+type PlayerLayout = "full" | "compact";
 type SortKey =
   | "title"
   | "artist"
@@ -130,6 +156,7 @@ type SortKey =
   | "analysis_provider"
   | "analysis_updated_at"
   | "year"
+  | "bitrate"
   | "rating"
   | "duration_seconds"
   | "play_count"
@@ -138,6 +165,7 @@ type SortKey =
   | "last_skipped_at"
   | "date_added"
   | "file_modified_at"
+  | "audio_fingerprint"
   | "path";
 type MetadataColumnKey =
   | "title"
@@ -152,6 +180,7 @@ type MetadataColumnKey =
   | "analysis_provider"
   | "analysis_updated_at"
   | "year"
+  | "bitrate"
   | "rating"
   | "duration_seconds"
   | "play_count"
@@ -161,6 +190,7 @@ type MetadataColumnKey =
   | "date_added"
   | "file_modified_at"
   | "file_name"
+  | "audio_fingerprint"
   | "path";
 type LibraryColumnKey = "play" | MetadataColumnKey;
 
@@ -182,6 +212,8 @@ interface TrackContextMenu {
   track: Track;
   x: number;
   y: number;
+  flipY: boolean;
+  submenuLeft: boolean;
   queue: Track[];
   removable?: boolean;
 }
@@ -190,6 +222,14 @@ interface ColumnContextMenu {
   x: number;
   y: number;
 }
+
+interface DeleteTrackPrompt {
+  trackIds: number[];
+  title: string;
+  allowFileDelete: boolean;
+}
+
+type RememberedDeleteChoice = "library" | "file";
 
 interface UiPreferences {
   hideFilePaths: boolean;
@@ -202,17 +242,63 @@ interface UiPreferences {
   albumGrid: boolean;
   showToasts: boolean;
   miniPlayer: boolean;
+  themeAccent: ThemeAccent;
+  density: UiDensity;
+  fontScale: FontScale;
+  playerLayout: PlayerLayout;
   enableArtistLookup: boolean;
   libraryVisibleColumns: MetadataColumnKey[];
 }
 
+interface AutoDjTemplate {
+  id: string;
+  name: string;
+  settings: AutoDjSettings;
+}
+
+type UndoAction =
+  | { type: "library-remove"; label: string; tracks: Track[] }
+  | { type: "playlist-remove"; label: string; playlistId: number; trackIds: number[] };
+
 const LIBRARY_PAGE_SIZE = 150;
 const DEFAULT_FADE_MS = 150;
 const END_FADE_SECONDS = 1;
+const QUEUE_HISTORY_LIMIT = 12;
+const TRACK_CONTEXT_MENU_WIDTH = 224;
+const TRACK_CONTEXT_MENU_HEIGHT = 430;
+const TRACK_AVOID_SUBMENU_WIDTH = 176;
+const TRACK_AVOID_SUBMENU_HEIGHT = 138;
+const MENU_VIEWPORT_MARGIN = 12;
+
+const themeAccentValues: Record<ThemeAccent, { ember: string; moss: string }> = {
+  cafe: { ember: "217 154 78", moss: "143 215 189" },
+  mint: { ember: "122 208 183", moss: "173 220 140" },
+  rose: { ember: "226 120 120", moss: "233 181 107" },
+  blue: { ember: "123 168 232", moss: "133 215 198" },
+};
+
+const fontScaleValues: Record<FontScale, string> = {
+  small: "15px",
+  default: "16px",
+  large: "17px",
+};
+
+const codecSupportChecks = [
+  { label: "MP3", mime: "audio/mpeg" },
+  { label: "FLAC", mime: "audio/flac" },
+  { label: "M4A / AAC", mime: "audio/mp4; codecs=\"mp4a.40.2\"" },
+  { label: "Ogg Vorbis", mime: "audio/ogg; codecs=\"vorbis\"" },
+  { label: "Opus", mime: "audio/ogg; codecs=\"opus\"" },
+  { label: "WAV", mime: "audio/wav; codecs=\"1\"" },
+  { label: "AIFF", mime: "audio/aiff" },
+];
 const storageKeys = {
   uiPreferences: "flac-cafe-ui-preferences",
   hideFilePaths: "flac-cafe-hide-file-paths",
   lastSession: "flac-cafe-last-session",
+  deleteChoice: "flac-cafe-delete-choice",
+  quickStartDismissed: "flac-cafe-quick-start-dismissed",
+  autoDjTemplates: "flac-cafe-autodj-templates",
 } as const;
 const legacyStorageKeys = {
   uiPreferences: "local-autodj-ui-preferences",
@@ -247,6 +333,7 @@ const libraryColumnDefinitions: LibraryColumnDefinition[] = [
   { key: "year", label: "Year", category: "Metadata", defaultWidth: 90, sortKey: "year", align: "right" },
   { key: "track_number", label: "Track", category: "Metadata", defaultWidth: 90, sortKey: "track_number", align: "right" },
   { key: "disc_number", label: "Disc", category: "Metadata", defaultWidth: 80, sortKey: "disc_number", align: "right" },
+  { key: "bitrate", label: "Bitrate", category: "Metadata", defaultWidth: 110, sortKey: "bitrate", align: "right" },
   { key: "play_count", label: "Plays", category: "Listening", defaultWidth: 90, sortKey: "play_count", align: "right" },
   { key: "skip_count", label: "Skips", category: "Listening", defaultWidth: 90, sortKey: "skip_count", align: "right" },
   { key: "last_played_at", label: "Last Played", category: "Listening", defaultWidth: 150, sortKey: "last_played_at" },
@@ -265,11 +352,13 @@ const libraryColumnDefinitions: LibraryColumnDefinition[] = [
   { key: "analysis_updated_at", label: "Analyzed", category: "Analysis", defaultWidth: 145, sortKey: "analysis_updated_at" },
   { key: "file_name", label: "File Name", category: "File", defaultWidth: 240, sortKey: "path" },
   { key: "path", label: "File Path", category: "File", defaultWidth: 420, sortKey: "path" },
+  { key: "audio_fingerprint", label: "Fingerprint", category: "File", defaultWidth: 180 },
   { key: "file_modified_at", label: "Modified", category: "File", defaultWidth: 145, sortKey: "file_modified_at" },
 ];
 
 const libraryColumnKeys = libraryColumnDefinitions.map((column) => column.key);
 const libraryColumnKeySet = new Set<MetadataColumnKey>(libraryColumnKeys);
+const librarySelectionColumnWidth = 44;
 
 const defaultLibraryColumnWidths: Record<LibraryColumnKey, number> = {
   play: 64,
@@ -280,6 +369,7 @@ const defaultLibraryColumnWidths: Record<LibraryColumnKey, number> = {
   track_number: 90,
   disc_number: 80,
   genre: 150,
+  bitrate: 110,
   analysis_genre: 160,
   analysis_genre_confidence: 110,
   analysis_provider: 120,
@@ -294,6 +384,7 @@ const defaultLibraryColumnWidths: Record<LibraryColumnKey, number> = {
   date_added: 145,
   file_modified_at: 145,
   file_name: 240,
+  audio_fingerprint: 180,
   path: 420,
 };
 
@@ -306,6 +397,18 @@ const defaultAutoDj: AutoDjSettings = {
   recently_played_cooldown_days: 14,
   seed_track_id: null,
   similarity_weight: 0,
+  rating_weight: 1,
+  recency_weight: 1,
+  skip_weight: 1,
+  exploration_weight: 1,
+  play_history_weight: 0.7,
+  feedback_weight: 0.8,
+  audio_similarity_weight: 2.2,
+  artist_similarity_weight: 1.6,
+  album_similarity_weight: 0.9,
+  genre_similarity_weight: 0.85,
+  year_similarity_weight: 0.45,
+  rating_similarity_weight: 0.25,
 };
 
 function formatDuration(seconds: number | null): string {
@@ -398,6 +501,13 @@ function reasonChipClass(reason: string): string {
   return "border-line bg-panel text-neutral-200";
 }
 
+function breakdownEntries(track: QueueTrack): Array<[string, number]> {
+  return Object.entries(track.score_breakdown ?? {})
+    .filter(([key]) => key !== "total")
+    .filter((entry): entry is [string, number] => typeof entry[1] === "number" && Math.abs(entry[1]) > 0.001)
+    .sort((left, right) => Math.abs(right[1]) - Math.abs(left[1]));
+}
+
 function formatPercent(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) {
     return "--";
@@ -426,6 +536,20 @@ function formatTime(seconds: number | null | undefined): string {
   return `${minutes}m ${remainingSeconds.toString().padStart(2, "0")}s`;
 }
 
+function formatBitrate(value: number | null | undefined): string {
+  if (!value || !Number.isFinite(value)) {
+    return "-";
+  }
+  return `${Math.round(value / 1000).toLocaleString()} kbps`;
+}
+
+function formatFingerprint(value: string | null | undefined): string {
+  if (!value) {
+    return "-";
+  }
+  return value.length > 14 ? value.slice(0, 14) : value;
+}
+
 function formatDate(value: string | null | undefined): string {
   if (!value) {
     return "-";
@@ -440,6 +564,34 @@ function formatShortDate(value: string | null | undefined): string {
   }
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString();
+}
+
+function codecSupportRows() {
+  if (typeof document === "undefined") {
+    return codecSupportChecks.map((codec) => ({ ...codec, support: "" }));
+  }
+  const audio = document.createElement("audio");
+  return codecSupportChecks.map((codec) => ({ ...codec, support: audio.canPlayType(codec.mime) }));
+}
+
+function formatCodecSupport(support: string): string {
+  if (support === "probably") {
+    return "Likely";
+  }
+  if (support === "maybe") {
+    return "Maybe";
+  }
+  return "No direct support";
+}
+
+function codecSupportClass(support: string): string {
+  if (support === "probably") {
+    return "border-moss/40 bg-moss/10 text-moss";
+  }
+  if (support === "maybe") {
+    return "border-ember/40 bg-ember/10 text-ember";
+  }
+  return "border-red-400/40 bg-red-500/10 text-red-300";
 }
 
 function parseLyricTimestamp(line: string): number | null {
@@ -465,6 +617,16 @@ function fileName(path: string | null): string {
   return parts[parts.length - 1] || path;
 }
 
+function fileExtension(path: string | null): string {
+  const name = fileName(path);
+  const index = name.lastIndexOf(".");
+  return index >= 0 ? name.slice(index).toLowerCase() : "";
+}
+
+function supportsFileTagWriting(path: string | null): boolean {
+  return new Set([".flac", ".mp3", ".m4a", ".mp4", ".ogg", ".opus"]).has(fileExtension(path));
+}
+
 function primaryArtistName(value: string | null | undefined): string {
   if (!value) {
     return "";
@@ -485,6 +647,39 @@ function normalizeLibraryColumns(value: unknown): MetadataColumnKey[] {
   return unique.length > 0 ? unique : defaultLibraryVisibleColumns;
 }
 
+function readRememberedDeleteChoice(): RememberedDeleteChoice | null {
+  try {
+    const value = window.localStorage.getItem(storageKeys.deleteChoice);
+    return value === "library" || value === "file" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeRememberedDeleteChoice(choice: RememberedDeleteChoice) {
+  try {
+    window.localStorage.setItem(storageKeys.deleteChoice, choice);
+  } catch {
+    // Remembering delete preference is a convenience only.
+  }
+}
+
+function readQuickStartDismissed(): boolean {
+  try {
+    return window.localStorage.getItem(storageKeys.quickStartDismissed) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function writeQuickStartDismissed() {
+  try {
+    window.localStorage.setItem(storageKeys.quickStartDismissed, "true");
+  } catch {
+    // The quick-start card can be shown again if local storage is unavailable.
+  }
+}
+
 function readUiPreferences(): UiPreferences {
   const defaults: UiPreferences = {
     hideFilePaths: true,
@@ -497,6 +692,10 @@ function readUiPreferences(): UiPreferences {
     albumGrid: true,
     showToasts: true,
     miniPlayer: false,
+    themeAccent: "cafe",
+    density: "comfortable",
+    fontScale: "default",
+    playerLayout: "full",
     enableArtistLookup: true,
     libraryVisibleColumns: defaultLibraryVisibleColumns,
   };
@@ -509,6 +708,18 @@ function readUiPreferences(): UiPreferences {
         ...defaults,
         ...parsed,
         startupPage: validPages.includes(parsed.startupPage as Page) ? (parsed.startupPage as Page) : defaults.startupPage,
+        themeAccent: ["cafe", "mint", "rose", "blue"].includes(parsed.themeAccent as ThemeAccent)
+          ? (parsed.themeAccent as ThemeAccent)
+          : defaults.themeAccent,
+        density: ["comfortable", "compact"].includes(parsed.density as UiDensity)
+          ? (parsed.density as UiDensity)
+          : defaults.density,
+        fontScale: ["small", "default", "large"].includes(parsed.fontScale as FontScale)
+          ? (parsed.fontScale as FontScale)
+          : defaults.fontScale,
+        playerLayout: ["full", "compact"].includes(parsed.playerLayout as PlayerLayout)
+          ? (parsed.playerLayout as PlayerLayout)
+          : defaults.playerLayout,
         libraryVisibleColumns: normalizeLibraryColumns(parsed.libraryVisibleColumns),
       };
     }
@@ -519,6 +730,32 @@ function readUiPreferences(): UiPreferences {
     };
   } catch {
     return defaults;
+  }
+}
+
+function readAutoDjTemplates(): AutoDjTemplate[] {
+  try {
+    const raw = window.localStorage.getItem(storageKeys.autoDjTemplates);
+    if (!raw) {
+      return [];
+    }
+    const parsed = JSON.parse(raw) as AutoDjTemplate[];
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .filter((template) => template?.id && template?.name && template?.settings)
+      .slice(0, 24);
+  } catch {
+    return [];
+  }
+}
+
+function writeAutoDjTemplates(templates: AutoDjTemplate[]) {
+  try {
+    window.localStorage.setItem(storageKeys.autoDjTemplates, JSON.stringify(templates.slice(0, 24)));
+  } catch {
+    // Templates are a convenience; failing to persist them should not block AutoDJ.
   }
 }
 
@@ -693,6 +930,8 @@ function TrackDetailsPanel({
   onAnalyzeTracks,
   onAddTracksToPlaylist,
   onDeleteTrack,
+  onEditTrack,
+  onRevealTrack,
 }: {
   track: Track | null;
   queue: Track[];
@@ -703,6 +942,8 @@ function TrackDetailsPanel({
   onAnalyzeTracks: (trackIds: number[]) => void;
   onAddTracksToPlaylist: (trackIds: number[]) => void;
   onDeleteTrack: (trackId: number, deleteFile: boolean) => void;
+  onEditTrack: (track: Track) => void;
+  onRevealTrack: (track: Track) => void;
 }) {
   const [artworkFailed, setArtworkFailed] = useState(false);
 
@@ -719,7 +960,7 @@ function TrackDetailsPanel({
   const artworkSrc = !artworkFailed ? albumArtworkUrl(track.id) : null;
 
   return (
-    <aside className="flex w-96 shrink-0 flex-col border-l border-line bg-[#14171b]">
+    <aside className="flex w-96 shrink-0 flex-col border-l border-line bg-[#18130f]">
       <div className="flex h-14 items-center justify-between border-b border-line px-4">
         <div className="min-w-0">
           <div className="truncate text-sm font-semibold text-white">Track Details</div>
@@ -753,11 +994,11 @@ function TrackDetailsPanel({
                 <Play size={14} />
                 Play
               </button>
-              <details className="relative">
+              <details className="relative" data-auto-close>
                 <summary className="icon-button h-8 w-8 cursor-pointer list-none [&::-webkit-details-marker]:hidden" title="More track actions">
                   <MoreHorizontal size={15} />
                 </summary>
-                <div className="absolute left-0 top-9 z-30 w-48 overflow-hidden rounded border border-line bg-[#191d22] py-1 text-sm shadow-2xl">
+                <div className="absolute left-0 top-9 z-30 w-48 overflow-hidden rounded border border-line bg-[#211a15] py-1 text-sm shadow-2xl">
                   <button className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10" type="button" onClick={() => onAddTracksToPlaylist([track.id])}>
                     <Plus size={14} />
                     Add to playlist
@@ -765,6 +1006,14 @@ function TrackDetailsPanel({
                   <button className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10 disabled:text-muted" type="button" disabled={isAudioAnalyzing} onClick={() => onAnalyzeTracks([track.id])}>
                     <BarChart3 size={14} />
                     Analyze track
+                  </button>
+                  <button className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10" type="button" onClick={() => onEditTrack(track)}>
+                    <Pencil size={14} />
+                    Edit metadata
+                  </button>
+                  <button className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10" type="button" onClick={() => onRevealTrack(track)}>
+                    <FolderOpen size={14} />
+                    Reveal in Explorer
                   </button>
                   <div className="my-1 border-t border-line" />
                   <button className="flex w-full items-center gap-2 px-3 py-2 text-left text-ember hover:bg-white/10" type="button" onClick={() => onDeleteTrack(track.id, false)}>
@@ -881,7 +1130,17 @@ function TrackDetailsPanel({
   );
 }
 
-function Sidebar({ activePage, setActivePage }: { activePage: Page; setActivePage: (page: Page) => void }) {
+function Sidebar({
+  activePage,
+  setActivePage,
+  hasDiagnosticsIssue,
+  hasAnalysisIssue,
+}: {
+  activePage: Page;
+  setActivePage: (page: Page) => void;
+  hasDiagnosticsIssue: boolean;
+  hasAnalysisIssue: boolean;
+}) {
   const mainItems = [
     { id: "library" as const, label: "Library", icon: Library },
     { id: "nowPlaying" as const, label: "Now Playing", icon: FileText },
@@ -895,10 +1154,10 @@ function Sidebar({ activePage, setActivePage }: { activePage: Page; setActivePag
   ];
 
   return (
-    <aside className="flex h-screen w-56 shrink-0 flex-col border-r border-line bg-[#15181d]">
+    <aside className="flex h-screen w-56 shrink-0 flex-col border-r border-line bg-[#19130f]">
       <div className="flex h-16 items-center gap-3 border-b border-line px-5">
-        <div className="grid h-9 w-9 place-items-center rounded bg-moss text-ink">
-          <ListMusic size={19} />
+        <div className="grid h-9 w-9 place-items-center rounded bg-ember text-ink shadow-sm shadow-black/20">
+          <Coffee size={19} />
         </div>
         <div>
           <div className="text-sm font-semibold text-white">FLAC Cafe</div>
@@ -937,12 +1196,58 @@ function Sidebar({ activePage, setActivePage }: { activePage: Page; setActivePag
               onClick={() => setActivePage(item.id)}
             >
               <Icon size={17} />
-              {item.label}
+              <span className="min-w-0 flex-1 text-left">{item.label}</span>
+              {item.id === "analysis" && hasAnalysisIssue && (
+                <span className="h-2 w-2 rounded-full bg-ember" title="Audio analysis needs attention" />
+              )}
+              {item.id === "settings" && hasDiagnosticsIssue && (
+                <span className="h-2 w-2 rounded-full bg-ember" title="Startup self-check found issues" />
+              )}
             </button>
           );
         })}
       </nav>
     </aside>
+  );
+}
+
+function QuickStartPanel({
+  onOpenSettings,
+  onOpenAnalysis,
+  onDismiss,
+}: {
+  onOpenSettings: () => void;
+  onOpenAnalysis: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <section className="border-b border-line bg-[#17110e] px-6 py-5">
+        <div className="flex flex-wrap items-start justify-between gap-5 rounded border border-ember/25 bg-panel/80 p-4 shadow-sm shadow-black/20">
+        <div className="max-w-2xl">
+          <div className="flex items-center gap-2 text-sm font-semibold text-white">
+            <Library size={16} />
+            Start your FLAC Cafe library
+          </div>
+          <p className="mt-2 text-sm leading-6 text-muted">
+            Pick a local music folder in Settings, scan it into SQLite, then optionally install CLAP analysis later
+            for genre hints and stronger AutoDJ similarity.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button className="primary-button" type="button" onClick={onOpenSettings}>
+            <Settings size={16} />
+            Settings
+          </button>
+          <button className="secondary-button" type="button" onClick={onOpenAnalysis}>
+            <BarChart3 size={16} />
+            Analysis
+          </button>
+          <button className="icon-button" type="button" title="Dismiss quick start" onClick={onDismiss}>
+            <X size={16} />
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -978,15 +1283,23 @@ function LibraryPage({
   scrollTop,
   setScrollTop,
   onRating,
+  onBulkRating,
   onPlayTrack,
+  onPlayNext,
+  onAddToQueue,
   onSelectAlbum,
   onSelectPlaylist,
   onCreatePlaylist,
   onDeletePlaylist,
   onAddTracksToPlaylist,
   onDeleteTrack,
+  onDeleteTracks,
+  onEditTrack,
+  onRequestDeleteTracks,
   onRemoveTrackFromPlaylist,
+  onRemoveTracksFromPlaylist,
   onMovePlaylistTrack,
+  onExportTracks,
   onExportPlaylist,
   onImportPlaylist,
   onPreviewSmartRule,
@@ -995,6 +1308,8 @@ function LibraryPage({
   onSelectSmartPlaylist,
   onShuffleTracks,
   onQuickAutoDj,
+  onAvoidAutoDj,
+  onRevealTrack,
   detailTrack,
   setDetailTrack,
   onAnalyzeTracks,
@@ -1010,6 +1325,10 @@ function LibraryPage({
   setNewPlaylistName,
   setImportPlaylistPath,
   setSmartPlaylistName,
+  showQuickStart,
+  onDismissQuickStart,
+  onOpenSettings,
+  onOpenAnalysis,
 }: {
   tracks: Track[];
   totalTracks: number;
@@ -1042,15 +1361,23 @@ function LibraryPage({
   scrollTop: number;
   setScrollTop: (value: number) => void;
   onRating: (trackId: number, rating: number | null) => void;
+  onBulkRating: (trackIds: number[], rating: number | null) => void | Promise<void>;
   onPlayTrack: (track: Track, queue: Track[]) => void;
+  onPlayNext: (track: Track) => void;
+  onAddToQueue: (track: Track) => void;
   onSelectAlbum: (albumId: number) => void;
   onSelectPlaylist: (playlistId: number) => void;
   onCreatePlaylist: () => void;
   onDeletePlaylist: (playlistId: number) => void;
   onAddTracksToPlaylist: (trackIds: number[]) => void;
   onDeleteTrack: (trackId: number, deleteFile: boolean) => void;
+  onDeleteTracks: (trackIds: number[], deleteFile: boolean) => void | Promise<void>;
+  onEditTrack: (track: Track) => void;
+  onRequestDeleteTracks: (trackIds: number[], title: string, allowFileDelete?: boolean) => void;
   onRemoveTrackFromPlaylist: (trackId: number) => void;
+  onRemoveTracksFromPlaylist: (trackIds: number[]) => void | Promise<void>;
   onMovePlaylistTrack: (trackId: number, direction: "up" | "down") => void;
+  onExportTracks: (trackIds: number[]) => void | Promise<void>;
   onExportPlaylist: (playlistId: number) => void;
   onImportPlaylist: () => void;
   onPreviewSmartRule: (rule: SmartPlaylistRule) => void;
@@ -1059,6 +1386,8 @@ function LibraryPage({
   onSelectSmartPlaylist: (smartPlaylistId: number) => void;
   onShuffleTracks: (tracks: Track[]) => void;
   onQuickAutoDj: (seedTrack?: Track | null) => void;
+  onAvoidAutoDj: (scope: "track" | "artist" | "album" | "genre", track?: Track | null) => void | Promise<void>;
+  onRevealTrack: (track: Track) => void;
   detailTrack: Track | null;
   setDetailTrack: (track: Track | null) => void;
   onAnalyzeTracks: (trackIds: number[]) => void;
@@ -1074,15 +1403,20 @@ function LibraryPage({
   setNewPlaylistName: (value: string) => void;
   setImportPlaylistPath: (value: string) => void;
   setSmartPlaylistName: (value: string) => void;
+  showQuickStart: boolean;
+  onDismissQuickStart: () => void;
+  onOpenSettings: () => void;
+  onOpenAnalysis: () => void;
 }) {
   const [columnWidths, setColumnWidths] = useState(defaultLibraryColumnWidths);
   const [contextMenu, setContextMenu] = useState<TrackContextMenu | null>(null);
   const [columnMenu, setColumnMenu] = useState<ColumnContextMenu | null>(null);
+  const [selectedTrackIds, setSelectedTrackIds] = useState<Set<number>>(() => new Set());
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const visibleColumns = normalizeLibraryColumns(libraryVisibleColumns);
   const visibleColumnDefs = libraryColumnDefinitions.filter((column) => visibleColumns.includes(column.key));
-  const tableWidth = columnWidths.play + visibleColumnDefs.reduce((total, column) => total + columnWidths[column.key], 0);
+  const tableWidth = librarySelectionColumnWidth + columnWidths.play + visibleColumnDefs.reduce((total, column) => total + columnWidths[column.key], 0);
   const rowPadding = compactRows ? "px-3 py-2" : "px-3 py-3";
   const activeAlbum = albums.find((album) => album.id === selectedAlbumId) ?? null;
   const activePlaylist = playlists.find((playlist) => playlist.id === selectedPlaylistId) ?? null;
@@ -1094,6 +1428,17 @@ function LibraryPage({
         : libraryView === "smart"
           ? smartTracks
           : tracks;
+  const selectedTracks = viewTracks.filter((track) => selectedTrackIds.has(track.id));
+  const selectedIds = selectedTracks.map((track) => track.id);
+  const allViewSelected = viewTracks.length > 0 && viewTracks.every((track) => selectedTrackIds.has(track.id));
+
+  useEffect(() => {
+    const visibleIds = new Set(viewTracks.map((track) => track.id));
+    setSelectedTrackIds((current) => {
+      const next = new Set(Array.from(current).filter((trackId) => visibleIds.has(trackId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [libraryView, viewTracks]);
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -1128,6 +1473,33 @@ function LibraryPage({
     };
   }, []);
 
+  useEffect(() => {
+    function handleDeleteKey(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      if (
+        event.key !== "Delete" ||
+        target?.closest("input, textarea, select, [contenteditable='true']") ||
+        selectedIds.length === 0 && !detailTrack
+      ) {
+        return;
+      }
+      event.preventDefault();
+      if (selectedIds.length > 0) {
+        onRequestDeleteTracks(
+          selectedIds,
+          selectedIds.length === 1
+            ? display(selectedTracks[0]?.title, "Selected track")
+            : `${selectedIds.length.toLocaleString()} selected tracks`,
+        );
+      } else if (detailTrack) {
+        onRequestDeleteTracks([detailTrack.id], display(detailTrack.title, "Selected track"));
+      }
+    }
+
+    window.addEventListener("keydown", handleDeleteKey);
+    return () => window.removeEventListener("keydown", handleDeleteKey);
+  }, [selectedIds, selectedTracks, detailTrack, onRequestDeleteTracks]);
+
   function handleSort(key: SortKey) {
     setSort((current) => {
       if (current.key === key) {
@@ -1139,6 +1511,36 @@ function LibraryPage({
 
   function handleResize(column: LibraryColumnKey, width: number) {
     setColumnWidths((current) => ({ ...current, [column]: width }));
+  }
+
+  function toggleTrackSelection(trackId: number) {
+    setSelectedTrackIds((current) => {
+      const next = new Set(current);
+      if (next.has(trackId)) {
+        next.delete(trackId);
+      } else {
+        next.add(trackId);
+      }
+      return next;
+    });
+  }
+
+  function setSelectionForList(list: Track[], selected: boolean) {
+    setSelectedTrackIds((current) => {
+      const next = new Set(current);
+      for (const track of list) {
+        if (selected) {
+          next.add(track.id);
+        } else {
+          next.delete(track.id);
+        }
+      }
+      return next;
+    });
+  }
+
+  function clearSelection() {
+    setSelectedTrackIds(new Set());
   }
 
   function handleScroll(event: ReactUIEvent<HTMLDivElement>) {
@@ -1159,12 +1561,24 @@ function LibraryPage({
     event.preventDefault();
     setDetailTrack(track);
     setColumnMenu(null);
+    const fitsBelow = event.clientY + TRACK_CONTEXT_MENU_HEIGHT + MENU_VIEWPORT_MARGIN <= window.innerHeight;
+    const fitsRight =
+      event.clientX + TRACK_CONTEXT_MENU_WIDTH + TRACK_AVOID_SUBMENU_WIDTH + MENU_VIEWPORT_MARGIN <= window.innerWidth;
+    const x = Math.min(
+      Math.max(MENU_VIEWPORT_MARGIN, event.clientX),
+      window.innerWidth - TRACK_CONTEXT_MENU_WIDTH - MENU_VIEWPORT_MARGIN,
+    );
+    const y = fitsBelow
+      ? event.clientY
+      : Math.max(MENU_VIEWPORT_MARGIN, event.clientY - TRACK_CONTEXT_MENU_HEIGHT);
     setContextMenu({
       track,
       queue,
       removable,
-      x: Math.min(event.clientX, window.innerWidth - 240),
-      y: Math.min(event.clientY, window.innerHeight - 360),
+      x,
+      y,
+      flipY: !fitsBelow,
+      submenuLeft: !fitsRight,
     });
   }
 
@@ -1217,6 +1631,8 @@ function LibraryPage({
         return display(track.disc_number, "-");
       case "genre":
         return display(trackGenre(track), "-");
+      case "bitrate":
+        return formatBitrate(track.bitrate);
       case "analysis_genre":
         return display(track.analysis_genre, "-");
       case "analysis_genre_confidence":
@@ -1247,6 +1663,8 @@ function LibraryPage({
         return formatShortDate(track.file_modified_at);
       case "file_name":
         return fileName(track.path);
+      case "audio_fingerprint":
+        return formatFingerprint(track.audio_fingerprint);
       case "path":
         return track.path;
       default:
@@ -1257,6 +1675,18 @@ function LibraryPage({
   function renderTableHeader(sortable: boolean) {
     return (
       <tr onContextMenu={openColumnContextMenu}>
+        <th className="px-3 py-3">
+          <input
+            aria-label="Select current view"
+            type="checkbox"
+            className="h-4 w-4 accent-moss"
+            checked={allViewSelected}
+            disabled={viewTracks.length === 0}
+            onChange={(event) => setSelectionForList(viewTracks, event.target.checked)}
+            onClick={(event) => event.stopPropagation()}
+            onContextMenu={(event) => event.stopPropagation()}
+          />
+        </th>
         <ResizableHeader label="" column="play" width={columnWidths.play} sort={sort} onSort={handleSort} onResize={handleResize} />
         {visibleColumnDefs.map((column) => (
           <ResizableHeader
@@ -1280,11 +1710,21 @@ function LibraryPage({
       <tr
         key={track.id}
         className={`cursor-pointer border-b border-line/60 hover:bg-white/[0.035] ${
-          detailTrack?.id === track.id ? "bg-white/[0.06]" : ""
+          detailTrack?.id === track.id ? "bg-white/[0.06]" : selectedTrackIds.has(track.id) ? "bg-white/[0.035]" : ""
         }`}
         onClick={() => setDetailTrack(track)}
         onContextMenu={(event) => openTrackContextMenu(event, track, list, Boolean(options.removable))}
       >
+        <td className={rowPadding}>
+          <input
+            aria-label={`Select ${display(track.title, "track")}`}
+            type="checkbox"
+            className="h-4 w-4 accent-moss"
+            checked={selectedTrackIds.has(track.id)}
+            onChange={() => toggleTrackSelection(track.id)}
+            onClick={(event) => event.stopPropagation()}
+          />
+        </td>
         <td className={rowPadding}>
           <div className="flex items-center justify-center">
             <button
@@ -1343,7 +1783,7 @@ function LibraryPage({
           </button>
         </div>
       </header>
-      <div className="flex items-center justify-between gap-4 border-b border-line bg-[#14171b] px-6 py-3">
+      <div className="flex items-center justify-between gap-4 border-b border-line bg-[#18130f] px-6 py-3">
         <div className="flex items-center gap-1 rounded border border-line bg-panel p-1">
           {primaryLibraryViews.map((item) => {
             const Icon = item.icon;
@@ -1362,7 +1802,7 @@ function LibraryPage({
               </button>
             );
           })}
-          <details className="relative">
+          <details className="relative" data-auto-close>
             <summary
               className={`inline-flex h-8 cursor-pointer list-none items-center gap-2 rounded px-3 text-sm transition [&::-webkit-details-marker]:hidden ${
                 libraryView === "smart" || libraryView === "health"
@@ -1374,7 +1814,7 @@ function LibraryPage({
               <MoreHorizontal size={15} />
               Tools
             </summary>
-            <div className="absolute left-0 top-10 z-40 w-52 overflow-hidden rounded border border-line bg-[#191d22] py-1 text-sm shadow-2xl">
+            <div className="absolute left-0 top-10 z-40 w-52 overflow-hidden rounded border border-line bg-[#211a15] py-1 text-sm shadow-2xl">
               {utilityLibraryViews.map((item) => {
                 const Icon = item.icon;
                 const active = libraryView === item.id;
@@ -1413,11 +1853,11 @@ function LibraryPage({
             <Wand2 size={16} />
             AutoDJ
           </button>
-          <details className="relative">
+          <details className="relative" data-auto-close>
             <summary className="icon-button cursor-pointer list-none [&::-webkit-details-marker]:hidden" title="Library actions">
               <MoreHorizontal size={17} />
             </summary>
-            <div className="absolute right-0 top-11 z-40 w-72 rounded border border-line bg-[#191d22] p-3 text-sm shadow-2xl">
+            <div className="absolute right-0 top-11 z-40 w-72 rounded border border-line bg-[#211a15] p-3 text-sm shadow-2xl">
               <label className="grid gap-2 text-xs uppercase text-muted">
                 Playlist target
                 <select
@@ -1456,12 +1896,97 @@ function LibraryPage({
           </details>
         </div>
       </div>
+      {showQuickStart && (
+        <QuickStartPanel
+          onOpenSettings={onOpenSettings}
+          onOpenAnalysis={onOpenAnalysis}
+          onDismiss={onDismissQuickStart}
+        />
+      )}
+      {selectedIds.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line bg-[#15100d] px-6 py-2 text-sm">
+          <div className="text-muted">
+            <span className="font-medium text-white">{selectedIds.length.toLocaleString()}</span> selected
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button className="secondary-button h-8" type="button" onClick={() => setSelectionForList(viewTracks, true)}>
+              Select View
+            </button>
+            <button className="secondary-button h-8" type="button" onClick={clearSelection}>
+              Clear
+            </button>
+            <div className="mx-1 h-6 w-px bg-line" />
+            <RatingStars rating={null} onChange={(rating) => void onBulkRating(selectedIds, rating)} />
+            <button
+              className="secondary-button h-8"
+              type="button"
+              disabled={!targetPlaylistId}
+              onClick={() => void onAddTracksToPlaylist(selectedIds)}
+            >
+              <Plus size={14} />
+              Add
+            </button>
+            <button
+              className="secondary-button h-8"
+              type="button"
+              onClick={() => {
+                void onExportTracks(selectedIds);
+                clearSelection();
+              }}
+            >
+              <Download size={14} />
+              Export
+            </button>
+            {libraryView === "playlists" && activePlaylist && (
+              <button
+                className="secondary-button h-8"
+                type="button"
+                onClick={() => {
+                  void onRemoveTracksFromPlaylist(selectedIds);
+                  clearSelection();
+                }}
+              >
+                <Trash2 size={14} />
+                Remove
+              </button>
+            )}
+            <button
+              className="secondary-button h-8"
+              type="button"
+              disabled={isAudioAnalyzing}
+              onClick={() => {
+                onAnalyzeTracks(selectedIds);
+                clearSelection();
+              }}
+            >
+              <BarChart3 size={14} />
+              Analyze
+            </button>
+            <button
+              className="secondary-button h-8 text-ember"
+              type="button"
+              onClick={() => {
+                onRequestDeleteTracks(
+                  selectedIds,
+                  selectedIds.length === 1
+                    ? display(selectedTracks[0]?.title, "Selected track")
+                    : `${selectedIds.length.toLocaleString()} selected tracks`,
+                );
+              }}
+            >
+              <Trash2 size={14} />
+              Delete
+            </button>
+          </div>
+        </div>
+      )}
       <div className="min-h-0 flex flex-1">
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto" onScroll={handleScroll}>
         {libraryView === "tracks" && (
           <>
             <table className="w-full table-fixed text-left text-sm" style={{ minWidth: tableWidth }}>
               <colgroup>
+                <col style={{ width: librarySelectionColumnWidth }} />
                 <col style={{ width: columnWidths.play }} />
                 {visibleColumnDefs.map((column) => (
                   <col key={column.key} style={{ width: columnWidths[column.key] }} />
@@ -1485,8 +2010,20 @@ function LibraryPage({
               </div>
             )}
             {tracks.length === 0 && !isLoading && (
-              <div className="grid h-full place-items-center text-sm text-muted">
-                No tracks yet. Set a music folder and scan your library.
+              <div className="grid h-full place-items-center px-6 text-center">
+                <div className="max-w-md">
+                  <div className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded border border-line bg-panel text-moss">
+                    <FolderOpen size={24} />
+                  </div>
+                  <div className="text-base font-semibold text-white">No tracks in the library yet</div>
+                  <div className="mt-2 text-sm text-muted">
+                    Choose a music folder in Settings, then scan it to build your local catalog.
+                  </div>
+                  <button className="primary-button mx-auto mt-4" type="button" onClick={() => setLibraryView("health")}>
+                    <ShieldCheck size={15} />
+                    View library tools
+                  </button>
+                </div>
               </div>
             )}
           </>
@@ -1535,6 +2072,11 @@ function LibraryPage({
                     </button>
                   );
                 })}
+                {albums.length === 0 && (
+                  <div className="col-span-full px-3 py-10 text-center text-sm text-muted">
+                    Albums will appear here after the first library scan.
+                  </div>
+                )}
               </div>
             </section>
             <section className="min-w-0">
@@ -1557,13 +2099,14 @@ function LibraryPage({
                 </div>
               </div>
               <table className="w-full table-fixed text-left text-sm" style={{ minWidth: tableWidth }}>
-                <colgroup>
+              <colgroup>
+                  <col style={{ width: librarySelectionColumnWidth }} />
                   <col style={{ width: columnWidths.play }} />
                   {visibleColumnDefs.map((column) => (
                     <col key={column.key} style={{ width: columnWidths[column.key] }} />
                   ))}
                 </colgroup>
-                <thead className="border-b border-line bg-[#14171b] text-xs uppercase text-muted">
+                <thead className="border-b border-line bg-[#18130f] text-xs uppercase text-muted">
                   {renderTableHeader(false)}
                 </thead>
                 <tbody>{renderTrackRows(selectedAlbumTracks)}</tbody>
@@ -1618,6 +2161,11 @@ function LibraryPage({
                     </button>
                   );
                 })}
+                {playlists.length === 0 && (
+                  <div className="px-4 py-10 text-center text-sm text-muted">
+                    Create a playlist or import an .m3u to start grouping tracks.
+                  </div>
+                )}
               </div>
             </section>
             <section className="min-w-0">
@@ -1645,12 +2193,13 @@ function LibraryPage({
               </div>
               <table className="w-full table-fixed text-left text-sm" style={{ minWidth: tableWidth }}>
                 <colgroup>
+                  <col style={{ width: librarySelectionColumnWidth }} />
                   <col style={{ width: columnWidths.play }} />
                   {visibleColumnDefs.map((column) => (
                     <col key={column.key} style={{ width: columnWidths[column.key] }} />
                   ))}
                 </colgroup>
-                <thead className="border-b border-line bg-[#14171b] text-xs uppercase text-muted">
+                <thead className="border-b border-line bg-[#18130f] text-xs uppercase text-muted">
                   {renderTableHeader(false)}
                 </thead>
                 <tbody>{renderTrackRows(selectedPlaylistTracks, { removable: true })}</tbody>
@@ -1725,12 +2274,13 @@ function LibraryPage({
               </div>
               <table className="w-full table-fixed text-left text-sm" style={{ minWidth: tableWidth }}>
                 <colgroup>
+                  <col style={{ width: librarySelectionColumnWidth }} />
                   <col style={{ width: columnWidths.play }} />
                   {visibleColumnDefs.map((column) => (
                     <col key={column.key} style={{ width: columnWidths[column.key] }} />
                   ))}
                 </colgroup>
-                <thead className="border-b border-line bg-[#14171b] text-xs uppercase text-muted">
+                <thead className="border-b border-line bg-[#18130f] text-xs uppercase text-muted">
                   {renderTableHeader(false)}
                 </thead>
                 <tbody>{renderTrackRows(smartTracks)}</tbody>
@@ -1807,14 +2357,93 @@ function LibraryPage({
                 <div>
                   <h2 className="mb-2 text-sm font-semibold text-white">Potential Duplicates</h2>
                   <div className="grid gap-3">
-                    {(libraryHealth?.duplicate_groups ?? []).slice(0, 8).map((group) => (
-                      <div key={group.key} className="rounded border border-line bg-panel p-3">
-                        <div className="mb-2 text-sm font-medium text-white">{group.key}</div>
-                        {group.tracks.map((track) => (
-                          <div key={track.id} className="truncate text-xs text-muted">{track.path}</div>
-                        ))}
-                      </div>
-                    ))}
+                    {(libraryHealth?.duplicate_groups ?? []).slice(0, 8).map((group) => {
+                      const keepId = group.recommended_keep_id ?? group.tracks[0]?.id ?? null;
+                      const removableIds = group.tracks.filter((track) => track.id !== keepId).map((track) => track.id);
+                      return (
+                        <div key={group.key} className="rounded border border-line bg-panel p-3">
+                          <div className="mb-2 flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-medium text-white">{group.key}</div>
+                              <div className="mt-1 flex flex-wrap gap-1.5 text-xs">
+                                <span className="rounded border border-line bg-ink px-2 py-1 text-muted">{group.match_reason}</span>
+                                {group.duration_spread_seconds !== null && (
+                                  <span className="rounded border border-line bg-ink px-2 py-1 text-muted">
+                                    spread {formatTime(group.duration_spread_seconds)}
+                                  </span>
+                                )}
+                                {group.bitrate_spread !== null && (
+                                  <span className="rounded border border-line bg-ink px-2 py-1 text-muted">
+                                    bitrate spread {formatBitrate(group.bitrate_spread)}
+                                  </span>
+                                )}
+                                {group.shared_fingerprint && (
+                                  <span className="rounded border border-moss/40 bg-moss/10 px-2 py-1 text-moss">same fingerprint</span>
+                                )}
+                                {group.average_audio_similarity !== null && (
+                                  <span className="rounded border border-moss/40 bg-moss/10 px-2 py-1 text-moss">
+                                    CLAP {group.average_audio_similarity.toFixed(2)}
+                                  </span>
+                                )}
+                                {group.analyzed_tracks > 0 && (
+                                  <span className="rounded border border-moss/40 bg-moss/10 px-2 py-1 text-moss">
+                                    {group.analyzed_tracks} analyzed
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex shrink-0 items-center gap-2">
+                              <div className="text-xs text-muted">{group.tracks.length} tracks</div>
+                              <button
+                                className="secondary-button h-8"
+                                type="button"
+                                disabled={removableIds.length === 0}
+                                onClick={() => onRequestDeleteTracks(removableIds, `duplicates for ${group.key}`, true)}
+                              >
+                                <Trash2 size={14} />
+                                Remove Others
+                              </button>
+                            </div>
+                          </div>
+                          {group.recommendation_reason && (
+                            <div className="mb-2 rounded border border-moss/30 bg-moss/10 px-2 py-1.5 text-xs text-moss">
+                              Keep suggestion: {group.recommendation_reason}
+                            </div>
+                          )}
+                          <div className="grid gap-1">
+                            {group.tracks.map((track) => {
+                              const recommended = track.id === keepId;
+                              return (
+                                <button
+                                  key={track.id}
+                                  className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-white/[0.04] ${
+                                    recommended ? "bg-moss/10 text-moss" : "text-muted"
+                                  }`}
+                                  type="button"
+                                  onClick={() => setDetailTrack(track)}
+                                >
+                                  <span className="w-12 shrink-0 tabular-nums">{formatDuration(track.duration_seconds)}</span>
+                                  <span className="w-20 shrink-0 tabular-nums">{formatBitrate(track.bitrate)}</span>
+                                  <span className="min-w-0 flex-1 truncate">{track.path}</span>
+                                  <span className="w-24 shrink-0 truncate text-right">{formatFingerprint(track.audio_fingerprint)}</span>
+                                  {recommended && <span className="shrink-0 rounded border border-moss/40 px-2 py-0.5">keep</span>}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          {group.path_roots.length > 0 && (
+                            <details className="mt-2 text-xs text-muted">
+                              <summary className="cursor-pointer text-neutral-300">Folders</summary>
+                              <div className="mt-1 grid gap-1">
+                                {group.path_roots.map((path) => (
+                                  <div key={path} className="truncate">{path}</div>
+                                ))}
+                              </div>
+                            </details>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
                 <div>
@@ -1845,11 +2474,13 @@ function LibraryPage({
         onAnalyzeTracks={onAnalyzeTracks}
         onAddTracksToPlaylist={onAddTracksToPlaylist}
         onDeleteTrack={onDeleteTrack}
+        onEditTrack={onEditTrack}
+        onRevealTrack={onRevealTrack}
       />
       </div>
       {columnMenu && (
         <div
-          className="fixed z-50 max-h-[70vh] w-80 overflow-auto rounded border border-line bg-[#191d22] p-3 text-sm text-neutral-100 shadow-2xl"
+          className="fixed z-50 max-h-[70vh] w-80 overflow-auto rounded border border-line bg-[#211a15] p-3 text-sm text-neutral-100 shadow-2xl"
           style={{ left: columnMenu.x, top: columnMenu.y }}
           onClick={(event) => event.stopPropagation()}
           onContextMenu={(event) => event.preventDefault()}
@@ -1898,7 +2529,7 @@ function LibraryPage({
       )}
       {contextMenu && (
         <div
-          className="fixed z-50 w-56 overflow-hidden rounded border border-line bg-[#191d22] py-1 text-sm text-neutral-100 shadow-2xl"
+          className="fixed z-50 w-56 overflow-visible rounded border border-line bg-[#211a15] py-1 text-sm text-neutral-100 shadow-2xl"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onClick={(event) => event.stopPropagation()}
         >
@@ -1917,12 +2548,45 @@ function LibraryPage({
             className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10"
             type="button"
             onClick={() => {
+              onPlayNext(contextMenu.track);
+              setContextMenu(null);
+            }}
+          >
+            <SkipForward size={15} />
+            Play Next
+          </button>
+          <button
+            className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10"
+            type="button"
+            onClick={() => {
+              onAddToQueue(contextMenu.track);
+              setContextMenu(null);
+            }}
+          >
+            <Plus size={15} />
+            Add To Queue
+          </button>
+          <button
+            className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10"
+            type="button"
+            onClick={() => {
               setDetailTrack(contextMenu.track);
               setContextMenu(null);
             }}
           >
             <Info size={15} />
             Details
+          </button>
+          <button
+            className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10"
+            type="button"
+            onClick={() => {
+              onEditTrack(contextMenu.track);
+              setContextMenu(null);
+            }}
+          >
+            <Pencil size={15} />
+            Edit Metadata
           </button>
           <button
             className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10"
@@ -1935,6 +2599,54 @@ function LibraryPage({
             <Wand2 size={15} />
             AutoDJ From Track
           </button>
+          <button
+            className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10"
+            type="button"
+            onClick={() => {
+              onRevealTrack(contextMenu.track);
+              setContextMenu(null);
+            }}
+          >
+            <FolderOpen size={15} />
+            Reveal in Explorer
+          </button>
+          <div className="my-1 border-t border-line" />
+          <div className="group/avoid relative">
+            <button className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left hover:bg-white/10" type="button">
+              <span className="inline-flex items-center gap-2">
+                <X size={15} />
+                Avoid in AutoDJ
+              </span>
+              <span className="text-muted">{">"}</span>
+            </button>
+            <div
+              className={`invisible absolute z-50 w-44 overflow-hidden rounded border border-line bg-[#211a15] py-1 opacity-0 shadow-2xl transition group-hover/avoid:visible group-hover/avoid:opacity-100 ${
+                contextMenu.submenuLeft ? "right-full" : "left-full"
+              } ${contextMenu.flipY ? "bottom-0" : "top-0"}`}
+            >
+              {(
+                [
+                  ["track", "Track", X],
+                  ["artist", "Artist", UserRound],
+                  ["album", "Album", Album],
+                  ["genre", "Genre", SlidersHorizontal],
+                ] as const
+              ).map(([scope, label, Icon]) => (
+                <button
+                  key={scope}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10"
+                  type="button"
+                  onClick={() => {
+                    void onAvoidAutoDj(scope, contextMenu.track);
+                    setContextMenu(null);
+                  }}
+                >
+                  <Icon size={15} />
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
           <button
             className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10 disabled:text-muted"
             type="button"
@@ -2002,27 +2714,215 @@ function LibraryPage({
             className="flex w-full items-center gap-2 px-3 py-2 text-left text-ember hover:bg-white/10"
             type="button"
             onClick={() => {
-              onDeleteTrack(contextMenu.track.id, false);
+              onRequestDeleteTracks([contextMenu.track.id], display(contextMenu.track.title, "Selected track"));
               setContextMenu(null);
             }}
           >
             <Trash2 size={15} />
-            Remove From Library
-          </button>
-          <button
-            className="flex w-full items-center gap-2 px-3 py-2 text-left text-red-300 hover:bg-red-500/10"
-            type="button"
-            onClick={() => {
-              onDeleteTrack(contextMenu.track.id, true);
-              setContextMenu(null);
-            }}
-          >
-            <Trash2 size={15} />
-            Delete File Too
+            Delete...
           </button>
         </div>
       )}
     </main>
+  );
+}
+
+function MetadataEditorModal({
+  track,
+  writeToFiles,
+  onClose,
+  onSave,
+}: {
+  track: Track;
+  writeToFiles: boolean;
+  onClose: () => void;
+  onSave: (trackId: number, metadata: TrackMetadataUpdate) => void | Promise<void>;
+}) {
+  const [form, setForm] = useState({
+    title: track.title ?? "",
+    artist: track.artist ?? "",
+    album: track.album ?? "",
+    album_artist: track.album_artist ?? "",
+    track_number: track.track_number?.toString() ?? "",
+    disc_number: track.disc_number?.toString() ?? "",
+    genre: track.genre ?? "",
+    year: track.year?.toString() ?? "",
+  });
+
+  function textValue(value: string): string | null {
+    const cleaned = value.trim();
+    return cleaned || null;
+  }
+
+  function numberValue(value: string): number | null {
+    const cleaned = value.trim();
+    return cleaned ? Number(cleaned) : null;
+  }
+
+  const previewValues = {
+    title: textValue(form.title),
+    artist: textValue(form.artist),
+    album: textValue(form.album),
+    album_artist: textValue(form.album_artist),
+    track_number: numberValue(form.track_number),
+    disc_number: numberValue(form.disc_number),
+    genre: textValue(form.genre),
+    year: numberValue(form.year),
+  };
+  const metadataChanges = (
+    [
+      ["Title", track.title, previewValues.title],
+      ["Artist", track.artist, previewValues.artist],
+      ["Album", track.album, previewValues.album],
+      ["Album Artist", track.album_artist, previewValues.album_artist],
+      ["Genre", track.genre, previewValues.genre],
+      ["Year", track.year, previewValues.year],
+      ["Track", track.track_number, previewValues.track_number],
+      ["Disc", track.disc_number, previewValues.disc_number],
+    ] as const
+  ).filter(([, before, after]) => (before ?? null) !== (after ?? null));
+  const tagWritable = supportsFileTagWriting(track.path);
+
+  function updateField(field: keyof typeof form, value: string) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  async function submit() {
+    await onSave(track.id, previewValues);
+  }
+
+  return (
+    <div className="fixed inset-0 z-[70] grid place-items-center bg-black/55 p-6" role="dialog" aria-modal="true">
+      <div className="w-full max-w-2xl rounded border border-line bg-[#211a15] shadow-2xl">
+        <div className="flex items-center justify-between border-b border-line px-5 py-4">
+          <div>
+            <div className="text-base font-semibold text-white">Edit Metadata</div>
+            <div className="mt-1 truncate text-xs text-muted">{fileName(track.path)}</div>
+          </div>
+          <button className="icon-button" type="button" title="Close" onClick={onClose}>
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="grid gap-4 p-5">
+          <div className="grid gap-4 md:grid-cols-2">
+            {(
+              [
+                ["title", "Title"],
+                ["artist", "Artist"],
+                ["album", "Album"],
+                ["album_artist", "Album Artist"],
+                ["genre", "Genre"],
+                ["year", "Year"],
+                ["track_number", "Track Number"],
+                ["disc_number", "Disc Number"],
+              ] as const
+            ).map(([field, label]) => (
+              <label key={field} className="grid gap-2 text-sm text-neutral-200">
+                <span className="text-xs uppercase text-muted">{label}</span>
+                <input
+                  className="h-9 rounded border border-line bg-ink px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                  inputMode={field === "year" || field === "track_number" || field === "disc_number" ? "numeric" : undefined}
+                  value={form[field]}
+                  onChange={(event) => updateField(field, event.target.value)}
+                />
+              </label>
+            ))}
+          </div>
+
+          <div className={`rounded border px-3 py-2 text-xs ${writeToFiles ? "border-ember/40 bg-ember/10 text-ember" : "border-line bg-ink text-muted"}`}>
+            {writeToFiles && tagWritable
+              ? "File tag writing is enabled. Saving will update SQLite and supported audio file tags."
+              : writeToFiles
+                ? `${fileExtension(track.path).toUpperCase() || "This format"} may not support safe tag writing yet. Saving will try the file write and stop if mutagen rejects it.`
+                : "File tag writing is off. Saving will update SQLite only."}
+          </div>
+
+          <div className="rounded border border-line/70 bg-ink p-3 text-xs">
+            <div className="mb-2 font-medium text-neutral-200">Changes to save</div>
+            {metadataChanges.length === 0 ? (
+              <div className="text-muted">No changes yet.</div>
+            ) : (
+              <div className="grid gap-2">
+                {metadataChanges.map(([label, before, after]) => (
+                  <div key={label} className="grid grid-cols-[90px_1fr] gap-2">
+                    <div className="text-muted">{label}</div>
+                    <div className="min-w-0 truncate text-neutral-200">
+                      <span className="text-muted">{display(before, "Empty")}</span>
+                      <span className="px-2 text-ember">to</span>
+                      <span>{display(after, "Empty")}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 border-t border-line px-5 py-4">
+          <button className="secondary-button" type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="primary-button" type="button" onClick={() => void submit()}>
+            <Pencil size={15} />
+            Save Metadata
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeleteTrackDialog({
+  prompt,
+  onCancel,
+  onConfirm,
+}: {
+  prompt: DeleteTrackPrompt;
+  onCancel: () => void;
+  onConfirm: (deleteFile: boolean, remember: boolean) => void | Promise<void>;
+}) {
+  const [rememberChoice, setRememberChoice] = useState(false);
+
+  return (
+    <div className="fixed inset-0 z-[70] grid place-items-center bg-black/55 p-6" role="dialog" aria-modal="true">
+      <div className="w-full max-w-md rounded border border-line bg-[#211a15] shadow-2xl">
+        <div className="border-b border-line px-5 py-4">
+          <div className="text-base font-semibold text-white">Delete Track</div>
+          <div className="mt-1 text-sm text-muted">{prompt.title}</div>
+        </div>
+        <div className="grid gap-3 p-5 text-sm text-neutral-200">
+          <button className="secondary-button justify-start" type="button" onClick={() => void onConfirm(false, rememberChoice)}>
+            <Trash2 size={15} />
+            Remove from library only
+          </button>
+          <button
+            className="secondary-button justify-start text-red-300"
+            type="button"
+            disabled={!prompt.allowFileDelete}
+            onClick={() => void onConfirm(true, rememberChoice)}
+          >
+            <Trash2 size={15} />
+            Remove from library and delete file
+          </button>
+          <label className="mt-1 flex items-center justify-between gap-3 rounded border border-line/70 bg-ink px-3 py-2 text-xs text-muted">
+            <span>Remember this choice</span>
+            <input
+              type="checkbox"
+              className="h-4 w-4 accent-moss"
+              checked={rememberChoice}
+              onChange={(event) => setRememberChoice(event.target.checked)}
+            />
+          </label>
+          <div className="text-xs text-muted">Deleting the file cannot be undone.</div>
+        </div>
+        <div className="flex justify-end border-t border-line px-5 py-4">
+          <button className="secondary-button" type="button" onClick={onCancel}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -2063,6 +2963,8 @@ function AutoDjPage({
   currentTrackId,
   currentTrack,
   uiPreferences,
+  avoidRules,
+  onDeleteAvoidRule,
 }: {
   queue: QueueTrack[];
   setQueue: (tracks: QueueTrack[]) => void;
@@ -2072,6 +2974,8 @@ function AutoDjPage({
   currentTrackId: number | null;
   currentTrack: Track | null;
   uiPreferences: UiPreferences;
+  avoidRules: AutoDjAvoidRule[];
+  onDeleteAvoidRule: (ruleId: number) => void;
 }) {
   const [settings, setSettings] = useState<AutoDjSettings>({
     ...defaultAutoDj,
@@ -2080,12 +2984,123 @@ function AutoDjPage({
     similarity_weight: uiPreferences.similarityWeight,
   });
   const [busy, setBusy] = useState(false);
+  const [templates, setTemplates] = useState<AutoDjTemplate[]>(readAutoDjTemplates);
+  const [explainTrackKey, setExplainTrackKey] = useState<string | null>(null);
+  const [selectedQueueKeys, setSelectedQueueKeys] = useState<Set<string>>(() => new Set());
+  const [dragQueueIndex, setDragQueueIndex] = useState<number | null>(null);
+  const [similarPreview, setSimilarPreview] = useState<SimilarTrack[]>([]);
+  const [isSimilarityLoading, setIsSimilarityLoading] = useState(false);
   const presets: { label: string; settings: Partial<AutoDjSettings> }[] = [
     { label: "Favorites", settings: { temperature: 0.45, unrated_exploration_percent: 3, recently_played_cooldown_days: 21 } },
     { label: "Discovery", settings: { temperature: 1.25, unrated_exploration_percent: 35, recently_played_cooldown_days: 7 } },
     { label: "Deep Cuts", settings: { temperature: 1.05, unrated_exploration_percent: 18, recently_played_cooldown_days: 45 } },
     { label: "Similar", settings: { seed_track_id: currentTrack?.id ?? null, similarity_weight: uiPreferences.similarityWeight, temperature: 0.7 } },
   ];
+  const queueDuration = queue.reduce((total, track) => total + (track.duration_seconds ?? 0), 0);
+  const queueArtists = new Set(queue.map((track) => display(track.artist)).filter(Boolean)).size;
+  const clapTracks = queue.filter((track) => isClapAnalyzed(track)).length;
+  const queueKeys = queue.map((track, index) => `${track.id}-${index}`);
+  const allQueueSelected = queue.length > 0 && queueKeys.every((key) => selectedQueueKeys.has(key));
+
+  useEffect(() => {
+    const seedTrackId = settings.seed_track_id ?? null;
+    if (!seedTrackId) {
+      setSimilarPreview([]);
+      return;
+    }
+    let canceled = false;
+    setIsSimilarityLoading(true);
+    fetchSimilarTracks(seedTrackId, 10)
+      .then((tracks) => {
+        if (!canceled) {
+          setSimilarPreview(tracks);
+        }
+      })
+      .catch((error) => {
+        if (!canceled) {
+          setSimilarPreview([]);
+          setStatus(error instanceof Error ? error.message : "Could not load similar tracks");
+        }
+      })
+      .finally(() => {
+        if (!canceled) {
+          setIsSimilarityLoading(false);
+        }
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [settings.seed_track_id, setStatus]);
+
+  function toggleQueueSelection(key: string) {
+    setSelectedQueueKeys((current) => {
+      const next = new Set(current);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  }
+
+  function setQueueSelection(selected: boolean) {
+    setSelectedQueueKeys(selected ? new Set(queueKeys) : new Set());
+  }
+
+  function removeSelectedQueueItems() {
+    if (selectedQueueKeys.size === 0) {
+      return;
+    }
+    setQueue(queue.filter((track, index) => !selectedQueueKeys.has(`${track.id}-${index}`)));
+    setSelectedQueueKeys(new Set());
+    setExplainTrackKey(null);
+  }
+
+  function moveQueueItem(index: number, direction: "up" | "down") {
+    const target = direction === "up" ? index - 1 : index + 1;
+    if (target < 0 || target >= queue.length) {
+      return;
+    }
+    const next = [...queue];
+    [next[index], next[target]] = [next[target], next[index]];
+    setQueue(next);
+    setSelectedQueueKeys(new Set());
+  }
+
+  function reorderQueueItem(fromIndex: number, toIndex: number) {
+    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= queue.length || toIndex >= queue.length) {
+      return;
+    }
+    const next = [...queue];
+    const [moved] = next.splice(fromIndex, 1);
+    next.splice(toIndex, 0, moved);
+    setQueue(next);
+    setSelectedQueueKeys(new Set());
+    setExplainTrackKey(null);
+  }
+
+  function saveCurrentTemplate() {
+    const name = window.prompt("Template name", "AutoDJ Template");
+    if (!name?.trim()) {
+      return;
+    }
+    const template: AutoDjTemplate = {
+      id: typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}`,
+      name: name.trim(),
+      settings,
+    };
+    const next = [template, ...templates.filter((item) => item.name.toLowerCase() !== template.name.toLowerCase())].slice(0, 24);
+    setTemplates(next);
+    writeAutoDjTemplates(next);
+    setStatus(`Saved AutoDJ template ${template.name}`);
+  }
+
+  function deleteTemplate(templateId: string) {
+    const next = templates.filter((template) => template.id !== templateId);
+    setTemplates(next);
+    writeAutoDjTemplates(next);
+  }
 
   async function handleGenerate() {
     setBusy(true);
@@ -2133,11 +3148,15 @@ function AutoDjPage({
             <Plus size={17} />
             Add Queue
           </button>
+          <button className="secondary-button" type="button" disabled={queue.length === 0} onClick={() => setQueue([])}>
+            <X size={17} />
+            Clear
+          </button>
         </div>
       </header>
 
       <div className="grid min-h-0 flex-1 grid-cols-[320px_minmax(0,1fr)]">
-        <section className="border-r border-line p-5">
+        <section className="min-h-0 overflow-auto border-r border-line p-5">
           <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-white">
             <SlidersHorizontal size={17} />
             Settings
@@ -2153,6 +3172,32 @@ function AutoDjPage({
                 {preset.label}
               </button>
             ))}
+          </div>
+          <div className="mb-4 rounded border border-line/70 bg-ink p-3">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <div className="text-xs font-medium uppercase text-muted">Saved Templates</div>
+              <button className="text-xs text-moss hover:text-white" type="button" onClick={saveCurrentTemplate}>
+                Save
+              </button>
+            </div>
+            <div className="grid max-h-40 gap-1 overflow-auto">
+              {templates.map((template) => (
+                <div key={template.id} className="flex items-center justify-between gap-2 rounded bg-panel px-2 py-1.5 text-xs">
+                  <button
+                    className="min-w-0 flex-1 truncate text-left text-neutral-200 hover:text-white"
+                    type="button"
+                    onClick={() => setSettings({ ...settings, ...template.settings })}
+                    title={template.name}
+                  >
+                    {template.name}
+                  </button>
+                  <button className="text-muted hover:text-white" type="button" title="Delete template" onClick={() => deleteTemplate(template.id)}>
+                    <X size={13} />
+                  </button>
+                </div>
+              ))}
+              {templates.length === 0 && <div className="text-xs text-muted">Save tuned settings here for later queues.</div>}
+            </div>
           </div>
           <div className="grid gap-4">
             <NumberField
@@ -2213,7 +3258,136 @@ function AutoDjPage({
                 <Wand2 size={15} />
                 {settings.seed_track_id ? "Seeded from current track" : "Use current track as seed"}
               </button>
+              {settings.seed_track_id && (
+                <button
+                  className="text-xs text-muted hover:text-white"
+                  type="button"
+                  onClick={() => setSettings({ ...settings, seed_track_id: null })}
+                >
+                  Clear seed
+                </button>
+              )}
             </label>
+            {settings.seed_track_id && (
+              <div className="rounded border border-line/70 bg-ink p-3">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <div className="text-xs font-medium uppercase text-muted">Seed Neighbors</div>
+                  <div className="text-xs text-muted">{isSimilarityLoading ? "Loading" : `${similarPreview.length} shown`}</div>
+                </div>
+                <div className="grid max-h-56 gap-1 overflow-auto">
+                  {similarPreview.map((track) => (
+                    <div key={track.id} className="flex items-center gap-2 rounded bg-panel px-2 py-1.5 text-xs">
+                      <button
+                        className="icon-button h-7 w-7 shrink-0"
+                        type="button"
+                        title={`Play ${display(track.title, "track")}`}
+                        onClick={() => onPlayTrack(track, similarPreview)}
+                      >
+                        <Play size={13} />
+                      </button>
+                      <button
+                        className="min-w-0 flex-1 text-left"
+                        type="button"
+                        title={track.similarity_reason}
+                        onClick={() =>
+                          setSettings({
+                            ...settings,
+                            seed_track_id: track.id,
+                            similarity_weight: settings.similarity_weight || uiPreferences.similarityWeight,
+                          })
+                        }
+                      >
+                        <div className="truncate text-neutral-100">{display(track.title, "Untitled")}</div>
+                        <div className="truncate text-muted">{display(track.artist)} - {track.similarity_reason}</div>
+                      </button>
+                      <div className="shrink-0 text-right tabular-nums text-moss">
+                        {track.similarity_score.toFixed(2)}
+                        <div className="text-[10px] text-muted">{track.audio_similarity !== null ? track.audio_similarity.toFixed(2) : "--"}</div>
+                      </div>
+                    </div>
+                  ))}
+                  {!isSimilarityLoading && similarPreview.length === 0 && (
+                    <div className="text-xs text-muted">Analyze tracks with CLAP or use richer metadata for better neighbors.</div>
+                  )}
+                </div>
+              </div>
+            )}
+            <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
+              <div className="text-xs font-medium uppercase text-muted">Scoring Weights</div>
+              {(
+                [
+                  ["rating_weight", "Rating"],
+                  ["recency_weight", "Recency"],
+                  ["skip_weight", "Skips"],
+                  ["exploration_weight", "Exploration"],
+                  ["play_history_weight", "Play history"],
+                  ["feedback_weight", "Manual queue"],
+                ] as const
+              ).map(([key, label]) => (
+                <label key={key} className="grid gap-1">
+                  <span className="text-xs text-muted">
+                    {label} {Number(settings[key] ?? 0).toFixed(1)}
+                  </span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={3}
+                    step={0.1}
+                    value={Number(settings[key] ?? 0)}
+                    onChange={(event) => setSettings({ ...settings, [key]: Number(event.target.value) })}
+                    className="accent-moss"
+                  />
+                </label>
+              ))}
+            </div>
+            <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
+              <div className="text-xs font-medium uppercase text-muted">Seed Match Bias</div>
+              {(
+                [
+                  ["audio_similarity_weight", "Audio"],
+                  ["artist_similarity_weight", "Artist"],
+                  ["album_similarity_weight", "Album"],
+                  ["genre_similarity_weight", "Genre"],
+                  ["year_similarity_weight", "Era"],
+                  ["rating_similarity_weight", "Rating"],
+                ] as const
+              ).map(([key, label]) => (
+                <label key={key} className="grid gap-1">
+                  <span className="text-xs text-muted">
+                    {label} {Number(settings[key] ?? defaultAutoDj[key]).toFixed(2)}
+                  </span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={5}
+                    step={0.05}
+                    value={Number(settings[key] ?? defaultAutoDj[key])}
+                    onChange={(event) => setSettings({ ...settings, [key]: Number(event.target.value) })}
+                    className="accent-moss"
+                  />
+                </label>
+              ))}
+            </div>
+            <div className="rounded border border-line/70 bg-ink p-3">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <div className="text-xs font-medium uppercase text-muted">Avoid List</div>
+                <div className="text-xs text-muted">{avoidRules.length} rules</div>
+              </div>
+              <div className="grid max-h-44 gap-1 overflow-auto">
+                {avoidRules.map((rule) => (
+                  <div key={rule.id} className="flex items-center justify-between gap-2 rounded bg-panel px-2 py-1.5 text-xs">
+                    <span className="min-w-0 truncate">
+                      <span className="mr-2 uppercase text-muted">{rule.scope}</span>
+                      <span className="text-neutral-200">{rule.label}</span>
+                    </span>
+                    <button className="text-muted hover:text-white" type="button" onClick={() => onDeleteAvoidRule(rule.id)}>
+                      <X size={13} />
+                    </button>
+                  </div>
+                ))}
+                {avoidRules.length === 0 && <div className="text-xs text-muted">Right-click tracks in Library to avoid them in AutoDJ.</div>}
+              </div>
+            </div>
             <label className="grid gap-2 text-sm text-neutral-200">
               <span className="text-xs uppercase text-muted">Temperature {settings.temperature.toFixed(2)}</span>
               <input
@@ -2251,9 +3425,53 @@ function AutoDjPage({
         </section>
 
         <section className="min-w-0 overflow-auto">
+          {selectedQueueKeys.size > 0 && (
+            <div className="flex items-center justify-between gap-3 border-b border-line bg-[#15100d] px-4 py-2 text-sm">
+              <div className="text-muted">
+                <span className="font-medium text-white">{selectedQueueKeys.size}</span> selected
+              </div>
+              <div className="flex items-center gap-2">
+                <button className="secondary-button h-8" type="button" onClick={() => setQueueSelection(false)}>
+                  Clear
+                </button>
+                <button className="secondary-button h-8 text-ember" type="button" onClick={removeSelectedQueueItems}>
+                  <Trash2 size={14} />
+                  Remove Selected
+                </button>
+              </div>
+            </div>
+          )}
+          <div className="grid gap-3 border-b border-line bg-[#18130f] p-4 md:grid-cols-4">
+            <div className="rounded border border-line/70 bg-panel p-3">
+              <div className="text-xs uppercase text-muted">Tracks</div>
+              <div className="mt-1 text-xl font-semibold text-white">{queue.length}</div>
+            </div>
+            <div className="rounded border border-line/70 bg-panel p-3">
+              <div className="text-xs uppercase text-muted">Duration</div>
+              <div className="mt-1 text-xl font-semibold text-white">{formatDuration(queueDuration)}</div>
+            </div>
+            <div className="rounded border border-line/70 bg-panel p-3">
+              <div className="text-xs uppercase text-muted">Artists</div>
+              <div className="mt-1 text-xl font-semibold text-white">{queueArtists}</div>
+            </div>
+            <div className="rounded border border-line/70 bg-panel p-3">
+              <div className="text-xs uppercase text-muted">CLAP</div>
+              <div className="mt-1 text-xl font-semibold text-moss">{queue.length ? formatPercent((clapTracks / queue.length) * 100) : "--"}</div>
+            </div>
+          </div>
           <table className="w-full table-fixed text-left text-sm">
             <thead className="sticky top-0 z-10 border-b border-line bg-ink text-xs uppercase text-muted">
               <tr>
+                <th className="w-11 px-3 py-3 font-medium">
+                  <input
+                    aria-label="Select AutoDJ queue"
+                    type="checkbox"
+                    className="h-4 w-4 accent-moss"
+                    checked={allQueueSelected}
+                    disabled={queue.length === 0}
+                    onChange={(event) => setQueueSelection(event.target.checked)}
+                  />
+                </th>
                 <th className="w-14 px-3 py-3 font-medium"></th>
                 <th className="w-16 px-6 py-3 font-medium">#</th>
                 <th className="w-[32%] px-3 py-3 font-medium">Title</th>
@@ -2261,11 +3479,46 @@ function AutoDjPage({
                 <th className="w-[18%] px-3 py-3 font-medium">Album</th>
                 <th className="w-24 px-3 py-3 font-medium">Score</th>
                 <th className="px-3 py-3 font-medium">Reason</th>
+                <th className="w-28 px-3 py-3 font-medium"></th>
               </tr>
             </thead>
             <tbody>
-              {queue.map((track, index) => (
-                <tr key={`${track.id}-${index}`} className="border-b border-line/60 hover:bg-white/[0.035]">
+              {queue.map((track, index) => {
+                const rowKey = `${track.id}-${index}`;
+                const explained = explainTrackKey === rowKey;
+                return (
+                <Fragment key={rowKey}>
+                <tr
+                  draggable
+                  className={`border-b border-line/60 hover:bg-white/[0.035] ${
+                    selectedQueueKeys.has(rowKey) ? "bg-white/[0.035]" : dragQueueIndex === index ? "bg-moss/10" : ""
+                  }`}
+                  onDragStart={(event) => {
+                    setDragQueueIndex(index);
+                    event.dataTransfer.effectAllowed = "move";
+                  }}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    if (dragQueueIndex !== null) {
+                      reorderQueueItem(dragQueueIndex, index);
+                    }
+                    setDragQueueIndex(null);
+                  }}
+                  onDragEnd={() => setDragQueueIndex(null)}
+                >
+                  <td className="px-3 py-3">
+                    <input
+                      aria-label={`Select ${display(track.title, "track")}`}
+                      type="checkbox"
+                      className="h-4 w-4 accent-moss"
+                      checked={selectedQueueKeys.has(rowKey)}
+                      onChange={() => toggleQueueSelection(rowKey)}
+                    />
+                  </td>
                   <td className="px-3 py-3">
                     <button
                       className={`icon-button h-8 w-8 ${
@@ -2287,6 +3540,20 @@ function AutoDjPage({
                   <td className="px-3 py-3 tabular-nums text-moss">{track.score.toFixed(2)}</td>
                   <td className="px-3 py-3">
                     <div className="flex flex-wrap gap-1.5">
+                      {breakdownEntries(track).slice(0, 5).map(([key, value]) => (
+                        <span
+                          key={key}
+                          className={`rounded border px-2 py-1 text-xs ${
+                            value >= 0
+                              ? "border-moss/30 bg-moss/10 text-moss"
+                              : "border-red-500/30 bg-red-500/10 text-red-200"
+                          }`}
+                          title={`${key}: ${value.toFixed(3)}`}
+                        >
+                          {key.replace("_", " ")} {value >= 0 ? "+" : ""}
+                          {value.toFixed(2)}
+                        </span>
+                      ))}
                       {reasonChips(track.reason).map((reason) => (
                         <span
                           key={reason}
@@ -2302,8 +3569,93 @@ function AutoDjPage({
                       )}
                     </div>
                   </td>
+                  <td className="px-3 py-3">
+                    <div className="flex justify-end gap-1">
+                      <button className="icon-button h-8 w-8" type="button" title="Move up" disabled={index === 0} onClick={() => moveQueueItem(index, "up")}>
+                        <ArrowUp size={14} />
+                      </button>
+                      <button className="icon-button h-8 w-8" type="button" title="Move down" disabled={index === queue.length - 1} onClick={() => moveQueueItem(index, "down")}>
+                        <ArrowDown size={14} />
+                      </button>
+                      <button
+                        className={`icon-button h-8 w-8 ${explained ? "border-moss text-moss" : ""}`}
+                        type="button"
+                        title="Why this track?"
+                        onClick={() => setExplainTrackKey(explained ? null : rowKey)}
+                      >
+                        <Info size={14} />
+                      </button>
+                      <button
+                        className="icon-button h-8 w-8"
+                        type="button"
+                        title="Remove from queue"
+                        onClick={() => {
+                          setQueue(queue.filter((_, itemIndex) => itemIndex !== index));
+                          setSelectedQueueKeys(new Set());
+                        }}
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  </td>
                 </tr>
-              ))}
+                {explained && (
+                  <tr className="border-b border-line/60 bg-[#15100d]">
+                    <td colSpan={9} className="px-6 py-4">
+                      <div className="grid gap-4 text-sm md:grid-cols-[1fr_280px]">
+                        <div>
+                          <div className="mb-2 text-xs font-medium uppercase text-muted">Why this track</div>
+                          <div className="flex flex-wrap gap-2">
+                            {breakdownEntries(track).map(([key, value]) => (
+                              <span
+                                key={key}
+                                className={`rounded border px-2 py-1 text-xs ${
+                                  value >= 0
+                                    ? "border-moss/30 bg-moss/10 text-moss"
+                                    : "border-red-500/30 bg-red-500/10 text-red-200"
+                                }`}
+                              >
+                                {key.replace("_", " ")} {value >= 0 ? "+" : ""}
+                                {value.toFixed(3)}
+                              </span>
+                            ))}
+                          </div>
+                          <div className="mt-3 text-xs text-muted">{track.reason}</div>
+                        </div>
+                        <div className="rounded border border-line/70 bg-panel p-3 text-xs">
+                          <div className="mb-2 font-medium uppercase text-muted">Audio analysis</div>
+                          <div className="grid gap-1">
+                            <div className="flex justify-between gap-3">
+                              <span className="text-muted">Provider</span>
+                              <span className="truncate text-neutral-200">{display(track.analysis_provider, "None")}</span>
+                            </div>
+                            <div className="flex justify-between gap-3">
+                              <span className="text-muted">Genre</span>
+                              <span className="truncate text-neutral-200">{display(track.analysis_genre, "-")}</span>
+                            </div>
+                            <div className="flex justify-between gap-3">
+                              <span className="text-muted">Confidence</span>
+                              <span className="text-neutral-200">
+                                {track.analysis_genre_confidence !== null && track.analysis_genre_confidence !== undefined
+                                  ? formatPercent(track.analysis_genre_confidence * 100)
+                                  : "--"}
+                              </span>
+                            </div>
+                            <div className="flex justify-between gap-3">
+                              <span className="text-muted">Seed similarity</span>
+                              <span className="text-neutral-200">
+                                {track.score_breakdown?.similarity ? `+${track.score_breakdown.similarity.toFixed(3)}` : "--"}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
+              );
+              })}
             </tbody>
           </table>
           {queue.length === 0 && (
@@ -2457,32 +3809,42 @@ function AnalysisPage({
           </div>
 
           {installProgress && (
-            <section className="rounded border border-line bg-panel p-5">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm font-semibold text-white">CLAP Install</div>
-                  <div className="mt-1 text-xs text-muted">
-                    {installProgress.device === "cuda" ? "NVIDIA CUDA" : "CPU"} - {installProgress.status}
+              <section className="min-w-0 rounded border border-line bg-panel p-5">
+                <div className="mb-3 flex min-w-0 items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-white">CLAP Install</div>
+                    <div className="mt-1 truncate text-xs text-muted">
+                      {installProgress.device === "cuda" ? "NVIDIA CUDA" : "CPU"} -{" "}
+                      {installProgress.status}
+                    </div>
+                  </div>
+
+                  <div className="shrink-0 text-xs uppercase text-muted">
+                    {installProgress.current_step} / {installProgress.total_steps}
                   </div>
                 </div>
-                <div className="text-xs uppercase text-muted">
-                  {installProgress.current_step} / {installProgress.total_steps}
+
+                <div className="h-2 overflow-hidden rounded bg-ink">
+                  <div
+                      className="h-full rounded bg-moss transition-all duration-300"
+                      style={{ width: `${installPercent}%` }}
+                  />
                 </div>
-              </div>
-              <div className="h-2 overflow-hidden rounded bg-ink">
-                <div className="h-full rounded bg-moss transition-all duration-300" style={{ width: `${installPercent}%` }} />
-              </div>
-              <div className="mt-2 truncate text-xs text-neutral-300">
-                {installProgress.current_command ?? installProgress.message}
-              </div>
-              {installProgress.log.length > 0 && (
-                <div className="mt-3 max-h-36 overflow-auto rounded border border-line/70 bg-ink p-3 font-mono text-[11px] leading-5 text-muted">
-                  {installProgress.log.slice(-10).map((line, index) => (
-                    <div key={`${line}-${index}`} className="truncate">{line}</div>
-                  ))}
+
+                <div className="mt-2 truncate text-xs text-neutral-300">
+                  {installProgress.current_command ?? installProgress.message}
                 </div>
-              )}
-            </section>
+
+                {installProgress.log.length > 0 && (
+                    <div className="mt-3 max-h-36 w-full max-w-full overflow-auto overflow-x-hidden rounded border border-line/70 bg-ink p-3 font-mono text-[11px] leading-5 text-muted">
+                      {installProgress.log.slice(-10).map((line, index) => (
+                          <div key={`${line}-${index}`} className="max-w-full truncate">
+                            {line}
+                          </div>
+                      ))}
+                    </div>
+                )}
+              </section>
           )}
 
           <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(360px,0.8fr)]">
@@ -2689,6 +4051,15 @@ function SettingsPage({
   scanResult,
   scanProgress,
   isScanning,
+  backendStatus,
+  backendMessage,
+  backendCheckedAt,
+  startupDiagnostics,
+  backendLog,
+  onCheckBackend,
+  onRunStartupDiagnostics,
+  onOpenBackendLog,
+  onRestartBackend,
   clapStatus,
   clapModelId,
   setClapModelId,
@@ -2714,6 +4085,9 @@ function SettingsPage({
   writeRatingsToFiles,
   onWriteRatingsToFilesChange,
   onBackupDatabase,
+  onCreateSupportBundle,
+  supportBundlePath,
+  onCopySupportBundlePath,
   onClearArtistCache,
 }: {
   settings: SettingsResponse | null;
@@ -2724,6 +4098,15 @@ function SettingsPage({
   scanResult: ScanResult | null;
   scanProgress: ScanProgress | null;
   isScanning: boolean;
+  backendStatus: BackendStatus;
+  backendMessage: string;
+  backendCheckedAt: string | null;
+  startupDiagnostics: StartupDiagnosticsResponse | null;
+  backendLog: LogTailResponse | null;
+  onCheckBackend: () => void;
+  onRunStartupDiagnostics: () => void;
+  onOpenBackendLog: () => void;
+  onRestartBackend: () => void;
   clapStatus: ClapStatusResponse | null;
   clapModelId: string;
   setClapModelId: (value: string) => void;
@@ -2749,12 +4132,21 @@ function SettingsPage({
   writeRatingsToFiles: boolean;
   onWriteRatingsToFilesChange: (value: boolean) => void;
   onBackupDatabase: () => void;
+  onCreateSupportBundle: () => void;
+  supportBundlePath: string | null;
+  onCopySupportBundlePath: () => void;
   onClearArtistCache: () => void;
 }) {
   const progressPercent = Math.max(0, Math.min(100, scanProgress?.percent ?? 0));
   const hasCount = Boolean(scanProgress && scanProgress.total_files > 0);
   const audioProgressPercent = Math.max(0, Math.min(100, audioAnalysisProgress?.percent ?? 0));
   const clapReady = Boolean(clapStatus?.installed);
+  const backendStatusClass =
+    backendStatus === "ok"
+      ? "border-moss/40 bg-moss/10 text-moss"
+      : backendStatus === "down"
+        ? "border-red-400/40 bg-red-500/10 text-red-300"
+        : "border-line bg-ink text-muted";
 
   return (
     <main className="flex min-w-0 flex-1 flex-col">
@@ -2764,8 +4156,8 @@ function SettingsPage({
           <p className="text-xs text-muted">{settings?.database_path ?? "Database path loading"}</p>
         </div>
       </header>
-      <section className="max-w-3xl p-6">
-        <div className="grid gap-5">
+      <section className="min-h-0 flex-1 overflow-auto p-6">
+        <div className="grid max-w-3xl gap-5">
           <label className="grid gap-2 text-sm text-neutral-200">
             <span className="text-xs uppercase text-muted">Music Folder Path</span>
             <div className="flex gap-2">
@@ -2785,6 +4177,23 @@ function SettingsPage({
               </button>
             </div>
           </label>
+
+          {!settings?.library_path && settings?.suggested_music_path && (
+            <div className="flex items-center justify-between gap-3 rounded border border-ember/30 bg-ember/10 p-3 text-sm">
+              <div className="min-w-0">
+                <div className="font-medium text-white">Use your Windows Music folder?</div>
+                <div className="truncate text-xs text-muted">{settings.suggested_music_path}</div>
+              </div>
+              <button
+                className="secondary-button shrink-0"
+                type="button"
+                onClick={() => setFolderPath(settings.suggested_music_path ?? "")}
+              >
+                <FolderOpen size={15} />
+                Use Folder
+              </button>
+            </div>
+          )}
 
           <DisclosureSection title="Library Preferences" description="Display, rating storage, and startup behavior" defaultOpen>
             <div className="grid gap-3 text-sm text-neutral-200">
@@ -2808,8 +4217,10 @@ function SettingsPage({
                 <div className="flex min-w-0 items-center gap-3">
                   <Star className="shrink-0 text-ember" size={18} />
                   <div className="min-w-0">
-                    <div className="font-medium text-white">Write star ratings to audio files</div>
-                    <div className="text-xs text-muted">When enabled, rating changes modify supported file tags as well as SQLite.</div>
+                    <div className="font-medium text-white">Write ratings and metadata to audio files</div>
+                    <div className="text-xs text-muted">
+                      Supported now: FLAC, MP3, M4A, Ogg, and Opus. WAV/AIFF edits stay safest in SQLite.
+                    </div>
                   </div>
                 </div>
                 <input
@@ -2829,7 +4240,11 @@ function SettingsPage({
                     className="h-4 w-4 accent-moss"
                     checked={uiPreferences.compactLibraryRows}
                     onChange={(event) =>
-                      setUiPreferences((current) => ({ ...current, compactLibraryRows: event.target.checked }))
+                      setUiPreferences((current) => ({
+                        ...current,
+                        compactLibraryRows: event.target.checked,
+                        density: event.target.checked ? "compact" : "comfortable",
+                      }))
                     }
                   />
                 </label>
@@ -2862,6 +4277,77 @@ function SettingsPage({
                     <option value="settings">Settings</option>
                   </select>
                 </label>
+              </div>
+
+              <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
+                <div className="font-medium text-white">Theme</div>
+                <label className="grid gap-2">
+                  <span className="text-xs uppercase text-muted">Accent</span>
+                  <select
+                    className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                    value={uiPreferences.themeAccent}
+                    onChange={(event) =>
+                      setUiPreferences((current) => ({ ...current, themeAccent: event.target.value as ThemeAccent }))
+                    }
+                  >
+                    <option value="cafe">FLAC Cafe</option>
+                    <option value="mint">Mint</option>
+                    <option value="rose">Rose</option>
+                    <option value="blue">Blue Note</option>
+                  </select>
+                </label>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <label className="grid gap-2">
+                    <span className="text-xs uppercase text-muted">Density</span>
+                    <select
+                      className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                      value={uiPreferences.density}
+                      onChange={(event) => {
+                        const density = event.target.value as UiDensity;
+                        setUiPreferences((current) => ({
+                          ...current,
+                          density,
+                          compactLibraryRows: density === "compact",
+                        }));
+                      }}
+                    >
+                      <option value="comfortable">Comfortable</option>
+                      <option value="compact">Compact</option>
+                    </select>
+                  </label>
+                  <label className="grid gap-2">
+                    <span className="text-xs uppercase text-muted">Font Size</span>
+                    <select
+                      className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                      value={uiPreferences.fontScale}
+                      onChange={(event) =>
+                        setUiPreferences((current) => ({ ...current, fontScale: event.target.value as FontScale }))
+                      }
+                    >
+                      <option value="small">Small</option>
+                      <option value="default">Default</option>
+                      <option value="large">Large</option>
+                    </select>
+                  </label>
+                  <label className="grid gap-2">
+                    <span className="text-xs uppercase text-muted">Player Layout</span>
+                    <select
+                      className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                      value={uiPreferences.playerLayout}
+                      onChange={(event) => {
+                        const playerLayout = event.target.value as PlayerLayout;
+                        setUiPreferences((current) => ({
+                          ...current,
+                          playerLayout,
+                          miniPlayer: playerLayout === "compact",
+                        }));
+                      }}
+                    >
+                      <option value="full">Full</option>
+                      <option value="compact">Compact</option>
+                    </select>
+                  </label>
+                </div>
               </div>
             </div>
           </DisclosureSection>
@@ -3047,7 +4533,11 @@ function SettingsPage({
                 className="h-4 w-4 accent-moss"
                 checked={uiPreferences.miniPlayer}
                 onChange={(event) =>
-                  setUiPreferences((current) => ({ ...current, miniPlayer: event.target.checked }))
+                  setUiPreferences((current) => ({
+                    ...current,
+                    miniPlayer: event.target.checked,
+                    playerLayout: event.target.checked ? "compact" : "full",
+                  }))
                 }
               />
             </label>
@@ -3065,11 +4555,126 @@ function SettingsPage({
                 className="accent-moss"
               />
             </label>
+            <div className="rounded border border-line/70 bg-ink p-3">
+              <div className="mb-2 font-medium text-white">WebView codec support</div>
+              <div className="grid gap-2">
+                {codecSupportRows().map((codec) => (
+                  <div key={codec.label} className="flex items-center justify-between gap-3 text-xs">
+                    <span className="text-muted">{codec.label}</span>
+                    <span className={`rounded border px-2 py-1 ${codecSupportClass(codec.support)}`}>
+                      {formatCodecSupport(codec.support)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
             </div>
           </DisclosureSection>
 
           <DisclosureSection title="Maintenance" description="Background services and database helpers">
             <div className="grid gap-3 text-sm text-neutral-200">
+            <div className="rounded border border-line/70 bg-ink p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="font-medium text-white">Backend service</div>
+                  <div className="mt-1 truncate text-xs text-muted">
+                    {backendCheckedAt ? `Last checked ${backendCheckedAt}` : "Not checked yet"}
+                  </div>
+                </div>
+                <span className={`shrink-0 rounded border px-2 py-1 text-xs uppercase ${backendStatusClass}`}>
+                  {backendStatus}
+                </span>
+              </div>
+              <div className="mt-2 text-xs text-muted">{backendMessage}</div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button className="secondary-button" type="button" onClick={onCheckBackend}>
+                  <RefreshCw size={15} />
+                  Check Backend
+                </button>
+                <button className="secondary-button" type="button" onClick={onRestartBackend} disabled={backendStatus === "restarting"}>
+                  <RefreshCw size={15} />
+                  {backendStatus === "restarting" ? "Restarting" : "Restart Backend"}
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded border border-line/70 bg-ink p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="font-medium text-white">Startup self-check</div>
+                  <div className="mt-1 truncate text-xs text-muted">
+                    {startupDiagnostics
+                      ? `Last run ${new Date(startupDiagnostics.generated_at).toLocaleString()}`
+                      : "Not run yet"}
+                  </div>
+                </div>
+                <span
+                  className={`shrink-0 rounded border px-2 py-1 text-xs uppercase ${
+                    startupDiagnostics?.ok
+                      ? "border-moss/40 bg-moss/10 text-moss"
+                      : startupDiagnostics
+                        ? "border-ember/50 bg-ember/10 text-ember"
+                        : "border-line bg-panel text-muted"
+                  }`}
+                >
+                  {startupDiagnostics ? (startupDiagnostics.ok ? "ok" : "review") : "unknown"}
+                </span>
+              </div>
+              {startupDiagnostics && (
+                <div className="mt-3 grid gap-2">
+                  {startupDiagnostics.items.map((item) => (
+                    <div key={item.key} className="flex items-start gap-2 text-xs">
+                      {item.ok ? (
+                        <CheckCircle2 className="mt-0.5 shrink-0 text-moss" size={14} />
+                      ) : (
+                        <Info className="mt-0.5 shrink-0 text-ember" size={14} />
+                      )}
+                      <div className="min-w-0">
+                        <div className="font-medium text-neutral-200">{item.label}</div>
+                        <div className="truncate text-muted" title={item.path ?? item.message}>
+                          {item.message}
+                          {item.path ? ` - ${item.path}` : ""}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="mt-2 border-t border-line pt-2">
+                    <div className="mb-2 text-xs font-medium uppercase text-muted">WebView codecs</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {codecSupportRows().map((codec) => (
+                        <div key={codec.label} className="flex items-center justify-between gap-2 rounded border border-line/70 bg-panel px-2 py-1">
+                          <span className="truncate text-muted">{codec.label}</span>
+                          <span className={`shrink-0 rounded border px-2 py-0.5 ${codecSupportClass(codec.support)}`}>
+                            {formatCodecSupport(codec.support)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button className="secondary-button" type="button" onClick={onRunStartupDiagnostics}>
+                  <ShieldCheck size={15} />
+                  Run Self-Check
+                </button>
+                <button className="secondary-button" type="button" onClick={onOpenBackendLog}>
+                  <FileText size={15} />
+                  Open Log
+                </button>
+              </div>
+              {backendLog && (
+                <details className="mt-3 rounded border border-line bg-panel p-2 text-xs text-muted">
+                  <summary className="cursor-pointer text-neutral-200">
+                    {backendLog.exists ? `Log tail (${backendLog.lines.length} lines)` : "No backend log yet"}
+                  </summary>
+                  <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap font-mono text-[11px] leading-5">
+                    {backendLog.lines.join("\n") || backendLog.path}
+                  </pre>
+                </details>
+              )}
+            </div>
+
             <label className="flex items-center justify-between gap-4">
               <span className="text-muted">Artist lookup</span>
               <input
@@ -3097,11 +4702,24 @@ function SettingsPage({
                 <Download size={15} />
                 Backup DB
               </button>
+              <button className="secondary-button" type="button" onClick={onCreateSupportBundle}>
+                <FileText size={15} />
+                Support Bundle
+              </button>
+              <button className="secondary-button" type="button" disabled={!supportBundlePath} onClick={onCopySupportBundlePath}>
+                <FileText size={15} />
+                Copy Path
+              </button>
               <button className="secondary-button" type="button" onClick={onClearArtistCache}>
                 <RefreshCw size={15} />
                 Clear Artist Cache
               </button>
             </div>
+            {supportBundlePath && (
+              <div className="truncate rounded border border-line/70 bg-panel px-3 py-2 text-xs text-muted" title={supportBundlePath}>
+                {supportBundlePath}
+              </div>
+            )}
             </div>
           </DisclosureSection>
 
@@ -3222,6 +4840,13 @@ function NowPlayingPage({
   playbackTime,
   queue,
   onPlayTrack,
+  onMoveQueueTrack,
+  onReorderQueueTrack,
+  onRemoveQueueTrack,
+  onClearQueue,
+  onSaveQueue,
+  onRestoreQueue,
+  canRestoreQueue,
 }: {
   currentTrack: Track | null;
   lyrics: LyricsResponse | null;
@@ -3229,8 +4854,16 @@ function NowPlayingPage({
   playbackTime: number;
   queue: Track[];
   onPlayTrack: (track: Track, queue: Track[]) => void;
+  onMoveQueueTrack: (index: number, direction: "up" | "down") => void;
+  onReorderQueueTrack: (fromIndex: number, toIndex: number) => void;
+  onRemoveQueueTrack: (index: number) => void;
+  onClearQueue: () => void;
+  onSaveQueue: () => void;
+  onRestoreQueue: () => void;
+  canRestoreQueue: boolean;
 }) {
   const [artworkFailed, setArtworkFailed] = useState(false);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
 
   useEffect(() => {
     setArtworkFailed(false);
@@ -3341,29 +4974,93 @@ function NowPlayingPage({
 
         <section className="min-h-0 min-w-0 rounded border border-line bg-panel">
           <div className="flex h-12 items-center justify-between border-b border-line px-4">
-            <div className="text-sm font-semibold text-white">Queue</div>
-            <div className="text-xs text-muted">{queue.length} tracks</div>
+            <div>
+              <div className="text-sm font-semibold text-white">Queue</div>
+              <div className="text-xs text-muted">{queue.length} tracks</div>
+            </div>
+            <div className="flex items-center gap-1">
+              <button className="icon-button h-8 w-8" type="button" title="Save queue as playlist" disabled={queue.length === 0} onClick={onSaveQueue}>
+                <Plus size={14} />
+              </button>
+              <button className="icon-button h-8 w-8" type="button" title="Restore previous queue" disabled={!canRestoreQueue} onClick={onRestoreQueue}>
+                <RefreshCw size={14} />
+              </button>
+              <button className="icon-button h-8 w-8" type="button" title="Clear queue" disabled={queue.length === 0} onClick={onClearQueue}>
+                <Trash2 size={14} />
+              </button>
+            </div>
           </div>
           <div className="h-[calc(100%-3rem)] overflow-auto">
             {queue.map((track, index) => {
               const active = currentTrack?.id === track.id;
               return (
-                <button
+                <div
                   key={`${track.id}-${index}`}
+                  draggable
                   className={`flex w-full items-center gap-3 border-b border-line/60 px-3 py-2 text-left text-sm transition ${
-                    active ? "bg-white/10" : "hover:bg-white/[0.035]"
+                    active ? "bg-white/10" : dragIndex === index ? "bg-moss/10" : "hover:bg-white/[0.035]"
                   }`}
-                  type="button"
-                  onClick={() => onPlayTrack(track, queue)}
+                  onDragStart={(event) => {
+                    event.dataTransfer.effectAllowed = "move";
+                    event.dataTransfer.setData("text/plain", String(index));
+                    setDragIndex(index);
+                  }}
+                  onDragEnd={() => setDragIndex(null)}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const fromIndex = Number(event.dataTransfer.getData("text/plain"));
+                    if (Number.isInteger(fromIndex)) {
+                      onReorderQueueTrack(fromIndex, index);
+                    }
+                    setDragIndex(null);
+                  }}
                 >
+                  <GripVertical className="shrink-0 text-muted" size={14} />
                   <span className="w-7 shrink-0 text-right text-xs tabular-nums text-muted">{index + 1}</span>
-                  <span className="min-w-0 flex-1">
+                  <button className="min-w-0 flex-1 text-left" type="button" onClick={() => onPlayTrack(track, queue)}>
                     <span className="block truncate text-white">{display(track.title, "Untitled")}</span>
                     <span className="block truncate text-xs text-muted">{display(track.artist)}</span>
-                  </span>
-                </button>
+                  </button>
+                  <div className="flex shrink-0 items-center gap-1 opacity-80">
+                    <button
+                      className="icon-button h-7 w-7"
+                      type="button"
+                      title="Move up"
+                      disabled={index === 0}
+                      onClick={() => onMoveQueueTrack(index, "up")}
+                    >
+                      <ArrowUp size={13} />
+                    </button>
+                    <button
+                      className="icon-button h-7 w-7"
+                      type="button"
+                      title="Move down"
+                      disabled={index === queue.length - 1}
+                      onClick={() => onMoveQueueTrack(index, "down")}
+                    >
+                      <ArrowDown size={13} />
+                    </button>
+                    <button
+                      className="icon-button h-7 w-7 text-ember"
+                      type="button"
+                      title="Remove from queue"
+                      onClick={() => onRemoveQueueTrack(index)}
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
+                </div>
               );
             })}
+            {queue.length === 0 && (
+              <div className="grid h-full place-items-center px-4 text-center text-sm text-muted">
+                Queue is empty.
+              </div>
+            )}
           </div>
         </section>
       </div>
@@ -3596,6 +5293,8 @@ function PlayerBar({
   autoPlay,
   fadeMs,
   miniPlayer,
+  playbackMode,
+  setPlaybackMode,
   setStatus,
 }: {
   currentTrack: Track | null;
@@ -3608,11 +5307,17 @@ function PlayerBar({
   autoPlay: boolean;
   fadeMs: number;
   miniPlayer: boolean;
+  playbackMode: PlaybackMode;
+  setPlaybackMode: (mode: PlaybackMode) => void;
   setStatus: (message: string) => void;
 }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const nextAudioRef = useRef<HTMLAudioElement | null>(null);
   const fadeTimerRef = useRef<number | null>(null);
+  const crossfadeTimerRef = useRef<number | null>(null);
   const endFadeTrackRef = useRef<number | null>(null);
+  const crossfadeTrackRef = useRef<number | null>(null);
+  const handoffRef = useRef<{ trackId: number; currentTime: number } | null>(null);
   const smtcActionRef = useRef<(payload: SmtcButtonPayload) => void>(() => {});
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -3621,19 +5326,38 @@ function PlayerBar({
   const currentIndex = currentTrack ? queue.findIndex((track) => track.id === currentTrack.id) : -1;
   const hasPrevious = currentIndex > 0;
   const hasNext = currentIndex >= 0 && currentIndex < queue.length - 1;
+  const preloadedNextTrack =
+    hasNext ? queue[currentIndex + 1] : playbackMode === "repeatQueue" && queue.length > 0 ? queue[0] : null;
   const effectiveDuration = duration || currentTrack?.duration_seconds || 0;
   const progressPercent = effectiveDuration > 0 ? Math.min(100, (currentTime / effectiveDuration) * 100) : 0;
   const smtcPositionSecond = Math.floor(currentTime);
   const trackSwitchFadeMs = Math.min(fadeMs, 160);
 
   useEffect(() => {
-    return () => cancelFade();
+    return () => {
+      cancelFade();
+      cancelCrossfade();
+    };
   }, []);
+
+  useEffect(() => {
+    const audio = nextAudioRef.current;
+    if (audio) {
+      audio.load();
+    }
+  }, [preloadedNextTrack?.id]);
 
   function cancelFade() {
     if (fadeTimerRef.current !== null) {
       window.clearInterval(fadeTimerRef.current);
       fadeTimerRef.current = null;
+    }
+  }
+
+  function cancelCrossfade() {
+    if (crossfadeTimerRef.current !== null) {
+      window.clearInterval(crossfadeTimerRef.current);
+      crossfadeTimerRef.current = null;
     }
   }
 
@@ -3659,6 +5383,45 @@ function PlayerBar({
       if (progress >= 1) {
         cancelFade();
         afterFade?.();
+      }
+    }, 16);
+  }
+
+  async function startCrossfade(nextTrack: Track) {
+    const currentAudio = audioRef.current;
+    const nextAudio = nextAudioRef.current;
+    if (!currentTrack || !currentAudio || !nextAudio || currentAudio.paused || crossfadeTrackRef.current === currentTrack.id) {
+      return;
+    }
+
+    crossfadeTrackRef.current = currentTrack.id;
+    cancelFade();
+    cancelCrossfade();
+
+    try {
+      nextAudio.currentTime = 0;
+      nextAudio.volume = 0;
+      await nextAudio.play();
+    } catch {
+      crossfadeTrackRef.current = null;
+      return;
+    }
+
+    const durationMs = Math.max(120, fadeMs);
+    const startedAt = window.performance.now();
+    crossfadeTimerRef.current = window.setInterval(() => {
+      const elapsed = window.performance.now() - startedAt;
+      const progress = Math.min(1, elapsed / durationMs);
+      currentAudio.volume = Math.max(0, 1 - progress);
+      nextAudio.volume = Math.min(1, progress);
+
+      if (progress >= 1) {
+        cancelCrossfade();
+        handoffRef.current = { trackId: nextTrack.id, currentTime: nextAudio.currentTime };
+        currentAudio.pause();
+        currentAudio.volume = 1;
+        void onTrackEnded(currentTrack.id);
+        onSelectTrack(nextTrack, queue);
       }
     }, 16);
   }
@@ -3708,6 +5471,7 @@ function PlayerBar({
     setArtworkFailed(false);
     setIsPlaying(false);
     endFadeTrackRef.current = null;
+    crossfadeTrackRef.current = null;
 
     if (!currentTrack) {
       return;
@@ -3716,10 +5480,20 @@ function PlayerBar({
     if (!audio) {
       return;
     }
+    const handoff = handoffRef.current;
+    if (handoff?.trackId === currentTrack.id) {
+      handoffRef.current = null;
+      audio.currentTime = handoff.currentTime;
+      audio.volume = 1;
+      void audio.play().then(() => setIsPlaying(true)).catch(() => {
+        setStatus("Playback could not continue after crossfade.");
+      });
+      return;
+    }
     if (autoPlay) {
       void playWithFade();
     }
-  }, [currentTrack, setStatus, autoPlay]);
+  }, [currentTrack?.id, autoPlay]);
 
   function syncDuration() {
     const audio = audioRef.current;
@@ -3761,6 +5535,9 @@ function PlayerBar({
     const nextTrack = queue[currentIndex + offset];
     if (nextTrack) {
       const audio = audioRef.current;
+      cancelCrossfade();
+      crossfadeTrackRef.current = null;
+      nextAudioRef.current?.pause();
       if (audio && !audio.paused) {
         fadeVolume(0, trackSwitchFadeMs, () => {
           audio.pause();
@@ -3801,8 +5578,23 @@ function PlayerBar({
     setCurrentTime(nextTime);
     onPlaybackTime(nextTime);
     const audioDuration = Number.isFinite(audio.duration) ? audio.duration : effectiveDuration;
+    const crossfadeLeadSeconds = Math.max(0.12, fadeMs / 1000);
     if (
       currentTrack &&
+      preloadedNextTrack &&
+      playbackMode !== "stopAfterCurrent" &&
+      playbackMode !== "repeatOne" &&
+      fadeMs > 0 &&
+      audioDuration > crossfadeLeadSeconds * 2 &&
+      audioDuration - nextTime <= crossfadeLeadSeconds &&
+      crossfadeTrackRef.current !== currentTrack.id
+    ) {
+      void startCrossfade(preloadedNextTrack);
+      return;
+    }
+    if (
+      currentTrack &&
+      (!preloadedNextTrack || playbackMode === "stopAfterCurrent") &&
       audioDuration > END_FADE_SECONDS * 2 &&
       audioDuration - nextTime <= END_FADE_SECONDS &&
       endFadeTrackRef.current !== currentTrack.id
@@ -3821,9 +5613,24 @@ function PlayerBar({
     if (!currentTrack) {
       return;
     }
+    if (crossfadeTrackRef.current === currentTrack.id) {
+      return;
+    }
     await onTrackEnded(currentTrack.id);
+    if (playbackMode === "stopAfterCurrent") {
+      setIsPlaying(false);
+      setStatus("Stopped after current track");
+      return;
+    }
+    if (playbackMode === "repeatOne") {
+      seekTo(0);
+      void playWithFade();
+      return;
+    }
     if (hasNext) {
-      playRelative(1);
+      onSelectTrack(queue[currentIndex + 1], queue);
+    } else if (playbackMode === "repeatQueue" && queue.length > 0) {
+      onSelectTrack(queue[0], queue);
     } else {
       setStatus("Queue finished");
     }
@@ -3898,7 +5705,7 @@ function PlayerBar({
   }, []);
 
   return (
-    <section className={`grid shrink-0 grid-cols-[minmax(240px,360px)_1fr_minmax(128px,180px)] items-center gap-5 border-t border-line bg-[#15181d] px-4 ${miniPlayer ? "h-20" : "h-28"}`}>
+    <section className={`grid shrink-0 grid-cols-[minmax(240px,360px)_1fr_minmax(150px,210px)] items-center gap-5 border-t border-line bg-[#19130f] px-4 ${miniPlayer ? "h-20" : "h-28"}`}>
       <div className="flex min-w-0 items-center gap-3">
         <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded border border-line bg-panel text-moss shadow-inner">
           {artworkSrc ? (
@@ -3937,7 +5744,7 @@ function PlayerBar({
             <SkipBack size={17} />
           </button>
           <button
-            className="grid h-11 w-11 place-items-center rounded-full bg-moss text-ink transition hover:bg-[#85dfa0] disabled:cursor-not-allowed disabled:opacity-50"
+            className="grid h-11 w-11 place-items-center rounded-full bg-ember text-ink shadow-sm shadow-black/25 transition hover:bg-[#efb66f] disabled:cursor-not-allowed disabled:opacity-50"
             type="button"
             title={isPlaying ? "Pause" : "Play"}
             disabled={!currentTrack}
@@ -3970,7 +5777,7 @@ function PlayerBar({
             key={currentTrack.id}
             ref={audioRef}
             className="hidden"
-            preload="metadata"
+            preload="auto"
             src={audioUrl(currentTrack.id)}
             onLoadedMetadata={syncDuration}
             onTimeUpdate={handleTimeUpdate}
@@ -3992,6 +5799,15 @@ function PlayerBar({
         ) : (
           <audio ref={audioRef} className="hidden" />
         )}
+        {preloadedNextTrack && (
+          <audio
+            key={`next-${preloadedNextTrack.id}`}
+            ref={nextAudioRef}
+            className="hidden"
+            preload="auto"
+            src={audioUrl(preloadedNextTrack.id)}
+          />
+        )}
 
         <div className="grid grid-cols-[42px_1fr_42px] items-center gap-3 text-xs tabular-nums text-muted">
           <span className="text-right">{formatPlaybackTime(currentTime)}</span>
@@ -4012,15 +5828,45 @@ function PlayerBar({
       </div>
 
       <div className="min-w-0 text-right text-xs text-muted">
-        <div className="truncate">{currentTrack ? display(trackGenre(currentTrack), "Local file") : "FLAC Cafe"}</div>
-        <div className="mt-1 truncate text-neutral-400">
-          {currentTrack ? `${display(currentTrack.year, "")}` : "Ready"}
-        </div>
+        {currentTrack && (
+          <>
+            <div className="truncate">{display(trackGenre(currentTrack), "")}</div>
+            <div className="mt-1 truncate text-neutral-400">{display(currentTrack.year, "")}</div>
+          </>
+        )}
         {currentTrack && (
           <div className="mt-2 flex justify-end">
             <RatingStars rating={currentTrack.rating} onChange={(rating) => onRating(currentTrack.id, rating)} />
           </div>
         )}
+        <div className="mt-2 flex justify-end gap-1">
+          <button
+            className={`icon-button h-7 w-7 ${
+              playbackMode === "repeatQueue" || playbackMode === "repeatOne" ? "border-moss text-moss" : ""
+            }`}
+            type="button"
+            title={playbackMode === "repeatOne" ? "Repeat one" : "Repeat queue"}
+            onClick={() =>
+              setPlaybackMode(
+                playbackMode === "normal"
+                  ? "repeatQueue"
+                  : playbackMode === "repeatQueue"
+                    ? "repeatOne"
+                    : "normal",
+              )
+            }
+          >
+            <Repeat size={13} />
+          </button>
+          <button
+            className={`icon-button h-7 w-7 ${playbackMode === "stopAfterCurrent" ? "border-ember text-ember" : ""}`}
+            type="button"
+            title="Stop after current"
+            onClick={() => setPlaybackMode(playbackMode === "stopAfterCurrent" ? "normal" : "stopAfterCurrent")}
+          >
+            <CircleStop size={13} />
+          </button>
+        </div>
       </div>
     </section>
   );
@@ -4030,11 +5876,19 @@ export default function App() {
   const [activePage, setActivePage] = useState<Page>(() => readUiPreferences().startupPage);
   const [tracks, setTracks] = useState<Track[]>([]);
   const [queue, setQueue] = useState<QueueTrack[]>([]);
+  const [autoDjAvoidRules, setAutoDjAvoidRules] = useState<AutoDjAvoidRule[]>([]);
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
   const [writeRatingsToFiles, setWriteRatingsToFiles] = useState(false);
   const [folderPath, setFolderPath] = useState("");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
+  const [backendStatus, setBackendStatus] = useState<BackendStatus>("unknown");
+  const [backendMessage, setBackendMessage] = useState("Backend status has not been checked yet.");
+  const [backendCheckedAt, setBackendCheckedAt] = useState<string | null>(null);
+  const [startupDiagnostics, setStartupDiagnostics] = useState<StartupDiagnosticsResponse | null>(null);
+  const [backendLog, setBackendLog] = useState<LogTailResponse | null>(null);
+  const [supportBundlePath, setSupportBundlePath] = useState<string | null>(null);
+  const [undoAction, setUndoAction] = useState<UndoAction | null>(null);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
   const [isScanning, setIsScanning] = useState(false);
@@ -4052,10 +5906,15 @@ export default function App() {
   const [audioAnalysisOnlyMissing, setAudioAnalysisOnlyMissing] = useState(true);
   const [isAudioAnalyzing, setIsAudioAnalyzing] = useState(false);
   const [uiPreferences, setUiPreferences] = useState<UiPreferences>(readUiPreferences);
+  const [quickStartDismissed, setQuickStartDismissed] = useState(readQuickStartDismissed);
   const [detailTrack, setDetailTrack] = useState<Track | null>(null);
+  const [metadataEditTrack, setMetadataEditTrack] = useState<Track | null>(null);
+  const [deletePrompt, setDeletePrompt] = useState<DeleteTrackPrompt | null>(null);
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [autoPlayOnTrackChange, setAutoPlayOnTrackChange] = useState(false);
   const [playbackQueue, setPlaybackQueue] = useState<Track[]>([]);
+  const [queueHistory, setQueueHistory] = useState<Track[][]>([]);
+  const [playbackMode, setPlaybackMode] = useState<PlaybackMode>("normal");
   const [libraryTotal, setLibraryTotal] = useState(0);
   const [hasMoreTracks, setHasMoreTracks] = useState(true);
   const [isLibraryLoading, setIsLibraryLoading] = useState(false);
@@ -4087,12 +5946,88 @@ export default function App() {
   const [playbackTime, setPlaybackTime] = useState(0);
   const [libraryScrollTop, setLibraryScrollTop] = useState(0);
   const libraryRequestId = useRef(0);
+  const undoTimerRef = useRef<number | null>(null);
   const hideFilePaths = uiPreferences.hideFilePaths;
   const libraryVisibleColumns = normalizeLibraryColumns(uiPreferences.libraryVisibleColumns);
   const setHideFilePaths = (value: boolean) =>
     setUiPreferences((current) => ({ ...current, hideFilePaths: value }));
   const setLibraryVisibleColumns = (columns: MetadataColumnKey[]) =>
     setUiPreferences((current) => ({ ...current, libraryVisibleColumns: normalizeLibraryColumns(columns) }));
+
+  function showUndoAction(action: UndoAction) {
+    setUndoAction(action);
+    if (undoTimerRef.current !== null) {
+      window.clearTimeout(undoTimerRef.current);
+    }
+    undoTimerRef.current = window.setTimeout(() => {
+      setUndoAction(null);
+      undoTimerRef.current = null;
+    }, 9000);
+  }
+
+  function findTracksByIds(trackIds: number[]): Track[] {
+    const wanted = new Set(trackIds);
+    const found = new Map<number, Track>();
+    for (const list of [tracks, selectedAlbumTracks, selectedPlaylistTracks, smartTracks, playbackQueue, queue, currentTrack ? [currentTrack] : [], detailTrack ? [detailTrack] : []]) {
+      for (const track of list) {
+        if (wanted.has(track.id) && !found.has(track.id)) {
+          found.set(track.id, track);
+        }
+      }
+    }
+    return trackIds.map((trackId) => found.get(trackId)).filter((track): track is Track => Boolean(track));
+  }
+
+  async function handleUndoAction() {
+    if (!undoAction) {
+      return;
+    }
+    const action = undoAction;
+    setUndoAction(null);
+    if (undoTimerRef.current !== null) {
+      window.clearTimeout(undoTimerRef.current);
+      undoTimerRef.current = null;
+    }
+    try {
+      if (action.type === "playlist-remove") {
+        const restored = await addTracksToPlaylist(action.playlistId, action.trackIds);
+        if (selectedPlaylistId === action.playlistId) {
+          setSelectedPlaylistTracks(restored);
+        }
+        await loadPlaylists();
+        setStatus(`Restored ${action.label}`);
+        return;
+      }
+
+      for (const track of action.tracks) {
+        await restoreTrack({ path: track.path, rating: track.rating });
+      }
+      await Promise.all([refreshTracks(), loadAlbums(), loadPlaylists(), loadLibraryStats(), loadClapCoverage()]);
+      setStatus(`Restored ${action.label}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Undo failed");
+    }
+  }
+
+  function dismissQuickStart() {
+    setQuickStartDismissed(true);
+    writeQuickStartDismissed();
+  }
+
+  function rememberQueueSnapshot(queueSnapshot = playbackQueue) {
+    if (!queueSnapshot.length) {
+      return;
+    }
+    setQueueHistory((current) => {
+      const duplicateLatest =
+        current[0]?.length === queueSnapshot.length &&
+        current[0].every((track, index) => track.id === queueSnapshot[index]?.id);
+      if (duplicateLatest) {
+        return current;
+      }
+      return [queueSnapshot, ...current].slice(0, QUEUE_HISTORY_LIMIT);
+    });
+  }
 
   async function loadTracksPage(reset: boolean) {
     if (isLibraryLoading && !reset) {
@@ -4199,6 +6134,14 @@ export default function App() {
     }
   }
 
+  async function loadAutoDjAvoidRules() {
+    try {
+      setAutoDjAvoidRules(await fetchAutoDjAvoidRules());
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not load AutoDJ avoid list");
+    }
+  }
+
   async function loadSettings() {
     try {
       const response = await fetchSettings();
@@ -4207,6 +6150,81 @@ export default function App() {
       setWriteRatingsToFiles(response.write_ratings_to_files);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not load settings");
+    }
+  }
+
+  async function loadStartupDiagnostics(showToast = false) {
+    try {
+      const response = await fetchStartupDiagnostics();
+      setStartupDiagnostics(response);
+      if (showToast) {
+        setStatus(response.ok ? "Startup self-check passed" : "Startup self-check found issues");
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not run startup self-check");
+    }
+  }
+
+  async function handleOpenBackendLog() {
+    try {
+      const response = await fetchBackendLog();
+      setBackendLog(response);
+      if (!response.exists) {
+        setStatus("Backend log has not been created yet");
+        return;
+      }
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("reveal_in_file_explorer", { path: response.path });
+      } catch {
+        // Browser mode cannot reveal files; the Settings panel still shows the tail.
+      }
+      setStatus(`Backend log loaded from ${response.path}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not open backend log");
+    }
+  }
+
+  async function checkBackendStatus(showToast = false) {
+    try {
+      const response = await fetchBackendHealth();
+      setBackendStatus("ok");
+      setBackendMessage(response.status === "ok" ? "Backend is responding normally." : `Backend responded: ${response.status}`);
+      setBackendCheckedAt(new Date().toLocaleTimeString());
+      if (showToast) {
+        setStatus("Backend is responding");
+      }
+    } catch (error) {
+      setBackendStatus("down");
+      setBackendMessage(error instanceof Error ? error.message : "Backend is not reachable");
+      setBackendCheckedAt(new Date().toLocaleTimeString());
+      if (showToast) {
+        setStatus("Backend is not reachable");
+      }
+    }
+  }
+
+  async function handleRestartBackend() {
+    setBackendStatus("restarting");
+    setBackendMessage("Restarting the bundled backend service.");
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const message = await invoke<string>("backend_restart");
+      setStatus(message);
+      window.setTimeout(() => {
+        void checkBackendStatus(false);
+      }, 900);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : "Backend restart is only available in the packaged desktop app";
+      setBackendStatus("down");
+      setBackendMessage(message);
+      setBackendCheckedAt(new Date().toLocaleTimeString());
+      setStatus(message);
     }
   }
 
@@ -4297,11 +6315,18 @@ export default function App() {
     try {
       const started = await startClapInstall({ device, force });
       let latest: ClapInstallProgress | null = null;
+      let lastInstallMessage = "";
+      const setInstallStatus = (message: string) => {
+        if (message !== lastInstallMessage) {
+          lastInstallMessage = message;
+          setStatus(message);
+        }
+      };
       while (true) {
         await new Promise((resolve) => window.setTimeout(resolve, 1000));
         latest = await fetchClapInstall(started.job_id);
         setClapInstallProgress(latest);
-        setStatus(latest.message ?? "Installing CLAP ML runtime");
+        setInstallStatus(latest.message ?? "Installing CLAP ML runtime");
         if (isClapInstallTerminal(latest.status)) {
           break;
         }
@@ -4523,6 +6548,34 @@ export default function App() {
     }
   }
 
+  async function handleBulkRating(trackIds: number[], rating: number | null) {
+    const uniqueIds = Array.from(new Set(trackIds));
+    if (!uniqueIds.length) {
+      return;
+    }
+    if (writeRatingsToFiles) {
+      const unsupported = findTracksByIds(uniqueIds).filter((track) => !supportsFileTagWriting(track.path));
+      if (unsupported.length > 0) {
+        const proceed = window.confirm(
+          `${unsupported.length} selected track${unsupported.length === 1 ? "" : "s"} use a format FLAC Cafe may not write safely yet. Continue? Unsupported file writes will fail before SQLite is changed for those tracks.`,
+        );
+        if (!proceed) {
+          return;
+        }
+      }
+    }
+    try {
+      const updatedTracks = await Promise.all(uniqueIds.map((trackId) => updateTrackRating(trackId, rating)));
+      for (const updated of updatedTracks) {
+        replaceTrackEverywhere(updated);
+      }
+      setStatus(`Updated ${updatedTracks.length} rating${updatedTracks.length === 1 ? "" : "s"}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Bulk rating failed");
+      await refreshTracks();
+    }
+  }
+
   function replaceTrackEverywhere(updated: Track) {
     const replace = (track: Track) => (track.id === updated.id ? updated : track);
     setTracks((current) => current.map(replace));
@@ -4532,6 +6585,7 @@ export default function App() {
     setQueue((current) => current.map((track) => (track.id === updated.id ? { ...track, ...updated } : track)));
     setCurrentTrack((current) => (current?.id === updated.id ? updated : current));
     setDetailTrack((current) => (current?.id === updated.id ? updated : current));
+    setMetadataEditTrack((current) => (current?.id === updated.id ? updated : current));
   }
 
   function removeTrackEverywhere(trackId: number) {
@@ -4545,15 +6599,11 @@ export default function App() {
     setLibraryTotal((current) => Math.max(0, current - 1));
     setCurrentTrack((current) => (current?.id === trackId ? null : current));
     setDetailTrack((current) => (current?.id === trackId ? null : current));
+    setMetadataEditTrack((current) => (current?.id === trackId ? null : current));
   }
 
   async function handleDeleteTrack(trackId: number, deleteFile: boolean) {
-    const message = deleteFile
-      ? "Delete this audio file from disk and remove it from the library? This cannot be undone."
-      : "Remove this track from the library? The audio file will stay on disk.";
-    if (!window.confirm(message)) {
-      return;
-    }
+    const snapshot = findTracksByIds([trackId]);
     try {
       const response = await deleteTrack(trackId, deleteFile);
       removeTrackEverywhere(trackId);
@@ -4563,10 +6613,101 @@ export default function App() {
       } else if (response.file_missing) {
         setStatus("Removed missing track from library");
       } else {
+        if (snapshot.length > 0) {
+          showUndoAction({
+            type: "library-remove",
+            label: display(snapshot[0].title, "track"),
+            tracks: snapshot,
+          });
+        }
         setStatus("Removed track from library");
       }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not remove track");
+    }
+  }
+
+  async function handleDeleteTracks(trackIds: number[], deleteFile: boolean) {
+    const uniqueIds = Array.from(new Set(trackIds));
+    if (!uniqueIds.length) {
+      return;
+    }
+    const snapshot = findTracksByIds(uniqueIds);
+    try {
+      let deletedFiles = 0;
+      let missingFiles = 0;
+      for (const trackId of uniqueIds) {
+        const response = await deleteTrack(trackId, deleteFile);
+        if (response.deleted_file) {
+          deletedFiles += 1;
+        }
+        if (response.file_missing) {
+          missingFiles += 1;
+        }
+        removeTrackEverywhere(trackId);
+      }
+      await Promise.all([loadAlbums(), loadPlaylists(), loadLibraryStats(), loadClapCoverage()]);
+      if (!deleteFile && snapshot.length > 0 && missingFiles === 0) {
+        showUndoAction({
+          type: "library-remove",
+          label: `${snapshot.length} track${snapshot.length === 1 ? "" : "s"}`,
+          tracks: snapshot,
+        });
+      }
+      setStatus(
+        deletedFiles > 0
+          ? `Deleted ${deletedFiles} files and removed ${uniqueIds.length} tracks`
+          : `Removed ${uniqueIds.length} tracks from library`,
+      );
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not remove selected tracks");
+      await refreshTracks();
+    }
+  }
+
+  function requestDeleteTracks(trackIds: number[], title: string, allowFileDelete = true) {
+    const uniqueIds = Array.from(new Set(trackIds));
+    if (!uniqueIds.length) {
+      return;
+    }
+    const remembered = readRememberedDeleteChoice();
+    if (remembered) {
+      const deleteFile = allowFileDelete && remembered === "file";
+      if (uniqueIds.length === 1) {
+        void handleDeleteTrack(uniqueIds[0], deleteFile);
+      } else {
+        void handleDeleteTracks(uniqueIds, deleteFile);
+      }
+      return;
+    }
+    setDeletePrompt({ trackIds: uniqueIds, title, allowFileDelete });
+  }
+
+  async function confirmDeleteTracks(deleteFile: boolean, remember: boolean) {
+    if (!deletePrompt) {
+      return;
+    }
+    const prompt = deletePrompt;
+    setDeletePrompt(null);
+    if (remember) {
+      writeRememberedDeleteChoice(deleteFile ? "file" : "library");
+    }
+    if (prompt.trackIds.length === 1) {
+      await handleDeleteTrack(prompt.trackIds[0], deleteFile);
+    } else {
+      await handleDeleteTracks(prompt.trackIds, deleteFile);
+    }
+  }
+
+  async function handleSaveTrackMetadata(trackId: number, metadata: TrackMetadataUpdate) {
+    try {
+      const updated = await updateTrackMetadata(trackId, metadata);
+      replaceTrackEverywhere(updated);
+      await Promise.all([loadAlbums(), loadLibraryStats()]);
+      setMetadataEditTrack(null);
+      setStatus(writeRatingsToFiles ? "Metadata saved to library and file" : "Metadata saved to library");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not save metadata");
     }
   }
 
@@ -4648,9 +6789,44 @@ export default function App() {
     try {
       setSelectedPlaylistTracks(await removeTrackFromPlaylist(selectedPlaylistId, trackId));
       await loadPlaylists();
+      const track = findTracksByIds([trackId])[0];
+      showUndoAction({
+        type: "playlist-remove",
+        label: display(track?.title, "track"),
+        playlistId: selectedPlaylistId,
+        trackIds: [trackId],
+      });
       setStatus("Removed track from playlist");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not remove track");
+    }
+  }
+
+  async function handleRemoveTracksFromPlaylist(trackIds: number[]) {
+    if (!selectedPlaylistId) {
+      return;
+    }
+    const uniqueIds = Array.from(new Set(trackIds));
+    if (!uniqueIds.length) {
+      return;
+    }
+    try {
+      const playlistId = selectedPlaylistId;
+      let updatedTracks = selectedPlaylistTracks;
+      for (const trackId of uniqueIds) {
+        updatedTracks = await removeTrackFromPlaylist(playlistId, trackId);
+      }
+      setSelectedPlaylistTracks(updatedTracks);
+      await loadPlaylists();
+      showUndoAction({
+        type: "playlist-remove",
+        label: `${uniqueIds.length} track${uniqueIds.length === 1 ? "" : "s"}`,
+        playlistId,
+        trackIds: uniqueIds,
+      });
+      setStatus(`Removed ${uniqueIds.length} track${uniqueIds.length === 1 ? "" : "s"} from playlist`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not remove selected tracks from playlist");
     }
   }
 
@@ -4672,6 +6848,19 @@ export default function App() {
       setStatus(`Exported ${response.track_count} tracks to ${response.playlist_path}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not export playlist");
+    }
+  }
+
+  async function handleExportTracks(trackIds: number[]) {
+    const uniqueIds = Array.from(new Set(trackIds));
+    if (!uniqueIds.length) {
+      return;
+    }
+    try {
+      const response = await exportQueue(uniqueIds);
+      setStatus(`Exported ${response.track_count} tracks to ${response.playlist_path}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not export selected tracks");
     }
   }
 
@@ -4772,11 +6961,173 @@ export default function App() {
     }
   }
 
+  async function handleAvoidAutoDj(scope: "track" | "artist" | "album" | "genre", track?: Track | null) {
+    try {
+      const rule = await createAutoDjAvoidRule({
+        scope,
+        track_id: track?.id ?? null,
+        value:
+          scope === "artist"
+            ? track?.artist ?? null
+            : scope === "album"
+              ? track?.album ?? null
+              : scope === "genre"
+                ? trackGenre(track) ?? null
+                : null,
+      });
+      await loadAutoDjAvoidRules();
+      setStatus(`AutoDJ will avoid ${rule.label}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not update AutoDJ avoid list");
+    }
+  }
+
+  async function handleRevealTrack(track: Track) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("reveal_in_file_explorer", { path: track.path });
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Reveal in Explorer is available in the desktop app.");
+    }
+  }
+
+  async function handleDeleteAutoDjAvoidRule(ruleId: number) {
+    try {
+      setAutoDjAvoidRules(await deleteAutoDjAvoidRule(ruleId));
+      setStatus("Removed AutoDJ avoid rule");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not remove AutoDJ avoid rule");
+    }
+  }
+
+  function rememberRecommendationFeedback(track: Track, eventType: "play_next" | "add_to_queue" | "manual_play", weight = 1) {
+    void recordRecommendationFeedback({ track_id: track.id, event_type: eventType, weight }).catch(() => {
+      // Recommendation feedback is a soft learning signal; playback should never wait on it.
+    });
+  }
+
   function handlePlayTrack(track: Track, queueItems: Track[]) {
     setPlaybackQueue(queueItems);
     setAutoPlayOnTrackChange(true);
     setCurrentTrack(track);
+    rememberRecommendationFeedback(track, "manual_play", 0.7);
     setStatus(`Playing ${display(track.title, "track")}`);
+  }
+
+  function handlePlayNext(track: Track) {
+    setPlaybackQueue((current) => {
+      const baseQueue = current.length ? current : currentTrack ? [currentTrack] : [];
+      const withoutTrack = baseQueue.filter((item) => item.id !== track.id);
+      const activeIndex = currentTrack ? withoutTrack.findIndex((item) => item.id === currentTrack.id) : -1;
+      const insertAt = activeIndex >= 0 ? activeIndex + 1 : 0;
+      return [...withoutTrack.slice(0, insertAt), track, ...withoutTrack.slice(insertAt)];
+    });
+    if (!currentTrack) {
+      setAutoPlayOnTrackChange(false);
+      setCurrentTrack(track);
+    }
+    rememberRecommendationFeedback(track, "play_next", 1.4);
+    setStatus(`Queued ${display(track.title, "track")} next`);
+  }
+
+  function handleAddToQueue(track: Track) {
+    setPlaybackQueue((current) => (current.some((item) => item.id === track.id) ? current : [...current, track]));
+    if (!currentTrack) {
+      setAutoPlayOnTrackChange(false);
+      setCurrentTrack(track);
+    }
+    rememberRecommendationFeedback(track, "add_to_queue", 1.0);
+    setStatus(`Added ${display(track.title, "track")} to queue`);
+  }
+
+  function handleMovePlaybackQueueTrack(index: number, direction: "up" | "down") {
+    setPlaybackQueue((current) => {
+      const targetIndex = direction === "up" ? index - 1 : index + 1;
+      if (index < 0 || targetIndex < 0 || index >= current.length || targetIndex >= current.length) {
+        return current;
+      }
+      rememberQueueSnapshot(current);
+      const next = [...current];
+      [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
+      return next;
+    });
+  }
+
+  function handleReorderPlaybackQueueTrack(fromIndex: number, toIndex: number) {
+    setPlaybackQueue((current) => {
+      if (
+        fromIndex === toIndex ||
+        fromIndex < 0 ||
+        toIndex < 0 ||
+        fromIndex >= current.length ||
+        toIndex >= current.length
+      ) {
+        return current;
+      }
+      rememberQueueSnapshot(current);
+      const next = [...current];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+  }
+
+  function handleRemovePlaybackQueueTrack(index: number) {
+    setPlaybackQueue((current) => {
+      if (index < 0 || index >= current.length) {
+        return current;
+      }
+      rememberQueueSnapshot(current);
+      const removed = current[index];
+      const next = current.filter((_, itemIndex) => itemIndex !== index);
+      if (removed.id === currentTrack?.id) {
+        setAutoPlayOnTrackChange(Boolean(next.length));
+        setCurrentTrack(next[index] ?? next[index - 1] ?? null);
+      }
+      return next;
+    });
+  }
+
+  function handleClearPlaybackQueue() {
+    rememberQueueSnapshot();
+    setPlaybackQueue(currentTrack ? [currentTrack] : []);
+    setStatus("Cleared upcoming queue");
+  }
+
+  function handleRestorePlaybackQueue() {
+    const [previous, ...rest] = queueHistory;
+    if (!previous) {
+      setStatus("No previous queue to restore");
+      return;
+    }
+    setPlaybackQueue(previous);
+    setQueueHistory(rest);
+    if (currentTrack && !previous.some((track) => track.id === currentTrack.id)) {
+      setCurrentTrack(previous[0] ?? null);
+      setAutoPlayOnTrackChange(false);
+    }
+    setStatus("Restored previous queue");
+  }
+
+  async function handleSavePlaybackQueue() {
+    if (!playbackQueue.length) {
+      setStatus("Queue is empty");
+      return;
+    }
+    const name = window.prompt("Playlist name", `Queue ${new Date().toLocaleDateString()}`);
+    if (!name?.trim()) {
+      return;
+    }
+    try {
+      const created = await createPlaylist(name.trim());
+      await addTracksToPlaylist(created.id, playbackQueue.map((track) => track.id));
+      await loadPlaylists();
+      setSelectedPlaylistId(created.id);
+      setTargetPlaylistId(created.id);
+      setStatus(`Saved queue as ${created.name}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not save queue");
+    }
   }
 
   async function handleTrackEnded(trackId: number) {
@@ -4806,6 +7157,34 @@ export default function App() {
       setStatus(`Database backed up to ${response.backup_path}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Database backup failed");
+    }
+  }
+
+  async function handleCreateSupportBundle() {
+    try {
+      const response = await createSupportBundle();
+      setSupportBundlePath(response.bundle_path);
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("reveal_in_file_explorer", { path: response.bundle_path });
+      } catch {
+        // Browser mode cannot reveal files; the path in the toast is enough.
+      }
+      setStatus(`Support bundle ready: ${response.bundle_path}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not create support bundle");
+    }
+  }
+
+  async function handleCopySupportBundlePath() {
+    if (!supportBundlePath) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(supportBundlePath);
+      setStatus("Support bundle path copied");
+    } catch {
+      setStatus(supportBundlePath);
     }
   }
 
@@ -4862,6 +7241,8 @@ export default function App() {
 
   useEffect(() => {
     void loadSettings();
+    void checkBackendStatus(false);
+    void loadStartupDiagnostics(false);
     void loadClapStatus();
     void loadClapCoverage();
     try {
@@ -4894,6 +7275,21 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const handle = window.setInterval(() => {
+      void checkBackendStatus(false);
+    }, 30000);
+    return () => window.clearInterval(handle);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (undoTimerRef.current !== null) {
+        window.clearTimeout(undoTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     try {
       window.localStorage.setItem(
         storageKeys.lastSession,
@@ -4917,12 +7313,47 @@ export default function App() {
   }, [uiPreferences]);
 
   useEffect(() => {
+    const accent = themeAccentValues[uiPreferences.themeAccent] ?? themeAccentValues.cafe;
+    document.documentElement.style.setProperty("--color-ember", accent.ember);
+    document.documentElement.style.setProperty("--color-moss", accent.moss);
+    document.documentElement.style.fontSize = fontScaleValues[uiPreferences.fontScale] ?? fontScaleValues.default;
+    document.documentElement.dataset.density = uiPreferences.density;
+  }, [uiPreferences.themeAccent, uiPreferences.fontScale, uiPreferences.density]);
+
+  useEffect(() => {
     if (!status) {
       return;
     }
     const handle = window.setTimeout(() => setStatus(""), 3200);
     return () => window.clearTimeout(handle);
   }, [status]);
+
+  useEffect(() => {
+    function closeFloatingDetails(event: MouseEvent) {
+      const target = event.target as Node | null;
+      document.querySelectorAll<HTMLDetailsElement>("details[data-auto-close][open]").forEach((details) => {
+        if (!target || !details.contains(target)) {
+          details.open = false;
+        }
+      });
+    }
+
+    function closeFloatingDetailsOnEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape") {
+        return;
+      }
+      document.querySelectorAll<HTMLDetailsElement>("details[data-auto-close][open]").forEach((details) => {
+        details.open = false;
+      });
+    }
+
+    window.addEventListener("click", closeFloatingDetails);
+    window.addEventListener("keydown", closeFloatingDetailsOnEscape);
+    return () => {
+      window.removeEventListener("click", closeFloatingDetails);
+      window.removeEventListener("keydown", closeFloatingDetailsOnEscape);
+    };
+  }, []);
 
   useEffect(() => {
     const handle = window.setTimeout(() => {
@@ -4947,6 +7378,7 @@ export default function App() {
     void loadSmartPlaylists();
     void loadLibraryStats();
     void loadHistory();
+    void loadAutoDjAvoidRules();
   }, []);
 
   useEffect(() => {
@@ -5045,7 +7477,42 @@ export default function App() {
           {status}
         </div>
       )}
-      <Sidebar activePage={activePage} setActivePage={setActivePage} />
+      {undoAction && (
+        <div className="fixed bottom-24 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded border border-line bg-[#211a15] px-4 py-3 text-sm text-white shadow-2xl">
+          <span className="text-muted">Removed {undoAction.label}</span>
+          <button className="text-moss hover:text-white" type="button" onClick={() => void handleUndoAction()}>
+            Undo
+          </button>
+          <button className="text-muted hover:text-white" type="button" onClick={() => setUndoAction(null)}>
+            <X size={14} />
+          </button>
+        </div>
+      )}
+      {metadataEditTrack && (
+        <MetadataEditorModal
+          track={metadataEditTrack}
+          writeToFiles={writeRatingsToFiles}
+          onClose={() => setMetadataEditTrack(null)}
+          onSave={handleSaveTrackMetadata}
+        />
+      )}
+      {deletePrompt && (
+        <DeleteTrackDialog
+          prompt={deletePrompt}
+          onCancel={() => setDeletePrompt(null)}
+          onConfirm={confirmDeleteTracks}
+        />
+      )}
+      <Sidebar
+        activePage={activePage}
+        setActivePage={setActivePage}
+        hasDiagnosticsIssue={Boolean(startupDiagnostics && !startupDiagnostics.ok)}
+        hasAnalysisIssue={Boolean(
+          clapStatus &&
+            ((clapStatus.runtime_exists && !clapStatus.installed) ||
+              Object.keys(clapStatus.dependency_errors ?? {}).length > 0),
+        )}
+      />
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="min-h-0 flex flex-1">
           {activePage === "library" && (
@@ -5081,15 +7548,23 @@ export default function App() {
               scrollTop={libraryScrollTop}
               setScrollTop={setLibraryScrollTop}
               onRating={handleRating}
+              onBulkRating={handleBulkRating}
               onPlayTrack={handlePlayTrack}
+              onPlayNext={handlePlayNext}
+              onAddToQueue={handleAddToQueue}
               onSelectAlbum={handleSelectAlbum}
               onSelectPlaylist={handleSelectPlaylist}
               onCreatePlaylist={handleCreatePlaylist}
               onDeletePlaylist={handleDeletePlaylist}
               onAddTracksToPlaylist={handleAddTracksToPlaylist}
               onDeleteTrack={handleDeleteTrack}
+              onDeleteTracks={handleDeleteTracks}
+              onEditTrack={setMetadataEditTrack}
+              onRequestDeleteTracks={requestDeleteTracks}
               onRemoveTrackFromPlaylist={handleRemoveTrackFromPlaylist}
+              onRemoveTracksFromPlaylist={handleRemoveTracksFromPlaylist}
               onMovePlaylistTrack={handleMovePlaylistTrack}
+              onExportTracks={handleExportTracks}
               onExportPlaylist={handleExportPlaylist}
               onImportPlaylist={handleImportPlaylist}
               onPreviewSmartRule={handlePreviewSmartRule}
@@ -5098,6 +7573,8 @@ export default function App() {
               onSelectSmartPlaylist={handleSelectSmartPlaylist}
               onShuffleTracks={handleShuffleTracks}
               onQuickAutoDj={handleQuickAutoDj}
+              onAvoidAutoDj={handleAvoidAutoDj}
+              onRevealTrack={handleRevealTrack}
               detailTrack={detailTrack}
               setDetailTrack={setDetailTrack}
               onAnalyzeTracks={handleAnalyzeTracks}
@@ -5113,6 +7590,10 @@ export default function App() {
               setNewPlaylistName={setNewPlaylistName}
               setImportPlaylistPath={setImportPlaylistPath}
               setSmartPlaylistName={setSmartPlaylistName}
+              showQuickStart={libraryTotal === 0 && !quickStartDismissed}
+              onDismissQuickStart={dismissQuickStart}
+              onOpenSettings={() => setActivePage("settings")}
+              onOpenAnalysis={() => setActivePage("analysis")}
             />
           )}
           {activePage === "analysis" && (
@@ -5157,6 +7638,13 @@ export default function App() {
               playbackTime={playbackTime}
               queue={playbackQueue}
               onPlayTrack={handlePlayTrack}
+              onMoveQueueTrack={handleMovePlaybackQueueTrack}
+              onReorderQueueTrack={handleReorderPlaybackQueueTrack}
+              onRemoveQueueTrack={handleRemovePlaybackQueueTrack}
+              onClearQueue={handleClearPlaybackQueue}
+              onSaveQueue={handleSavePlaybackQueue}
+              onRestoreQueue={handleRestorePlaybackQueue}
+              canRestoreQueue={queueHistory.length > 0}
             />
           )}
           {activePage === "artist" && (
@@ -5187,6 +7675,8 @@ export default function App() {
               currentTrackId={currentTrack?.id ?? null}
               currentTrack={currentTrack}
               uiPreferences={uiPreferences}
+              avoidRules={autoDjAvoidRules}
+              onDeleteAvoidRule={(ruleId) => void handleDeleteAutoDjAvoidRule(ruleId)}
             />
           )}
           {activePage === "settings" && (
@@ -5199,6 +7689,15 @@ export default function App() {
               scanResult={scanResult}
               scanProgress={scanProgress}
               isScanning={isScanning}
+              backendStatus={backendStatus}
+              backendMessage={backendMessage}
+              backendCheckedAt={backendCheckedAt}
+              startupDiagnostics={startupDiagnostics}
+              backendLog={backendLog}
+              onCheckBackend={() => void checkBackendStatus(true)}
+              onRunStartupDiagnostics={() => void loadStartupDiagnostics(true)}
+              onOpenBackendLog={() => void handleOpenBackendLog()}
+              onRestartBackend={() => void handleRestartBackend()}
               clapStatus={clapStatus}
               clapModelId={clapModelId}
               setClapModelId={setClapModelId}
@@ -5224,6 +7723,9 @@ export default function App() {
               writeRatingsToFiles={writeRatingsToFiles}
               onWriteRatingsToFilesChange={(value) => void handleWriteRatingsToFiles(value)}
               onBackupDatabase={handleBackupDatabase}
+              onCreateSupportBundle={handleCreateSupportBundle}
+              supportBundlePath={supportBundlePath}
+              onCopySupportBundlePath={handleCopySupportBundlePath}
               onClearArtistCache={handleClearArtistCache}
             />
           )}
@@ -5238,7 +7740,9 @@ export default function App() {
           onRating={handleRating}
           autoPlay={autoPlayOnTrackChange}
           fadeMs={uiPreferences.playerFadeMs}
-          miniPlayer={uiPreferences.miniPlayer}
+          miniPlayer={uiPreferences.playerLayout === "compact" || uiPreferences.miniPlayer}
+          playbackMode={playbackMode}
+          setPlaybackMode={setPlaybackMode}
           setStatus={setStatus}
         />
       </div>

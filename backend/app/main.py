@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+from .ml_runtime import activate_ml_runtime
+
+activate_ml_runtime()
+
 import base64
-import shutil
 import json
+import logging
+from logging.handlers import RotatingFileHandler
 import re
+import shutil
 import sqlite3
+import zipfile
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib import error as urlerror
@@ -17,9 +25,9 @@ from mutagen import File as MutagenFile
 from mutagen.flac import Picture
 from mutagen.mp4 import MP4Cover
 
-from .config import EXPORT_DIR, database_path
+from .config import APP_STORAGE_ROOT, EXPORT_DIR, MODEL_DIR, database_path
 from .database import connect, get_setting, init_db, rows_to_dicts, set_setting
-from .file_tags import write_track_rating
+from .file_tags import write_track_metadata, write_track_rating
 from .analysis_jobs import (
     cancel_audio_analysis_job,
     get_audio_analysis_job,
@@ -31,8 +39,18 @@ from .clap_analysis import save_config as save_clap_config
 from .clap_analysis import status as clap_status
 from .clap_install_jobs import get_clap_install_job, start_clap_install_job
 from .playlist import export_m3u
-from .recommender import event_metadata, generate_queue
-from .scanner import path_key, scan_folder
+from .recommender import (
+    album_token,
+    artist_tokens,
+    cosine_similarity,
+    event_metadata,
+    generate_queue,
+    normalize_token,
+    parse_embedding,
+    similarity_adjustment,
+    text_tokens,
+)
+from .scanner import path_key, read_metadata, scan_folder, upsert_track
 from .scan_jobs import get_scan_job, start_scan_job
 from .schemas import (
     AlbumSummary,
@@ -42,14 +60,18 @@ from .schemas import (
     AudioAnalysisStartRequest,
     AudioAnalysisStartResponse,
     AutoDjRequest,
+    AutoDjAvoidRequest,
+    AutoDjAvoidRule,
     AutoDjResponse,
     BackupResponse,
     ClapInstallProgress,
     ClapInstallRequest,
     ClapInstallStartResponse,
     DuplicateGroup,
+    DiagnosticItem,
     ExportRequest,
     ExportResponse,
+    LogTailResponse,
     ClapConfigRequest,
     ClapStatusResponse,
     LibraryHealthResponse,
@@ -62,6 +84,7 @@ from .schemas import (
     PlaylistTrackRequest,
     PlayEventEntry,
     RatingRequest,
+    RecommendationFeedbackRequest,
     ScanRequest,
     ScanProgress,
     ScanResult,
@@ -71,11 +94,15 @@ from .schemas import (
     SmartPlaylistCreateRequest,
     SmartPlaylistRule,
     SmartPlaylistSummary,
+    SimilarTrack,
+    StartupDiagnosticsResponse,
+    SupportBundleResponse,
     Track,
     TrackDeleteResponse,
+    TrackRestoreRequest,
+    TrackMetadataUpdateRequest,
     TrackPage,
 )
-
 
 MEDIA_TYPES = {
     ".flac": "audio/flac",
@@ -101,7 +128,7 @@ TRACK_COLUMNS = """
     id, path, title, artist, album, album_artist, track_number,
     disc_number, genre, analysis_provider, analysis_model, analysis_genre,
     analysis_genre_confidence, analysis_genre_tags, analysis_updated_at,
-    year, duration_seconds,
+    analysis_embedding, year, duration_seconds, bitrate, audio_fingerprint,
     rating, play_count, skip_count, last_played_at, last_skipped_at,
     date_added, file_modified_at
 """
@@ -114,8 +141,10 @@ TRACK_JOIN_COLUMNS = """
     tracks.analysis_model AS analysis_model, tracks.analysis_genre AS analysis_genre,
     tracks.analysis_genre_confidence AS analysis_genre_confidence,
     tracks.analysis_genre_tags AS analysis_genre_tags,
+    tracks.analysis_embedding AS analysis_embedding,
     tracks.analysis_updated_at AS analysis_updated_at,
     tracks.year AS year, tracks.duration_seconds AS duration_seconds,
+    tracks.bitrate AS bitrate, tracks.audio_fingerprint AS audio_fingerprint,
     tracks.rating AS rating, tracks.play_count AS play_count, tracks.skip_count AS skip_count,
     tracks.last_played_at AS last_played_at, tracks.last_skipped_at AS last_skipped_at,
     tracks.date_added AS date_added, tracks.file_modified_at AS file_modified_at
@@ -135,6 +164,7 @@ TRACK_SORTS = {
     "analysis_provider": "lower(coalesce(analysis_provider, ''))",
     "analysis_updated_at": "coalesce(analysis_updated_at, '')",
     "year": "coalesce(year, -1)",
+    "bitrate": "coalesce(bitrate, -1)",
     "rating": "coalesce(rating, -1)",
     "duration_seconds": "coalesce(duration_seconds, -1)",
     "play_count": "coalesce(play_count, 0)",
@@ -147,6 +177,296 @@ TRACK_SORTS = {
 
 WIKIPEDIA_API_URL = "https://en.wikipedia.org/w/api.php"
 WIKIPEDIA_USER_AGENT = "FLACCafe/0.1 (local desktop music app)"
+LOGGER = logging.getLogger("flac_cafe.backend")
+
+
+def backend_log_path() -> Path:
+    return APP_STORAGE_ROOT / "logs" / "backend.log"
+
+
+def configure_backend_file_logging() -> Path:
+    log_path = backend_log_path()
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        root = logging.getLogger()
+        resolved = str(log_path.resolve())
+        if not any(isinstance(handler, RotatingFileHandler) and handler.baseFilename == resolved for handler in root.handlers):
+            handler = RotatingFileHandler(log_path, maxBytes=1_500_000, backupCount=3, encoding="utf-8")
+            handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+            root.addHandler(handler)
+        if root.level == logging.NOTSET:
+            root.setLevel(logging.INFO)
+        LOGGER.info("Backend logging ready at %s", log_path)
+    except OSError:
+        LOGGER.exception("Could not initialize backend file logging")
+    return log_path
+
+
+def suggested_music_path() -> str | None:
+    music_dir = Path.home() / "Music"
+    return str(music_dir) if music_dir.exists() and music_dir.is_dir() else None
+
+
+def diagnostic_item(key: str, label: str, path: Path | str | None, check) -> DiagnosticItem:
+    try:
+        message = check()
+        return DiagnosticItem(key=key, label=label, ok=True, message=message, path=str(path) if path else None)
+    except Exception as exc:
+        return DiagnosticItem(key=key, label=label, ok=False, message=str(exc), path=str(path) if path else None)
+
+
+def _check_writable_directory(path: Path) -> str:
+    path.mkdir(parents=True, exist_ok=True)
+    test_path = path / ".flac-cafe-write-test.tmp"
+    test_path.write_text("ok", encoding="utf-8")
+    test_path.unlink(missing_ok=True)
+    return "Writable"
+
+
+def recent_backend_error_summary(limit: int = 500) -> str | None:
+    log_path = backend_log_path()
+    if not log_path.exists():
+        return None
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-limit:]
+    except OSError as exc:
+        return f"Could not read backend log: {exc}"
+
+    interesting = [
+        line
+        for line in lines
+        if "Traceback" in line or " CRITICAL " in line or " ERROR " in line or "Exception" in line
+    ]
+    if not interesting:
+        return None
+    return interesting[-1].strip()[:500]
+
+
+def _check_recent_backend_errors() -> str:
+    summary = recent_backend_error_summary()
+    if summary:
+        raise RuntimeError(f"Recent backend error: {summary}")
+    return "No recent backend errors in the current log"
+
+
+def startup_diagnostics() -> StartupDiagnosticsResponse:
+    log_path = configure_backend_file_logging()
+    db_path = database_path()
+
+    def check_database() -> str:
+        init_db()
+        with connect() as conn:
+            conn.execute("SELECT 1").fetchone()
+        return "SQLite database is reachable"
+
+    def check_clap_runtime() -> str:
+        status = clap_status()
+        if status.get("installed"):
+            device = status.get("runtime_device") or status.get("torch_device") or "available"
+            return f"CLAP runtime ready ({device})"
+        return status.get("message") or "Optional CLAP runtime is not installed"
+
+    items = [
+        diagnostic_item("app_data", "App data folder", APP_STORAGE_ROOT, lambda: _check_writable_directory(APP_STORAGE_ROOT)),
+        diagnostic_item("database", "Database", db_path, check_database),
+        diagnostic_item("logs", "Backend log", log_path, lambda: _check_writable_directory(log_path.parent)),
+        diagnostic_item("models", "Model cache", MODEL_DIR, lambda: _check_writable_directory(MODEL_DIR)),
+        diagnostic_item("recent_errors", "Recent backend errors", log_path, _check_recent_backend_errors),
+        diagnostic_item("clap", "CLAP runtime", None, check_clap_runtime),
+    ]
+    return StartupDiagnosticsResponse(
+        ok=all(item.ok for item in items),
+        generated_at=datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        items=items,
+        log_path=str(log_path),
+        app_data_path=str(APP_STORAGE_ROOT),
+    )
+
+
+def read_log_tail(path: Path, limit: int) -> LogTailResponse:
+    if not path.exists():
+        return LogTailResponse(path=str(path), exists=False, lines=[])
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as exc:
+        return LogTailResponse(path=str(path), exists=True, lines=[f"Could not read log: {exc}"])
+    return LogTailResponse(path=str(path), exists=True, lines=lines[-limit:])
+
+
+def duplicate_keep_recommendation(tracks: list[dict]) -> tuple[int | None, str | None]:
+    if not tracks:
+        return None, None
+
+    def score(track: dict) -> float:
+        value = 0.0
+        if track.get("rating") is not None:
+            value += float(track["rating"]) * 100
+        if track.get("bitrate"):
+            value += min(80, int(track["bitrate"]) / 4000)
+        if track.get("audio_fingerprint"):
+            value += 20
+        if track.get("analysis_embedding"):
+            value += 15
+        if track.get("duration_seconds"):
+            value += 8
+        if Path(track["path"]).exists():
+            value += 10
+        value -= len(str(track.get("path") or "")) / 1000
+        return value
+
+    selected = max(tracks, key=score)
+    reasons: list[str] = []
+    if selected.get("rating") is not None:
+        reasons.append(f"{selected['rating']} star rating")
+    if selected.get("bitrate"):
+        reasons.append(f"{round(int(selected['bitrate']) / 1000)} kbps")
+    if selected.get("analysis_embedding"):
+        reasons.append("has CLAP analysis")
+    if selected.get("audio_fingerprint"):
+        reasons.append("has file fingerprint")
+    return int(selected["id"]), ", ".join(reasons) if reasons else "best available metadata"
+
+
+def average_embedding_similarity(tracks: list[dict]) -> float | None:
+    embeddings = [parse_embedding(track.get("analysis_embedding")) for track in tracks]
+    embeddings = [embedding for embedding in embeddings if embedding]
+    if len(embeddings) < 2:
+        return None
+    values: list[float] = []
+    for index, left in enumerate(embeddings):
+        for right in embeddings[index + 1 :]:
+            similarity = cosine_similarity(left, right)
+            if similarity is not None:
+                values.append(similarity)
+    return round(sum(values) / len(values), 4) if values else None
+
+
+def duplicate_group_from_tracks(key: str, tracks: list[dict], base_reason: str) -> DuplicateGroup:
+    durations = [
+        float(track["duration_seconds"])
+        for track in tracks
+        if isinstance(track.get("duration_seconds"), (int, float))
+    ]
+    bitrates = [int(track["bitrate"]) for track in tracks if isinstance(track.get("bitrate"), int)]
+    fingerprints = [track.get("audio_fingerprint") for track in tracks if track.get("audio_fingerprint")]
+    duration_spread = round(max(durations) - min(durations), 3) if len(durations) >= 2 else None
+    bitrate_spread = max(bitrates) - min(bitrates) if len(bitrates) >= 2 else None
+    shared_fingerprint = bool(fingerprints and len(set(fingerprints)) < len(fingerprints))
+    path_roots = sorted({str(Path(track["path"]).parent) for track in tracks if track.get("path")})[:6]
+    analyzed_tracks = sum(1 for track in tracks if track.get("analysis_embedding"))
+    keep_id, keep_reason = duplicate_keep_recommendation(tracks)
+    reasons = [base_reason]
+    if shared_fingerprint:
+        reasons.append("matching fingerprint")
+    if duration_spread is not None:
+        reasons.append("same duration" if duration_spread <= 2 else f"duration spread {duration_spread:.1f}s")
+    if bitrate_spread is not None:
+        reasons.append("same bitrate" if bitrate_spread == 0 else f"bitrate spread {round(bitrate_spread / 1000)} kbps")
+    if analyzed_tracks:
+        reasons.append(f"{analyzed_tracks}/{len(tracks)} analyzed")
+    return DuplicateGroup(
+        key=key,
+        tracks=tracks,
+        match_reason=", ".join(reasons),
+        recommended_keep_id=keep_id,
+        recommendation_reason=keep_reason,
+        duration_spread_seconds=duration_spread,
+        bitrate_spread=bitrate_spread,
+        shared_fingerprint=shared_fingerprint,
+        average_audio_similarity=average_embedding_similarity(tracks),
+        path_roots=path_roots,
+        analyzed_tracks=analyzed_tracks,
+    )
+
+
+def create_support_bundle() -> SupportBundleResponse:
+    configure_backend_file_logging()
+    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    bundle_path = EXPORT_DIR / f"flac-cafe-support-{stamp}.zip"
+    files_written: list[str] = []
+
+    with connect() as conn:
+        settings_rows = rows_to_dicts(conn.execute("SELECT key, value FROM settings ORDER BY key"))
+        redacted_settings = [
+            {
+                **row,
+                "value": "[redacted path]" if "path" in row["key"] or "dir" in row["key"] else row["value"],
+            }
+            for row in settings_rows
+        ]
+        library_counts = rows_to_dicts(
+            conn.execute(
+                """
+                SELECT
+                    count(*) AS tracks,
+                    count(DISTINCT album_id) AS albums,
+                    count(DISTINCT lower(coalesce(artist, ''))) AS artists
+                FROM tracks
+                """
+            )
+        )[0]
+        extension_counts: dict[str, int] = {}
+        for row in conn.execute("SELECT path FROM tracks"):
+            extension = Path(row["path"]).suffix.lower() or "(none)"
+            extension_counts[extension] = extension_counts.get(extension, 0) + 1
+
+        redacted_summary = {
+            "counts": library_counts,
+            "ratings": rows_to_dicts(
+                conn.execute(
+                    """
+                    SELECT coalesce(CAST(rating AS TEXT), 'unrated') AS bucket, count(*) AS tracks
+                    FROM tracks
+                    GROUP BY bucket
+                    ORDER BY bucket
+                    """
+                )
+            ),
+            "formats": [
+                {"extension": extension, "tracks": count}
+                for extension, count in sorted(extension_counts.items(), key=lambda item: (-item[1], item[0]))
+            ],
+            "analysis": rows_to_dicts(
+                conn.execute(
+                    """
+                    SELECT coalesce(analysis_provider, 'none') AS provider,
+                           count(*) AS tracks
+                    FROM tracks
+                    GROUP BY provider
+                    ORDER BY tracks DESC
+                    """
+                )
+            ),
+        }
+
+    diagnostics = startup_diagnostics().model_dump()
+    app_info = {
+        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "app_data_path": str(APP_STORAGE_ROOT),
+        "database_path": str(database_path()),
+        "library_counts": library_counts,
+        "media_types": MEDIA_TYPES,
+    }
+
+    def add_json(archive: zipfile.ZipFile, name: str, value: object) -> None:
+        archive.writestr(name, json.dumps(value, ensure_ascii=True, indent=2, sort_keys=True))
+        files_written.append(name)
+
+    with zipfile.ZipFile(bundle_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        add_json(archive, "diagnostics.json", diagnostics)
+        add_json(archive, "settings.redacted.json", redacted_settings)
+        add_json(archive, "database-summary.redacted.json", redacted_summary)
+        add_json(archive, "app-info.json", app_info)
+
+        log_dir = backend_log_path().parent
+        if log_dir.exists():
+            for log_file in sorted(log_dir.glob("backend.log*")):
+                if log_file.is_file():
+                    archive.write(log_file, f"logs/{log_file.name}")
+                    files_written.append(f"logs/{log_file.name}")
+
+    return SupportBundleResponse(bundle_path=str(bundle_path), file_count=len(files_written))
 
 
 def get_track_path(track_id: int) -> Path:
@@ -183,6 +503,29 @@ def delete_orphan_albums(conn) -> None:
         )
         """
     )
+
+
+def ensure_album_for_track(conn, values: dict) -> int | None:
+    album = values.get("album")
+    if not album:
+        return None
+    album_artist = values.get("album_artist") or values.get("artist")
+    year = values.get("year")
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO albums(album, album_artist, year)
+        VALUES(?, ?, ?)
+        """,
+        (album, album_artist, year),
+    )
+    row = conn.execute(
+        """
+        SELECT id FROM albums
+        WHERE album IS ? AND album_artist IS ? AND year IS ?
+        """,
+        (album, album_artist, year),
+    ).fetchone()
+    return None if row is None else int(row["id"])
 
 
 def track_where_clause(search: str) -> tuple[str, list[object]]:
@@ -863,7 +1206,14 @@ def save_artist_info(query_name: str, info: dict[str, str | None]) -> ArtistInfo
     )
 
 
-app = FastAPI(title="FLAC Cafe")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    configure_backend_file_logging()
+    init_db()
+    yield
+
+
+app = FastAPI(title="FLAC Cafe", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -875,20 +1225,31 @@ app.add_middleware(
         "https://tauri.localhost",
         "tauri://localhost",
     ],
+    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1):\d+$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-@app.on_event("startup")
-def startup() -> None:
-    init_db()
-
-
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/diagnostics/startup", response_model=StartupDiagnosticsResponse)
+def get_startup_diagnostics() -> StartupDiagnosticsResponse:
+    return startup_diagnostics()
+
+
+@app.get("/diagnostics/logs/backend", response_model=LogTailResponse)
+def get_backend_log(limit: int = Query(default=200, ge=1, le=2000)) -> LogTailResponse:
+    return read_log_tail(backend_log_path(), limit)
+
+
+@app.post("/diagnostics/support-bundle", response_model=SupportBundleResponse)
+def build_support_bundle() -> SupportBundleResponse:
+    return create_support_bundle()
 
 
 @app.get("/settings", response_model=SettingsResponse)
@@ -899,6 +1260,7 @@ def get_settings() -> SettingsResponse:
     return SettingsResponse(
         library_path=library_path,
         database_path=str(database_path()),
+        suggested_music_path=suggested_music_path(),
         write_ratings_to_files=write_ratings_to_files,
         extra={"clap": clap_status()},
     )
@@ -1059,6 +1421,118 @@ def get_track(track_id: int) -> dict:
         return track_response(conn, track_id)
 
 
+@app.get("/tracks/{track_id}/similar", response_model=list[SimilarTrack])
+def similar_tracks(track_id: int, limit: int = Query(default=12, ge=1, le=50)) -> list[dict]:
+    with connect() as conn:
+        seed = conn.execute(f"SELECT {TRACK_COLUMNS} FROM tracks WHERE id = ?", (track_id,)).fetchone()
+        if seed is None:
+            raise HTTPException(status_code=404, detail="Track not found")
+        seed_track = dict(seed)
+        rows = rows_to_dicts(
+            conn.execute(
+                f"""
+                SELECT {TRACK_COLUMNS}
+                FROM tracks
+                WHERE id <> ?
+                """,
+                (track_id,),
+            )
+        )
+
+    candidates: list[dict] = []
+    seed_embedding = parse_embedding(seed_track.get("analysis_embedding"))
+    for track in rows:
+        score, reason = similarity_adjustment(track, seed_track)
+        audio_similarity = cosine_similarity(parse_embedding(track.get("analysis_embedding")), seed_embedding)
+        if audio_similarity is not None and audio_similarity > 0:
+            score += audio_similarity
+        if score <= 0:
+            continue
+        candidates.append(
+            {
+                **track,
+                "similarity_score": round(score, 4),
+                "similarity_reason": reason or "metadata similarity",
+                "audio_similarity": round(audio_similarity, 4) if audio_similarity is not None else None,
+            }
+        )
+
+    candidates.sort(
+        key=lambda track: (
+            track["similarity_score"],
+            track.get("rating") or 0,
+            track.get("bitrate") or 0,
+        ),
+        reverse=True,
+    )
+    return candidates[:limit]
+
+
+@app.patch("/tracks/{track_id}/metadata", response_model=Track)
+def update_track_metadata(track_id: int, request: TrackMetadataUpdateRequest) -> dict:
+    editable_fields = {
+        "title",
+        "artist",
+        "album",
+        "album_artist",
+        "track_number",
+        "disc_number",
+        "genre",
+        "year",
+    }
+    requested = request.model_dump(exclude_unset=True)
+    updates = {key: value for key, value in requested.items() if key in editable_fields}
+    if not updates:
+        with connect() as conn:
+            return track_response(conn, track_id)
+
+    with connect() as conn:
+        row = conn.execute(f"SELECT {TRACK_COLUMNS} FROM tracks WHERE id = ?", (track_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Track not found")
+
+        current = dict(row)
+        merged = {**current, **updates}
+        file_modified_at = None
+        if get_write_ratings_to_files(conn):
+            try:
+                path = Path(current["path"])
+                write_track_metadata(path, {field: merged.get(field) for field in editable_fields})
+                if path.exists():
+                    file_modified_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).replace(microsecond=0).isoformat()
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except OSError as exc:
+                raise HTTPException(status_code=400, detail=f"Could not write metadata to file: {exc}") from exc
+
+        merged["album_id"] = ensure_album_for_track(conn, merged)
+        conn.execute(
+            """
+            UPDATE tracks
+            SET title = :title,
+                artist = :artist,
+                album = :album,
+                album_artist = :album_artist,
+                album_id = :album_id,
+                track_number = :track_number,
+                disc_number = :disc_number,
+                genre = :genre,
+                year = :year,
+                file_modified_at = coalesce(:file_modified_at, file_modified_at),
+                updated_at = datetime('now')
+            WHERE id = :id
+            """,
+            {
+                **merged,
+                "file_modified_at": file_modified_at,
+                "id": track_id,
+            },
+        )
+        delete_orphan_albums(conn)
+        conn.commit()
+        return track_response(conn, track_id)
+
+
 @app.delete("/tracks/{track_id}", response_model=TrackDeleteResponse)
 def delete_track(track_id: int, delete_file: bool = False) -> TrackDeleteResponse:
     with connect() as conn:
@@ -1088,6 +1562,31 @@ def delete_track(track_id: int, delete_file: bool = False) -> TrackDeleteRespons
         deleted_file=deleted_file,
         file_missing=file_missing,
     )
+
+
+@app.post("/tracks/restore", response_model=Track)
+def restore_track(request: TrackRestoreRequest) -> dict:
+    path = Path(request.path).expanduser()
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Audio file is missing on disk")
+    try:
+        metadata = read_metadata(path)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not read track metadata: {exc}") from exc
+
+    with connect() as conn:
+        upsert_track(conn, metadata)
+        row = conn.execute("SELECT id FROM tracks WHERE path_key = ?", (metadata["path_key"],)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=400, detail="Track could not be restored")
+        track_id = int(row["id"])
+        if request.rating is not None:
+            conn.execute(
+                "UPDATE tracks SET rating = ?, updated_at = datetime('now') WHERE id = ?",
+                (request.rating, track_id),
+            )
+        conn.commit()
+        return track_response(conn, track_id)
 
 
 @app.get("/history", response_model=list[PlayEventEntry])
@@ -1223,6 +1722,17 @@ def library_health(limit: int = Query(default=80, ge=1, le=500)) -> LibraryHealt
             """
         ).fetchall()
         duplicates: list[DuplicateGroup] = []
+        seen_duplicate_sets: set[tuple[int, ...]] = set()
+
+        def append_duplicate_group(key: str, tracks: list[dict], reason: str) -> None:
+            if len(tracks) < 2:
+                return
+            identity = tuple(sorted(int(track["id"]) for track in tracks))
+            if identity in seen_duplicate_sets:
+                return
+            seen_duplicate_sets.add(identity)
+            duplicates.append(duplicate_group_from_tracks(key, tracks, reason))
+
         for key in duplicate_keys:
             tracks = rows_to_dicts(
                 conn.execute(
@@ -1236,7 +1746,34 @@ def library_health(limit: int = Query(default=80, ge=1, le=500)) -> LibraryHealt
                     (key["title_key"], key["artist_key"], limit),
                 )
             )
-            duplicates.append(DuplicateGroup(key=key["display_key"], tracks=tracks))
+            append_duplicate_group(key["display_key"], tracks, "matching title/artist")
+
+        fingerprint_keys = conn.execute(
+            """
+            SELECT audio_fingerprint, count(*) AS tracks
+            FROM tracks
+            WHERE audio_fingerprint IS NOT NULL AND trim(audio_fingerprint) <> ''
+            GROUP BY audio_fingerprint
+            HAVING count(*) > 1
+            ORDER BY tracks DESC
+            LIMIT 20
+            """
+        ).fetchall()
+        for key in fingerprint_keys:
+            tracks = rows_to_dicts(
+                conn.execute(
+                    f"""
+                    SELECT {TRACK_COLUMNS}
+                    FROM tracks
+                    WHERE audio_fingerprint = ?
+                    ORDER BY lower(coalesce(artist, '')), lower(coalesce(album, '')), path ASC
+                    LIMIT ?
+                    """,
+                    (key["audio_fingerprint"], limit),
+                )
+            )
+            label = f"File fingerprint {str(key['audio_fingerprint'])[:10]}"
+            append_duplicate_group(label, tracks, "matching file fingerprint")
     return LibraryHealthResponse(
         missing_files=missing_files,
         missing_metadata=missing,
@@ -1878,6 +2415,109 @@ def mark_track_skipped(track_id: int) -> dict:
 @app.post("/autodj/generate", response_model=AutoDjResponse)
 def generate_autodj(request: AutoDjRequest) -> AutoDjResponse:
     return AutoDjResponse(tracks=generate_queue(request), settings=request)
+
+
+def _avoid_key_and_label(request: AutoDjAvoidRequest) -> tuple[str, str]:
+    track = None
+    if request.track_id is not None:
+        with connect() as conn:
+            track = conn.execute(f"SELECT {TRACK_COLUMNS} FROM tracks WHERE id = ?", (request.track_id,)).fetchone()
+        if track is None:
+            raise HTTPException(status_code=404, detail="Track not found")
+        track = dict(track)
+
+    value = (request.value or "").strip()
+    if request.scope == "track":
+        if track is None:
+            raise HTTPException(status_code=400, detail="Track avoid rules require track_id")
+        return str(track["id"]), display_track_label(track)
+
+    if request.scope == "artist":
+        label = value or (track or {}).get("artist") or ""
+        tokens = sorted(artist_tokens(label))
+        key = tokens[0] if tokens else normalize_token(label)
+    elif request.scope == "album":
+        label = value or (track or {}).get("album") or ""
+        key = album_token(label)
+    else:
+        label = value or (track or {}).get("analysis_genre") or (track or {}).get("genre") or ""
+        tokens = sorted(text_tokens(label))
+        key = tokens[0] if tokens else normalize_token(label)
+
+    if not key:
+        raise HTTPException(status_code=400, detail=f"No {request.scope} value available")
+    return key, label or key
+
+
+def display_track_label(track: dict) -> str:
+    title = track.get("title") or "Untitled"
+    artist = track.get("artist") or "Unknown artist"
+    return f"{title} - {artist}"
+
+
+@app.get("/autodj/avoid", response_model=list[AutoDjAvoidRule])
+def list_autodj_avoid_rules() -> list[dict]:
+    with connect() as conn:
+        return rows_to_dicts(
+            conn.execute(
+                """
+                SELECT id, scope, target_key, label, created_at, updated_at
+                FROM autodj_avoid_rules
+                ORDER BY scope, lower(label)
+                """
+            )
+        )
+
+
+@app.post("/autodj/avoid", response_model=AutoDjAvoidRule)
+def create_autodj_avoid_rule(request: AutoDjAvoidRequest) -> dict:
+    key, label = _avoid_key_and_label(request)
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO autodj_avoid_rules(scope, target_key, label)
+            VALUES(?, ?, ?)
+            ON CONFLICT(scope, target_key) DO UPDATE SET
+              label = excluded.label,
+              updated_at = datetime('now')
+            """,
+            (request.scope, key, label),
+        )
+        conn.commit()
+        row = conn.execute(
+            """
+            SELECT id, scope, target_key, label, created_at, updated_at
+            FROM autodj_avoid_rules
+            WHERE scope = ? AND target_key = ?
+            """,
+            (request.scope, key),
+        ).fetchone()
+    return dict(row)
+
+
+@app.delete("/autodj/avoid/{rule_id}", response_model=list[AutoDjAvoidRule])
+def delete_autodj_avoid_rule(rule_id: int) -> list[dict]:
+    with connect() as conn:
+        conn.execute("DELETE FROM autodj_avoid_rules WHERE id = ?", (rule_id,))
+        conn.commit()
+    return list_autodj_avoid_rules()
+
+
+@app.post("/autodj/feedback")
+def record_recommendation_feedback(request: RecommendationFeedbackRequest) -> dict[str, str]:
+    with connect() as conn:
+        track = conn.execute("SELECT id FROM tracks WHERE id = ?", (request.track_id,)).fetchone()
+        if track is None:
+            raise HTTPException(status_code=404, detail="Track not found")
+        conn.execute(
+            """
+            INSERT INTO recommendation_feedback(track_id, event_type, weight)
+            VALUES(?, ?, ?)
+            """,
+            (request.track_id, request.event_type, request.weight),
+        )
+        conn.commit()
+    return {"status": "ok"}
 
 
 @app.post("/autodj/export", response_model=ExportResponse)

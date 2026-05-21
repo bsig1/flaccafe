@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS tracks (
   analysis_updated_at TEXT,
   year INTEGER,
   duration_seconds REAL,
+  bitrate INTEGER,
+  audio_fingerprint TEXT,
   rating REAL CHECK (rating IS NULL OR rating BETWEEN 0.5 AND 5),
   play_count INTEGER NOT NULL DEFAULT 0,
   skip_count INTEGER NOT NULL DEFAULT 0,
@@ -97,6 +99,24 @@ CREATE TABLE IF NOT EXISTS artist_info_cache (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS autodj_avoid_rules (
+  id INTEGER PRIMARY KEY,
+  scope TEXT NOT NULL CHECK (scope IN ('track', 'artist', 'album', 'genre')),
+  target_key TEXT NOT NULL,
+  label TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(scope, target_key)
+);
+
+CREATE TABLE IF NOT EXISTS recommendation_feedback (
+  id INTEGER PRIMARY KEY,
+  track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+  event_type TEXT NOT NULL CHECK (event_type IN ('play_next', 'add_to_queue', 'manual_play')),
+  weight REAL NOT NULL DEFAULT 1.0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
 CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album);
 CREATE INDEX IF NOT EXISTS idx_tracks_rating ON tracks(rating);
@@ -106,13 +126,23 @@ CREATE INDEX IF NOT EXISTS idx_playlist_tracks_playlist_id ON playlist_tracks(pl
 CREATE INDEX IF NOT EXISTS idx_playlist_tracks_track_id ON playlist_tracks(track_id);
 CREATE INDEX IF NOT EXISTS idx_smart_playlists_name ON smart_playlists(name);
 CREATE INDEX IF NOT EXISTS idx_artist_info_updated_at ON artist_info_cache(updated_at);
+CREATE INDEX IF NOT EXISTS idx_autodj_avoid_rules_scope ON autodj_avoid_rules(scope, target_key);
+CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_track_id ON recommendation_feedback(track_id, created_at);
 """
+
+
+class ClosingConnection(sqlite3.Connection):
+    def __exit__(self, exc_type, exc_value, traceback) -> bool:
+        try:
+            return bool(super().__exit__(exc_type, exc_value, traceback))
+        finally:
+            self.close()
 
 
 def connect(path: Path | None = None) -> sqlite3.Connection:
     db_path = path or database_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, factory=ClosingConnection)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -204,6 +234,8 @@ def ensure_track_analysis_columns(conn: sqlite3.Connection) -> None:
         "analysis_genre_tags": "ALTER TABLE tracks ADD COLUMN analysis_genre_tags TEXT",
         "analysis_embedding": "ALTER TABLE tracks ADD COLUMN analysis_embedding TEXT",
         "analysis_updated_at": "ALTER TABLE tracks ADD COLUMN analysis_updated_at TEXT",
+        "bitrate": "ALTER TABLE tracks ADD COLUMN bitrate INTEGER",
+        "audio_fingerprint": "ALTER TABLE tracks ADD COLUMN audio_fingerprint TEXT",
     }
     for column, sql in additions.items():
         if column not in columns:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +12,9 @@ from mutagen import File as MutagenFile
 
 from .config import SUPPORTED_EXTENSIONS
 from .database import connect, set_setting
+
+
+FINGERPRINT_CHUNK_SIZE = 64 * 1024
 
 
 def utc_now() -> str:
@@ -74,6 +78,23 @@ def parse_rating(tags: dict[str, Any]) -> float | None:
     return max(0.5, min(5.0, round(stars * 2) / 2))
 
 
+def file_fingerprint(path: Path) -> str:
+    """Fast content fingerprint for duplicate resolution, not acoustic matching."""
+    size = path.stat().st_size
+    digest = hashlib.sha1()
+    digest.update(str(size).encode("ascii"))
+    with path.open("rb") as handle:
+        offsets = [0]
+        if size > FINGERPRINT_CHUNK_SIZE * 2:
+            offsets.append(max(0, size // 2 - FINGERPRINT_CHUNK_SIZE // 2))
+        if size > FINGERPRINT_CHUNK_SIZE:
+            offsets.append(max(0, size - FINGERPRINT_CHUNK_SIZE))
+        for offset in dict.fromkeys(offsets):
+            handle.seek(offset)
+            digest.update(handle.read(FINGERPRINT_CHUNK_SIZE))
+    return digest.hexdigest()
+
+
 def read_metadata(path: Path) -> dict[str, Any]:
     audio = MutagenFile(path, easy=True)
     if audio is None:
@@ -81,8 +102,11 @@ def read_metadata(path: Path) -> dict[str, Any]:
 
     tags = dict(audio.tags or {})
     duration = None
+    bitrate = None
     if getattr(audio, "info", None) is not None and getattr(audio.info, "length", None):
         duration = float(audio.info.length)
+    if getattr(audio, "info", None) is not None and getattr(audio.info, "bitrate", None):
+        bitrate = int(audio.info.bitrate)
 
     fallback_title = path.stem
     return {
@@ -97,6 +121,8 @@ def read_metadata(path: Path) -> dict[str, Any]:
         "genre": first_text(tags, "genre"),
         "year": parse_year(tags),
         "duration_seconds": duration,
+        "bitrate": bitrate,
+        "audio_fingerprint": file_fingerprint(path),
         "rating": parse_rating(tags),
         "file_modified_at": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
         .replace(microsecond=0)
@@ -151,6 +177,11 @@ def ensure_album(conn, metadata: dict[str, Any]) -> int | None:
 
 def upsert_track(conn, metadata: dict[str, Any]) -> str:
     album_id = ensure_album(conn, metadata)
+    values = {
+        **metadata,
+        "bitrate": metadata.get("bitrate"),
+        "audio_fingerprint": metadata.get("audio_fingerprint"),
+    }
     existing = conn.execute(
         "SELECT id, rating FROM tracks WHERE path_key = ?", (metadata["path_key"],)
     ).fetchone()
@@ -162,15 +193,15 @@ def upsert_track(conn, metadata: dict[str, Any]) -> str:
             INSERT INTO tracks(
               path, path_key, title, artist, album, album_artist, album_id,
               track_number, disc_number, genre, year, duration_seconds, rating,
-              file_modified_at, date_added, updated_at
+              bitrate, audio_fingerprint, file_modified_at, date_added, updated_at
             )
             VALUES(
               :path, :path_key, :title, :artist, :album, :album_artist, :album_id,
               :track_number, :disc_number, :genre, :year, :duration_seconds, :rating,
-              :file_modified_at, :now, :now
+              :bitrate, :audio_fingerprint, :file_modified_at, :now, :now
             )
             """,
-            {**metadata, "album_id": album_id, "now": now},
+            {**values, "album_id": album_id, "now": now},
         )
         return "inserted"
 
@@ -190,12 +221,14 @@ def upsert_track(conn, metadata: dict[str, Any]) -> str:
             genre = :genre,
             year = :year,
             duration_seconds = :duration_seconds,
+            bitrate = :bitrate,
+            audio_fingerprint = :audio_fingerprint,
             rating = :rating,
             file_modified_at = :file_modified_at,
             updated_at = :now
         WHERE path_key = :path_key
         """,
-        {**metadata, "album_id": album_id, "rating": rating, "now": now},
+        {**values, "album_id": album_id, "rating": rating, "now": now},
     )
     return "updated"
 
