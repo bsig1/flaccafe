@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import os
 import json
 import tempfile
@@ -228,6 +229,53 @@ class ApiTests(unittest.TestCase):
             row = conn.execute("SELECT path FROM tracks WHERE id = ?", (track_id,)).fetchone()
         self.assertEqual(Path(row["path"]), new_path)
 
+    def test_metadata_csv_export_and_import_updates_editable_fields(self) -> None:
+        audio_file = self.root / "csv-track.mp3"
+        audio_file.write_bytes(b"audio")
+        track_id = insert_track(audio_file, title="Old Title", artist="Old Artist", rating=None)
+        csv_path = self.root / "metadata.csv"
+
+        export_response = self.client.post(
+            "/library/tools/export-metadata-csv",
+            json={"track_ids": [track_id], "csv_path": str(csv_path)},
+        )
+        self.assertEqual(export_response.status_code, 200)
+        self.assertTrue(csv_path.exists())
+        self.assertEqual(export_response.json()["track_count"], 1)
+
+        with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+            fieldnames = list(rows[0].keys())
+        rows[0]["title"] = "CSV Title"
+        rows[0]["artist"] = "CSV Artist"
+        rows[0]["rating"] = "4.5"
+        with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+
+        preview = self.client.post(
+            "/library/tools/import-metadata-csv",
+            json={"csv_path": str(csv_path), "missing_only": False, "apply": False},
+        )
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(preview.json()["matched"], 1)
+        self.assertEqual(preview.json()["changed"], 1)
+        self.assertIn("title", preview.json()["previews"][0]["changed_fields"])
+        self.assertIn("rating", preview.json()["previews"][0]["changed_fields"])
+
+        apply_response = self.client.post(
+            "/library/tools/import-metadata-csv",
+            json={"csv_path": str(csv_path), "missing_only": False, "apply": True},
+        )
+        self.assertEqual(apply_response.status_code, 200)
+        self.assertEqual(apply_response.json()["applied"], 1)
+        with connect() as conn:
+            row = conn.execute("SELECT title, artist, rating FROM tracks WHERE id = ?", (track_id,)).fetchone()
+        self.assertEqual(row["title"], "CSV Title")
+        self.assertEqual(row["artist"], "CSV Artist")
+        self.assertEqual(row["rating"], 4.5)
+
     def test_clear_library_caches_endpoint_removes_derived_rows(self) -> None:
         audio_file = self.root / "cached.mp3"
         audio_file.write_bytes(b"audio")
@@ -437,6 +485,18 @@ class ApiTests(unittest.TestCase):
         )
         self.assertEqual(compare_response.status_code, 200)
         self.assertEqual({item["profile"]["name"] for item in compare_response.json()}, {"Late Night", "Deep Cuts"})
+
+        export_response = self.client.post(
+            "/autodj/profiles/compare/export",
+            json={"profile_ids": [profile["id"], second_id], "seed": 7},
+        )
+        self.assertEqual(export_response.status_code, 200)
+        export_path = Path(export_response.json()["export_path"])
+        self.assertTrue(export_path.exists())
+        payload = json.loads(export_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["seed"], 7)
+        self.assertEqual(len(payload["comparisons"]), 2)
+        export_path.unlink(missing_ok=True)
 
         delete_response = self.client.delete(f"/autodj/profiles/{second_id}")
         self.assertEqual(delete_response.status_code, 200)

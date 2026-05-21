@@ -42,6 +42,7 @@ import {
   deleteRecommendationProfile,
   deleteSmartPlaylist,
   deleteTrack,
+  exportMetadataCsv,
   exportPlaylist,
   exportQueue,
   fetchAlbumTracks,
@@ -74,6 +75,7 @@ import {
   fetchTrackPage,
   generateAutoDj,
   importPlaylist,
+  importMetadataCsv,
   inferFilenameTags,
   markTrackPlayed,
   markTrackSkipped,
@@ -110,6 +112,8 @@ import type {
   ClapInstallDevice,
   ClapInstallProgress,
   ClapStatusResponse,
+  CsvMetadataExportResponse,
+  CsvMetadataImportResponse,
   FileOrganizationResponse,
   FilenameTagInferenceResponse,
   LibraryHealthResponse,
@@ -257,6 +261,8 @@ export default function App() {
   const [libraryHealth, setLibraryHealth] = useState<LibraryHealthResponse | null>(null);
   const [filenameTagPreview, setFilenameTagPreview] = useState<FilenameTagInferenceResponse | null>(null);
   const [fileOrganizationPreview, setFileOrganizationPreview] = useState<FileOrganizationResponse | null>(null);
+  const [metadataCsvExport, setMetadataCsvExport] = useState<CsvMetadataExportResponse | null>(null);
+  const [metadataCsvImportPreview, setMetadataCsvImportPreview] = useState<CsvMetadataImportResponse | null>(null);
   const [historyEvents, setHistoryEvents] = useState<PlayEventEntry[]>([]);
   const [selectedAlbumId, setSelectedAlbumId] = useState<number | null>(null);
   const [selectedAlbumTracks, setSelectedAlbumTracks] = useState<Track[]>([]);
@@ -1834,6 +1840,60 @@ export default function App() {
     }
   }
 
+  async function handleExportMetadataCsv() {
+    try {
+      const response = await exportMetadataCsv({ limit: 200000 });
+      setMetadataCsvExport(response);
+      setStatus(`Exported ${response.track_count.toLocaleString()} tracks to ${response.csv_path}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not export metadata CSV");
+    }
+  }
+
+  async function handlePreviewMetadataCsv(csvPath: string, missingOnly: boolean) {
+    const trimmedPath = csvPath.trim();
+    if (!trimmedPath) {
+      setStatus("Choose a CSV path first");
+      return;
+    }
+    try {
+      const response = await importMetadataCsv({
+        csv_path: trimmedPath,
+        missing_only: missingOnly,
+        apply: false,
+        limit: 10000,
+      });
+      setMetadataCsvImportPreview(response);
+      setStatus(`${response.changed.toLocaleString()} of ${response.matched.toLocaleString()} matched rows would change`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not preview metadata CSV");
+    }
+  }
+
+  async function handleApplyMetadataCsv(csvPath: string, missingOnly: boolean) {
+    const trimmedPath = csvPath.trim();
+    if (!trimmedPath) {
+      setStatus("Choose a CSV path first");
+      return;
+    }
+    if (!window.confirm("Import CSV metadata into the library? File writing follows the current write-tags setting.")) {
+      return;
+    }
+    try {
+      const response = await importMetadataCsv({
+        csv_path: trimmedPath,
+        missing_only: missingOnly,
+        apply: true,
+        limit: 10000,
+      });
+      setMetadataCsvImportPreview(response);
+      await Promise.all([refreshTracks(), loadAlbums(), loadLibraryStats()]);
+      setStatus(`Applied CSV metadata to ${response.applied.toLocaleString()} track${response.applied === 1 ? "" : "s"}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not import metadata CSV");
+    }
+  }
+
   async function loadArtistInfo(refresh = false) {
     const artistName = primaryArtistName(currentTrack?.artist);
     if (!artistName) {
@@ -2482,6 +2542,11 @@ export default function App() {
               fileOrganizationPreview={fileOrganizationPreview}
               onPreviewFileOrganization={handlePreviewFileOrganization}
               onApplyFileOrganization={handleApplyFileOrganization}
+              metadataCsvExport={metadataCsvExport}
+              metadataCsvImportPreview={metadataCsvImportPreview}
+              onExportMetadataCsv={handleExportMetadataCsv}
+              onPreviewMetadataCsv={handlePreviewMetadataCsv}
+              onApplyMetadataCsv={handleApplyMetadataCsv}
             />
           ) : null}
         </div>

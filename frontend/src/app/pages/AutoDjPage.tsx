@@ -24,6 +24,7 @@ import {
 
 import {
   compareRecommendationProfiles,
+  exportRecommendationProfileComparison,
   exportQueue,
   fetchSimilarTracks,
   generateAutoDj,
@@ -124,6 +125,7 @@ export function AutoDjPage({
   const [neighborMinRating, setNeighborMinRating] = useState(0);
   const [neighborGenre, setNeighborGenre] = useState("");
   const [profileComparisons, setProfileComparisons] = useState<RecommendationProfileComparison[]>([]);
+  const [profileComparisonSeed, setProfileComparisonSeed] = useState<number | null>(null);
   const [isComparingProfiles, setIsComparingProfiles] = useState(false);
   const appliedDefaultProfileId = useRef<number | null>(null);
   const defaultProfile = recommendationProfiles.find((profile) => profile.is_default) ?? null;
@@ -319,11 +321,30 @@ export function AutoDjPage({
         seed_track_id: settings.seed_track_id ?? currentTrack?.id ?? null,
       });
       setProfileComparisons(comparisons);
+      setProfileComparisonSeed(seed);
       setStatus(`Compared ${comparisons.length} recommendation profiles`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Profile comparison failed");
     } finally {
       setIsComparingProfiles(false);
+    }
+  }
+
+  async function handleExportProfileComparison() {
+    if (recommendationProfiles.length < 2) {
+      setStatus("Save at least two recommendation profiles before exporting a comparison");
+      return;
+    }
+    try {
+      const seed = profileComparisonSeed ?? Date.now() % 1_000_000;
+      const response = await exportRecommendationProfileComparison({
+        seed,
+        seed_track_id: settings.seed_track_id ?? currentTrack?.id ?? null,
+      });
+      setProfileComparisonSeed(seed);
+      setStatus(`Exported ${response.profile_count} profile comparisons to ${response.export_path}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Profile comparison export failed");
     }
   }
 
@@ -518,6 +539,9 @@ export function AutoDjPage({
                 </button>
                 <button className="text-xs text-muted hover:text-white" type="button" disabled={isComparingProfiles} onClick={() => void handleCompareProfiles()}>
                   Compare
+                </button>
+                <button className="text-xs text-muted hover:text-white" type="button" onClick={() => void handleExportProfileComparison()}>
+                  Export
                 </button>
                 <button className="text-xs text-moss hover:text-white" type="button" onClick={() => saveCurrentProfile(false)}>
                   Save

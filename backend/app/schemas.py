@@ -247,6 +247,48 @@ class FileOrganizationResponse(BaseModel):
     applied: int = 0
 
 
+class CsvMetadataExportRequest(BaseModel):
+    csv_path: str | None = None
+    track_ids: list[int] | None = Field(default=None, max_length=10000)
+    limit: int = Field(default=100000, ge=1, le=500000)
+
+
+class CsvMetadataExportResponse(BaseModel):
+    csv_path: str
+    track_count: int
+    columns: list[str] = Field(default_factory=list)
+
+
+class CsvMetadataImportRequest(BaseModel):
+    csv_path: str
+    track_ids: list[int] | None = Field(default=None, max_length=10000)
+    missing_only: bool = True
+    apply: bool = False
+    limit: int = Field(default=10000, ge=1, le=100000)
+
+
+class CsvMetadataImportPreview(BaseModel):
+    row_number: int
+    track_id: int | None = None
+    path: str | None = None
+    matched: bool = False
+    current: dict[str, Any] = Field(default_factory=dict)
+    imported: dict[str, Any] = Field(default_factory=dict)
+    changed_fields: list[str] = Field(default_factory=list)
+    applied: bool = False
+    error: str | None = None
+
+
+class CsvMetadataImportResponse(BaseModel):
+    csv_path: str
+    total: int = 0
+    matched: int = 0
+    changed: int = 0
+    applied: int = 0
+    errors: list[str] = Field(default_factory=list)
+    previews: list[CsvMetadataImportPreview] = Field(default_factory=list)
+
+
 class ScanRequest(BaseModel):
     folder_path: str
 
@@ -558,6 +600,11 @@ class RecommendationProfileComparison(BaseModel):
     profile: RecommendationProfile
     drift: RecommendationDrift
     top_tracks: list[QueueTrack]
+
+
+class RecommendationProfileComparisonExportResponse(BaseModel):
+    export_path: str
+    profile_count: int
 
 
 class ExportRequest(BaseModel):

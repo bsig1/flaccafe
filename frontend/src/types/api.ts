@@ -208,6 +208,48 @@ export interface FileOrganizationResponse {
   applied: number;
 }
 
+export interface CsvMetadataExportRequest {
+  csv_path?: string | null;
+  track_ids?: number[] | null;
+  limit?: number;
+}
+
+export interface CsvMetadataExportResponse {
+  csv_path: string;
+  track_count: number;
+  columns: string[];
+}
+
+export interface CsvMetadataImportRequest {
+  csv_path: string;
+  track_ids?: number[] | null;
+  missing_only?: boolean;
+  apply?: boolean;
+  limit?: number;
+}
+
+export interface CsvMetadataImportPreview {
+  row_number: number;
+  track_id: number | null;
+  path: string | null;
+  matched: boolean;
+  current: Record<string, unknown>;
+  imported: Record<string, unknown>;
+  changed_fields: string[];
+  applied: boolean;
+  error: string | null;
+}
+
+export interface CsvMetadataImportResponse {
+  csv_path: string;
+  total: number;
+  matched: number;
+  changed: number;
+  applied: number;
+  errors: string[];
+  previews: CsvMetadataImportPreview[];
+}
+
 export interface AudioAnalysisCoverage {
   total_tracks: number;
   analyzed_tracks: number;
@@ -500,6 +542,11 @@ export interface RecommendationProfileComparison {
   profile: RecommendationProfile;
   drift: RecommendationDrift;
   top_tracks: QueueTrack[];
+}
+
+export interface RecommendationProfileComparisonExportResponse {
+  export_path: string;
+  profile_count: number;
 }
 
 export interface ExportResponse {

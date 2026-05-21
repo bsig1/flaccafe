@@ -5,6 +5,7 @@ from .ml_runtime import activate_ml_runtime
 activate_ml_runtime()
 
 import base64
+import csv
 import json
 import logging
 from logging.handlers import RotatingFileHandler
@@ -74,6 +75,11 @@ from .schemas import (
     ClapInstallProgress,
     ClapInstallRequest,
     ClapInstallStartResponse,
+    CsvMetadataExportRequest,
+    CsvMetadataExportResponse,
+    CsvMetadataImportPreview,
+    CsvMetadataImportRequest,
+    CsvMetadataImportResponse,
     DuplicateGroup,
     DiagnosticItem,
     ExportRequest,
@@ -102,6 +108,7 @@ from .schemas import (
     RecommendationDrift,
     RecommendationProfile,
     RecommendationProfileComparison,
+    RecommendationProfileComparisonExportResponse,
     RecommendationProfileComparisonRequest,
     RecommendationProfileRequest,
     RecommendationRun,
@@ -143,7 +150,7 @@ IMAGE_MEDIA_TYPES = {
 }
 
 TRUE_SETTING_VALUES = {"1", "true", "yes", "on"}
-EDITABLE_METADATA_FIELDS = {
+EDITABLE_METADATA_FIELD_ORDER = (
     "title",
     "artist",
     "album",
@@ -152,7 +159,33 @@ EDITABLE_METADATA_FIELDS = {
     "disc_number",
     "genre",
     "year",
-}
+)
+EDITABLE_METADATA_FIELDS = set(EDITABLE_METADATA_FIELD_ORDER)
+CSV_IMPORT_FIELDS = (*EDITABLE_METADATA_FIELD_ORDER, "rating")
+METADATA_CSV_COLUMNS = [
+    "id",
+    "path",
+    "path_key",
+    "title",
+    "artist",
+    "album",
+    "album_artist",
+    "track_number",
+    "disc_number",
+    "genre",
+    "year",
+    "duration_seconds",
+    "bitrate",
+    "analysis_genre",
+    "analysis_genre_confidence",
+    "rating",
+    "play_count",
+    "skip_count",
+    "last_played_at",
+    "last_skipped_at",
+    "date_added",
+    "file_modified_at",
+]
 
 TRACK_COLUMNS = """
     id, path, title, artist, album, album_artist, track_number,
@@ -811,7 +844,7 @@ def track_response(conn, track_id: int) -> dict:
 
 
 def current_metadata(track: dict) -> dict[str, object | None]:
-    return {field: track.get(field) for field in EDITABLE_METADATA_FIELDS}
+    return {field: track.get(field) for field in EDITABLE_METADATA_FIELD_ORDER}
 
 
 def apply_track_metadata_update(conn, track_id: int, updates: dict[str, object]) -> dict:
@@ -860,6 +893,44 @@ def apply_track_metadata_update(conn, track_id: int, updates: dict[str, object])
         },
     )
     delete_orphan_albums(conn)
+    return track_response(conn, track_id)
+
+
+def apply_track_rating_update(conn, track_id: int, rating: float | None, record_event: bool = True) -> dict:
+    row = conn.execute("SELECT id, path FROM tracks WHERE id = ?", (track_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Track not found")
+
+    file_modified_at = None
+    if get_write_ratings_to_files(conn):
+        try:
+            path = Path(row["path"])
+            write_track_rating(path, rating)
+            if path.exists():
+                file_modified_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).replace(microsecond=0).isoformat()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=f"Could not write rating to file: {exc}") from exc
+
+    conn.execute(
+        """
+        UPDATE tracks
+        SET rating = ?,
+            file_modified_at = coalesce(?, file_modified_at),
+            updated_at = datetime('now')
+        WHERE id = ?
+        """,
+        (rating, file_modified_at, track_id),
+    )
+    if record_event:
+        conn.execute(
+            """
+            INSERT INTO play_events(track_id, event_type, metadata_json)
+            VALUES(?, 'rated', ?)
+            """,
+            (track_id, event_metadata(rating=rating)),
+        )
     return track_response(conn, track_id)
 
 
@@ -2013,6 +2084,163 @@ def tool_track_rows(conn, track_ids: list[int] | None, limit: int) -> list[dict]
     )
 
 
+def metadata_csv_rows(conn, track_ids: list[int] | None, limit: int) -> list[dict]:
+    selected_columns = ", ".join(METADATA_CSV_COLUMNS)
+    if track_ids:
+        unique_ids = list(dict.fromkeys(track_ids))
+        placeholders = ",".join("?" for _ in unique_ids)
+        return rows_to_dicts(
+            conn.execute(
+                f"""
+                SELECT {selected_columns}
+                FROM tracks
+                WHERE id IN ({placeholders})
+                ORDER BY lower(coalesce(artist, '')), lower(coalesce(album, '')),
+                         coalesce(disc_number, 0), coalesce(track_number, 0),
+                         lower(coalesce(title, ''))
+                LIMIT ?
+                """,
+                [*unique_ids, limit],
+            )
+        )
+    return rows_to_dicts(
+        conn.execute(
+            f"""
+            SELECT {selected_columns}
+            FROM tracks
+            ORDER BY lower(coalesce(artist, '')), lower(coalesce(album, '')),
+                     coalesce(disc_number, 0), coalesce(track_number, 0),
+                     lower(coalesce(title, ''))
+            LIMIT ?
+            """,
+            (limit,),
+        )
+    )
+
+
+def resolve_csv_tool_path(csv_path: str | None, default_name: str | None = None) -> Path:
+    text = csv_path.strip() if csv_path else ""
+    if text:
+        target = Path(text).expanduser()
+        if not target.is_absolute():
+            target = (EXPORT_DIR / target).resolve()
+    elif default_name:
+        target = EXPORT_DIR / default_name
+    else:
+        raise HTTPException(status_code=400, detail="CSV path is required")
+    if target.suffix.lower() != ".csv":
+        target = target.with_suffix(".csv")
+    return target
+
+
+def csv_text(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def csv_int(value: object, field: str) -> int | None:
+    text = csv_text(value)
+    if text is None:
+        return None
+    try:
+        return int(float(text))
+    except ValueError as exc:
+        raise ValueError(f"{field} must be a number") from exc
+
+
+def csv_rating(value: object) -> float | None:
+    text = csv_text(value)
+    if text is None:
+        return None
+    try:
+        rating = float(text)
+    except ValueError as exc:
+        raise ValueError("rating must be a number") from exc
+    if rating == 0:
+        return None
+    if not 0.5 <= rating <= 5 or abs(round(rating * 2) - rating * 2) > 1e-9:
+        raise ValueError("rating must be 0.5 to 5 in half-star steps")
+    return rating
+
+
+def parse_csv_import_values(row: dict[str, str | None]) -> dict[str, object | None]:
+    imported: dict[str, object | None] = {}
+    for field in CSV_IMPORT_FIELDS:
+        if field not in row:
+            continue
+        if field in {"track_number", "disc_number", "year"}:
+            imported[field] = csv_int(row[field], field)
+        elif field == "rating":
+            imported[field] = csv_rating(row[field])
+        else:
+            imported[field] = csv_text(row[field])
+    return imported
+
+
+def csv_value_missing(value: object) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def csv_values_equal(current: object, imported: object) -> bool:
+    if current is None and imported is None:
+        return True
+    if isinstance(imported, float) and current is not None:
+        try:
+            return abs(float(current) - imported) < 1e-9
+        except (TypeError, ValueError):
+            return False
+    return current == imported
+
+
+def csv_import_changes(track: dict, imported: dict[str, object | None], missing_only: bool) -> dict[str, object | None]:
+    changes: dict[str, object | None] = {}
+    for field, value in imported.items():
+        if missing_only and not csv_value_missing(track.get(field)):
+            continue
+        if not csv_values_equal(track.get(field), value):
+            changes[field] = value
+    return changes
+
+
+def csv_import_track(conn, row: dict[str, str | None], allowed_ids: set[int] | None) -> dict | None:
+    select_columns = f"path_key, {TRACK_COLUMNS}"
+    id_text = csv_text(row.get("id"))
+    if id_text:
+        try:
+            track_id = int(float(id_text))
+        except ValueError:
+            track_id = None
+        if track_id is not None and (allowed_ids is None or track_id in allowed_ids):
+            found = conn.execute(
+                f"SELECT {select_columns} FROM tracks WHERE id = ?",
+                (track_id,),
+            ).fetchone()
+            if found is not None:
+                return dict(found)
+
+    key = csv_text(row.get("path_key"))
+    path_text = csv_text(row.get("path"))
+    if key is None and path_text:
+        try:
+            key = path_key(Path(path_text))
+        except OSError:
+            key = None
+    if key is None:
+        return None
+    found = conn.execute(
+        f"SELECT {select_columns} FROM tracks WHERE path_key = ?",
+        (key,),
+    ).fetchone()
+    if found is None:
+        return None
+    track = dict(found)
+    if allowed_ids is not None and int(track["id"]) not in allowed_ids:
+        return None
+    return track
+
+
 @app.post("/library/maintenance/clear", response_model=CacheClearResponse)
 def clear_library_caches(request: CacheClearRequest) -> CacheClearResponse:
     table_by_target = {
@@ -2124,6 +2352,97 @@ def organize_files_from_tags(request: FileOrganizationRequest) -> FileOrganizati
         changes=changes,
         changed_count=sum(1 for change in changes if change.changed),
         applied=applied,
+    )
+
+
+@app.post("/library/tools/export-metadata-csv", response_model=CsvMetadataExportResponse)
+def export_metadata_csv(request: CsvMetadataExportRequest) -> CsvMetadataExportResponse:
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    target = resolve_csv_tool_path(request.csv_path, f"flac-cafe-metadata-{stamp}.csv")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with connect() as conn:
+        rows = metadata_csv_rows(conn, request.track_ids, request.limit)
+    try:
+        with target.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=METADATA_CSV_COLUMNS, extrasaction="ignore")
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({column: row.get(column) for column in METADATA_CSV_COLUMNS})
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Could not write CSV: {exc}") from exc
+    return CsvMetadataExportResponse(csv_path=str(target), track_count=len(rows), columns=METADATA_CSV_COLUMNS)
+
+
+@app.post("/library/tools/import-metadata-csv", response_model=CsvMetadataImportResponse)
+def import_metadata_csv(request: CsvMetadataImportRequest) -> CsvMetadataImportResponse:
+    source = resolve_csv_tool_path(request.csv_path)
+    if not source.exists():
+        raise HTTPException(status_code=400, detail="CSV file does not exist")
+
+    try:
+        with source.open("r", encoding="utf-8-sig", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+    except UnicodeDecodeError:
+        with source.open("r", encoding="latin-1", errors="ignore", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Could not read CSV: {exc}") from exc
+
+    rows = rows[: request.limit]
+    allowed_ids = set(request.track_ids) if request.track_ids else None
+    previews: list[CsvMetadataImportPreview] = []
+    matched = 0
+    changed = 0
+    applied = 0
+    errors: list[str] = []
+
+    with connect() as conn:
+        for index, row in enumerate(rows, start=2):
+            preview = CsvMetadataImportPreview(row_number=index)
+            try:
+                track = csv_import_track(conn, row, allowed_ids)
+                if track is None:
+                    preview.error = "No library track matched this row"
+                    errors.append(f"Row {index}: {preview.error}")
+                    previews.append(preview)
+                    continue
+
+                preview.track_id = int(track["id"])
+                preview.path = track["path"]
+                preview.matched = True
+                preview.current = {field: track.get(field) for field in CSV_IMPORT_FIELDS}
+                imported = parse_csv_import_values(row)
+                preview.imported = imported
+                changes = csv_import_changes(track, imported, request.missing_only)
+                preview.changed_fields = sorted(changes.keys())
+                matched += 1
+                if changes:
+                    changed += 1
+
+                if request.apply and changes:
+                    metadata_changes = {field: value for field, value in changes.items() if field in EDITABLE_METADATA_FIELDS}
+                    if metadata_changes:
+                        apply_track_metadata_update(conn, int(track["id"]), metadata_changes)
+                    if "rating" in changes:
+                        apply_track_rating_update(conn, int(track["id"]), changes["rating"])
+                    preview.applied = True
+                    applied += 1
+            except (HTTPException, ValueError) as exc:
+                message = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
+                preview.error = message
+                errors.append(f"Row {index}: {message}")
+            previews.append(preview)
+        if request.apply:
+            conn.commit()
+
+    return CsvMetadataImportResponse(
+        csv_path=str(source),
+        total=len(rows),
+        matched=matched,
+        changed=changed,
+        applied=applied,
+        errors=errors[:50],
+        previews=previews,
     )
 
 
@@ -2539,49 +2858,9 @@ def get_scan_progress(job_id: str) -> dict:
 @app.patch("/tracks/{track_id}/rating", response_model=Track)
 def update_rating(track_id: int, request: RatingRequest) -> dict:
     with connect() as conn:
-        row = conn.execute("SELECT id, path FROM tracks WHERE id = ?", (track_id,)).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="Track not found")
-
-        file_modified_at = None
-        if get_write_ratings_to_files(conn):
-            try:
-                path = Path(row["path"])
-                write_track_rating(path, request.rating)
-                if path.exists():
-                    file_modified_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).replace(microsecond=0).isoformat()
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            except OSError as exc:
-                raise HTTPException(status_code=400, detail=f"Could not write rating to file: {exc}") from exc
-
-        conn.execute(
-            """
-            UPDATE tracks
-            SET rating = ?,
-                file_modified_at = coalesce(?, file_modified_at),
-                updated_at = datetime('now')
-            WHERE id = ?
-            """,
-            (request.rating, file_modified_at, track_id),
-        )
-        conn.execute(
-            """
-            INSERT INTO play_events(track_id, event_type, metadata_json)
-            VALUES(?, 'rated', ?)
-            """,
-            (track_id, event_metadata(rating=request.rating)),
-        )
+        updated = apply_track_rating_update(conn, track_id, request.rating)
         conn.commit()
-        updated = conn.execute(
-            f"""
-            SELECT {TRACK_COLUMNS}
-            FROM tracks
-            WHERE id = ?
-            """,
-            (track_id,),
-        ).fetchone()
-    return dict(updated)
+    return updated
 
 
 @app.head("/tracks/{track_id}/audio")
@@ -2940,8 +3219,7 @@ def recommendation_history(limit: int = Query(default=30, ge=1, le=100)) -> list
     return [recommendation_run_from_row(row) for row in rows]
 
 
-@app.post("/autodj/profiles/compare", response_model=list[RecommendationProfileComparison])
-def compare_recommendation_profiles(
+def build_recommendation_profile_comparisons(
     request: RecommendationProfileComparisonRequest,
 ) -> list[RecommendationProfileComparison]:
     with connect() as conn:
@@ -2982,6 +3260,34 @@ def compare_recommendation_profiles(
             )
         )
     return comparisons
+
+
+@app.post("/autodj/profiles/compare", response_model=list[RecommendationProfileComparison])
+def compare_recommendation_profiles(
+    request: RecommendationProfileComparisonRequest,
+) -> list[RecommendationProfileComparison]:
+    return build_recommendation_profile_comparisons(request)
+
+
+@app.post("/autodj/profiles/compare/export", response_model=RecommendationProfileComparisonExportResponse)
+def export_recommendation_profile_comparison(
+    request: RecommendationProfileComparisonRequest,
+) -> RecommendationProfileComparisonExportResponse:
+    comparisons = build_recommendation_profile_comparisons(request)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    target = EXPORT_DIR / f"flac-cafe-profile-comparison-{stamp}.json"
+    payload = {
+        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "seed": request.seed,
+        "seed_track_id": request.seed_track_id,
+        "comparisons": [comparison.model_dump(mode="json") for comparison in comparisons],
+    }
+    try:
+        target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Could not write profile comparison: {exc}") from exc
+    return RecommendationProfileComparisonExportResponse(export_path=str(target), profile_count=len(comparisons))
 
 
 @app.post("/autodj/profiles", response_model=RecommendationProfile)

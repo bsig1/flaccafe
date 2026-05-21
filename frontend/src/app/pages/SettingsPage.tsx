@@ -12,6 +12,7 @@ import {
   RefreshCw,
   ShieldCheck,
   Star,
+  Upload,
   Wand2,
 } from "lucide-react";
 
@@ -28,6 +29,8 @@ import type {
   AudioAnalysisProgress,
   CacheClearTarget,
   ClapStatusResponse,
+  CsvMetadataExportResponse,
+  CsvMetadataImportResponse,
   FileOrganizationResponse,
   FilenameTagInferenceResponse,
   LogTailResponse,
@@ -106,6 +109,11 @@ export function SettingsPage({
   fileOrganizationPreview,
   onPreviewFileOrganization,
   onApplyFileOrganization,
+  metadataCsvExport,
+  metadataCsvImportPreview,
+  onExportMetadataCsv,
+  onPreviewMetadataCsv,
+  onApplyMetadataCsv,
 }: {
   settings: SettingsResponse | null;
   folderPath: string;
@@ -162,11 +170,18 @@ export function SettingsPage({
   fileOrganizationPreview: FileOrganizationResponse | null;
   onPreviewFileOrganization: (template: string, baseFolder?: string | null) => void | Promise<void>;
   onApplyFileOrganization: (template: string, baseFolder?: string | null) => void | Promise<void>;
+  metadataCsvExport: CsvMetadataExportResponse | null;
+  metadataCsvImportPreview: CsvMetadataImportResponse | null;
+  onExportMetadataCsv: () => void | Promise<void>;
+  onPreviewMetadataCsv: (csvPath: string, missingOnly: boolean) => void | Promise<void>;
+  onApplyMetadataCsv: (csvPath: string, missingOnly: boolean) => void | Promise<void>;
 }) {
   const [filenameTagPattern, setFilenameTagPattern] = useState("<Album Artist> - <Album> [<Year>]/<Track#> - <Artist> - <Title>");
   const [filenameTagMissingOnly, setFilenameTagMissingOnly] = useState(true);
   const [organizeTemplate, setOrganizeTemplate] = useState("<Album Artist>/<Album> (<Year>)/<Track#> - <Title>");
   const [organizeBaseFolder, setOrganizeBaseFolder] = useState("");
+  const [metadataCsvPath, setMetadataCsvPath] = useState("");
+  const [metadataCsvMissingOnly, setMetadataCsvMissingOnly] = useState(true);
   const progressPercent = Math.max(0, Math.min(100, scanProgress?.percent ?? 0));
   const hasCount = Boolean(scanProgress && scanProgress.total_files > 0);
   const audioProgressPercent = Math.max(0, Math.min(100, audioAnalysisProgress?.percent ?? 0));
@@ -746,6 +761,99 @@ export function SettingsPage({
                             {change.target_path}
                             {change.collision ? " - collision" : ""}
                             {change.error ? ` - ${change.error}` : ""}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
+                <div>
+                  <div className="font-medium text-white">CSV metadata cleanup</div>
+                  <div className="mt-1 text-xs text-muted">
+                    Export editable metadata for spreadsheet cleanup, then preview the CSV before importing changes.
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button className="secondary-button" type="button" onClick={() => void onExportMetadataCsv()}>
+                    <Download size={15} />
+                    Export CSV
+                  </button>
+                  {metadataCsvExport && (
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => setMetadataCsvPath(metadataCsvExport.csv_path)}
+                    >
+                      <FileText size={15} />
+                      Use Last Export
+                    </button>
+                  )}
+                </div>
+                {metadataCsvExport && (
+                  <div className="rounded border border-line bg-panel px-3 py-2 text-xs text-muted">
+                    <div className="truncate">{metadataCsvExport.csv_path}</div>
+                    <div>{metadataCsvExport.track_count.toLocaleString()} tracks exported</div>
+                  </div>
+                )}
+                <label className="grid gap-2">
+                  <span className="text-xs uppercase text-muted">Import CSV Path</span>
+                  <input
+                    className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
+                    value={metadataCsvPath}
+                    placeholder="Paste the exported CSV path"
+                    onChange={(event) => setMetadataCsvPath(event.target.value)}
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-panel px-3 py-2">
+                  <span className="text-muted">Only fill empty fields on import</span>
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 accent-moss"
+                    checked={metadataCsvMissingOnly}
+                    onChange={(event) => setMetadataCsvMissingOnly(event.target.checked)}
+                  />
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => void onPreviewMetadataCsv(metadataCsvPath, metadataCsvMissingOnly)}
+                  >
+                    <EyeOff size={15} />
+                    Preview Import
+                  </button>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    onClick={() => void onApplyMetadataCsv(metadataCsvPath, metadataCsvMissingOnly)}
+                  >
+                    <Upload size={15} />
+                    Import CSV
+                  </button>
+                </div>
+                {metadataCsvImportPreview && (
+                  <div className="rounded border border-line bg-panel p-3 text-xs">
+                    <div className="mb-2 text-neutral-200">
+                      {metadataCsvImportPreview.changed.toLocaleString()} changed rows,{" "}
+                      {metadataCsvImportPreview.applied.toLocaleString()} applied
+                    </div>
+                    <div className="grid gap-1">
+                      {metadataCsvImportPreview.previews.slice(0, 5).map((preview) => (
+                        <div key={`${preview.row_number}-${preview.track_id ?? "missing"}`} className="grid gap-1 rounded bg-ink px-2 py-1.5">
+                          <div className="truncate text-muted">
+                            Row {preview.row_number}
+                            {preview.path ? ` - ${preview.path}` : ""}
+                          </div>
+                          <div className={preview.error ? "truncate text-ember" : "truncate text-neutral-200"}>
+                            {preview.error ??
+                              (preview.changed_fields.length
+                                ? preview.changed_fields.join(", ")
+                                : preview.matched
+                                  ? "Matched; no fields need changes"
+                                  : "No match")}
                           </div>
                         </div>
                       ))}

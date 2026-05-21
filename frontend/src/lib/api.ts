@@ -16,6 +16,10 @@ import type {
   ClapInstallRequest,
   ClapInstallStartResponse,
   ClapStatusResponse,
+  CsvMetadataExportRequest,
+  CsvMetadataExportResponse,
+  CsvMetadataImportRequest,
+  CsvMetadataImportResponse,
   ExportResponse,
   FileOrganizationRequest,
   FileOrganizationResponse,
@@ -30,6 +34,7 @@ import type {
   PlaylistSummary,
   RecommendationProfile,
   RecommendationProfileComparison,
+  RecommendationProfileComparisonExportResponse,
   RecommendationRun,
   ScanProgress,
   ScanResult,
@@ -131,6 +136,20 @@ export function inferFilenameTags(requestBody: FilenameTagInferenceRequest): Pro
 
 export function organizeFiles(requestBody: FileOrganizationRequest): Promise<FileOrganizationResponse> {
   return request<FileOrganizationResponse>("/library/tools/organize-files", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function exportMetadataCsv(requestBody: CsvMetadataExportRequest = {}): Promise<CsvMetadataExportResponse> {
+  return request<CsvMetadataExportResponse>("/library/tools/export-metadata-csv", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function importMetadataCsv(requestBody: CsvMetadataImportRequest): Promise<CsvMetadataImportResponse> {
+  return request<CsvMetadataImportResponse>("/library/tools/import-metadata-csv", {
     method: "POST",
     body: JSON.stringify(requestBody),
   });
@@ -474,6 +493,17 @@ export function compareRecommendationProfiles(requestBody: {
   seed?: number | null;
 }): Promise<RecommendationProfileComparison[]> {
   return request<RecommendationProfileComparison[]>("/autodj/profiles/compare", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function exportRecommendationProfileComparison(requestBody: {
+  profile_ids?: number[] | null;
+  seed_track_id?: number | null;
+  seed?: number | null;
+}): Promise<RecommendationProfileComparisonExportResponse> {
+  return request<RecommendationProfileComparisonExportResponse>("/autodj/profiles/compare/export", {
     method: "POST",
     body: JSON.stringify(requestBody),
   });
