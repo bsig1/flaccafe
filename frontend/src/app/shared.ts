@@ -25,6 +25,22 @@ export type SortDirection = "asc" | "desc";
 export type UiDensity = "comfortable" | "compact";
 export type FontScale = "small" | "default" | "large";
 export type AutoDjExperience = "simple" | "advanced";
+export type KeyboardShortcutAction =
+  | "page.library"
+  | "page.analysis"
+  | "page.nowPlaying"
+  | "page.artist"
+  | "page.history"
+  | "page.autodj"
+  | "page.settings"
+  | "playback.playPause"
+  | "playback.previous"
+  | "playback.next"
+  | "playback.seekBackward"
+  | "playback.seekForward"
+  | "playback.volumeDown"
+  | "playback.volumeUp"
+  | "playback.mute";
 export type SortKey =
   | "title"
   | "artist"
@@ -178,6 +194,14 @@ export interface UiPreferences {
   fontChoice: FontChoice;
   enableArtistLookup: boolean;
   libraryVisibleColumns: MetadataColumnKey[];
+  keyboardShortcuts: Record<KeyboardShortcutAction, KeyboardShortcut>;
+}
+
+export interface KeyboardShortcut {
+  key: string;
+  ctrl: boolean;
+  alt: boolean;
+  shift: boolean;
 }
 
 export interface AutoDjTemplate {
@@ -232,6 +256,62 @@ export const defaultLibraryVisibleColumns: MetadataColumnKey[] = [
   "genre",
   "rating",
   "duration_seconds",
+];
+
+export const defaultKeyboardShortcuts: Record<KeyboardShortcutAction, KeyboardShortcut> = {
+  "page.library": { key: "1", ctrl: true, alt: false, shift: false },
+  "page.analysis": { key: "2", ctrl: true, alt: false, shift: false },
+  "page.nowPlaying": { key: "3", ctrl: true, alt: false, shift: false },
+  "page.artist": { key: "4", ctrl: true, alt: false, shift: false },
+  "page.history": { key: "5", ctrl: true, alt: false, shift: false },
+  "page.autodj": { key: "6", ctrl: true, alt: false, shift: false },
+  "page.settings": { key: "7", ctrl: true, alt: false, shift: false },
+  "playback.playPause": { key: "Space", ctrl: false, alt: false, shift: false },
+  "playback.previous": { key: ",", ctrl: false, alt: true, shift: false },
+  "playback.next": { key: ".", ctrl: false, alt: true, shift: false },
+  "playback.seekBackward": { key: "ArrowLeft", ctrl: false, alt: true, shift: false },
+  "playback.seekForward": { key: "ArrowRight", ctrl: false, alt: true, shift: false },
+  "playback.volumeDown": { key: "ArrowDown", ctrl: false, alt: true, shift: false },
+  "playback.volumeUp": { key: "ArrowUp", ctrl: false, alt: true, shift: false },
+  "playback.mute": { key: "m", ctrl: false, alt: true, shift: false },
+};
+
+export const keyboardShortcutLabels: Record<KeyboardShortcutAction, string> = {
+  "page.library": "Library page",
+  "page.analysis": "Analysis page",
+  "page.nowPlaying": "Now Playing page",
+  "page.artist": "Artist page",
+  "page.history": "History page",
+  "page.autodj": "AutoDJ page",
+  "page.settings": "Settings page",
+  "playback.playPause": "Play / pause",
+  "playback.previous": "Previous track",
+  "playback.next": "Next track",
+  "playback.seekBackward": "Seek backward",
+  "playback.seekForward": "Seek forward",
+  "playback.volumeDown": "Volume down",
+  "playback.volumeUp": "Volume up",
+  "playback.mute": "Mute",
+};
+
+export const keyboardShortcutGroups: Array<{ title: string; actions: KeyboardShortcutAction[] }> = [
+  {
+    title: "Pages",
+    actions: ["page.library", "page.analysis", "page.nowPlaying", "page.artist", "page.history", "page.autodj", "page.settings"],
+  },
+  {
+    title: "Playback",
+    actions: [
+      "playback.playPause",
+      "playback.previous",
+      "playback.next",
+      "playback.seekBackward",
+      "playback.seekForward",
+      "playback.volumeDown",
+      "playback.volumeUp",
+      "playback.mute",
+    ],
+  },
 ];
 
 export const libraryColumnDefinitions: LibraryColumnDefinition[] = [
@@ -615,6 +695,65 @@ export function normalizeLibraryColumns(value: unknown): MetadataColumnKey[] {
   return unique.length > 0 ? unique : defaultLibraryVisibleColumns;
 }
 
+export function normalizeKeyboardShortcuts(value: unknown): Record<KeyboardShortcutAction, KeyboardShortcut> {
+  const parsed = typeof value === "object" && value !== null ? (value as Partial<Record<KeyboardShortcutAction, Partial<KeyboardShortcut>>>) : {};
+  const normalized = { ...defaultKeyboardShortcuts };
+  for (const action of Object.keys(defaultKeyboardShortcuts) as KeyboardShortcutAction[]) {
+    const shortcut = parsed[action];
+    if (!shortcut || typeof shortcut.key !== "string" || !shortcut.key.trim()) {
+      continue;
+    }
+    normalized[action] = {
+      key: shortcut.key,
+      ctrl: Boolean(shortcut.ctrl),
+      alt: Boolean(shortcut.alt),
+      shift: Boolean(shortcut.shift),
+    };
+  }
+  return normalized;
+}
+
+export function keyboardEventKey(event: Pick<KeyboardEvent, "key" | "code">): string {
+  if (event.code === "Space" || event.key === " ") {
+    return "Space";
+  }
+  return event.key.length === 1 ? event.key.toLowerCase() : event.key;
+}
+
+export function shortcutMatchesEvent(shortcut: KeyboardShortcut, event: KeyboardEvent): boolean {
+  return (
+    keyboardEventKey(event) === (shortcut.key.length === 1 ? shortcut.key.toLowerCase() : shortcut.key) &&
+    event.ctrlKey === shortcut.ctrl &&
+    event.altKey === shortcut.alt &&
+    event.shiftKey === shortcut.shift &&
+    !event.metaKey
+  );
+}
+
+export function shortcutFromEvent(event: KeyboardEvent): KeyboardShortcut | null {
+  const key = keyboardEventKey(event);
+  if (["Control", "Shift", "Alt", "Meta"].includes(key)) {
+    return null;
+  }
+  return {
+    key,
+    ctrl: event.ctrlKey,
+    alt: event.altKey,
+    shift: event.shiftKey,
+  };
+}
+
+export function formatShortcut(shortcut: KeyboardShortcut): string {
+  return [
+    shortcut.ctrl ? "Ctrl" : null,
+    shortcut.alt ? "Alt" : null,
+    shortcut.shift ? "Shift" : null,
+    shortcut.key === " " ? "Space" : shortcut.key,
+  ]
+    .filter(Boolean)
+    .join(" + ");
+}
+
 export function readRememberedDeleteChoice(): RememberedDeleteChoice | null {
   try {
     const value = window.localStorage.getItem(storageKeys.deleteChoice);
@@ -826,6 +965,7 @@ export function readUiPreferences(): UiPreferences {
     fontChoice: "theme",
     enableArtistLookup: true,
     libraryVisibleColumns: defaultLibraryVisibleColumns,
+    keyboardShortcuts: defaultKeyboardShortcuts,
   };
   try {
     const modern = window.localStorage.getItem(storageKeys.uiPreferences) ?? window.localStorage.getItem(legacyStorageKeys.uiPreferences);
@@ -856,6 +996,7 @@ export function readUiPreferences(): UiPreferences {
             ? clampNumber(parsed.skipThresholdPercent, 0, 95)
             : defaults.skipThresholdPercent,
         libraryVisibleColumns: normalizeLibraryColumns(parsed.libraryVisibleColumns),
+        keyboardShortcuts: normalizeKeyboardShortcuts(parsed.keyboardShortcuts),
       };
     }
     return {

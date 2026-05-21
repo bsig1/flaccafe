@@ -34,15 +34,14 @@
 
 ## Playback
 - Add ReplayGain or loudness normalization support.
-- Add a visible codec support diagnostic for the current WebView2 runtime.
 - Persist detached mini-player preferences for always-on-top and preferred snap size.
+- Add a fallback playback path or user-facing recommendation for files the WebView codec diagnostic reports as unsupported.
 
 ## UI Polish
 - Add browser-level smoke tests against a running Vite/Tauri preview, beyond the current frontend interaction unit tests.
-- Add a keyboard shortcut editor instead of hard-coded shortcuts only.
 - Continue splitting the largest page files, especially Library and AutoDJ, into smaller focused components.
 - Add an in-app report viewer for CSV import previews, file organization previews, and profile comparison JSON exports.
-- Add richer inline feedback after saving/deleting local tool presets instead of relying only on disabled button states.
+- Add shortcut conflict detection and import/export for keyboard shortcut presets.
 
 ## Recommendations
 - Add A/B feedback controls that compare two generated queues and learn from the chosen one.
@@ -51,7 +50,8 @@
 
 ## Documentation
 - Add screenshots to the README once the FLAC Cafe theme settles.
-- Add a release documentation checklist that verifies README, route docs, and user guides before packaging.
+- Add a short keyboard-shortcuts user guide once the shortcut list settles.
+- Add a troubleshooting page for codec support, backend startup, and optional ML runtime issues.
 
 ## Project
 - Add release artifacts to CI once MSI builds are reliable enough to publish from GitHub Actions.

@@ -38,6 +38,8 @@ import {
 } from "../components/common";
 import {
   END_FADE_SECONDS,
+  KeyboardShortcutAction,
+  KeyboardShortcut,
   MiniPlayerCommand,
   PlaybackMode,
   clampNumber,
@@ -49,6 +51,7 @@ import {
   readStoredMuted,
   readStoredVolume,
   shouldRecordTrackAsPlayed,
+  shortcutMatchesEvent,
   trackGenre,
   writeStoredAudioControls,
 } from "../shared";
@@ -65,6 +68,7 @@ export function PlayerBar({
   fadeMs,
   skipThresholdPercent,
   miniPlayer,
+  keyboardShortcuts,
   playbackMode,
   setPlaybackMode,
   onOpenMiniPlayer,
@@ -81,6 +85,7 @@ export function PlayerBar({
   fadeMs: number;
   skipThresholdPercent: number;
   miniPlayer: boolean;
+  keyboardShortcuts: Record<KeyboardShortcutAction, KeyboardShortcut>;
   playbackMode: PlaybackMode;
   setPlaybackMode: (mode: PlaybackMode) => void;
   onOpenMiniPlayer: () => void | Promise<void>;
@@ -537,7 +542,7 @@ export function PlayerBar({
         return;
       }
 
-      if (event.key === "MediaPlayPause" || event.code === "Space" || event.key.toLowerCase() === "k") {
+      if (event.key === "MediaPlayPause" || shortcutMatchesEvent(keyboardShortcuts["playback.playPause"], event)) {
         if (event.repeat || !currentTrack) {
           return;
         }
@@ -562,23 +567,29 @@ export function PlayerBar({
         return;
       }
 
-      if (!event.altKey) {
-        return;
-      }
-
-      if (event.key === "ArrowRight") {
+      if (shortcutMatchesEvent(keyboardShortcuts["playback.next"], event)) {
+        event.preventDefault();
+        playRelative(1);
+      } else if (shortcutMatchesEvent(keyboardShortcuts["playback.previous"], event)) {
+        event.preventDefault();
+        if (currentTime > 4) {
+          seekTo(0);
+        } else {
+          playRelative(-1);
+        }
+      } else if (shortcutMatchesEvent(keyboardShortcuts["playback.seekForward"], event)) {
         event.preventDefault();
         seekTo(currentTime + 5);
-      } else if (event.key === "ArrowLeft") {
+      } else if (shortcutMatchesEvent(keyboardShortcuts["playback.seekBackward"], event)) {
         event.preventDefault();
         seekTo(currentTime - 5);
-      } else if (event.key === "ArrowUp") {
+      } else if (shortcutMatchesEvent(keyboardShortcuts["playback.volumeUp"], event)) {
         event.preventDefault();
         changeVolume(volume + 0.05);
-      } else if (event.key === "ArrowDown") {
+      } else if (shortcutMatchesEvent(keyboardShortcuts["playback.volumeDown"], event)) {
         event.preventDefault();
         changeVolume(volume - 0.05);
-      } else if (event.key.toLowerCase() === "m") {
+      } else if (shortcutMatchesEvent(keyboardShortcuts["playback.mute"], event)) {
         event.preventDefault();
         toggleMuted();
       }
@@ -586,7 +597,7 @@ export function PlayerBar({
 
     window.addEventListener("keydown", handleLocalAudioKeyDown);
     return () => window.removeEventListener("keydown", handleLocalAudioKeyDown);
-  }, [currentTrack, currentTime, volume, muted, hasPrevious, hasNext, queue, currentIndex, outputVolume]);
+  }, [currentTrack, currentTime, volume, muted, hasPrevious, hasNext, queue, currentIndex, outputVolume, keyboardShortcuts]);
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;

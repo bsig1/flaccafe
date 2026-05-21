@@ -1,6 +1,9 @@
 import {
   useState,
 } from "react";
+import type {
+  KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 
 import {
   CheckCircle2,
@@ -9,7 +12,9 @@ import {
   FileText,
   FolderOpen,
   Info,
+  Keyboard,
   RefreshCw,
+  RotateCcw,
   ShieldCheck,
   Star,
   Upload,
@@ -47,11 +52,17 @@ import {
 import {
   BackendStatus,
   FontScale,
+  KeyboardShortcutAction,
   Page,
   UiDensity,
   UiPreferences,
+  defaultKeyboardShortcuts,
   fileName,
+  formatShortcut,
   formatTime,
+  keyboardShortcutGroups,
+  keyboardShortcutLabels,
+  shortcutFromEvent,
 } from "../shared";
 
 const DEFAULT_FILENAME_TAG_PATTERNS = [
@@ -77,6 +88,33 @@ function readFilenameTagPresets(): string[] {
 
 function writeFilenameTagPresets(patterns: string[]) {
   window.localStorage.setItem(FILENAME_TAG_PRESETS_KEY, JSON.stringify(patterns));
+}
+
+const CODEC_TESTS = [
+  { label: "MP3", type: "audio/mpeg" },
+  { label: "FLAC", type: "audio/flac" },
+  { label: "M4A / AAC", type: "audio/mp4; codecs=\"mp4a.40.2\"" },
+  { label: "Ogg Vorbis", type: "audio/ogg; codecs=\"vorbis\"" },
+  { label: "Opus", type: "audio/ogg; codecs=\"opus\"" },
+  { label: "WAV", type: "audio/wav" },
+  { label: "AIFF", type: "audio/aiff" },
+];
+
+interface CodecSupportRow {
+  label: string;
+  type: string;
+  support: CanPlayTypeResult | "no";
+}
+
+function detectCodecSupport(): CodecSupportRow[] {
+  if (typeof document === "undefined") {
+    return [];
+  }
+  const audio = document.createElement("audio");
+  return CODEC_TESTS.map((codec) => ({
+    ...codec,
+    support: audio.canPlayType(codec.type) || "no",
+  }));
 }
 
 export function SettingsPage({
@@ -223,6 +261,10 @@ export function SettingsPage({
   const [organizeCleanupEmptyFolders, setOrganizeCleanupEmptyFolders] = useState(false);
   const [metadataCsvPath, setMetadataCsvPath] = useState("");
   const [metadataCsvMissingOnly, setMetadataCsvMissingOnly] = useState(true);
+  const [shortcutCaptureAction, setShortcutCaptureAction] = useState<KeyboardShortcutAction | null>(null);
+  const [shortcutMessage, setShortcutMessage] = useState<string | null>(null);
+  const [presetMessage, setPresetMessage] = useState<string | null>(null);
+  const [codecSupport, setCodecSupport] = useState(detectCodecSupport);
   const allFilenameTagPresets = Array.from(new Set([...DEFAULT_FILENAME_TAG_PATTERNS, ...filenameTagPresets]));
   const isCustomFilenameTagPreset = filenameTagPresets.includes(filenameTagPattern);
   const progressPercent = Math.max(0, Math.min(100, scanProgress?.percent ?? 0));
@@ -244,6 +286,7 @@ export function SettingsPage({
     const next = [...filenameTagPresets, trimmed];
     setFilenameTagPresets(next);
     writeFilenameTagPresets(next);
+    setPresetMessage("Pattern saved");
   }
 
   function deleteCurrentFilenameTagPreset() {
@@ -254,6 +297,51 @@ export function SettingsPage({
     setFilenameTagPresets(next);
     writeFilenameTagPresets(next);
     setFilenameTagPattern(DEFAULT_FILENAME_TAG_PATTERNS[0]);
+    setPresetMessage("Pattern deleted");
+  }
+
+  function updateShortcut(action: KeyboardShortcutAction, event: ReactKeyboardEvent<HTMLButtonElement>) {
+    if (shortcutCaptureAction !== action) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.key === "Escape") {
+      setShortcutCaptureAction(null);
+      setShortcutMessage("Shortcut edit canceled");
+      return;
+    }
+    const shortcut = shortcutFromEvent(event.nativeEvent);
+    if (!shortcut) {
+      return;
+    }
+    setUiPreferences((current) => ({
+      ...current,
+      keyboardShortcuts: {
+        ...current.keyboardShortcuts,
+        [action]: shortcut,
+      },
+    }));
+    setShortcutCaptureAction(null);
+    setShortcutMessage(`${keyboardShortcutLabels[action]} set to ${formatShortcut(shortcut)}`);
+  }
+
+  function resetShortcut(action: KeyboardShortcutAction) {
+    setUiPreferences((current) => ({
+      ...current,
+      keyboardShortcuts: {
+        ...current.keyboardShortcuts,
+        [action]: defaultKeyboardShortcuts[action],
+      },
+    }));
+    setShortcutCaptureAction(null);
+    setShortcutMessage(`${keyboardShortcutLabels[action]} reset`);
+  }
+
+  function resetAllShortcuts() {
+    setUiPreferences((current) => ({ ...current, keyboardShortcuts: defaultKeyboardShortcuts }));
+    setShortcutCaptureAction(null);
+    setShortcutMessage("Keyboard shortcuts reset");
   }
 
   return (
@@ -474,6 +562,51 @@ export function SettingsPage({
                   </label>
                 </div>
               </div>
+            </div>
+          </DisclosureSection>
+
+          <DisclosureSection title="Keyboard Shortcuts" description="Page navigation and local playback controls">
+            <div className="grid gap-4 text-sm text-neutral-200">
+              <div className="flex items-center justify-between gap-3 rounded border border-line/70 bg-ink p-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <Keyboard className="shrink-0 text-muted" size={18} />
+                  <div className="min-w-0">
+                    <div className="font-medium text-white">Shortcut editor</div>
+                    <div className="text-xs text-muted">Click a shortcut, then press the replacement keys. Escape cancels.</div>
+                  </div>
+                </div>
+                <button className="secondary-button shrink-0" type="button" onClick={resetAllShortcuts}>
+                  <RotateCcw size={15} />
+                  Reset All
+                </button>
+              </div>
+              {shortcutMessage && <div className="rounded border border-moss/30 bg-moss/10 px-3 py-2 text-xs text-moss">{shortcutMessage}</div>}
+              {keyboardShortcutGroups.map((group) => (
+                <div key={group.title} className="grid gap-2 rounded border border-line/70 bg-ink p-3">
+                  <div className="text-xs font-medium uppercase text-muted">{group.title}</div>
+                  <div className="grid gap-2">
+                    {group.actions.map((action) => (
+                      <div key={action} className="grid gap-2 rounded border border-line/60 bg-panel px-3 py-2 sm:grid-cols-[1fr_auto_auto] sm:items-center">
+                        <span className="min-w-0 truncate text-neutral-200">{keyboardShortcutLabels[action]}</span>
+                        <button
+                          className={`secondary-button h-8 justify-center font-mono text-xs ${shortcutCaptureAction === action ? "border-ember text-ember" : ""}`}
+                          type="button"
+                          onClick={() => {
+                            setShortcutCaptureAction(action);
+                            setShortcutMessage(null);
+                          }}
+                          onKeyDown={(event) => updateShortcut(action, event)}
+                        >
+                          {shortcutCaptureAction === action ? "Press keys..." : formatShortcut(uiPreferences.keyboardShortcuts[action])}
+                        </button>
+                        <button className="icon-button h-8 w-8" type="button" title="Reset shortcut" onClick={() => resetShortcut(action)}>
+                          <RotateCcw size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
             </div>
           </DisclosureSection>
 
@@ -698,6 +831,36 @@ export function SettingsPage({
                 Leaving a track before this much has played counts as a skip; after that it counts as a play.
               </span>
             </label>
+            <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="font-medium text-white">WebView codec support</div>
+                  <div className="text-xs text-muted">Reported by the local WebView2 audio element on this machine.</div>
+                </div>
+                <button className="secondary-button h-8" type="button" onClick={() => setCodecSupport(detectCodecSupport())}>
+                  <RefreshCw size={14} />
+                  Recheck
+                </button>
+              </div>
+              <div className="grid gap-1 text-xs">
+                {codecSupport.map((codec) => (
+                  <div key={codec.label} className="grid grid-cols-[110px_1fr] gap-3 rounded bg-panel px-2 py-1.5">
+                    <span className="text-neutral-200">{codec.label}</span>
+                    <span
+                      className={
+                        codec.support === "probably"
+                          ? "text-moss"
+                          : codec.support === "maybe"
+                            ? "text-ember"
+                            : "text-muted"
+                      }
+                    >
+                      {codec.support === "no" ? "not reported" : codec.support}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
             </div>
           </DisclosureSection>
 
@@ -753,6 +916,7 @@ export function SettingsPage({
                     value={filenameTagPattern}
                     onChange={(event) => setFilenameTagPattern(event.target.value)}
                   />
+                  {presetMessage && <span className="text-xs text-moss">{presetMessage}</span>}
                 </label>
                 <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-panel px-3 py-2">
                   <span className="text-muted">Only fill empty fields</span>

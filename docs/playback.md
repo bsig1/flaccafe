@@ -8,6 +8,8 @@ Direct playback depends on the codecs supported by the installed WebView2 runtim
 
 Unsupported files should remain in the library, recommendation engine, and playlists even when direct playback is unavailable.
 
+Settings > Player includes a WebView codec diagnostic that calls the local audio element's `canPlayType` support check for MP3, FLAC, AAC, Ogg Vorbis, Opus, WAV, and AIFF. Treat "probably" as good, "maybe" as worth trying, and "not reported" as a warning that WebView2 may refuse direct playback for that format.
+
 ## Player Behavior
 
 - The queue lives in React state and can be reordered from the queue handle.
@@ -30,14 +32,14 @@ The helper logic for this is centralized in `frontend/src/app/App.tsx` so the bo
 
 The Tauri shell exposes Windows System Media Transport Controls through `frontend/src/lib/tauriMedia.ts` and `src-tauri/src/smtc.rs`. The app publishes title, artist, playback state, position, and button availability. Supported buttons include play/pause, previous, next, and stop-style state clearing on shutdown.
 
-Keyboard shortcuts are currently hard-coded:
+Keyboard shortcuts are editable in Settings > Keyboard Shortcuts. Media keys are still supported as a fallback for play/pause, previous, and next. The default local shortcuts are:
 
-- Space or `K`: play/pause
-- Alt+Left: previous
-- Alt+Right: next
+- Space: play/pause
+- Alt+Comma: previous
+- Alt+Period: next
+- Alt+Left / Alt+Right: seek
+- Alt+Up / Alt+Down: volume
 - Alt+M: mute
-
-The TODO keeps a future shortcut editor as a polish item.
 
 ## Not In Scope Yet
 

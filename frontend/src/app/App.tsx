@@ -182,6 +182,7 @@ import {
   readQuickStartDismissed,
   readRememberedDeleteChoice,
   readUiPreferences,
+  shortcutMatchesEvent,
   shouldRecordTrackAsPlayed,
   shuffleItems,
   storageKeys,
@@ -2162,27 +2163,28 @@ export default function App() {
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      if (!event.ctrlKey || event.altKey || event.metaKey) {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable='true']")) {
         return;
       }
-      const shortcuts: Record<string, Page> = {
-        "1": "library",
-        "2": "analysis",
-        "3": "nowPlaying",
-        "4": "artist",
-        "5": "history",
-        "6": "autodj",
-        "7": "settings",
-      };
-      const page = shortcuts[event.key];
-      if (page) {
+      const shortcuts: Array<[Page, keyof UiPreferences["keyboardShortcuts"]]> = [
+        ["library", "page.library"],
+        ["analysis", "page.analysis"],
+        ["nowPlaying", "page.nowPlaying"],
+        ["artist", "page.artist"],
+        ["history", "page.history"],
+        ["autodj", "page.autodj"],
+        ["settings", "page.settings"],
+      ];
+      const match = shortcuts.find(([, action]) => shortcutMatchesEvent(uiPreferences.keyboardShortcuts[action], event));
+      if (match) {
         event.preventDefault();
-        setActivePage(page);
+        setActivePage(match[0]);
       }
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  }, [uiPreferences.keyboardShortcuts]);
 
   useEffect(() => {
     if (!selectedAlbumId && albums[0]) {
@@ -2602,6 +2604,7 @@ export default function App() {
           fadeMs={uiPreferences.playerFadeMs}
           skipThresholdPercent={uiPreferences.skipThresholdPercent}
           miniPlayer={uiPreferences.miniPlayer}
+          keyboardShortcuts={uiPreferences.keyboardShortcuts}
           playbackMode={playbackMode}
           setPlaybackMode={setPlaybackMode}
           onOpenMiniPlayer={handleOpenDetachedMiniPlayer}
