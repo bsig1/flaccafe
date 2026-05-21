@@ -85,6 +85,9 @@ from .schemas import (
     PlayEventEntry,
     RatingRequest,
     RecommendationFeedbackRequest,
+    RecommendationDrift,
+    RecommendationProfile,
+    RecommendationProfileRequest,
     ScanRequest,
     ScanProgress,
     ScanResult,
@@ -439,6 +442,16 @@ def create_support_bundle() -> SupportBundleResponse:
                 )
             ),
         }
+        scan_error_samples = rows_to_dicts(
+            conn.execute(
+                """
+                SELECT path_hash, folder_hash, extension, message, created_at
+                FROM scan_error_samples
+                ORDER BY datetime(created_at) DESC, id DESC
+                LIMIT 25
+                """
+            )
+        )
 
     diagnostics = startup_diagnostics().model_dump()
     app_info = {
@@ -457,6 +470,7 @@ def create_support_bundle() -> SupportBundleResponse:
         add_json(archive, "diagnostics.json", diagnostics)
         add_json(archive, "settings.redacted.json", redacted_settings)
         add_json(archive, "database-summary.redacted.json", redacted_summary)
+        add_json(archive, "scan-errors.sample.redacted.json", scan_error_samples)
         add_json(archive, "app-info.json", app_info)
 
         log_dir = backend_log_path().parent
@@ -2414,7 +2428,159 @@ def mark_track_skipped(track_id: int) -> dict:
 
 @app.post("/autodj/generate", response_model=AutoDjResponse)
 def generate_autodj(request: AutoDjRequest) -> AutoDjResponse:
-    return AutoDjResponse(tracks=generate_queue(request), settings=request)
+    tracks = generate_queue(request)
+    return AutoDjResponse(tracks=tracks, settings=request, drift=recommendation_drift(tracks))
+
+
+def recommendation_drift(tracks: list[dict]) -> RecommendationDrift:
+    total = len(tracks)
+    if total == 0:
+        return RecommendationDrift()
+
+    ratings = [float(track["rating"]) for track in tracks if track.get("rating") is not None]
+    familiar = [
+        track
+        for track in tracks
+        if (track.get("rating") is not None and float(track["rating"]) >= 4.0) or int(track.get("play_count") or 0) > 0
+    ]
+    exploratory = [track for track in tracks if track.get("rating") is None or int(track.get("play_count") or 0) == 0]
+    unique_artists = {
+        token
+        for track in tracks
+        for token in (artist_tokens(track.get("artist")) or {normalize_token(track.get("artist"))})
+        if token
+    }
+    unique_albums = {album_token(track.get("album")) for track in tracks if album_token(track.get("album"))}
+    clap_tracks = [
+        track
+        for track in tracks
+        if track.get("analysis_provider") == "clap" and track.get("analysis_embedding")
+    ]
+    repeat_artist_percent = max(0.0, ((total - len(unique_artists)) / total) * 100) if unique_artists else 0.0
+    return RecommendationDrift(
+        total_tracks=total,
+        familiar_percent=round((len(familiar) / total) * 100, 2),
+        exploration_percent=round((len(exploratory) / total) * 100, 2),
+        repeat_artist_percent=round(repeat_artist_percent, 2),
+        unrated_percent=round((sum(1 for track in tracks if track.get("rating") is None) / total) * 100, 2),
+        clap_percent=round((len(clap_tracks) / total) * 100, 2),
+        average_rating=round(sum(ratings) / len(ratings), 2) if ratings else None,
+        unique_artists=len(unique_artists),
+        unique_albums=len(unique_albums),
+    )
+
+
+def profile_from_row(row) -> RecommendationProfile:
+    try:
+        settings = AutoDjRequest.model_validate(json.loads(row["settings_json"]))
+    except Exception:
+        settings = AutoDjRequest()
+    return RecommendationProfile(
+        id=int(row["id"]),
+        name=row["name"],
+        settings=settings,
+        is_default=bool(row["is_default"]),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+@app.get("/autodj/profiles", response_model=list[RecommendationProfile])
+def list_recommendation_profiles() -> list[RecommendationProfile]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, name, settings_json, is_default, created_at, updated_at
+            FROM recommendation_profiles
+            ORDER BY is_default DESC, lower(name) ASC
+            """
+        ).fetchall()
+    return [profile_from_row(row) for row in rows]
+
+
+@app.post("/autodj/profiles", response_model=RecommendationProfile)
+def create_recommendation_profile(request: RecommendationProfileRequest) -> RecommendationProfile:
+    name = request.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Profile name is required")
+    settings_json = json.dumps(request.settings.model_dump(), ensure_ascii=True, sort_keys=True)
+    with connect() as conn:
+        if request.is_default:
+            conn.execute("UPDATE recommendation_profiles SET is_default = 0")
+        conn.execute(
+            """
+            INSERT INTO recommendation_profiles(name, settings_json, is_default)
+            VALUES(?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+              settings_json = excluded.settings_json,
+              is_default = excluded.is_default,
+              updated_at = datetime('now')
+            """,
+            (name, settings_json, 1 if request.is_default else 0),
+        )
+        if request.is_default:
+            conn.execute("UPDATE recommendation_profiles SET is_default = CASE WHEN lower(name) = lower(?) THEN 1 ELSE 0 END", (name,))
+        conn.commit()
+        row = conn.execute(
+            """
+            SELECT id, name, settings_json, is_default, created_at, updated_at
+            FROM recommendation_profiles
+            WHERE lower(name) = lower(?)
+            """,
+            (name,),
+        ).fetchone()
+    return profile_from_row(row)
+
+
+@app.patch("/autodj/profiles/{profile_id}", response_model=RecommendationProfile)
+def update_recommendation_profile(profile_id: int, request: RecommendationProfileRequest) -> RecommendationProfile:
+    name = request.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Profile name is required")
+    settings_json = json.dumps(request.settings.model_dump(), ensure_ascii=True, sort_keys=True)
+    with connect() as conn:
+        row = conn.execute("SELECT id FROM recommendation_profiles WHERE id = ?", (profile_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Recommendation profile not found")
+        if request.is_default:
+            conn.execute("UPDATE recommendation_profiles SET is_default = 0")
+        conn.execute(
+            """
+            UPDATE recommendation_profiles
+            SET name = ?, settings_json = ?, is_default = ?, updated_at = datetime('now')
+            WHERE id = ?
+            """,
+            (name, settings_json, 1 if request.is_default else 0, profile_id),
+        )
+        conn.commit()
+        row = conn.execute(
+            """
+            SELECT id, name, settings_json, is_default, created_at, updated_at
+            FROM recommendation_profiles
+            WHERE id = ?
+            """,
+            (profile_id,),
+        ).fetchone()
+    return profile_from_row(row)
+
+
+@app.post("/autodj/profiles/{profile_id}/default", response_model=list[RecommendationProfile])
+def set_default_recommendation_profile(profile_id: int) -> list[RecommendationProfile]:
+    with connect() as conn:
+        row = conn.execute("SELECT id FROM recommendation_profiles WHERE id = ?", (profile_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Recommendation profile not found")
+        conn.execute("UPDATE recommendation_profiles SET is_default = CASE WHEN id = ? THEN 1 ELSE 0 END", (profile_id,))
+        conn.commit()
+    return list_recommendation_profiles()
+
+
+@app.delete("/autodj/profiles/{profile_id}", response_model=list[RecommendationProfile])
+def delete_recommendation_profile(profile_id: int) -> list[RecommendationProfile]:
+    with connect() as conn:
+        conn.execute("DELETE FROM recommendation_profiles WHERE id = ?", (profile_id,))
+        conn.commit()
+    return list_recommendation_profiles()
 
 
 def _avoid_key_and_label(request: AutoDjAvoidRequest) -> tuple[str, str]:

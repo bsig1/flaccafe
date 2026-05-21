@@ -432,9 +432,37 @@ class RecommendationFeedbackRequest(BaseModel):
     weight: float = Field(default=1.0, ge=0.0, le=5.0)
 
 
+class RecommendationDrift(BaseModel):
+    total_tracks: int = 0
+    familiar_percent: float = 0.0
+    exploration_percent: float = 0.0
+    repeat_artist_percent: float = 0.0
+    unrated_percent: float = 0.0
+    clap_percent: float = 0.0
+    average_rating: float | None = None
+    unique_artists: int = 0
+    unique_albums: int = 0
+
+
 class AutoDjResponse(BaseModel):
     tracks: list[QueueTrack]
     settings: AutoDjRequest
+    drift: RecommendationDrift
+
+
+class RecommendationProfileRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    settings: AutoDjRequest
+    is_default: bool = False
+
+
+class RecommendationProfile(BaseModel):
+    id: int
+    name: str
+    settings: AutoDjRequest
+    is_default: bool = False
+    created_at: str
+    updated_at: str
 
 
 class ExportRequest(BaseModel):

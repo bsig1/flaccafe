@@ -124,6 +124,8 @@ def _pip_install_command(
         "-m",
         "pip",
         "install",
+        "--disable-pip-version-check",
+        "--no-cache-dir",
     ]
     if force:
         command.append("--force-reinstall")
@@ -160,7 +162,7 @@ def _run_job(job_id: str) -> None:
 
         steps = [
             *setup_steps,
-            ("Updating runtime pip", [runtime_python, "-m", "pip", "install", "--upgrade", "pip"]),
+            ("Updating runtime pip", [runtime_python, "-m", "pip", "install", "--disable-pip-version-check", "--no-cache-dir", "--upgrade", "pip"]),
             (
                 "Installing Torch for CPU" if _jobs[job_id].device == "cpu" else "Installing Torch for NVIDIA CUDA",
                 _pip_install_command(

@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from backend.app.database import connect, get_setting, init_db, set_setting
-from backend.app.scanner import path_key, remove_missing_tracks
+from backend.app.scanner import path_key, read_metadata_cached, remove_missing_tracks
 
 
 def insert_track(path: Path, **overrides: object) -> int:
@@ -145,6 +145,35 @@ class LibraryWorkflowTests(unittest.TestCase):
                 (track_id,),
             ).fetchone()
         self.assertIsNotNone(row["album_id"])
+
+    def test_metadata_cache_reuses_unchanged_file_tags(self) -> None:
+        audio_file = self.root / "cached.flac"
+        audio_file.write_bytes(b"audio")
+        metadata = {
+            "path": str(audio_file.resolve()),
+            "path_key": path_key(audio_file),
+            "title": "Cached",
+            "artist": "Cache Artist",
+            "album": "Cache Album",
+            "album_artist": "Cache Artist",
+            "track_number": None,
+            "disc_number": None,
+            "genre": "Rock",
+            "year": 2026,
+            "duration_seconds": 120.0,
+            "bitrate": None,
+            "audio_fingerprint": "fingerprint",
+            "rating": None,
+            "file_modified_at": None,
+        }
+
+        with connect() as conn, patch("backend.app.scanner.read_metadata", return_value=metadata) as read_metadata:
+            first = read_metadata_cached(conn, audio_file)
+            second = read_metadata_cached(conn, audio_file)
+
+        self.assertEqual(first["title"], "Cached")
+        self.assertEqual(second["title"], "Cached")
+        read_metadata.assert_called_once_with(audio_file)
 
 
 if __name__ == "__main__":

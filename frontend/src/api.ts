@@ -21,6 +21,7 @@ import type {
   LyricsResponse,
   PlayEventEntry,
   PlaylistSummary,
+  RecommendationProfile,
   ScanProgress,
   ScanResult,
   ScanStartResponse,
@@ -416,6 +417,43 @@ export function recordRecommendationFeedback(requestBody: {
     method: "POST",
     body: JSON.stringify(requestBody),
   });
+}
+
+export function fetchRecommendationProfiles(): Promise<RecommendationProfile[]> {
+  return request<RecommendationProfile[]>("/autodj/profiles");
+}
+
+export function saveRecommendationProfile(requestBody: {
+  name: string;
+  settings: AutoDjSettings;
+  is_default?: boolean;
+}): Promise<RecommendationProfile> {
+  return request<RecommendationProfile>("/autodj/profiles", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function updateRecommendationProfile(
+  profileId: number,
+  requestBody: {
+    name: string;
+    settings: AutoDjSettings;
+    is_default?: boolean;
+  },
+): Promise<RecommendationProfile> {
+  return request<RecommendationProfile>(`/autodj/profiles/${profileId}`, {
+    method: "PATCH",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function setDefaultRecommendationProfile(profileId: number): Promise<RecommendationProfile[]> {
+  return request<RecommendationProfile[]>(`/autodj/profiles/${profileId}/default`, { method: "POST" });
+}
+
+export function deleteRecommendationProfile(profileId: number): Promise<RecommendationProfile[]> {
+  return request<RecommendationProfile[]>(`/autodj/profiles/${profileId}`, { method: "DELETE" });
 }
 
 export function generateAutoDj(settings: AutoDjSettings): Promise<AutoDjResponse> {

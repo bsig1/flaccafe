@@ -38,8 +38,20 @@ jobs:
       - name: TypeScript check
         run: npm run check
 
+      - name: Frontend interaction tests
+        run: npm run test:frontend
+
       - name: Backend tests
         run: python -m unittest discover backend/tests
+
+      - name: Changelog preview
+        run: powershell -ExecutionPolicy Bypass -File scripts/changelog_preview.ps1
+
+      - name: Installer smoke test
+        run: powershell -ExecutionPolicy Bypass -File scripts/installer_smoke.ps1
+
+      - name: Optional CLAP runtime validation
+        run: powershell -ExecutionPolicy Bypass -File scripts/validate_clap_runtime.ps1
 
       - name: Python compile check
         run: python -m compileall backend

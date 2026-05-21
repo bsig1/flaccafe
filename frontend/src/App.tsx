@@ -75,6 +75,7 @@ import {
   fetchLyrics,
   fetchPlaylists,
   fetchPlaylistTracks,
+  fetchRecommendationProfiles,
   fetchSettings,
   fetchSimilarTracks,
   fetchScanProgress,
@@ -99,13 +100,17 @@ import {
   startClapInstall,
   startScanLibrary,
   recordRecommendationFeedback,
+  saveRecommendationProfile,
+  setDefaultRecommendationProfile,
   updateClapConfig,
+  deleteRecommendationProfile,
   updateTrackMetadata,
   updateSettings,
   updateTrackRating,
 } from "./api";
 import { clearSmtcState, listenForSmtcButtons, updateSmtcState } from "./tauriMedia";
 import type { SmtcButtonPayload } from "./tauriMedia";
+import { limitRecentItems, placeFloatingMenu, readBooleanFlag, toggleOrderedValue, writeBooleanFlag } from "./uiInteractions";
 import type {
   AlbumSummary,
   AutoDjAvoidRule,
@@ -123,6 +128,8 @@ import type {
   PlayEventEntry,
   PlaylistSummary,
   QueueTrack,
+  RecommendationDrift,
+  RecommendationProfile,
   ScanProgress,
   ScanResult,
   SettingsResponse,
@@ -223,6 +230,33 @@ interface ColumnContextMenu {
   y: number;
 }
 
+interface MiniPlayerTrackSnapshot {
+  id: number;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  genre: string | null;
+  year: number | null;
+  rating: number | null;
+  duration_seconds: number | null;
+}
+
+interface MiniPlayerSnapshot {
+  track: MiniPlayerTrackSnapshot | null;
+  isPlaying: boolean;
+  currentTime: number;
+  duration: number;
+  hasPrevious: boolean;
+  hasNext: boolean;
+  updatedAt: string;
+}
+
+type MiniPlayerCommand =
+  | { type: "playPause" }
+  | { type: "previous" }
+  | { type: "next" }
+  | { type: "seek"; seconds: number };
+
 interface DeleteTrackPrompt {
   trackIds: number[];
   title: string;
@@ -299,6 +333,7 @@ const storageKeys = {
   deleteChoice: "flac-cafe-delete-choice",
   quickStartDismissed: "flac-cafe-quick-start-dismissed",
   autoDjTemplates: "flac-cafe-autodj-templates",
+  miniPlayerSnapshot: "flac-cafe-mini-player-snapshot",
 } as const;
 const legacyStorageKeys = {
   uiPreferences: "local-autodj-ui-preferences",
@@ -359,6 +394,7 @@ const libraryColumnDefinitions: LibraryColumnDefinition[] = [
 const libraryColumnKeys = libraryColumnDefinitions.map((column) => column.key);
 const libraryColumnKeySet = new Set<MetadataColumnKey>(libraryColumnKeys);
 const librarySelectionColumnWidth = 44;
+const miniPlayerChannelName = "flac-cafe-mini-player";
 
 const defaultLibraryColumnWidths: Record<LibraryColumnKey, number> = {
   play: 64,
@@ -411,6 +447,18 @@ const defaultAutoDj: AutoDjSettings = {
   rating_similarity_weight: 0.25,
 };
 
+const emptyRecommendationDrift: RecommendationDrift = {
+  total_tracks: 0,
+  familiar_percent: 0,
+  exploration_percent: 0,
+  repeat_artist_percent: 0,
+  unrated_percent: 0,
+  clap_percent: 0,
+  average_rating: null,
+  unique_artists: 0,
+  unique_albums: 0,
+};
+
 function formatDuration(seconds: number | null): string {
   if (!seconds || seconds < 0) {
     return "--:--";
@@ -440,6 +488,61 @@ function display(value: string | number | null | undefined, fallback = "Unknown"
 
 function trackGenre(track: Track | null | undefined): string | null {
   return track?.analysis_genre ?? track?.genre ?? null;
+}
+
+function miniPlayerTrackSnapshot(track: Track): MiniPlayerTrackSnapshot {
+  return {
+    id: track.id,
+    title: track.title,
+    artist: track.artist,
+    album: track.album,
+    genre: trackGenre(track),
+    year: track.year,
+    rating: track.rating,
+    duration_seconds: track.duration_seconds,
+  };
+}
+
+function emptyMiniPlayerSnapshot(): MiniPlayerSnapshot {
+  return {
+    track: null,
+    isPlaying: false,
+    currentTime: 0,
+    duration: 0,
+    hasPrevious: false,
+    hasNext: false,
+    updatedAt: new Date(0).toISOString(),
+  };
+}
+
+function readMiniPlayerSnapshot(): MiniPlayerSnapshot {
+  try {
+    const raw = window.localStorage.getItem(storageKeys.miniPlayerSnapshot);
+    if (!raw) {
+      return emptyMiniPlayerSnapshot();
+    }
+    return { ...emptyMiniPlayerSnapshot(), ...JSON.parse(raw) } as MiniPlayerSnapshot;
+  } catch {
+    return emptyMiniPlayerSnapshot();
+  }
+}
+
+function publishMiniPlayerSnapshot(channel: BroadcastChannel | null, snapshot: MiniPlayerSnapshot) {
+  try {
+    window.localStorage.setItem(storageKeys.miniPlayerSnapshot, JSON.stringify(snapshot));
+  } catch {
+    // The detached mini-player is best-effort; local storage can be disabled.
+  }
+  channel?.postMessage({ type: "snapshot", snapshot });
+}
+
+function sendMiniPlayerCommand(command: MiniPlayerCommand) {
+  if (!("BroadcastChannel" in window)) {
+    return;
+  }
+  const channel = new BroadcastChannel(miniPlayerChannelName);
+  channel.postMessage({ type: "command", command });
+  channel.close();
 }
 
 function analysisTags(track: Track | null | undefined): Array<[string, number]> {
@@ -665,19 +768,11 @@ function writeRememberedDeleteChoice(choice: RememberedDeleteChoice) {
 }
 
 function readQuickStartDismissed(): boolean {
-  try {
-    return window.localStorage.getItem(storageKeys.quickStartDismissed) === "true";
-  } catch {
-    return false;
-  }
+  return readBooleanFlag(window.localStorage, storageKeys.quickStartDismissed, false);
 }
 
 function writeQuickStartDismissed() {
-  try {
-    window.localStorage.setItem(storageKeys.quickStartDismissed, "true");
-  } catch {
-    // The quick-start card can be shown again if local storage is unavailable.
-  }
+  writeBooleanFlag(window.localStorage, storageKeys.quickStartDismissed, true);
 }
 
 function readUiPreferences(): UiPreferences {
@@ -743,9 +838,10 @@ function readAutoDjTemplates(): AutoDjTemplate[] {
     if (!Array.isArray(parsed)) {
       return [];
     }
-    return parsed
-      .filter((template) => template?.id && template?.name && template?.settings)
-      .slice(0, 24);
+    return limitRecentItems(
+      parsed.filter((template) => template?.id && template?.name && template?.settings),
+      24,
+    );
   } catch {
     return [];
   }
@@ -753,7 +849,7 @@ function readAutoDjTemplates(): AutoDjTemplate[] {
 
 function writeAutoDjTemplates(templates: AutoDjTemplate[]) {
   try {
-    window.localStorage.setItem(storageKeys.autoDjTemplates, JSON.stringify(templates.slice(0, 24)));
+    window.localStorage.setItem(storageKeys.autoDjTemplates, JSON.stringify(limitRecentItems(templates, 24)));
   } catch {
     // Templates are a convenience; failing to persist them should not block AutoDJ.
   }
@@ -1295,6 +1391,7 @@ function LibraryPage({
   onDeleteTrack,
   onDeleteTracks,
   onEditTrack,
+  onBulkMetadata,
   onRequestDeleteTracks,
   onRemoveTrackFromPlaylist,
   onRemoveTracksFromPlaylist,
@@ -1319,6 +1416,7 @@ function LibraryPage({
   hideFilePaths,
   compactRows,
   albumGrid,
+  writeRatingsToFiles,
   libraryVisibleColumns,
   setLibraryVisibleColumns,
   setTargetPlaylistId,
@@ -1373,6 +1471,7 @@ function LibraryPage({
   onDeleteTrack: (trackId: number, deleteFile: boolean) => void;
   onDeleteTracks: (trackIds: number[], deleteFile: boolean) => void | Promise<void>;
   onEditTrack: (track: Track) => void;
+  onBulkMetadata: (trackIds: number[], metadata: TrackMetadataUpdate) => void | Promise<void>;
   onRequestDeleteTracks: (trackIds: number[], title: string, allowFileDelete?: boolean) => void;
   onRemoveTrackFromPlaylist: (trackId: number) => void;
   onRemoveTracksFromPlaylist: (trackIds: number[]) => void | Promise<void>;
@@ -1397,6 +1496,7 @@ function LibraryPage({
   hideFilePaths: boolean;
   compactRows: boolean;
   albumGrid: boolean;
+  writeRatingsToFiles: boolean;
   libraryVisibleColumns: MetadataColumnKey[];
   setLibraryVisibleColumns: (columns: MetadataColumnKey[]) => void;
   setTargetPlaylistId: (playlistId: number | null) => void;
@@ -1412,6 +1512,8 @@ function LibraryPage({
   const [contextMenu, setContextMenu] = useState<TrackContextMenu | null>(null);
   const [columnMenu, setColumnMenu] = useState<ColumnContextMenu | null>(null);
   const [selectedTrackIds, setSelectedTrackIds] = useState<Set<number>>(() => new Set());
+  const [showAllDuplicateGroups, setShowAllDuplicateGroups] = useState(false);
+  const [bulkMetadataOpen, setBulkMetadataOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const visibleColumns = normalizeLibraryColumns(libraryVisibleColumns);
@@ -1561,47 +1663,50 @@ function LibraryPage({
     event.preventDefault();
     setDetailTrack(track);
     setColumnMenu(null);
-    const fitsBelow = event.clientY + TRACK_CONTEXT_MENU_HEIGHT + MENU_VIEWPORT_MARGIN <= window.innerHeight;
-    const fitsRight =
-      event.clientX + TRACK_CONTEXT_MENU_WIDTH + TRACK_AVOID_SUBMENU_WIDTH + MENU_VIEWPORT_MARGIN <= window.innerWidth;
-    const x = Math.min(
-      Math.max(MENU_VIEWPORT_MARGIN, event.clientX),
-      window.innerWidth - TRACK_CONTEXT_MENU_WIDTH - MENU_VIEWPORT_MARGIN,
-    );
-    const y = fitsBelow
-      ? event.clientY
-      : Math.max(MENU_VIEWPORT_MARGIN, event.clientY - TRACK_CONTEXT_MENU_HEIGHT);
+    const placement = placeFloatingMenu({
+      cursorX: event.clientX,
+      cursorY: event.clientY,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      menuWidth: TRACK_CONTEXT_MENU_WIDTH,
+      menuHeight: TRACK_CONTEXT_MENU_HEIGHT,
+      submenuWidth: TRACK_AVOID_SUBMENU_WIDTH,
+      margin: MENU_VIEWPORT_MARGIN,
+    });
     setContextMenu({
       track,
       queue,
       removable,
-      x,
-      y,
-      flipY: !fitsBelow,
-      submenuLeft: !fitsRight,
+      x: placement.x,
+      y: placement.y,
+      flipY: placement.flipY,
+      submenuLeft: placement.submenuLeft,
     });
   }
 
   function openColumnContextMenu(event: ReactMouseEvent) {
     event.preventDefault();
     setContextMenu(null);
+    const placement = placeFloatingMenu({
+      cursorX: event.clientX,
+      cursorY: event.clientY,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      menuWidth: 340,
+      menuHeight: 520,
+      margin: MENU_VIEWPORT_MARGIN,
+    });
     setColumnMenu({
-      x: Math.min(event.clientX, window.innerWidth - 340),
-      y: Math.min(event.clientY, window.innerHeight - 520),
+      x: placement.x,
+      y: placement.y,
     });
   }
 
   function toggleVisibleColumn(column: MetadataColumnKey) {
-    const currentSet = new Set(visibleColumns);
-    if (currentSet.has(column)) {
-      if (currentSet.size <= 1) {
-        return;
-      }
-      currentSet.delete(column);
-    } else {
-      currentSet.add(column);
+    if (visibleColumns.includes(column) && visibleColumns.length <= 1) {
+      return;
     }
-    setLibraryVisibleColumns(libraryColumnDefinitions.map((definition) => definition.key).filter((key) => currentSet.has(key)));
+    setLibraryVisibleColumns(toggleOrderedValue(visibleColumns, column, libraryColumnDefinitions.map((definition) => definition.key)));
   }
 
   function columnTextClass(column: LibraryColumnDefinition) {
@@ -1950,6 +2055,14 @@ function LibraryPage({
                 Remove
               </button>
             )}
+            <button
+              className="secondary-button h-8"
+              type="button"
+              onClick={() => setBulkMetadataOpen(true)}
+            >
+              <Pencil size={14} />
+              Metadata
+            </button>
             <button
               className="secondary-button h-8"
               type="button"
@@ -2355,9 +2468,18 @@ function LibraryPage({
                   </div>
                 </div>
                 <div>
-                  <h2 className="mb-2 text-sm font-semibold text-white">Potential Duplicates</h2>
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <h2 className="text-sm font-semibold text-white">Potential Duplicates</h2>
+                    <button
+                      className="text-xs text-muted hover:text-white"
+                      type="button"
+                      onClick={() => setShowAllDuplicateGroups((current) => !current)}
+                    >
+                      {showAllDuplicateGroups ? "Show fewer" : `Review all ${(libraryHealth?.duplicate_groups ?? []).length}`}
+                    </button>
+                  </div>
                   <div className="grid gap-3">
-                    {(libraryHealth?.duplicate_groups ?? []).slice(0, 8).map((group) => {
+                    {(showAllDuplicateGroups ? libraryHealth?.duplicate_groups ?? [] : (libraryHealth?.duplicate_groups ?? []).slice(0, 8)).map((group) => {
                       const keepId = group.recommended_keep_id ?? group.tracks[0]?.id ?? null;
                       const removableIds = group.tracks.filter((track) => track.id !== keepId).map((track) => track.id);
                       return (
@@ -2403,6 +2525,15 @@ function LibraryPage({
                                 <Trash2 size={14} />
                                 Remove Others
                               </button>
+                              <button
+                                className="secondary-button h-8"
+                                type="button"
+                                onClick={() => onAnalyzeTracks(group.tracks.map((track) => track.id))}
+                                disabled={isAudioAnalyzing}
+                              >
+                                <Wand2 size={14} />
+                                Analyze Set
+                              </button>
                             </div>
                           </div>
                           {group.recommendation_reason && (
@@ -2421,6 +2552,7 @@ function LibraryPage({
                                   }`}
                                   type="button"
                                   onClick={() => setDetailTrack(track)}
+                                  onDoubleClick={() => onPlayTrack(track, group.tracks)}
                                 >
                                   <span className="w-12 shrink-0 tabular-nums">{formatDuration(track.duration_seconds)}</span>
                                   <span className="w-20 shrink-0 tabular-nums">{formatBitrate(track.bitrate)}</span>
@@ -2477,6 +2609,18 @@ function LibraryPage({
         onEditTrack={onEditTrack}
         onRevealTrack={onRevealTrack}
       />
+      {bulkMetadataOpen && (
+        <BulkMetadataModal
+          tracks={selectedTracks}
+          writeToFiles={writeRatingsToFiles}
+          onClose={() => setBulkMetadataOpen(false)}
+          onSave={async (metadata) => {
+            await onBulkMetadata(selectedIds, metadata);
+            setBulkMetadataOpen(false);
+            clearSelection();
+          }}
+        />
+      )}
       </div>
       {columnMenu && (
         <div
@@ -2873,6 +3017,141 @@ function MetadataEditorModal({
   );
 }
 
+function BulkMetadataModal({
+  tracks,
+  writeToFiles,
+  onClose,
+  onSave,
+}: {
+  tracks: Track[];
+  writeToFiles: boolean;
+  onClose: () => void;
+  onSave: (metadata: TrackMetadataUpdate) => void | Promise<void>;
+}) {
+  const [enabledFields, setEnabledFields] = useState<Record<keyof TrackMetadataUpdate, boolean>>({
+    title: false,
+    artist: false,
+    album: false,
+    album_artist: false,
+    track_number: false,
+    disc_number: false,
+    genre: false,
+    year: false,
+  });
+  const [values, setValues] = useState<Record<keyof TrackMetadataUpdate, string>>({
+    title: "",
+    artist: "",
+    album: "",
+    album_artist: "",
+    track_number: "",
+    disc_number: "",
+    genre: "",
+    year: "",
+  });
+
+  const fields: Array<[keyof TrackMetadataUpdate, string, "text" | "number"]> = [
+    ["artist", "Artist", "text"],
+    ["album", "Album", "text"],
+    ["album_artist", "Album Artist", "text"],
+    ["genre", "Genre", "text"],
+    ["year", "Year", "number"],
+    ["disc_number", "Disc", "number"],
+  ];
+  const enabledCount = Object.values(enabledFields).filter(Boolean).length;
+  const unsupported = tracks.filter((track) => !supportsFileTagWriting(track.path));
+
+  function submit() {
+    const metadata: TrackMetadataUpdate = {};
+    for (const [key] of fields) {
+      if (!enabledFields[key]) {
+        continue;
+      }
+      const raw = values[key].trim();
+      switch (key) {
+        case "year":
+        case "disc_number":
+        case "track_number":
+          metadata[key] = raw ? Number(raw) : null;
+          break;
+        default:
+          metadata[key] = raw || null;
+      }
+    }
+    void onSave(metadata);
+  }
+
+  return (
+    <div className="fixed inset-0 z-[70] grid place-items-center bg-black/55 p-6" role="dialog" aria-modal="true">
+      <div className="flex max-h-[88vh] w-full max-w-3xl flex-col rounded border border-line bg-[#211a15] shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
+          <div>
+            <div className="text-base font-semibold text-white">Bulk Metadata Preview</div>
+            <div className="mt-1 text-sm text-muted">{tracks.length.toLocaleString()} selected tracks</div>
+          </div>
+          <button className="icon-button" type="button" title="Close" onClick={onClose}>
+            <X size={16} />
+          </button>
+        </div>
+        <div className="min-h-0 overflow-auto p-5">
+          <div className="grid gap-3">
+            {fields.map(([key, label, type]) => (
+              <div key={key} className="grid grid-cols-[140px_minmax(0,1fr)] gap-3 rounded border border-line/70 bg-ink p-3 text-sm">
+                <label className="flex items-center gap-2 text-muted">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 accent-moss"
+                    checked={enabledFields[key]}
+                    onChange={(event) => setEnabledFields((current) => ({ ...current, [key]: event.target.checked }))}
+                  />
+                  {label}
+                </label>
+                <input
+                  type={type}
+                  disabled={!enabledFields[key]}
+                  className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 disabled:opacity-40 focus:ring-2"
+                  value={values[key]}
+                  onChange={(event) => setValues((current) => ({ ...current, [key]: event.target.value }))}
+                />
+              </div>
+            ))}
+          </div>
+          <div className="mt-4 rounded border border-line/70 bg-ink p-3">
+            <div className="mb-2 text-xs font-medium uppercase text-muted">Preview</div>
+            <div className="grid gap-1 text-xs">
+              {tracks.slice(0, 8).map((track) => (
+                <div key={track.id} className="grid grid-cols-[1fr_1fr] gap-3 rounded bg-panel px-2 py-1.5">
+                  <div className="truncate text-muted">{display(track.title, "Untitled")} - {display(track.artist)}</div>
+                  <div className="truncate text-neutral-200">
+                    {fields
+                      .filter(([key]) => enabledFields[key])
+                      .map(([key, label]) => `${label}: ${values[key].trim() || "(blank)"}`)
+                      .join(" / ") || "No fields selected"}
+                  </div>
+                </div>
+              ))}
+              {tracks.length > 8 && <div className="text-muted">...and {(tracks.length - 8).toLocaleString()} more tracks</div>}
+            </div>
+          </div>
+          {writeToFiles && unsupported.length > 0 && (
+            <div className="mt-3 rounded border border-ember/40 bg-ember/10 p-3 text-xs text-ember">
+              {unsupported.length} selected file{unsupported.length === 1 ? "" : "s"} may not support direct metadata writes. SQLite updates will still be attempted track by track.
+            </div>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 border-t border-line px-5 py-4">
+          <button className="secondary-button" type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="primary-button" type="button" disabled={enabledCount === 0} onClick={submit}>
+            <Pencil size={15} />
+            Apply Previewed Changes
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DeleteTrackDialog({
   prompt,
   onCancel,
@@ -2957,6 +3236,7 @@ function NumberField({
 function AutoDjPage({
   queue,
   setQueue,
+  setRecommendationDrift,
   setStatus,
   onPlayTrack,
   onAddTracksToPlaylist,
@@ -2965,9 +3245,16 @@ function AutoDjPage({
   uiPreferences,
   avoidRules,
   onDeleteAvoidRule,
+  recommendationProfiles,
+  recommendationDrift,
+  onRefreshProfiles,
+  onSaveRecommendationProfile,
+  onDeleteRecommendationProfile,
+  onSetDefaultRecommendationProfile,
 }: {
   queue: QueueTrack[];
   setQueue: (tracks: QueueTrack[]) => void;
+  setRecommendationDrift: (drift: RecommendationDrift) => void;
   setStatus: (message: string) => void;
   onPlayTrack: (track: Track, queue: Track[]) => void;
   onAddTracksToPlaylist: (trackIds: number[]) => void;
@@ -2976,6 +3263,12 @@ function AutoDjPage({
   uiPreferences: UiPreferences;
   avoidRules: AutoDjAvoidRule[];
   onDeleteAvoidRule: (ruleId: number) => void;
+  recommendationProfiles: RecommendationProfile[];
+  recommendationDrift: RecommendationDrift;
+  onRefreshProfiles: () => void | Promise<void>;
+  onSaveRecommendationProfile: (name: string, settings: AutoDjSettings, isDefault: boolean) => void | Promise<void>;
+  onDeleteRecommendationProfile: (profileId: number) => void | Promise<void>;
+  onSetDefaultRecommendationProfile: (profileId: number) => void | Promise<void>;
 }) {
   const [settings, setSettings] = useState<AutoDjSettings>({
     ...defaultAutoDj,
@@ -2990,6 +3283,11 @@ function AutoDjPage({
   const [dragQueueIndex, setDragQueueIndex] = useState<number | null>(null);
   const [similarPreview, setSimilarPreview] = useState<SimilarTrack[]>([]);
   const [isSimilarityLoading, setIsSimilarityLoading] = useState(false);
+  const [neighborAnalyzedOnly, setNeighborAnalyzedOnly] = useState(false);
+  const [neighborMinRating, setNeighborMinRating] = useState(0);
+  const [neighborGenre, setNeighborGenre] = useState("");
+  const appliedDefaultProfileId = useRef<number | null>(null);
+  const defaultProfile = recommendationProfiles.find((profile) => profile.is_default) ?? null;
   const presets: { label: string; settings: Partial<AutoDjSettings> }[] = [
     { label: "Favorites", settings: { temperature: 0.45, unrated_exploration_percent: 3, recently_played_cooldown_days: 21 } },
     { label: "Discovery", settings: { temperature: 1.25, unrated_exploration_percent: 35, recently_played_cooldown_days: 7 } },
@@ -3001,6 +3299,26 @@ function AutoDjPage({
   const clapTracks = queue.filter((track) => isClapAnalyzed(track)).length;
   const queueKeys = queue.map((track, index) => `${track.id}-${index}`);
   const allQueueSelected = queue.length > 0 && queueKeys.every((key) => selectedQueueKeys.has(key));
+  const filteredSimilarPreview = similarPreview.filter((track) => {
+    if (neighborAnalyzedOnly && !isClapAnalyzed(track)) {
+      return false;
+    }
+    if (neighborMinRating > 0 && (track.rating ?? 0) < neighborMinRating) {
+      return false;
+    }
+    if (neighborGenre.trim() && !display(trackGenre(track), "").toLowerCase().includes(neighborGenre.trim().toLowerCase())) {
+      return false;
+    }
+    return true;
+  });
+
+  useEffect(() => {
+    if (!defaultProfile || appliedDefaultProfileId.current === defaultProfile.id) {
+      return;
+    }
+    appliedDefaultProfileId.current = defaultProfile.id;
+    setSettings({ ...defaultAutoDj, ...defaultProfile.settings });
+  }, [defaultProfile?.id]);
 
   useEffect(() => {
     const seedTrackId = settings.seed_track_id ?? null;
@@ -3102,11 +3420,20 @@ function AutoDjPage({
     writeAutoDjTemplates(next);
   }
 
+  function saveCurrentProfile(isDefault = false) {
+    const name = window.prompt("Recommendation profile name", defaultProfile?.name ?? "Cafe Profile");
+    if (!name?.trim()) {
+      return;
+    }
+    void onSaveRecommendationProfile(name.trim(), settings, isDefault);
+  }
+
   async function handleGenerate() {
     setBusy(true);
     try {
       const response = await generateAutoDj(settings);
       setQueue(response.tracks);
+      setRecommendationDrift(response.drift);
       setStatus(`Generated ${response.tracks.length} tracks`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Queue generation failed");
@@ -3199,6 +3526,57 @@ function AutoDjPage({
               {templates.length === 0 && <div className="text-xs text-muted">Save tuned settings here for later queues.</div>}
             </div>
           </div>
+          <div className="mb-4 rounded border border-line/70 bg-ink p-3">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-medium uppercase text-muted">Recommendation Profiles</div>
+                {defaultProfile && <div className="mt-0.5 truncate text-[11px] text-moss">Default: {defaultProfile.name}</div>}
+              </div>
+              <div className="flex items-center gap-2">
+                <button className="text-xs text-muted hover:text-white" type="button" onClick={() => void onRefreshProfiles()}>
+                  Refresh
+                </button>
+                <button className="text-xs text-moss hover:text-white" type="button" onClick={() => saveCurrentProfile(false)}>
+                  Save
+                </button>
+              </div>
+            </div>
+            <div className="grid max-h-48 gap-1 overflow-auto">
+              {recommendationProfiles.map((profile) => (
+                <div key={profile.id} className="grid gap-1 rounded bg-panel px-2 py-1.5 text-xs">
+                  <button
+                    className="min-w-0 truncate text-left text-neutral-100 hover:text-white"
+                    type="button"
+                    onClick={() => setSettings({ ...defaultAutoDj, ...profile.settings })}
+                    title={profile.name}
+                  >
+                    {profile.name}
+                  </button>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={profile.is_default ? "text-moss" : "text-muted"}>
+                      {profile.is_default ? "default profile" : `${formatShortDate(profile.updated_at)}`}
+                    </span>
+                    <span className="flex items-center gap-2">
+                      {!profile.is_default && (
+                        <button className="text-muted hover:text-moss" type="button" onClick={() => void onSetDefaultRecommendationProfile(profile.id)}>
+                          Default
+                        </button>
+                      )}
+                      <button className="text-muted hover:text-red-300" type="button" onClick={() => void onDeleteRecommendationProfile(profile.id)}>
+                        Delete
+                      </button>
+                    </span>
+                  </div>
+                </div>
+              ))}
+              {recommendationProfiles.length === 0 && (
+                <div className="text-xs text-muted">Profiles persist tuned AutoDJ settings and can become the Settings default.</div>
+              )}
+            </div>
+            <button className="mt-2 w-full text-left text-xs text-muted hover:text-white" type="button" onClick={() => saveCurrentProfile(true)}>
+              Save current settings as default profile
+            </button>
+          </div>
           <div className="grid gap-4">
             <NumberField
               label="Queue Length"
@@ -3272,10 +3650,39 @@ function AutoDjPage({
               <div className="rounded border border-line/70 bg-ink p-3">
                 <div className="mb-2 flex items-center justify-between gap-3">
                   <div className="text-xs font-medium uppercase text-muted">Seed Neighbors</div>
-                  <div className="text-xs text-muted">{isSimilarityLoading ? "Loading" : `${similarPreview.length} shown`}</div>
+                  <div className="text-xs text-muted">{isSimilarityLoading ? "Loading" : `${filteredSimilarPreview.length}/${similarPreview.length} shown`}</div>
+                </div>
+                <div className="mb-2 grid gap-2 text-xs">
+                  <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-panel px-2 py-1.5 text-muted">
+                    <span>Analyzed only</span>
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-moss"
+                      checked={neighborAnalyzedOnly}
+                      onChange={(event) => setNeighborAnalyzedOnly(event.target.checked)}
+                    />
+                  </label>
+                  <div className="grid grid-cols-[1fr_84px] gap-2">
+                    <input
+                      className="h-8 rounded border border-line bg-panel px-2 text-neutral-100 outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
+                      placeholder="Filter genre"
+                      value={neighborGenre}
+                      onChange={(event) => setNeighborGenre(event.target.value)}
+                    />
+                    <select
+                      className="h-8 rounded border border-line bg-panel px-2 text-neutral-100 outline-none ring-moss/40 focus:ring-2"
+                      value={neighborMinRating}
+                      onChange={(event) => setNeighborMinRating(Number(event.target.value))}
+                    >
+                      <option value={0}>Any</option>
+                      <option value={3}>3+</option>
+                      <option value={4}>4+</option>
+                      <option value={4.5}>4.5+</option>
+                    </select>
+                  </div>
                 </div>
                 <div className="grid max-h-56 gap-1 overflow-auto">
-                  {similarPreview.map((track) => (
+                  {filteredSimilarPreview.map((track) => (
                     <div key={track.id} className="flex items-center gap-2 rounded bg-panel px-2 py-1.5 text-xs">
                       <button
                         className="icon-button h-7 w-7 shrink-0"
@@ -3306,7 +3713,7 @@ function AutoDjPage({
                       </div>
                     </div>
                   ))}
-                  {!isSimilarityLoading && similarPreview.length === 0 && (
+                  {!isSimilarityLoading && filteredSimilarPreview.length === 0 && (
                     <div className="text-xs text-muted">Analyze tracks with CLAP or use richer metadata for better neighbors.</div>
                   )}
                 </div>
@@ -3459,6 +3866,39 @@ function AutoDjPage({
               <div className="mt-1 text-xl font-semibold text-moss">{queue.length ? formatPercent((clapTracks / queue.length) * 100) : "--"}</div>
             </div>
           </div>
+          {recommendationDrift.total_tracks > 0 && (
+            <div className="border-b border-line bg-[#15100d] p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-white">Recommendation Drift</div>
+                  <div className="text-xs text-muted">
+                    {recommendationDrift.unique_artists} artists, {recommendationDrift.unique_albums} albums, average rating{" "}
+                    {recommendationDrift.average_rating?.toFixed(2) ?? "unrated"}
+                  </div>
+                </div>
+                <div className="text-xs text-muted">{recommendationDrift.total_tracks} tracks</div>
+              </div>
+              <div className="grid gap-3 md:grid-cols-5">
+                {[
+                  ["Familiar", recommendationDrift.familiar_percent, "bg-moss"],
+                  ["Exploration", recommendationDrift.exploration_percent, "bg-ember"],
+                  ["Unrated", recommendationDrift.unrated_percent, "bg-[#d8b077]"],
+                  ["Artist repeats", recommendationDrift.repeat_artist_percent, "bg-red-300"],
+                  ["CLAP", recommendationDrift.clap_percent, "bg-neutral-300"],
+                ].map(([label, value, color]) => (
+                  <div key={label} className="rounded border border-line/70 bg-panel p-2 text-xs">
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <span className="text-muted">{label}</span>
+                      <span className="tabular-nums text-neutral-100">{Number(value).toFixed(0)}%</span>
+                    </div>
+                    <div className="h-1.5 overflow-hidden rounded bg-ink">
+                      <div className={`h-full rounded ${color}`} style={{ width: `${Math.max(0, Math.min(100, Number(value)))}%` }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <table className="w-full table-fixed text-left text-sm">
             <thead className="sticky top-0 z-10 border-b border-line bg-ink text-xs uppercase text-muted">
               <tr>
@@ -3751,6 +4191,17 @@ function AnalysisPage({
           <p className="text-xs text-muted">{statusText}</p>
         </div>
         <div className="flex items-center gap-2">
+          {clapStatus && (
+            <span
+              className={`rounded border px-2 py-1 text-xs uppercase ${
+                clapReady && Object.keys(clapStatus.dependency_errors ?? {}).length === 0
+                  ? "border-moss/40 bg-moss/10 text-moss"
+                  : "border-ember/50 bg-ember/10 text-ember"
+              }`}
+            >
+              {clapReady ? "analysis ok" : "runtime issue"}
+            </span>
+          )}
           <button className="secondary-button" type="button" onClick={onRefresh}>
             <RefreshCw size={17} />
             Refresh
@@ -4150,10 +4601,24 @@ function SettingsPage({
 
   return (
     <main className="flex min-w-0 flex-1 flex-col">
-      <header className="flex h-16 items-center border-b border-line px-6">
+      <header className="flex h-16 items-center justify-between border-b border-line px-6">
         <div>
           <h1 className="text-lg font-semibold text-white">Settings</h1>
           <p className="text-xs text-muted">{settings?.database_path ?? "Database path loading"}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={`rounded border px-2 py-1 text-xs uppercase ${backendStatusClass}`}>
+            backend {backendStatus}
+          </span>
+          {startupDiagnostics && (
+            <span
+              className={`rounded border px-2 py-1 text-xs uppercase ${
+                startupDiagnostics.ok ? "border-moss/40 bg-moss/10 text-moss" : "border-ember/50 bg-ember/10 text-ember"
+              }`}
+            >
+              self-check {startupDiagnostics.ok ? "ok" : "review"}
+            </span>
+          )}
         </div>
       </header>
       <section className="min-h-0 flex-1 overflow-auto p-6">
@@ -5282,6 +5747,189 @@ function HistoryPage({
   );
 }
 
+function BackendRecoveryPage({
+  backendMessage,
+  backendCheckedAt,
+  onCheckBackend,
+  onRestartBackend,
+  onOpenBackendLog,
+}: {
+  backendMessage: string;
+  backendCheckedAt: string | null;
+  onCheckBackend: () => void;
+  onRestartBackend: () => void;
+  onOpenBackendLog: () => void;
+}) {
+  return (
+    <main className="flex min-w-0 flex-1 flex-col">
+      <header className="flex h-16 items-center border-b border-line px-6">
+        <div>
+          <h1 className="text-lg font-semibold text-white">Recovery</h1>
+          <p className="text-xs text-muted">
+            {backendCheckedAt ? `Backend last checked ${backendCheckedAt}` : "Backend status unavailable"}
+          </p>
+        </div>
+      </header>
+      <section className="grid min-h-0 flex-1 place-items-center overflow-auto p-6">
+        <div className="w-full max-w-2xl rounded border border-ember/40 bg-[#211a15] p-6 shadow-2xl">
+          <div className="mb-4 flex items-start gap-3">
+            <Info className="mt-1 shrink-0 text-ember" size={22} />
+            <div>
+              <h2 className="text-lg font-semibold text-white">FLAC Cafe cannot reach its local backend</h2>
+              <p className="mt-2 text-sm text-muted">{backendMessage}</p>
+            </div>
+          </div>
+          <div className="grid gap-3 text-sm text-neutral-200">
+            <div className="rounded border border-line/70 bg-ink p-3">
+              The UI is still running, but library scans, ratings, playback URLs, and AutoDJ need the Python service on
+              `127.0.0.1:8765`.
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button className="primary-button" type="button" onClick={onCheckBackend}>
+                <RefreshCw size={15} />
+                Check Again
+              </button>
+              <button className="secondary-button" type="button" onClick={onRestartBackend}>
+                <RefreshCw size={15} />
+                Restart Backend
+              </button>
+              <button className="secondary-button" type="button" onClick={onOpenBackendLog}>
+                <FileText size={15} />
+                Open Log
+              </button>
+            </div>
+            <div className="text-xs text-muted">
+              In development, start the backend with `npm run backend:dev`. In the installed app, Restart Backend should relaunch the bundled service.
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function MiniPlayerWindow() {
+  const [snapshot, setSnapshot] = useState<MiniPlayerSnapshot>(readMiniPlayerSnapshot);
+  const track = snapshot.track;
+  const duration = snapshot.duration || track?.duration_seconds || 0;
+  const progressPercent = duration > 0 ? Math.min(100, (snapshot.currentTime / duration) * 100) : 0;
+  const artworkSrc = track ? albumArtworkUrl(track.id) : null;
+  const [artworkFailed, setArtworkFailed] = useState(false);
+
+  useEffect(() => {
+    if (!("BroadcastChannel" in window)) {
+      return;
+    }
+    const channel = new BroadcastChannel(miniPlayerChannelName);
+    channel.onmessage = (event: MessageEvent) => {
+      if (event.data?.type === "snapshot") {
+        setSnapshot(event.data.snapshot as MiniPlayerSnapshot);
+      }
+    };
+    return () => channel.close();
+  }, []);
+
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === storageKeys.miniPlayerSnapshot) {
+        setSnapshot(readMiniPlayerSnapshot());
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  useEffect(() => {
+    setArtworkFailed(false);
+  }, [track?.id]);
+
+  async function closeMiniPlayer() {
+    try {
+      const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+      await getCurrentWebviewWindow().close();
+    } catch {
+      window.close();
+    }
+  }
+
+  return (
+    <main className="flex h-screen min-h-0 flex-col overflow-hidden bg-[#19130f] text-white">
+      <div className="grid h-full grid-cols-[84px_minmax(0,1fr)_92px] items-center gap-3 p-3">
+        <div className="grid h-[72px] w-[72px] place-items-center overflow-hidden rounded border border-line bg-panel text-moss shadow-inner">
+          {artworkSrc && !artworkFailed ? (
+            <img alt="" className="h-full w-full object-cover" src={artworkSrc} onError={() => setArtworkFailed(true)} />
+          ) : (
+            <Coffee size={26} />
+          )}
+        </div>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <div className="truncate text-sm font-semibold">{track ? display(track.title, "Untitled") : "Nothing playing"}</div>
+            {track?.rating !== null && track?.rating !== undefined && (
+              <span className="shrink-0 rounded border border-moss/40 px-1.5 py-0.5 text-[10px] text-moss">
+                {track.rating} star
+              </span>
+            )}
+          </div>
+          <div className="truncate text-xs text-muted">
+            {track ? `${display(track.artist)} - ${display(track.album, "Unknown album")}` : "Use the main window to start a queue"}
+          </div>
+          <div className="mt-3 grid grid-cols-[38px_1fr_38px] items-center gap-2 text-[11px] tabular-nums text-muted">
+            <span className="text-right">{formatPlaybackTime(snapshot.currentTime)}</span>
+            <input
+              aria-label="Mini player position"
+              className="player-progress"
+              disabled={!track || duration <= 0}
+              max={Math.max(duration, 0)}
+              min={0}
+              step={1}
+              style={{ "--progress": `${progressPercent}%` } as CSSProperties}
+              type="range"
+              value={duration > 0 ? Math.min(snapshot.currentTime, duration) : 0}
+              onChange={(event) => sendMiniPlayerCommand({ type: "seek", seconds: Number(event.target.value) })}
+            />
+            <span>{formatPlaybackTime(duration)}</span>
+          </div>
+        </div>
+        <div className="flex h-full flex-col items-end justify-between">
+          <button className="icon-button h-7 w-7" type="button" title="Close mini player" onClick={() => void closeMiniPlayer()}>
+            <X size={13} />
+          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              className="icon-button h-8 w-8"
+              type="button"
+              title="Previous"
+              disabled={!snapshot.hasPrevious}
+              onClick={() => sendMiniPlayerCommand({ type: "previous" })}
+            >
+              <SkipBack size={14} />
+            </button>
+            <button
+              className="grid h-9 w-9 place-items-center rounded-full bg-ember text-ink shadow-sm shadow-black/25 disabled:opacity-50"
+              type="button"
+              title={snapshot.isPlaying ? "Pause" : "Play"}
+              disabled={!track}
+              onClick={() => sendMiniPlayerCommand({ type: "playPause" })}
+            >
+              {snapshot.isPlaying ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
+            </button>
+            <button
+              className="icon-button h-8 w-8"
+              type="button"
+              title="Next"
+              disabled={!snapshot.hasNext}
+              onClick={() => sendMiniPlayerCommand({ type: "next" })}
+            >
+              <SkipForward size={14} />
+            </button>
+          </div>
+        </div>
+      </div>
+    </main>
+  );
+}
+
 function PlayerBar({
   currentTrack,
   queue,
@@ -5295,6 +5943,7 @@ function PlayerBar({
   miniPlayer,
   playbackMode,
   setPlaybackMode,
+  onOpenMiniPlayer,
   setStatus,
 }: {
   currentTrack: Track | null;
@@ -5309,6 +5958,7 @@ function PlayerBar({
   miniPlayer: boolean;
   playbackMode: PlaybackMode;
   setPlaybackMode: (mode: PlaybackMode) => void;
+  onOpenMiniPlayer: () => void | Promise<void>;
   setStatus: (message: string) => void;
 }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -5319,6 +5969,8 @@ function PlayerBar({
   const crossfadeTrackRef = useRef<number | null>(null);
   const handoffRef = useRef<{ trackId: number; currentTime: number } | null>(null);
   const smtcActionRef = useRef<(payload: SmtcButtonPayload) => void>(() => {});
+  const miniPlayerChannelRef = useRef<BroadcastChannel | null>(null);
+  const miniPlayerCommandRef = useRef<(command: MiniPlayerCommand) => void>(() => {});
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -5337,6 +5989,27 @@ function PlayerBar({
     return () => {
       cancelFade();
       cancelCrossfade();
+      miniPlayerChannelRef.current?.close();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!("BroadcastChannel" in window)) {
+      return;
+    }
+    const channel = new BroadcastChannel(miniPlayerChannelName);
+    miniPlayerChannelRef.current = channel;
+    channel.onmessage = (event: MessageEvent) => {
+      if (event.data?.type !== "command") {
+        return;
+      }
+      miniPlayerCommandRef.current(event.data.command as MiniPlayerCommand);
+    };
+    return () => {
+      if (miniPlayerChannelRef.current === channel) {
+        miniPlayerChannelRef.current = null;
+      }
+      channel.close();
     };
   }, []);
 
@@ -5638,6 +6311,18 @@ function PlayerBar({
 
   const artworkSrc = currentTrack && !artworkFailed ? albumArtworkUrl(currentTrack.id) : null;
 
+  miniPlayerCommandRef.current = (command: MiniPlayerCommand) => {
+    if (command.type === "playPause") {
+      void togglePlayback();
+    } else if (command.type === "previous") {
+      playRelative(-1);
+    } else if (command.type === "next") {
+      playRelative(1);
+    } else if (command.type === "seek") {
+      seekTo(command.seconds);
+    }
+  };
+
   smtcActionRef.current = (payload: SmtcButtonPayload) => {
     if (payload.command === "play") {
       if (currentTrack && audioRef.current?.paused) {
@@ -5695,6 +6380,18 @@ function PlayerBar({
       canNext: hasNext,
     }).catch(() => {
       // SMTC is best-effort; playback should never depend on Windows media UI.
+    });
+  }, [currentTrack, isPlaying, smtcPositionSecond, effectiveDuration, hasPrevious, hasNext]);
+
+  useEffect(() => {
+    publishMiniPlayerSnapshot(miniPlayerChannelRef.current, {
+      track: currentTrack ? miniPlayerTrackSnapshot(currentTrack) : null,
+      isPlaying,
+      currentTime,
+      duration: effectiveDuration,
+      hasPrevious,
+      hasNext,
+      updatedAt: new Date().toISOString(),
     });
   }, [currentTrack, isPlaying, smtcPositionSecond, effectiveDuration, hasPrevious, hasNext]);
 
@@ -5841,6 +6538,14 @@ function PlayerBar({
         )}
         <div className="mt-2 flex justify-end gap-1">
           <button
+            className="icon-button h-7 w-7"
+            type="button"
+            title="Open detached mini player"
+            onClick={() => void onOpenMiniPlayer()}
+          >
+            <ExternalLink size={13} />
+          </button>
+          <button
             className={`icon-button h-7 w-7 ${
               playbackMode === "repeatQueue" || playbackMode === "repeatOne" ? "border-moss text-moss" : ""
             }`}
@@ -5873,10 +6578,16 @@ function PlayerBar({
 }
 
 export default function App() {
+  if (new URLSearchParams(window.location.search).get("miniPlayer") === "1") {
+    return <MiniPlayerWindow />;
+  }
+
   const [activePage, setActivePage] = useState<Page>(() => readUiPreferences().startupPage);
   const [tracks, setTracks] = useState<Track[]>([]);
   const [queue, setQueue] = useState<QueueTrack[]>([]);
   const [autoDjAvoidRules, setAutoDjAvoidRules] = useState<AutoDjAvoidRule[]>([]);
+  const [recommendationProfiles, setRecommendationProfiles] = useState<RecommendationProfile[]>([]);
+  const [recommendationDrift, setRecommendationDrift] = useState<RecommendationDrift>(emptyRecommendationDrift);
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
   const [writeRatingsToFiles, setWriteRatingsToFiles] = useState(false);
   const [folderPath, setFolderPath] = useState("");
@@ -6142,6 +6853,14 @@ export default function App() {
     }
   }
 
+  async function loadRecommendationProfiles() {
+    try {
+      setRecommendationProfiles(await fetchRecommendationProfiles());
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not load recommendation profiles");
+    }
+  }
+
   async function loadSettings() {
     try {
       const response = await fetchSettings();
@@ -6225,6 +6944,32 @@ export default function App() {
       setBackendMessage(message);
       setBackendCheckedAt(new Date().toLocaleTimeString());
       setStatus(message);
+    }
+  }
+
+  async function handleOpenDetachedMiniPlayer() {
+    try {
+      const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+      const existing = await WebviewWindow.getByLabel("mini-player");
+      if (existing) {
+        await existing.setFocus();
+        return;
+      }
+      const miniWindow = new WebviewWindow("mini-player", {
+        title: "FLAC Cafe Mini Player",
+        url: "/index.html?miniPlayer=1",
+        width: 560,
+        height: 128,
+        minWidth: 420,
+        minHeight: 118,
+        resizable: true,
+        decorations: true,
+      });
+      miniWindow.once("tauri://error", (event) => {
+        setStatus(`Could not open mini player: ${String(event.payload)}`);
+      });
+    } catch {
+      setStatus("Detached mini player is available in the Tauri desktop app.");
     }
   }
 
@@ -6711,6 +7456,24 @@ export default function App() {
     }
   }
 
+  async function handleBulkMetadata(trackIds: number[], metadata: TrackMetadataUpdate) {
+    const uniqueIds = Array.from(new Set(trackIds));
+    if (!uniqueIds.length || Object.keys(metadata).length === 0) {
+      return;
+    }
+    try {
+      const updatedTracks = await Promise.all(uniqueIds.map((trackId) => updateTrackMetadata(trackId, metadata)));
+      for (const updated of updatedTracks) {
+        replaceTrackEverywhere(updated);
+      }
+      await Promise.all([loadAlbums(), loadLibraryStats()]);
+      setStatus(`Updated metadata for ${updatedTracks.length} track${updatedTracks.length === 1 ? "" : "s"}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Bulk metadata update failed");
+      await refreshTracks();
+    }
+  }
+
   async function handleSelectAlbum(albumId: number) {
     setSelectedAlbumId(albumId);
     try {
@@ -6944,12 +7707,14 @@ export default function App() {
     try {
       const response = await generateAutoDj({
         ...defaultAutoDj,
+        ...(recommendationProfiles.find((profile) => profile.is_default)?.settings ?? {}),
         queue_length: uiPreferences.defaultQueueLength,
         temperature: uiPreferences.defaultTemperature,
         seed_track_id: seedTrack?.id ?? null,
         similarity_weight: seedTrack ? uiPreferences.similarityWeight : 0,
       });
       setQueue(response.tracks);
+      setRecommendationDrift(response.drift);
       if (response.tracks[0]) {
         setPlaybackQueue(response.tracks);
         setAutoPlayOnTrackChange(true);
@@ -6997,6 +7762,34 @@ export default function App() {
       setStatus("Removed AutoDJ avoid rule");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not remove AutoDJ avoid rule");
+    }
+  }
+
+  async function handleSaveRecommendationProfile(name: string, profileSettings: AutoDjSettings, isDefault: boolean) {
+    try {
+      const saved = await saveRecommendationProfile({ name, settings: profileSettings, is_default: isDefault });
+      await loadRecommendationProfiles();
+      setStatus(`${saved.name} recommendation profile saved${saved.is_default ? " as default" : ""}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not save recommendation profile");
+    }
+  }
+
+  async function handleSetDefaultRecommendationProfile(profileId: number) {
+    try {
+      setRecommendationProfiles(await setDefaultRecommendationProfile(profileId));
+      setStatus("Default recommendation profile updated");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not update default profile");
+    }
+  }
+
+  async function handleDeleteRecommendationProfile(profileId: number) {
+    try {
+      setRecommendationProfiles(await deleteRecommendationProfile(profileId));
+      setStatus("Recommendation profile deleted");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not delete recommendation profile");
     }
   }
 
@@ -7379,6 +8172,7 @@ export default function App() {
     void loadLibraryStats();
     void loadHistory();
     void loadAutoDjAvoidRules();
+    void loadRecommendationProfiles();
   }, []);
 
   useEffect(() => {
@@ -7515,7 +8309,15 @@ export default function App() {
       />
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="min-h-0 flex flex-1">
-          {activePage === "library" && (
+          {backendStatus === "down" ? (
+            <BackendRecoveryPage
+              backendMessage={backendMessage}
+              backendCheckedAt={backendCheckedAt}
+              onCheckBackend={() => void checkBackendStatus(true)}
+              onRestartBackend={() => void handleRestartBackend()}
+              onOpenBackendLog={() => void handleOpenBackendLog()}
+            />
+          ) : activePage === "library" ? (
             <LibraryPage
               tracks={tracks}
               totalTracks={libraryTotal}
@@ -7560,6 +8362,7 @@ export default function App() {
               onDeleteTrack={handleDeleteTrack}
               onDeleteTracks={handleDeleteTracks}
               onEditTrack={setMetadataEditTrack}
+              onBulkMetadata={handleBulkMetadata}
               onRequestDeleteTracks={requestDeleteTracks}
               onRemoveTrackFromPlaylist={handleRemoveTrackFromPlaylist}
               onRemoveTracksFromPlaylist={handleRemoveTracksFromPlaylist}
@@ -7584,6 +8387,7 @@ export default function App() {
               hideFilePaths={hideFilePaths}
               compactRows={uiPreferences.compactLibraryRows}
               albumGrid={uiPreferences.albumGrid}
+              writeRatingsToFiles={writeRatingsToFiles}
               libraryVisibleColumns={libraryVisibleColumns}
               setLibraryVisibleColumns={setLibraryVisibleColumns}
               setTargetPlaylistId={setTargetPlaylistId}
@@ -7595,8 +8399,7 @@ export default function App() {
               onOpenSettings={() => setActivePage("settings")}
               onOpenAnalysis={() => setActivePage("analysis")}
             />
-          )}
-          {activePage === "analysis" && (
+          ) : activePage === "analysis" ? (
             <AnalysisPage
               clapStatus={clapStatus}
               coverage={audioAnalysisCoverage}
@@ -7629,8 +8432,7 @@ export default function App() {
               onResume={() => void handleResumeAudioAnalysis()}
               onCancel={() => void handleCancelAudioAnalysis()}
             />
-          )}
-          {activePage === "nowPlaying" && (
+          ) : activePage === "nowPlaying" ? (
             <NowPlayingPage
               currentTrack={currentTrack}
               lyrics={lyrics}
@@ -7646,8 +8448,7 @@ export default function App() {
               onRestoreQueue={handleRestorePlaybackQueue}
               canRestoreQueue={queueHistory.length > 0}
             />
-          )}
-          {activePage === "artist" && (
+          ) : activePage === "artist" ? (
             <ArtistPage
               currentTrack={currentTrack}
               artistInfo={artistInfo}
@@ -7656,19 +8457,18 @@ export default function App() {
               onRefresh={() => void loadArtistInfo(true)}
               onPlayTrack={handlePlayTrack}
             />
-          )}
-          {activePage === "history" && (
+          ) : activePage === "history" ? (
             <HistoryPage
               events={historyEvents}
               stats={libraryStats}
               onPlayTrack={handlePlayTrack}
               onRefresh={() => void loadHistory()}
             />
-          )}
-          {activePage === "autodj" && (
+          ) : activePage === "autodj" ? (
             <AutoDjPage
               queue={queue}
               setQueue={setQueue}
+              setRecommendationDrift={setRecommendationDrift}
               setStatus={setStatus}
               onPlayTrack={handlePlayTrack}
               onAddTracksToPlaylist={handleAddTracksToPlaylist}
@@ -7677,9 +8477,14 @@ export default function App() {
               uiPreferences={uiPreferences}
               avoidRules={autoDjAvoidRules}
               onDeleteAvoidRule={(ruleId) => void handleDeleteAutoDjAvoidRule(ruleId)}
+              recommendationProfiles={recommendationProfiles}
+              recommendationDrift={recommendationDrift}
+              onRefreshProfiles={loadRecommendationProfiles}
+              onSaveRecommendationProfile={handleSaveRecommendationProfile}
+              onDeleteRecommendationProfile={handleDeleteRecommendationProfile}
+              onSetDefaultRecommendationProfile={handleSetDefaultRecommendationProfile}
             />
-          )}
-          {activePage === "settings" && (
+          ) : activePage === "settings" ? (
             <SettingsPage
               settings={settings}
               folderPath={folderPath}
@@ -7728,7 +8533,7 @@ export default function App() {
               onCopySupportBundlePath={handleCopySupportBundlePath}
               onClearArtistCache={handleClearArtistCache}
             />
-          )}
+          ) : null}
         </div>
         <PlayerBar
           currentTrack={currentTrack}
@@ -7743,6 +8548,7 @@ export default function App() {
           miniPlayer={uiPreferences.playerLayout === "compact" || uiPreferences.miniPlayer}
           playbackMode={playbackMode}
           setPlaybackMode={setPlaybackMode}
+          onOpenMiniPlayer={handleOpenDetachedMiniPlayer}
           setStatus={setStatus}
         />
       </div>

@@ -4,6 +4,7 @@ import os
 import json
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -82,6 +83,27 @@ class ApiTests(unittest.TestCase):
         self.assertGreaterEqual(body["file_count"], 3)
         bundle_path = Path(body["bundle_path"])
         self.assertTrue(bundle_path.exists())
+        bundle_path.unlink(missing_ok=True)
+
+    def test_support_bundle_includes_redacted_scan_error_sample(self) -> None:
+        with connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO scan_error_samples(path_hash, folder_hash, extension, message)
+                VALUES('pathhash', 'folderhash', '.flac', 'synthetic scan failure')
+                """
+            )
+            conn.commit()
+
+        response = self.client.post("/diagnostics/support-bundle")
+
+        self.assertEqual(response.status_code, 200)
+        bundle_path = Path(response.json()["bundle_path"])
+        with zipfile.ZipFile(bundle_path) as archive:
+            payload = json.loads(archive.read("scan-errors.sample.redacted.json"))
+        self.assertEqual(payload[0]["path_hash"], "pathhash")
+        self.assertEqual(payload[0]["message"], "synthetic scan failure")
+        self.assertNotIn(str(self.root), json.dumps(payload))
         bundle_path.unlink(missing_ok=True)
 
     def test_scan_endpoint_rejects_missing_folder(self) -> None:
@@ -220,6 +242,64 @@ class ApiTests(unittest.TestCase):
         self.assertGreaterEqual(len(body), 1)
         self.assertEqual(body[0]["id"], close_id)
         self.assertGreater(body[0]["audio_similarity"], 0.9)
+
+    def test_autodj_generate_returns_drift_summary(self) -> None:
+        for index in range(5):
+            audio_file = self.root / f"queue-{index}.mp3"
+            audio_file.write_bytes(b"audio")
+            insert_track(
+                audio_file,
+                title=f"Queue {index}",
+                artist=f"Artist {index % 2}",
+                album=f"Album {index}",
+                rating=5.0 if index == 0 else None,
+                analysis_embedding=json.dumps([1.0, float(index)]),
+                duration_seconds=180 + index,
+            )
+
+        response = self.client.post(
+            "/autodj/generate",
+            json={"queue_length": 4, "seed": 123, "temperature": 0.8, "unrated_exploration_percent": 25},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(len(body["tracks"]), 4)
+        self.assertEqual(body["drift"]["total_tracks"], 4)
+        self.assertGreaterEqual(body["drift"]["exploration_percent"], 0)
+        self.assertIn("average_rating", body["drift"])
+
+    def test_recommendation_profiles_round_trip_and_default(self) -> None:
+        create_response = self.client.post(
+            "/autodj/profiles",
+            json={
+                "name": "Late Night",
+                "is_default": True,
+                "settings": {"queue_length": 12, "temperature": 1.1, "artist_cooldown": 4},
+            },
+        )
+
+        self.assertEqual(create_response.status_code, 200)
+        profile = create_response.json()
+        self.assertTrue(profile["is_default"])
+        self.assertEqual(profile["settings"]["queue_length"], 12)
+
+        second_response = self.client.post(
+            "/autodj/profiles",
+            json={"name": "Deep Cuts", "settings": {"queue_length": 20, "unrated_exploration_percent": 30}},
+        )
+        self.assertEqual(second_response.status_code, 200)
+        second_id = second_response.json()["id"]
+
+        default_response = self.client.post(f"/autodj/profiles/{second_id}/default")
+        self.assertEqual(default_response.status_code, 200)
+        defaults = [item for item in default_response.json() if item["is_default"]]
+        self.assertEqual(len(defaults), 1)
+        self.assertEqual(defaults[0]["name"], "Deep Cuts")
+
+        delete_response = self.client.delete(f"/autodj/profiles/{second_id}")
+        self.assertEqual(delete_response.status_code, 200)
+        self.assertNotIn(second_id, {item["id"] for item in delete_response.json()})
 
 
 if __name__ == "__main__":

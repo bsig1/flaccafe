@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import hashlib
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -95,6 +96,15 @@ def file_fingerprint(path: Path) -> str:
     return digest.hexdigest()
 
 
+def file_modified_at(path: Path) -> str:
+    return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).replace(microsecond=0).isoformat()
+
+
+def file_state(path: Path) -> tuple[str, int]:
+    stat = path.stat()
+    return datetime.fromtimestamp(stat.st_mtime, timezone.utc).replace(microsecond=0).isoformat(), int(stat.st_size)
+
+
 def read_metadata(path: Path) -> dict[str, Any]:
     audio = MutagenFile(path, easy=True)
     if audio is None:
@@ -124,10 +134,80 @@ def read_metadata(path: Path) -> dict[str, Any]:
         "bitrate": bitrate,
         "audio_fingerprint": file_fingerprint(path),
         "rating": parse_rating(tags),
-        "file_modified_at": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
-        .replace(microsecond=0)
-        .isoformat(),
+        "file_modified_at": file_modified_at(path),
     }
+
+
+def read_metadata_cached(conn, path: Path) -> dict[str, Any]:
+    modified_at, file_size = file_state(path)
+    key = path_key(path)
+    row = conn.execute(
+        """
+        SELECT metadata_json
+        FROM track_metadata_cache
+        WHERE path_key = ? AND file_modified_at = ? AND file_size = ?
+        """,
+        (key, modified_at, file_size),
+    ).fetchone()
+    if row is not None:
+        try:
+            metadata = json.loads(row["metadata_json"])
+            metadata["path"] = str(path.resolve())
+            metadata["path_key"] = key
+            metadata["file_modified_at"] = modified_at
+            return metadata
+        except (TypeError, ValueError, json.JSONDecodeError):
+            conn.execute("DELETE FROM track_metadata_cache WHERE path_key = ?", (key,))
+
+    metadata = read_metadata(path)
+    conn.execute(
+        """
+        INSERT INTO track_metadata_cache(path_key, path, file_modified_at, file_size, metadata_json, updated_at)
+        VALUES(?, ?, ?, ?, ?, ?)
+        ON CONFLICT(path_key) DO UPDATE SET
+          path = excluded.path,
+          file_modified_at = excluded.file_modified_at,
+          file_size = excluded.file_size,
+          metadata_json = excluded.metadata_json,
+          updated_at = excluded.updated_at
+        """,
+        (
+            key,
+            str(path.resolve()),
+            modified_at,
+            file_size,
+            json.dumps(metadata, ensure_ascii=True, sort_keys=True),
+            utc_now(),
+        ),
+    )
+    return metadata
+
+
+def anonymized_hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8", errors="ignore")).hexdigest()[:16]
+
+
+def record_scan_error(conn, folder: Path, audio_path: Path, error: Exception) -> None:
+    conn.execute(
+        """
+        INSERT INTO scan_error_samples(path_hash, folder_hash, extension, message)
+        VALUES(?, ?, ?, ?)
+        """,
+        (
+            anonymized_hash(path_key(audio_path)),
+            anonymized_hash(path_key(folder)),
+            audio_path.suffix.lower(),
+            str(error)[:500],
+        ),
+    )
+    conn.execute(
+        """
+        DELETE FROM scan_error_samples
+        WHERE id NOT IN (
+          SELECT id FROM scan_error_samples ORDER BY datetime(created_at) DESC, id DESC LIMIT 200
+        )
+        """
+    )
 
 
 @dataclass
@@ -286,7 +366,7 @@ def scan_folder(
             if progress_callback:
                 progress_callback(stats, index - 1, len(files), audio_path, "scanning")
             try:
-                result = upsert_track(conn, read_metadata(audio_path))
+                result = upsert_track(conn, read_metadata_cached(conn, audio_path))
                 if result == "inserted":
                     stats.inserted += 1
                 else:
@@ -294,6 +374,10 @@ def scan_folder(
             except Exception as exc:  # Keep one bad file from stopping a library scan.
                 stats.skipped += 1
                 stats.errors.append(f"{audio_path}: {exc}")
+                try:
+                    record_scan_error(conn, folder, audio_path, exc)
+                except Exception:
+                    pass
             if progress_callback:
                 progress_callback(stats, index, len(files), audio_path, "scanning")
         if progress_callback:

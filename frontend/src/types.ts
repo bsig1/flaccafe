@@ -395,6 +395,28 @@ export interface AutoDjAvoidRule {
 export interface AutoDjResponse {
   tracks: QueueTrack[];
   settings: AutoDjSettings;
+  drift: RecommendationDrift;
+}
+
+export interface RecommendationDrift {
+  total_tracks: number;
+  familiar_percent: number;
+  exploration_percent: number;
+  repeat_artist_percent: number;
+  unrated_percent: number;
+  clap_percent: number;
+  average_rating: number | null;
+  unique_artists: number;
+  unique_albums: number;
+}
+
+export interface RecommendationProfile {
+  id: number;
+  name: string;
+  settings: AutoDjSettings;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface ExportResponse {

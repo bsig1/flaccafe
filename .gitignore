@@ -15,6 +15,7 @@ backend/data/*.sqlite3
 backend/data/*.sqlite3-*
 backend/exports/*.m3u
 backend/exports/*.zip
+docs/release-notes/preview.md
 backend/ml-runtime/
 backend/models/clap/*
 !backend/models/clap/.gitkeep
