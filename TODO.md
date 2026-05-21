@@ -9,9 +9,8 @@
 - Add an optional true acoustic fingerprint pass for duplicates that do not share exact file chunks.
 - Add batch duplicate actions for very large duplicate sets: keep best, remove selected, reveal selected, and export review report.
 - Add CSV import profiles with saved column mappings, conflict review, and "clear blank fields" controls.
-- Add a CSV dry-run report export that captures skipped rows and per-field changes.
-- Extend the new filename-tag inference tool with saved pattern presets and per-track accept/reject controls.
-- Extend the new tag-based file organizer with selected-track scope, collision auto-renaming options, and empty-folder cleanup after moves.
+- Extend the filename-tag inference tool with per-track accept/reject controls and import/export for saved pattern presets.
+- Extend the tag-based file organizer with selected-track scope and a reviewable move report before applying large batches.
 - Add an undo log for bulk metadata imports and file organization batches.
 
 ## MusicBee-Inspired Feature Gaps
@@ -43,6 +42,7 @@
 - Add a keyboard shortcut editor instead of hard-coded shortcuts only.
 - Continue splitting the largest page files, especially Library and AutoDJ, into smaller focused components.
 - Add an in-app report viewer for CSV import previews, file organization previews, and profile comparison JSON exports.
+- Add richer inline feedback after saving/deleting local tool presets instead of relying only on disabled button states.
 
 ## Recommendations
 - Add A/B feedback controls that compare two generated queues and learn from the chosen one.
@@ -50,9 +50,8 @@
 - Add import/share support for exported recommendation profile comparison reports.
 
 ## Documentation
-- Add a route-doc freshness check that compares `docs/backend-routes.md` against `backend/app/main.py`.
 - Add screenshots to the README once the FLAC Cafe theme settles.
-- Add a user guide for CSV metadata cleanup, including safe spreadsheet editing examples.
+- Add a release documentation checklist that verifies README, route docs, and user guides before packaging.
 
 ## Project
 - Add release artifacts to CI once MSI builds are reliable enough to publish from GitHub Actions.

@@ -78,6 +78,8 @@ from .schemas import (
     CsvMetadataExportRequest,
     CsvMetadataExportResponse,
     CsvMetadataImportPreview,
+    CsvMetadataImportReportRequest,
+    CsvMetadataImportReportResponse,
     CsvMetadataImportRequest,
     CsvMetadataImportResponse,
     DuplicateGroup,
@@ -2133,6 +2135,19 @@ def resolve_csv_tool_path(csv_path: str | None, default_name: str | None = None)
     return target
 
 
+def resolve_json_tool_path(json_path: str | None, default_name: str) -> Path:
+    text = json_path.strip() if json_path else ""
+    if text:
+        target = Path(text).expanduser()
+        if not target.is_absolute():
+            target = (EXPORT_DIR / target).resolve()
+    else:
+        target = EXPORT_DIR / default_name
+    if target.suffix.lower() != ".json":
+        target = target.with_suffix(".json")
+    return target
+
+
 def csv_text(value: object) -> str | None:
     if value is None:
         return None
@@ -2241,140 +2256,41 @@ def csv_import_track(conn, row: dict[str, str | None], allowed_ids: set[int] | N
     return track
 
 
-@app.post("/library/maintenance/clear", response_model=CacheClearResponse)
-def clear_library_caches(request: CacheClearRequest) -> CacheClearResponse:
-    table_by_target = {
-        "artist": "artist_info_cache",
-        "artwork": "artwork_cache",
-        "metadata": "track_metadata_cache",
-        "recommendation_history": "recommendation_runs",
-        "scan_errors": "scan_error_samples",
-    }
-    cleared: dict[str, int] = {}
-    with connect() as conn:
-        for target in dict.fromkeys(request.targets):
-            table = table_by_target[target]
-            cursor = conn.execute(f"DELETE FROM {table}")
-            cleared[target] = int(cursor.rowcount if cursor.rowcount is not None else 0)
-        conn.commit()
-    return CacheClearResponse(cleared=cleared)
+def unique_collision_path(target_path: Path) -> Path:
+    if not target_path.exists():
+        return target_path
+    parent = target_path.parent
+    stem = target_path.stem
+    suffix = target_path.suffix
+    for index in range(2, 10000):
+        candidate = parent / f"{stem} ({index}){suffix}"
+        if not candidate.exists():
+            return candidate.resolve()
+    raise OSError("Could not find an available target filename")
 
 
-@app.post("/library/tools/infer-tags", response_model=FilenameTagInferenceResponse)
-def infer_tags_from_filenames(request: FilenameTagInferenceRequest) -> FilenameTagInferenceResponse:
-    previews: list[FilenameTagInferencePreview] = []
-    matches = 0
-    applied = 0
-    with connect() as conn:
-        library_path = get_setting(conn, "library_path")
-        library_root = Path(library_path).expanduser().resolve() if library_path else None
-        rows = tool_track_rows(conn, request.track_ids, request.limit)
-        for track in rows:
-            inferred = infer_metadata_from_filename(Path(track["path"]), request.pattern, library_root) or {}
-            changes = changed_metadata(track, inferred, request.missing_only) if inferred else {}
-            preview = FilenameTagInferencePreview(
-                track_id=int(track["id"]),
-                path=track["path"],
-                matched=bool(inferred),
-                current=current_metadata(track),
-                inferred=inferred,
-                changed_fields=sorted(changes.keys()),
-            )
-            if inferred:
-                matches += 1
-            if request.apply and changes:
-                try:
-                    apply_track_metadata_update(conn, int(track["id"]), changes)
-                    preview.applied = True
-                    applied += 1
-                except HTTPException as exc:
-                    preview.error = str(exc.detail)
-            previews.append(preview)
-        if request.apply:
-            conn.commit()
-    return FilenameTagInferenceResponse(total=len(previews), matches=matches, applied=applied, previews=previews)
-
-
-@app.post("/library/tools/organize-files", response_model=FileOrganizationResponse)
-def organize_files_from_tags(request: FileOrganizationRequest) -> FileOrganizationResponse:
-    with connect() as conn:
-        library_path = get_setting(conn, "library_path")
-        base_folder = Path(request.base_folder or library_path or APP_STORAGE_ROOT / "organized-library").expanduser().resolve()
-        rows = tool_track_rows(conn, request.track_ids, request.limit)
-        changes: list[FileOrganizationChange] = []
-        applied = 0
-        for track in rows:
-            current_path = Path(track["path"])
-            target_path = organization_target_path(track, base_folder, request.template)
-            changed = path_key(current_path) != path_key(target_path)
-            collision = target_path.exists() and path_key(current_path) != path_key(target_path)
-            change = FileOrganizationChange(
-                track_id=int(track["id"]),
-                title=track.get("title"),
-                artist=track.get("artist"),
-                current_path=str(current_path),
-                target_path=str(target_path),
-                changed=changed,
-                collision=collision,
-            )
-            if request.apply and changed:
-                if not current_path.exists():
-                    change.error = "Source file is missing"
-                elif collision:
-                    change.error = "Target file already exists"
-                else:
-                    try:
-                        target_path.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.move(str(current_path), str(target_path))
-                        modified_at = datetime.fromtimestamp(target_path.stat().st_mtime, timezone.utc).replace(microsecond=0).isoformat()
-                        old_key = track["path_key"] if "path_key" in track else path_key(current_path)
-                        new_key = path_key(target_path)
-                        conn.execute(
-                            """
-                            UPDATE tracks
-                            SET path = ?, path_key = ?, file_modified_at = ?, updated_at = datetime('now')
-                            WHERE id = ?
-                            """,
-                            (str(target_path), new_key, modified_at, int(track["id"])),
-                        )
-                        conn.execute("DELETE FROM track_metadata_cache WHERE path_key IN (?, ?)", (old_key, new_key))
-                        change.applied = True
-                        applied += 1
-                    except OSError as exc:
-                        change.error = f"Could not move file: {exc}"
-            changes.append(change)
-        if request.apply:
-            conn.commit()
-    return FileOrganizationResponse(
-        template=request.template,
-        base_folder=str(base_folder),
-        total=len(changes),
-        changes=changes,
-        changed_count=sum(1 for change in changes if change.changed),
-        applied=applied,
-    )
-
-
-@app.post("/library/tools/export-metadata-csv", response_model=CsvMetadataExportResponse)
-def export_metadata_csv(request: CsvMetadataExportRequest) -> CsvMetadataExportResponse:
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    target = resolve_csv_tool_path(request.csv_path, f"flac-cafe-metadata-{stamp}.csv")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with connect() as conn:
-        rows = metadata_csv_rows(conn, request.track_ids, request.limit)
+def remove_empty_source_folders(source_parent: Path, cleanup_root: Path | None) -> int:
+    if cleanup_root is None:
+        return 0
+    removed = 0
     try:
-        with target.open("w", encoding="utf-8-sig", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=METADATA_CSV_COLUMNS, extrasaction="ignore")
-            writer.writeheader()
-            for row in rows:
-                writer.writerow({column: row.get(column) for column in METADATA_CSV_COLUMNS})
-    except OSError as exc:
-        raise HTTPException(status_code=400, detail=f"Could not write CSV: {exc}") from exc
-    return CsvMetadataExportResponse(csv_path=str(target), track_count=len(rows), columns=METADATA_CSV_COLUMNS)
+        current = source_parent.resolve()
+        root = cleanup_root.resolve()
+        current.relative_to(root)
+    except (OSError, ValueError):
+        return 0
+
+    while current != root:
+        try:
+            current.rmdir()
+        except OSError:
+            break
+        removed += 1
+        current = current.parent
+    return removed
 
 
-@app.post("/library/tools/import-metadata-csv", response_model=CsvMetadataImportResponse)
-def import_metadata_csv(request: CsvMetadataImportRequest) -> CsvMetadataImportResponse:
+def build_metadata_csv_import_response(request: CsvMetadataImportRequest) -> CsvMetadataImportResponse:
     source = resolve_csv_tool_path(request.csv_path)
     if not source.exists():
         raise HTTPException(status_code=400, detail="CSV file does not exist")
@@ -2443,6 +2359,192 @@ def import_metadata_csv(request: CsvMetadataImportRequest) -> CsvMetadataImportR
         applied=applied,
         errors=errors[:50],
         previews=previews,
+    )
+
+
+@app.post("/library/maintenance/clear", response_model=CacheClearResponse)
+def clear_library_caches(request: CacheClearRequest) -> CacheClearResponse:
+    table_by_target = {
+        "artist": "artist_info_cache",
+        "artwork": "artwork_cache",
+        "metadata": "track_metadata_cache",
+        "recommendation_history": "recommendation_runs",
+        "scan_errors": "scan_error_samples",
+    }
+    cleared: dict[str, int] = {}
+    with connect() as conn:
+        for target in dict.fromkeys(request.targets):
+            table = table_by_target[target]
+            cursor = conn.execute(f"DELETE FROM {table}")
+            cleared[target] = int(cursor.rowcount if cursor.rowcount is not None else 0)
+        conn.commit()
+    return CacheClearResponse(cleared=cleared)
+
+
+@app.post("/library/tools/infer-tags", response_model=FilenameTagInferenceResponse)
+def infer_tags_from_filenames(request: FilenameTagInferenceRequest) -> FilenameTagInferenceResponse:
+    previews: list[FilenameTagInferencePreview] = []
+    matches = 0
+    applied = 0
+    with connect() as conn:
+        library_path = get_setting(conn, "library_path")
+        library_root = Path(library_path).expanduser().resolve() if library_path else None
+        rows = tool_track_rows(conn, request.track_ids, request.limit)
+        for track in rows:
+            inferred = infer_metadata_from_filename(Path(track["path"]), request.pattern, library_root) or {}
+            changes = changed_metadata(track, inferred, request.missing_only) if inferred else {}
+            preview = FilenameTagInferencePreview(
+                track_id=int(track["id"]),
+                path=track["path"],
+                matched=bool(inferred),
+                current=current_metadata(track),
+                inferred=inferred,
+                changed_fields=sorted(changes.keys()),
+            )
+            if inferred:
+                matches += 1
+            if request.apply and changes:
+                try:
+                    apply_track_metadata_update(conn, int(track["id"]), changes)
+                    preview.applied = True
+                    applied += 1
+                except HTTPException as exc:
+                    preview.error = str(exc.detail)
+            previews.append(preview)
+        if request.apply:
+            conn.commit()
+    return FilenameTagInferenceResponse(total=len(previews), matches=matches, applied=applied, previews=previews)
+
+
+@app.post("/library/tools/organize-files", response_model=FileOrganizationResponse)
+def organize_files_from_tags(request: FileOrganizationRequest) -> FileOrganizationResponse:
+    with connect() as conn:
+        library_path = get_setting(conn, "library_path")
+        library_root = Path(library_path).expanduser().resolve() if library_path else None
+        base_folder = Path(request.base_folder or library_path or APP_STORAGE_ROOT / "organized-library").expanduser().resolve()
+        rows = tool_track_rows(conn, request.track_ids, request.limit)
+        changes: list[FileOrganizationChange] = []
+        applied = 0
+        removed_empty_folders = 0
+        for track in rows:
+            current_path = Path(track["path"])
+            target_path = organization_target_path(track, base_folder, request.template)
+            initial_target_path = target_path
+            changed = path_key(current_path) != path_key(initial_target_path)
+            collision = initial_target_path.exists() and path_key(current_path) != path_key(initial_target_path)
+            if changed and collision and request.collision_strategy == "auto_rename":
+                try:
+                    target_path = unique_collision_path(initial_target_path)
+                except OSError:
+                    target_path = initial_target_path
+            change = FileOrganizationChange(
+                track_id=int(track["id"]),
+                title=track.get("title"),
+                artist=track.get("artist"),
+                current_path=str(current_path),
+                target_path=str(target_path),
+                changed=changed,
+                collision=collision,
+            )
+            if request.apply and changed:
+                if not current_path.exists():
+                    change.error = "Source file is missing"
+                elif collision and request.collision_strategy == "skip":
+                    change.error = "Target file already exists"
+                else:
+                    try:
+                        source_parent = current_path.parent
+                        target_path.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.move(str(current_path), str(target_path))
+                        modified_at = datetime.fromtimestamp(target_path.stat().st_mtime, timezone.utc).replace(microsecond=0).isoformat()
+                        old_key = track["path_key"] if "path_key" in track else path_key(current_path)
+                        new_key = path_key(target_path)
+                        conn.execute(
+                            """
+                            UPDATE tracks
+                            SET path = ?, path_key = ?, file_modified_at = ?, updated_at = datetime('now')
+                            WHERE id = ?
+                            """,
+                            (str(target_path), new_key, modified_at, int(track["id"])),
+                        )
+                        conn.execute("DELETE FROM track_metadata_cache WHERE path_key IN (?, ?)", (old_key, new_key))
+                        change.applied = True
+                        applied += 1
+                        if request.cleanup_empty_folders:
+                            removed_empty_folders += remove_empty_source_folders(source_parent, library_root)
+                    except OSError as exc:
+                        change.error = f"Could not move file: {exc}"
+            changes.append(change)
+        if request.apply:
+            conn.commit()
+    return FileOrganizationResponse(
+        template=request.template,
+        base_folder=str(base_folder),
+        total=len(changes),
+        changes=changes,
+        changed_count=sum(1 for change in changes if change.changed),
+        applied=applied,
+        removed_empty_folders=removed_empty_folders,
+    )
+
+
+@app.post("/library/tools/export-metadata-csv", response_model=CsvMetadataExportResponse)
+def export_metadata_csv(request: CsvMetadataExportRequest) -> CsvMetadataExportResponse:
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    target = resolve_csv_tool_path(request.csv_path, f"flac-cafe-metadata-{stamp}.csv")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with connect() as conn:
+        rows = metadata_csv_rows(conn, request.track_ids, request.limit)
+    try:
+        with target.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=METADATA_CSV_COLUMNS, extrasaction="ignore")
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({column: row.get(column) for column in METADATA_CSV_COLUMNS})
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Could not write CSV: {exc}") from exc
+    return CsvMetadataExportResponse(csv_path=str(target), track_count=len(rows), columns=METADATA_CSV_COLUMNS)
+
+
+@app.post("/library/tools/import-metadata-csv", response_model=CsvMetadataImportResponse)
+def import_metadata_csv(request: CsvMetadataImportRequest) -> CsvMetadataImportResponse:
+    return build_metadata_csv_import_response(request)
+
+
+@app.post("/library/tools/import-metadata-csv/report", response_model=CsvMetadataImportReportResponse)
+def export_metadata_csv_import_report(request: CsvMetadataImportReportRequest) -> CsvMetadataImportReportResponse:
+    preview_request = CsvMetadataImportRequest(
+        csv_path=request.csv_path,
+        track_ids=request.track_ids,
+        missing_only=request.missing_only,
+        apply=False,
+        limit=request.limit,
+    )
+    response = build_metadata_csv_import_response(preview_request)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    target = resolve_json_tool_path(request.report_path, f"flac-cafe-csv-import-report-{stamp}.json")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "csv_path": response.csv_path,
+        "missing_only": request.missing_only,
+        "total": response.total,
+        "matched": response.matched,
+        "changed": response.changed,
+        "errors": response.errors,
+        "previews": [preview.model_dump(mode="json") for preview in response.previews],
+    }
+    try:
+        target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Could not write CSV import report: {exc}") from exc
+    return CsvMetadataImportReportResponse(
+        report_path=str(target),
+        csv_path=response.csv_path,
+        total=response.total,
+        matched=response.matched,
+        changed=response.changed,
+        errors=len(response.errors),
     )
 
 

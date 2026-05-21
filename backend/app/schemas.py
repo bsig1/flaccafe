@@ -222,6 +222,8 @@ class FileOrganizationRequest(BaseModel):
     template: str = Field(default="<Album Artist>/<Album> (<Year>)/<Track#> - <Title>", max_length=500)
     base_folder: str | None = None
     track_ids: list[int] | None = Field(default=None, max_length=10000)
+    collision_strategy: Literal["skip", "auto_rename"] = "skip"
+    cleanup_empty_folders: bool = False
     apply: bool = False
     limit: int = Field(default=200, ge=1, le=10000)
 
@@ -245,6 +247,7 @@ class FileOrganizationResponse(BaseModel):
     changes: list[FileOrganizationChange] = Field(default_factory=list)
     changed_count: int = 0
     applied: int = 0
+    removed_empty_folders: int = 0
 
 
 class CsvMetadataExportRequest(BaseModel):
@@ -287,6 +290,19 @@ class CsvMetadataImportResponse(BaseModel):
     applied: int = 0
     errors: list[str] = Field(default_factory=list)
     previews: list[CsvMetadataImportPreview] = Field(default_factory=list)
+
+
+class CsvMetadataImportReportRequest(CsvMetadataImportRequest):
+    report_path: str | None = None
+
+
+class CsvMetadataImportReportResponse(BaseModel):
+    report_path: str
+    csv_path: str
+    total: int = 0
+    matched: int = 0
+    changed: int = 0
+    errors: int = 0
 
 
 class ScanRequest(BaseModel):

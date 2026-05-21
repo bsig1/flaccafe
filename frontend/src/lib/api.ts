@@ -18,6 +18,8 @@ import type {
   ClapStatusResponse,
   CsvMetadataExportRequest,
   CsvMetadataExportResponse,
+  CsvMetadataImportReportRequest,
+  CsvMetadataImportReportResponse,
   CsvMetadataImportRequest,
   CsvMetadataImportResponse,
   ExportResponse,
@@ -150,6 +152,15 @@ export function exportMetadataCsv(requestBody: CsvMetadataExportRequest = {}): P
 
 export function importMetadataCsv(requestBody: CsvMetadataImportRequest): Promise<CsvMetadataImportResponse> {
   return request<CsvMetadataImportResponse>("/library/tools/import-metadata-csv", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function exportMetadataCsvImportReport(
+  requestBody: CsvMetadataImportReportRequest,
+): Promise<CsvMetadataImportReportResponse> {
+  return request<CsvMetadataImportReportResponse>("/library/tools/import-metadata-csv/report", {
     method: "POST",
     body: JSON.stringify(requestBody),
   });

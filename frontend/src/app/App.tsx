@@ -43,6 +43,7 @@ import {
   deleteSmartPlaylist,
   deleteTrack,
   exportMetadataCsv,
+  exportMetadataCsvImportReport,
   exportPlaylist,
   exportQueue,
   fetchAlbumTracks,
@@ -113,6 +114,7 @@ import type {
   ClapInstallProgress,
   ClapStatusResponse,
   CsvMetadataExportResponse,
+  CsvMetadataImportReportResponse,
   CsvMetadataImportResponse,
   FileOrganizationResponse,
   FilenameTagInferenceResponse,
@@ -263,6 +265,7 @@ export default function App() {
   const [fileOrganizationPreview, setFileOrganizationPreview] = useState<FileOrganizationResponse | null>(null);
   const [metadataCsvExport, setMetadataCsvExport] = useState<CsvMetadataExportResponse | null>(null);
   const [metadataCsvImportPreview, setMetadataCsvImportPreview] = useState<CsvMetadataImportResponse | null>(null);
+  const [metadataCsvImportReport, setMetadataCsvImportReport] = useState<CsvMetadataImportReportResponse | null>(null);
   const [historyEvents, setHistoryEvents] = useState<PlayEventEntry[]>([]);
   const [selectedAlbumId, setSelectedAlbumId] = useState<number | null>(null);
   const [selectedAlbumTracks, setSelectedAlbumTracks] = useState<Track[]>([]);
@@ -1806,11 +1809,17 @@ export default function App() {
     }
   }
 
-  async function handlePreviewFileOrganization(template: string, baseFolder?: string | null) {
+  async function handlePreviewFileOrganization(
+    template: string,
+    baseFolder?: string | null,
+    options?: { collisionStrategy?: "skip" | "auto_rename"; cleanupEmptyFolders?: boolean },
+  ) {
     try {
       const response = await organizeFiles({
         template,
         base_folder: baseFolder || null,
+        collision_strategy: options?.collisionStrategy ?? "skip",
+        cleanup_empty_folders: options?.cleanupEmptyFolders ?? false,
         apply: false,
         limit: 200,
       });
@@ -1821,7 +1830,11 @@ export default function App() {
     }
   }
 
-  async function handleApplyFileOrganization(template: string, baseFolder?: string | null) {
+  async function handleApplyFileOrganization(
+    template: string,
+    baseFolder?: string | null,
+    options?: { collisionStrategy?: "skip" | "auto_rename"; cleanupEmptyFolders?: boolean },
+  ) {
     if (!window.confirm("Move audio files on disk and update FLAC Cafe paths? Preview first and make sure the target folder is right.")) {
       return;
     }
@@ -1829,12 +1842,17 @@ export default function App() {
       const response = await organizeFiles({
         template,
         base_folder: baseFolder || null,
+        collision_strategy: options?.collisionStrategy ?? "skip",
+        cleanup_empty_folders: options?.cleanupEmptyFolders ?? false,
         apply: true,
         limit: 10000,
       });
       setFileOrganizationPreview(response);
       await Promise.all([refreshTracks(), loadAlbums(), loadLibraryStats()]);
-      setStatus(`Moved ${response.applied.toLocaleString()} file${response.applied === 1 ? "" : "s"}`);
+      const cleanup = response.removed_empty_folders
+        ? ` and removed ${response.removed_empty_folders.toLocaleString()} empty folder${response.removed_empty_folders === 1 ? "" : "s"}`
+        : "";
+      setStatus(`Moved ${response.applied.toLocaleString()} file${response.applied === 1 ? "" : "s"}${cleanup}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not organize files");
     }
@@ -1891,6 +1909,26 @@ export default function App() {
       setStatus(`Applied CSV metadata to ${response.applied.toLocaleString()} track${response.applied === 1 ? "" : "s"}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not import metadata CSV");
+    }
+  }
+
+  async function handleExportMetadataCsvReport(csvPath: string, missingOnly: boolean) {
+    const trimmedPath = csvPath.trim();
+    if (!trimmedPath) {
+      setStatus("Choose a CSV path first");
+      return;
+    }
+    try {
+      const response = await exportMetadataCsvImportReport({
+        csv_path: trimmedPath,
+        missing_only: missingOnly,
+        apply: false,
+        limit: 10000,
+      });
+      setMetadataCsvImportReport(response);
+      setStatus(`Exported CSV dry-run report to ${response.report_path}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not export CSV report");
     }
   }
 
@@ -2544,9 +2582,11 @@ export default function App() {
               onApplyFileOrganization={handleApplyFileOrganization}
               metadataCsvExport={metadataCsvExport}
               metadataCsvImportPreview={metadataCsvImportPreview}
+              metadataCsvImportReport={metadataCsvImportReport}
               onExportMetadataCsv={handleExportMetadataCsv}
               onPreviewMetadataCsv={handlePreviewMetadataCsv}
               onApplyMetadataCsv={handleApplyMetadataCsv}
+              onExportMetadataCsvReport={handleExportMetadataCsvReport}
             />
           ) : null}
         </div>

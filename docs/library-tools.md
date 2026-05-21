@@ -23,6 +23,8 @@ Supported tokens are:
 
 The preview shows which tracks match and which fields would change. When "Only fill empty fields" is enabled, existing non-empty library metadata is left alone.
 
+Custom filename patterns can be saved in Settings for repeated cleanup sessions. Saved presets are local UI preferences, so they are easy to revise without changing backend behavior.
+
 ## File Organization
 
 The file organizer renders a tag-based path template, previews target paths, and can move files on disk after confirmation. For example:
@@ -31,7 +33,9 @@ The file organizer renders a tag-based path template, previews target paths, and
 <Album Artist>/<Album> (<Year>)/<Track#> - <Title>
 ```
 
-FLAC Cafe sanitizes Windows-invalid filename characters and skips moves when the target file already exists. After a successful move, the track path and path key are updated in SQLite and stale metadata-cache rows are removed.
+FLAC Cafe sanitizes Windows-invalid filename characters and skips moves when the target file already exists by default. The organizer can also auto-rename collisions with suffixes such as `(2)`. After a successful move, the track path and path key are updated in SQLite and stale metadata-cache rows are removed.
+
+When empty-folder cleanup is enabled, FLAC Cafe removes empty source folders under the configured library root after successful moves. It does not remove folders outside the library root.
 
 ## CSV Metadata Cleanup
 
@@ -50,6 +54,8 @@ Editable import fields are:
 - rating
 
 "Only fill empty fields" is enabled by default so a spreadsheet import can repair gaps without overwriting good tags. When file writing is enabled in Settings, imported metadata and ratings also use the same audio-file writers as the manual edit and star-rating controls.
+
+The dry-run report button writes a JSON report with every previewed row, skipped rows, errors, matched tracks, imported values, and changed fields. Use this before large imports when you want a durable review artifact.
 
 ## Cache Cleanup
 

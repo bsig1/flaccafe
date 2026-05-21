@@ -183,6 +183,8 @@ export interface FileOrganizationRequest {
   template: string;
   base_folder?: string | null;
   track_ids?: number[] | null;
+  collision_strategy?: "skip" | "auto_rename";
+  cleanup_empty_folders?: boolean;
   apply?: boolean;
   limit?: number;
 }
@@ -206,6 +208,7 @@ export interface FileOrganizationResponse {
   changes: FileOrganizationChange[];
   changed_count: number;
   applied: number;
+  removed_empty_folders: number;
 }
 
 export interface CsvMetadataExportRequest {
@@ -248,6 +251,19 @@ export interface CsvMetadataImportResponse {
   applied: number;
   errors: string[];
   previews: CsvMetadataImportPreview[];
+}
+
+export interface CsvMetadataImportReportRequest extends CsvMetadataImportRequest {
+  report_path?: string | null;
+}
+
+export interface CsvMetadataImportReportResponse {
+  report_path: string;
+  csv_path: string;
+  total: number;
+  matched: number;
+  changed: number;
+  errors: number;
 }
 
 export interface AudioAnalysisCoverage {

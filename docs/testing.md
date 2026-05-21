@@ -6,6 +6,7 @@ FLAC Cafe currently has three practical check layers: TypeScript checks, fronten
 
 ```powershell
 npm run check
+npm run check:routes
 npm run test:frontend
 npm run test:backend
 npm run test
@@ -22,6 +23,7 @@ cargo check
 ## What The Tests Cover
 
 - `npm run check` validates the React/TypeScript surface.
+- `npm run check:routes` verifies that `docs/backend-routes.md` matches FastAPI routes in `backend/app/main.py`.
 - `npm run test:frontend` runs Vitest tests for shared UI helpers.
 - `npm run test:backend` runs the Python backend tests through the Windows helper script.
 - `npm run build` verifies the production Vite bundle.

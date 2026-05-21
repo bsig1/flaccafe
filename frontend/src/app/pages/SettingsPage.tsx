@@ -30,6 +30,7 @@ import type {
   CacheClearTarget,
   ClapStatusResponse,
   CsvMetadataExportResponse,
+  CsvMetadataImportReportResponse,
   CsvMetadataImportResponse,
   FileOrganizationResponse,
   FilenameTagInferenceResponse,
@@ -52,6 +53,31 @@ import {
   fileName,
   formatTime,
 } from "../shared";
+
+const DEFAULT_FILENAME_TAG_PATTERNS = [
+  "<Album Artist> - <Album> [<Year>]/<Track#> - <Artist> - <Title>",
+  "<Album Artist>/<Album>/<Track#> - <Title>",
+  "<Artist> - <Album>/<Disc#>-<Track#> - <Title>",
+  "<Genre>/<Artist>/<Album> (<Year>)/<Track#> - <Title>",
+];
+
+const FILENAME_TAG_PRESETS_KEY = "flacCafeFilenameTagPresets";
+
+function readFilenameTagPresets(): string[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(FILENAME_TAG_PRESETS_KEY) ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeFilenameTagPresets(patterns: string[]) {
+  window.localStorage.setItem(FILENAME_TAG_PRESETS_KEY, JSON.stringify(patterns));
+}
 
 export function SettingsPage({
   settings,
@@ -111,9 +137,11 @@ export function SettingsPage({
   onApplyFileOrganization,
   metadataCsvExport,
   metadataCsvImportPreview,
+  metadataCsvImportReport,
   onExportMetadataCsv,
   onPreviewMetadataCsv,
   onApplyMetadataCsv,
+  onExportMetadataCsvReport,
 }: {
   settings: SettingsResponse | null;
   folderPath: string;
@@ -168,20 +196,35 @@ export function SettingsPage({
   onPreviewFilenameTags: (pattern: string, missingOnly: boolean) => void | Promise<void>;
   onApplyFilenameTags: (pattern: string, missingOnly: boolean) => void | Promise<void>;
   fileOrganizationPreview: FileOrganizationResponse | null;
-  onPreviewFileOrganization: (template: string, baseFolder?: string | null) => void | Promise<void>;
-  onApplyFileOrganization: (template: string, baseFolder?: string | null) => void | Promise<void>;
+  onPreviewFileOrganization: (
+    template: string,
+    baseFolder?: string | null,
+    options?: { collisionStrategy?: "skip" | "auto_rename"; cleanupEmptyFolders?: boolean },
+  ) => void | Promise<void>;
+  onApplyFileOrganization: (
+    template: string,
+    baseFolder?: string | null,
+    options?: { collisionStrategy?: "skip" | "auto_rename"; cleanupEmptyFolders?: boolean },
+  ) => void | Promise<void>;
   metadataCsvExport: CsvMetadataExportResponse | null;
   metadataCsvImportPreview: CsvMetadataImportResponse | null;
+  metadataCsvImportReport: CsvMetadataImportReportResponse | null;
   onExportMetadataCsv: () => void | Promise<void>;
   onPreviewMetadataCsv: (csvPath: string, missingOnly: boolean) => void | Promise<void>;
   onApplyMetadataCsv: (csvPath: string, missingOnly: boolean) => void | Promise<void>;
+  onExportMetadataCsvReport: (csvPath: string, missingOnly: boolean) => void | Promise<void>;
 }) {
   const [filenameTagPattern, setFilenameTagPattern] = useState("<Album Artist> - <Album> [<Year>]/<Track#> - <Artist> - <Title>");
   const [filenameTagMissingOnly, setFilenameTagMissingOnly] = useState(true);
+  const [filenameTagPresets, setFilenameTagPresets] = useState(readFilenameTagPresets);
   const [organizeTemplate, setOrganizeTemplate] = useState("<Album Artist>/<Album> (<Year>)/<Track#> - <Title>");
   const [organizeBaseFolder, setOrganizeBaseFolder] = useState("");
+  const [organizeCollisionStrategy, setOrganizeCollisionStrategy] = useState<"skip" | "auto_rename">("skip");
+  const [organizeCleanupEmptyFolders, setOrganizeCleanupEmptyFolders] = useState(false);
   const [metadataCsvPath, setMetadataCsvPath] = useState("");
   const [metadataCsvMissingOnly, setMetadataCsvMissingOnly] = useState(true);
+  const allFilenameTagPresets = Array.from(new Set([...DEFAULT_FILENAME_TAG_PATTERNS, ...filenameTagPresets]));
+  const isCustomFilenameTagPreset = filenameTagPresets.includes(filenameTagPattern);
   const progressPercent = Math.max(0, Math.min(100, scanProgress?.percent ?? 0));
   const hasCount = Boolean(scanProgress && scanProgress.total_files > 0);
   const audioProgressPercent = Math.max(0, Math.min(100, audioAnalysisProgress?.percent ?? 0));
@@ -192,6 +235,26 @@ export function SettingsPage({
       : backendStatus === "down"
         ? "border-red-400/40 bg-red-500/10 text-red-300"
         : "border-line bg-ink text-muted";
+
+  function saveCurrentFilenameTagPreset() {
+    const trimmed = filenameTagPattern.trim();
+    if (!trimmed || allFilenameTagPresets.includes(trimmed)) {
+      return;
+    }
+    const next = [...filenameTagPresets, trimmed];
+    setFilenameTagPresets(next);
+    writeFilenameTagPresets(next);
+  }
+
+  function deleteCurrentFilenameTagPreset() {
+    if (!isCustomFilenameTagPreset) {
+      return;
+    }
+    const next = filenameTagPresets.filter((pattern) => pattern !== filenameTagPattern);
+    setFilenameTagPresets(next);
+    writeFilenameTagPresets(next);
+    setFilenameTagPattern(DEFAULT_FILENAME_TAG_PATTERNS[0]);
+  }
 
   return (
     <main className="flex min-w-0 flex-1 flex-col">
@@ -649,6 +712,42 @@ export function SettingsPage({
                 </div>
                 <label className="grid gap-2">
                   <span className="text-xs uppercase text-muted">Pattern</span>
+                  <div className="flex flex-wrap gap-2">
+                    <select
+                      className="h-9 min-w-0 flex-1 rounded border border-line bg-panel px-3 font-mono text-xs text-white outline-none ring-moss/40 focus:ring-2"
+                      value={allFilenameTagPresets.includes(filenameTagPattern) ? filenameTagPattern : ""}
+                      onChange={(event) => {
+                        if (event.target.value) {
+                          setFilenameTagPattern(event.target.value);
+                        }
+                      }}
+                    >
+                      <option value="" disabled>
+                        Choose saved pattern
+                      </option>
+                      {allFilenameTagPresets.map((pattern) => (
+                        <option key={pattern} value={pattern}>
+                          {pattern}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      className="secondary-button h-9"
+                      type="button"
+                      disabled={!filenameTagPattern.trim() || allFilenameTagPresets.includes(filenameTagPattern.trim())}
+                      onClick={saveCurrentFilenameTagPreset}
+                    >
+                      Save Pattern
+                    </button>
+                    <button
+                      className="secondary-button h-9"
+                      type="button"
+                      disabled={!isCustomFilenameTagPreset}
+                      onClick={deleteCurrentFilenameTagPreset}
+                    >
+                      Delete
+                    </button>
+                  </div>
                   <input
                     className="h-9 rounded border border-line bg-panel px-3 font-mono text-xs text-white outline-none ring-moss/40 focus:ring-2"
                     value={filenameTagPattern}
@@ -730,11 +829,38 @@ export function SettingsPage({
                     onChange={(event) => setOrganizeBaseFolder(event.target.value)}
                   />
                 </label>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <label className="grid gap-2">
+                    <span className="text-xs uppercase text-muted">Name Collisions</span>
+                    <select
+                      className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                      value={organizeCollisionStrategy}
+                      onChange={(event) => setOrganizeCollisionStrategy(event.target.value as "skip" | "auto_rename")}
+                    >
+                      <option value="skip">Skip existing files</option>
+                      <option value="auto_rename">Auto-rename with (2)</option>
+                    </select>
+                  </label>
+                  <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-panel px-3 py-2">
+                    <span className="text-muted">Remove empty source folders</span>
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-moss"
+                      checked={organizeCleanupEmptyFolders}
+                      onChange={(event) => setOrganizeCleanupEmptyFolders(event.target.checked)}
+                    />
+                  </label>
+                </div>
                 <div className="flex flex-wrap gap-2">
                   <button
                     className="secondary-button"
                     type="button"
-                    onClick={() => void onPreviewFileOrganization(organizeTemplate, organizeBaseFolder)}
+                    onClick={() =>
+                      void onPreviewFileOrganization(organizeTemplate, organizeBaseFolder, {
+                        collisionStrategy: organizeCollisionStrategy,
+                        cleanupEmptyFolders: organizeCleanupEmptyFolders,
+                      })
+                    }
                   >
                     <FileText size={15} />
                     Preview Moves
@@ -742,7 +868,12 @@ export function SettingsPage({
                   <button
                     className="primary-button"
                     type="button"
-                    onClick={() => void onApplyFileOrganization(organizeTemplate, organizeBaseFolder)}
+                    onClick={() =>
+                      void onApplyFileOrganization(organizeTemplate, organizeBaseFolder, {
+                        collisionStrategy: organizeCollisionStrategy,
+                        cleanupEmptyFolders: organizeCleanupEmptyFolders,
+                      })
+                    }
                   >
                     <FolderOpen size={15} />
                     Move Files
@@ -752,6 +883,9 @@ export function SettingsPage({
                   <div className="rounded border border-line bg-panel p-3 text-xs">
                     <div className="mb-2 text-neutral-200">
                       {fileOrganizationPreview.changed_count.toLocaleString()} possible moves, {fileOrganizationPreview.applied.toLocaleString()} applied
+                      {fileOrganizationPreview.removed_empty_folders
+                        ? `, ${fileOrganizationPreview.removed_empty_folders.toLocaleString()} empty folders removed`
+                        : ""}
                     </div>
                     <div className="grid gap-1">
                       {fileOrganizationPreview.changes.slice(0, 5).map((change) => (
@@ -826,6 +960,14 @@ export function SettingsPage({
                     Preview Import
                   </button>
                   <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => void onExportMetadataCsvReport(metadataCsvPath, metadataCsvMissingOnly)}
+                  >
+                    <Download size={15} />
+                    Export Dry Run
+                  </button>
+                  <button
                     className="primary-button"
                     type="button"
                     onClick={() => void onApplyMetadataCsv(metadataCsvPath, metadataCsvMissingOnly)}
@@ -857,6 +999,15 @@ export function SettingsPage({
                           </div>
                         </div>
                       ))}
+                    </div>
+                  </div>
+                )}
+                {metadataCsvImportReport && (
+                  <div className="rounded border border-line bg-panel px-3 py-2 text-xs text-muted">
+                    <div className="truncate">{metadataCsvImportReport.report_path}</div>
+                    <div>
+                      {metadataCsvImportReport.changed.toLocaleString()} changed rows,{" "}
+                      {metadataCsvImportReport.errors.toLocaleString()} errors captured
                     </div>
                   </div>
                 )}

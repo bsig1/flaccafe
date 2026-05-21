@@ -229,6 +229,52 @@ class ApiTests(unittest.TestCase):
             row = conn.execute("SELECT path FROM tracks WHERE id = ?", (track_id,)).fetchone()
         self.assertEqual(Path(row["path"]), new_path)
 
+    def test_organize_files_can_auto_rename_collisions_and_clean_empty_source_folders(self) -> None:
+        music_dir = self.root / "Music"
+        source = music_dir / "Loose" / "loose.mp3"
+        source.parent.mkdir(parents=True)
+        source.write_bytes(b"audio")
+        track_id = insert_track(
+            source,
+            title="A Good Song",
+            artist="The Artist",
+            album="The Album",
+            album_artist="The Artist",
+            track_number=3,
+            year=2025,
+        )
+        with connect() as conn:
+            conn.execute("INSERT INTO settings(key, value) VALUES('library_path', ?)", (str(music_dir),))
+            conn.commit()
+        target_root = self.root / "Organized"
+        existing_target = target_root / "The Artist" / "The Album (2025)" / "03 - A Good Song.mp3"
+        existing_target.parent.mkdir(parents=True)
+        existing_target.write_bytes(b"already here")
+
+        response = self.client.post(
+            "/library/tools/organize-files",
+            json={
+                "track_ids": [track_id],
+                "base_folder": str(target_root),
+                "template": "<Album Artist>/<Album> (<Year>)/<Track#> - <Title>",
+                "collision_strategy": "auto_rename",
+                "cleanup_empty_folders": True,
+                "apply": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["applied"], 1)
+        self.assertEqual(body["removed_empty_folders"], 1)
+        renamed_target = target_root / "The Artist" / "The Album (2025)" / "03 - A Good Song (2).mp3"
+        self.assertTrue(existing_target.exists())
+        self.assertTrue(renamed_target.exists())
+        self.assertFalse(source.parent.exists())
+        with connect() as conn:
+            row = conn.execute("SELECT path FROM tracks WHERE id = ?", (track_id,)).fetchone()
+        self.assertEqual(Path(row["path"]), renamed_target)
+
     def test_metadata_csv_export_and_import_updates_editable_fields(self) -> None:
         audio_file = self.root / "csv-track.mp3"
         audio_file.write_bytes(b"audio")
@@ -275,6 +321,19 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(row["title"], "CSV Title")
         self.assertEqual(row["artist"], "CSV Artist")
         self.assertEqual(row["rating"], 4.5)
+
+        report_response = self.client.post(
+            "/library/tools/import-metadata-csv/report",
+            json={"csv_path": str(csv_path), "missing_only": False},
+        )
+        self.assertEqual(report_response.status_code, 200)
+        report_path = Path(report_response.json()["report_path"])
+        self.assertTrue(report_path.exists())
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["csv_path"], str(csv_path))
+        self.assertEqual(payload["matched"], 1)
+        self.assertIn("previews", payload)
+        report_path.unlink(missing_ok=True)
 
     def test_clear_library_caches_endpoint_removes_derived_rows(self) -> None:
         audio_file = self.root / "cached.mp3"

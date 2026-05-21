@@ -28,6 +28,10 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `POST /library/tools/organize-files` previews or applies tag-based file moves.
 - `POST /library/tools/export-metadata-csv` exports track metadata for spreadsheet cleanup.
 - `POST /library/tools/import-metadata-csv` previews or applies spreadsheet metadata changes.
+- `POST /library/tools/import-metadata-csv/report` writes a JSON dry-run import report.
+- `POST /scan` runs a synchronous library scan.
+- `POST /scan/start` starts an asynchronous scan job.
+- `GET /scan/jobs/{job_id}` returns scan progress.
 
 ## Playback Assets And Context
 
