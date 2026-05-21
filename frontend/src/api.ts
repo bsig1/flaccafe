@@ -21,7 +21,9 @@ import type {
   LyricsResponse,
   PlayEventEntry,
   PlaylistSummary,
+  RecommendationProfileComparison,
   RecommendationProfile,
+  RecommendationRun,
   ScanProgress,
   ScanResult,
   ScanStartResponse,
@@ -421,6 +423,21 @@ export function recordRecommendationFeedback(requestBody: {
 
 export function fetchRecommendationProfiles(): Promise<RecommendationProfile[]> {
   return request<RecommendationProfile[]>("/autodj/profiles");
+}
+
+export function fetchRecommendationHistory(limit = 30): Promise<RecommendationRun[]> {
+  return request<RecommendationRun[]>(`/autodj/history?limit=${limit}`);
+}
+
+export function compareRecommendationProfiles(requestBody: {
+  profile_ids?: number[] | null;
+  seed_track_id?: number | null;
+  seed?: number | null;
+}): Promise<RecommendationProfileComparison[]> {
+  return request<RecommendationProfileComparison[]>("/autodj/profiles/compare", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
 }
 
 export function saveRecommendationProfile(requestBody: {

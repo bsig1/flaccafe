@@ -52,6 +52,7 @@ import {
   createAutoDjAvoidRule,
   createPlaylist,
   createSmartPlaylist,
+  compareRecommendationProfiles,
   deleteAutoDjAvoidRule,
   deleteTrack,
   deletePlaylist,
@@ -75,6 +76,7 @@ import {
   fetchLyrics,
   fetchPlaylists,
   fetchPlaylistTracks,
+  fetchRecommendationHistory,
   fetchRecommendationProfiles,
   fetchSettings,
   fetchSimilarTracks,
@@ -130,6 +132,8 @@ import type {
   QueueTrack,
   RecommendationDrift,
   RecommendationProfile,
+  RecommendationProfileComparison,
+  RecommendationRun,
   ScanProgress,
   ScanResult,
   SettingsResponse,
@@ -457,6 +461,7 @@ const emptyRecommendationDrift: RecommendationDrift = {
   average_rating: null,
   unique_artists: 0,
   unique_albums: 0,
+  warnings: [],
 };
 
 function formatDuration(seconds: number | null): string {
@@ -1576,11 +1581,23 @@ function LibraryPage({
   }, []);
 
   useEffect(() => {
-    function handleDeleteKey(event: KeyboardEvent) {
+    function handleLibraryShortcut(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable='true']")) {
+        return;
+      }
+      if (event.ctrlKey && event.key.toLowerCase() === "e" && selectedIds.length > 0) {
+        event.preventDefault();
+        setBulkMetadataOpen(true);
+        return;
+      }
+      if (event.ctrlKey && event.key.toLowerCase() === "d" && libraryView === "health") {
+        event.preventDefault();
+        setShowAllDuplicateGroups((current) => !current);
+        return;
+      }
       if (
         event.key !== "Delete" ||
-        target?.closest("input, textarea, select, [contenteditable='true']") ||
         selectedIds.length === 0 && !detailTrack
       ) {
         return;
@@ -1598,9 +1615,9 @@ function LibraryPage({
       }
     }
 
-    window.addEventListener("keydown", handleDeleteKey);
-    return () => window.removeEventListener("keydown", handleDeleteKey);
-  }, [selectedIds, selectedTracks, detailTrack, onRequestDeleteTracks]);
+    window.addEventListener("keydown", handleLibraryShortcut);
+    return () => window.removeEventListener("keydown", handleLibraryShortcut);
+  }, [selectedIds, selectedTracks, detailTrack, libraryView, onRequestDeleteTracks]);
 
   function handleSort(key: SortKey) {
     setSort((current) => {
@@ -3247,7 +3264,9 @@ function AutoDjPage({
   onDeleteAvoidRule,
   recommendationProfiles,
   recommendationDrift,
+  recommendationHistory,
   onRefreshProfiles,
+  onRefreshHistory,
   onSaveRecommendationProfile,
   onDeleteRecommendationProfile,
   onSetDefaultRecommendationProfile,
@@ -3265,7 +3284,9 @@ function AutoDjPage({
   onDeleteAvoidRule: (ruleId: number) => void;
   recommendationProfiles: RecommendationProfile[];
   recommendationDrift: RecommendationDrift;
+  recommendationHistory: RecommendationRun[];
   onRefreshProfiles: () => void | Promise<void>;
+  onRefreshHistory: () => void | Promise<void>;
   onSaveRecommendationProfile: (name: string, settings: AutoDjSettings, isDefault: boolean) => void | Promise<void>;
   onDeleteRecommendationProfile: (profileId: number) => void | Promise<void>;
   onSetDefaultRecommendationProfile: (profileId: number) => void | Promise<void>;
@@ -3286,6 +3307,8 @@ function AutoDjPage({
   const [neighborAnalyzedOnly, setNeighborAnalyzedOnly] = useState(false);
   const [neighborMinRating, setNeighborMinRating] = useState(0);
   const [neighborGenre, setNeighborGenre] = useState("");
+  const [profileComparisons, setProfileComparisons] = useState<RecommendationProfileComparison[]>([]);
+  const [isComparingProfiles, setIsComparingProfiles] = useState(false);
   const appliedDefaultProfileId = useRef<number | null>(null);
   const defaultProfile = recommendationProfiles.find((profile) => profile.is_default) ?? null;
   const presets: { label: string; settings: Partial<AutoDjSettings> }[] = [
@@ -3434,11 +3457,33 @@ function AutoDjPage({
       const response = await generateAutoDj(settings);
       setQueue(response.tracks);
       setRecommendationDrift(response.drift);
+      void onRefreshHistory();
       setStatus(`Generated ${response.tracks.length} tracks`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Queue generation failed");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleCompareProfiles() {
+    if (recommendationProfiles.length < 2) {
+      setStatus("Save at least two recommendation profiles to compare them");
+      return;
+    }
+    setIsComparingProfiles(true);
+    try {
+      const seed = Date.now() % 1_000_000;
+      const comparisons = await compareRecommendationProfiles({
+        seed,
+        seed_track_id: settings.seed_track_id ?? currentTrack?.id ?? null,
+      });
+      setProfileComparisons(comparisons);
+      setStatus(`Compared ${comparisons.length} recommendation profiles`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Profile comparison failed");
+    } finally {
+      setIsComparingProfiles(false);
     }
   }
 
@@ -3536,6 +3581,9 @@ function AutoDjPage({
                 <button className="text-xs text-muted hover:text-white" type="button" onClick={() => void onRefreshProfiles()}>
                   Refresh
                 </button>
+                <button className="text-xs text-muted hover:text-white" type="button" disabled={isComparingProfiles} onClick={() => void handleCompareProfiles()}>
+                  Compare
+                </button>
                 <button className="text-xs text-moss hover:text-white" type="button" onClick={() => saveCurrentProfile(false)}>
                   Save
                 </button>
@@ -3573,6 +3621,29 @@ function AutoDjPage({
                 <div className="text-xs text-muted">Profiles persist tuned AutoDJ settings and can become the Settings default.</div>
               )}
             </div>
+            {profileComparisons.length > 0 && (
+              <div className="mt-3 border-t border-line pt-3">
+                <div className="mb-2 text-xs font-medium uppercase text-muted">Profile Comparison</div>
+                <div className="grid gap-2">
+                  {profileComparisons.map((comparison) => (
+                    <div key={comparison.profile.id} className="rounded border border-line/70 bg-panel p-2 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="truncate font-medium text-white">{comparison.profile.name}</span>
+                        <span className="text-muted">{comparison.drift.total_tracks} tracks</span>
+                      </div>
+                      <div className="mt-2 grid grid-cols-3 gap-1 text-[11px]">
+                        <span className="rounded bg-ink px-1.5 py-1 text-moss">Fav {comparison.drift.familiar_percent.toFixed(0)}%</span>
+                        <span className="rounded bg-ink px-1.5 py-1 text-ember">Explore {comparison.drift.exploration_percent.toFixed(0)}%</span>
+                        <span className="rounded bg-ink px-1.5 py-1 text-red-300">Repeat {comparison.drift.repeat_artist_percent.toFixed(0)}%</span>
+                      </div>
+                      <div className="mt-2 truncate text-[11px] text-muted">
+                        {comparison.top_tracks.slice(0, 2).map((track) => display(track.title, "Untitled")).join(" / ") || "No tracks"}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <button className="mt-2 w-full text-left text-xs text-muted hover:text-white" type="button" onClick={() => saveCurrentProfile(true)}>
               Save current settings as default profile
             </button>
@@ -3878,6 +3949,15 @@ function AutoDjPage({
                 </div>
                 <div className="text-xs text-muted">{recommendationDrift.total_tracks} tracks</div>
               </div>
+              {recommendationDrift.warnings.length > 0 && (
+                <div className="mb-3 grid gap-1.5">
+                  {recommendationDrift.warnings.map((warning) => (
+                    <div key={warning} className="rounded border border-ember/40 bg-ember/10 px-3 py-2 text-xs text-ember">
+                      {warning}
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="grid gap-3 md:grid-cols-5">
                 {[
                   ["Familiar", recommendationDrift.familiar_percent, "bg-moss"],
@@ -3897,6 +3977,28 @@ function AutoDjPage({
                   </div>
                 ))}
               </div>
+              {recommendationHistory.length > 0 && (
+                <div className="mt-4 border-t border-line pt-3">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="text-xs font-medium uppercase text-muted">Recent Queue Balance</div>
+                    <button className="text-xs text-muted hover:text-white" type="button" onClick={() => void onRefreshHistory()}>
+                      Refresh
+                    </button>
+                  </div>
+                  <div className="grid gap-1.5">
+                    {recommendationHistory.slice(0, 5).map((run) => (
+                      <div key={run.id} className="grid grid-cols-[120px_1fr_60px] items-center gap-3 text-xs">
+                        <span className="truncate text-muted">{formatShortDate(run.created_at)}</span>
+                        <div className="flex h-2 overflow-hidden rounded bg-ink">
+                          <div className="bg-moss" style={{ width: `${Math.min(100, run.drift.familiar_percent)}%` }} />
+                          <div className="bg-ember" style={{ width: `${Math.min(100, run.drift.exploration_percent)}%` }} />
+                        </div>
+                        <span className="text-right tabular-nums text-muted">{run.track_ids.length}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
           <table className="w-full table-fixed text-left text-sm">
@@ -5810,6 +5912,7 @@ function BackendRecoveryPage({
 
 function MiniPlayerWindow() {
   const [snapshot, setSnapshot] = useState<MiniPlayerSnapshot>(readMiniPlayerSnapshot);
+  const [alwaysOnTop, setAlwaysOnTop] = useState(false);
   const track = snapshot.track;
   const duration = snapshot.duration || track?.duration_seconds || 0;
   const progressPercent = duration > 0 ? Math.min(100, (snapshot.currentTime / duration) * 100) : 0;
@@ -5849,6 +5952,27 @@ function MiniPlayerWindow() {
       await getCurrentWebviewWindow().close();
     } catch {
       window.close();
+    }
+  }
+
+  async function toggleAlwaysOnTop() {
+    try {
+      const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+      const next = !alwaysOnTop;
+      await getCurrentWebviewWindow().setAlwaysOnTop(next);
+      setAlwaysOnTop(next);
+    } catch {
+      setAlwaysOnTop((current) => !current);
+    }
+  }
+
+  async function snapMiniPlayer(width: number, height: number) {
+    try {
+      const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+      const { LogicalSize } = await import("@tauri-apps/api/dpi");
+      await getCurrentWebviewWindow().setSize(new LogicalSize(width, height));
+    } catch {
+      // Browser preview cannot resize a Tauri window.
     }
   }
 
@@ -5892,9 +6016,25 @@ function MiniPlayerWindow() {
           </div>
         </div>
         <div className="flex h-full flex-col items-end justify-between">
-          <button className="icon-button h-7 w-7" type="button" title="Close mini player" onClick={() => void closeMiniPlayer()}>
-            <X size={13} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              className={`icon-button h-7 w-7 ${alwaysOnTop ? "border-moss text-moss" : ""}`}
+              type="button"
+              title="Always on top"
+              onClick={() => void toggleAlwaysOnTop()}
+            >
+              <ArrowUp size={13} />
+            </button>
+            <button className="icon-button h-7 w-7" type="button" title="Compact size" onClick={() => void snapMiniPlayer(420, 118)}>
+              <MoreHorizontal size={13} />
+            </button>
+            <button className="icon-button h-7 w-7" type="button" title="Wide size" onClick={() => void snapMiniPlayer(720, 132)}>
+              <ExternalLink size={13} />
+            </button>
+            <button className="icon-button h-7 w-7" type="button" title="Close mini player" onClick={() => void closeMiniPlayer()}>
+              <X size={13} />
+            </button>
+          </div>
           <div className="flex items-center gap-1.5">
             <button
               className="icon-button h-8 w-8"
@@ -6588,6 +6728,7 @@ export default function App() {
   const [autoDjAvoidRules, setAutoDjAvoidRules] = useState<AutoDjAvoidRule[]>([]);
   const [recommendationProfiles, setRecommendationProfiles] = useState<RecommendationProfile[]>([]);
   const [recommendationDrift, setRecommendationDrift] = useState<RecommendationDrift>(emptyRecommendationDrift);
+  const [recommendationHistory, setRecommendationHistory] = useState<RecommendationRun[]>([]);
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
   const [writeRatingsToFiles, setWriteRatingsToFiles] = useState(false);
   const [folderPath, setFolderPath] = useState("");
@@ -6858,6 +6999,14 @@ export default function App() {
       setRecommendationProfiles(await fetchRecommendationProfiles());
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not load recommendation profiles");
+    }
+  }
+
+  async function loadRecommendationHistory() {
+    try {
+      setRecommendationHistory(await fetchRecommendationHistory(30));
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not load recommendation history");
     }
   }
 
@@ -7715,6 +7864,7 @@ export default function App() {
       });
       setQueue(response.tracks);
       setRecommendationDrift(response.drift);
+      void loadRecommendationHistory();
       if (response.tracks[0]) {
         setPlaybackQueue(response.tracks);
         setAutoPlayOnTrackChange(true);
@@ -8173,6 +8323,7 @@ export default function App() {
     void loadHistory();
     void loadAutoDjAvoidRules();
     void loadRecommendationProfiles();
+    void loadRecommendationHistory();
   }, []);
 
   useEffect(() => {
@@ -8479,7 +8630,9 @@ export default function App() {
               onDeleteAvoidRule={(ruleId) => void handleDeleteAutoDjAvoidRule(ruleId)}
               recommendationProfiles={recommendationProfiles}
               recommendationDrift={recommendationDrift}
+              recommendationHistory={recommendationHistory}
               onRefreshProfiles={loadRecommendationProfiles}
+              onRefreshHistory={loadRecommendationHistory}
               onSaveRecommendationProfile={handleSaveRecommendationProfile}
               onDeleteRecommendationProfile={handleDeleteRecommendationProfile}
               onSetDefaultRecommendationProfile={handleSetDefaultRecommendationProfile}

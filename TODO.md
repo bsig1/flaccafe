@@ -7,18 +7,19 @@
 
 ## Library Workflow
 - Add an optional true acoustic fingerprint pass for duplicates that do not share exact file chunks.
-- Add a persistent artwork thumbnail cache so album grids and the detached mini-player do less tag parsing.
 - Add batch duplicate actions for very large duplicate sets: keep best, remove selected, reveal selected, and export review report.
+- Add a cache maintenance panel for clearing artwork cache, metadata cache, and old recommendation history.
+- Add bulk metadata import/export from CSV for larger cleanup sessions.
 
 ## UI Polish
 - Add browser-level smoke tests against a running Vite/Tauri preview, beyond the current frontend interaction unit tests.
-- Add an always-on-top toggle and snap sizes for the detached mini-player window.
-- Add keyboard shortcuts for the new duplicate review and bulk metadata flows.
+- Add persisted mini-player preferences for always-on-top and preferred snap size.
+- Add a keyboard shortcut editor instead of hard-coded shortcuts only.
 
 ## Recommendations
-- Add queue health warnings when a generated queue is too repetitive or too exploratory.
-- Add profile comparison so saved recommendation profiles can be A/B tested against the same seed track.
-- Add longer-term drift history so recommendation balance can be tracked across multiple generated queues.
+- Add profile comparison export so tuning sessions can be saved or shared.
+- Add A/B feedback controls that compare two generated queues and learn from the chosen one.
+- Add per-profile drift targets, for example "10% unrated" or "under 20% repeat artist".
 
 ## Project
 - Add release artifacts to CI once MSI builds are reliable enough to publish from GitHub Actions.

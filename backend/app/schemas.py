@@ -442,6 +442,7 @@ class RecommendationDrift(BaseModel):
     average_rating: float | None = None
     unique_artists: int = 0
     unique_albums: int = 0
+    warnings: list[str] = Field(default_factory=list)
 
 
 class AutoDjResponse(BaseModel):
@@ -463,6 +464,26 @@ class RecommendationProfile(BaseModel):
     is_default: bool = False
     created_at: str
     updated_at: str
+
+
+class RecommendationRun(BaseModel):
+    id: int
+    settings: AutoDjRequest
+    drift: RecommendationDrift
+    track_ids: list[int]
+    created_at: str
+
+
+class RecommendationProfileComparisonRequest(BaseModel):
+    profile_ids: list[int] | None = None
+    seed_track_id: int | None = None
+    seed: int | None = None
+
+
+class RecommendationProfileComparison(BaseModel):
+    profile: RecommendationProfile
+    drift: RecommendationDrift
+    top_tracks: list[QueueTrack]
 
 
 class ExportRequest(BaseModel):

@@ -269,6 +269,11 @@ class ApiTests(unittest.TestCase):
         self.assertGreaterEqual(body["drift"]["exploration_percent"], 0)
         self.assertIn("average_rating", body["drift"])
 
+        history = self.client.get("/autodj/history")
+        self.assertEqual(history.status_code, 200)
+        self.assertEqual(history.json()[0]["drift"]["total_tracks"], 4)
+        self.assertEqual(len(history.json()[0]["track_ids"]), 4)
+
     def test_recommendation_profiles_round_trip_and_default(self) -> None:
         create_response = self.client.post(
             "/autodj/profiles",
@@ -297,9 +302,30 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(len(defaults), 1)
         self.assertEqual(defaults[0]["name"], "Deep Cuts")
 
+        compare_response = self.client.post(
+            "/autodj/profiles/compare",
+            json={"profile_ids": [profile["id"], second_id], "seed": 7},
+        )
+        self.assertEqual(compare_response.status_code, 200)
+        self.assertEqual({item["profile"]["name"] for item in compare_response.json()}, {"Late Night", "Deep Cuts"})
+
         delete_response = self.client.delete(f"/autodj/profiles/{second_id}")
         self.assertEqual(delete_response.status_code, 200)
         self.assertNotIn(second_id, {item["id"] for item in delete_response.json()})
+
+    def test_artwork_endpoint_caches_embedded_artwork(self) -> None:
+        audio_file = self.root / "artwork.mp3"
+        audio_file.write_bytes(b"audio")
+        track_id = insert_track(audio_file)
+
+        with patch("backend.app.main.embedded_artwork", return_value=(b"image-bytes", "image/jpeg")) as artwork:
+            first = self.client.get(f"/tracks/{track_id}/artwork")
+            second = self.client.get(f"/tracks/{track_id}/artwork")
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(first.content, b"image-bytes")
+        artwork.assert_called_once()
 
 
 if __name__ == "__main__":

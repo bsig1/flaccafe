@@ -50,7 +50,7 @@ from .recommender import (
     similarity_adjustment,
     text_tokens,
 )
-from .scanner import path_key, read_metadata, scan_folder, upsert_track
+from .scanner import file_state, path_key, read_metadata, scan_folder, upsert_track
 from .scan_jobs import get_scan_job, start_scan_job
 from .schemas import (
     AlbumSummary,
@@ -87,7 +87,10 @@ from .schemas import (
     RecommendationFeedbackRequest,
     RecommendationDrift,
     RecommendationProfile,
+    RecommendationProfileComparison,
+    RecommendationProfileComparisonRequest,
     RecommendationProfileRequest,
+    RecommendationRun,
     ScanRequest,
     ScanProgress,
     ScanResult,
@@ -868,6 +871,45 @@ def sidecar_artwork(path: Path) -> tuple[bytes, str] | None:
             except OSError:
                 return None
     return None
+
+
+def cached_artwork(path: Path) -> tuple[bytes, str] | None:
+    modified_at, file_size = file_state(path)
+    key = path_key(path)
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT data, media_type
+            FROM artwork_cache
+            WHERE path_key = ? AND file_modified_at = ? AND file_size = ?
+            """,
+            (key, modified_at, file_size),
+        ).fetchone()
+        if row is not None:
+            return bytes(row["data"]), row["media_type"]
+
+    artwork = embedded_artwork(path) or sidecar_artwork(path)
+    if artwork is None:
+        return None
+
+    data, media_type = artwork
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO artwork_cache(path_key, path, file_modified_at, file_size, media_type, data, updated_at)
+            VALUES(?, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(path_key) DO UPDATE SET
+              path = excluded.path,
+              file_modified_at = excluded.file_modified_at,
+              file_size = excluded.file_size,
+              media_type = excluded.media_type,
+              data = excluded.data,
+              updated_at = excluded.updated_at
+            """,
+            (key, str(path.resolve()), modified_at, file_size, media_type, data),
+        )
+        conn.commit()
+    return data, media_type
 
 
 def normalize_lyrics(value: object) -> str | None:
@@ -2266,7 +2308,7 @@ def stream_track_audio(track_id: int) -> FileResponse:
 @app.get("/tracks/{track_id}/artwork")
 def track_artwork(track_id: int) -> Response:
     path = get_track_path(track_id)
-    artwork = embedded_artwork(path) or sidecar_artwork(path)
+    artwork = cached_artwork(path)
     if artwork is None:
         raise HTTPException(status_code=404, detail="No embedded artwork found")
 
@@ -2429,7 +2471,49 @@ def mark_track_skipped(track_id: int) -> dict:
 @app.post("/autodj/generate", response_model=AutoDjResponse)
 def generate_autodj(request: AutoDjRequest) -> AutoDjResponse:
     tracks = generate_queue(request)
-    return AutoDjResponse(tracks=tracks, settings=request, drift=recommendation_drift(tracks))
+    drift = recommendation_drift(tracks)
+    record_recommendation_run(request, drift, tracks)
+    return AutoDjResponse(tracks=tracks, settings=request, drift=drift)
+
+
+def recommendation_warnings(drift: RecommendationDrift) -> list[str]:
+    warnings: list[str] = []
+    if drift.total_tracks == 0:
+        return warnings
+    if drift.repeat_artist_percent >= 35:
+        warnings.append("This queue leans repetitive by artist. Increase artist cooldown or temperature.")
+    if drift.exploration_percent >= 85:
+        warnings.append("This queue is highly exploratory. Lower temperature or unrated exploration for a safer mix.")
+    if drift.familiar_percent >= 90 and drift.unrated_percent <= 5:
+        warnings.append("This queue is very familiar. Add a little unrated exploration for discovery.")
+    if drift.clap_percent <= 10 and drift.total_tracks >= 10:
+        warnings.append("Few tracks use CLAP similarity. Analyze more music to improve sound-based recommendations.")
+    return warnings
+
+
+def record_recommendation_run(request: AutoDjRequest, drift: RecommendationDrift, tracks: list[dict]) -> None:
+    track_ids = [int(track["id"]) for track in tracks if track.get("id") is not None]
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO recommendation_runs(settings_json, drift_json, track_ids_json)
+            VALUES(?, ?, ?)
+            """,
+            (
+                json.dumps(request.model_dump(), ensure_ascii=True, sort_keys=True),
+                json.dumps(drift.model_dump(), ensure_ascii=True, sort_keys=True),
+                json.dumps(track_ids, ensure_ascii=True),
+            ),
+        )
+        conn.execute(
+            """
+            DELETE FROM recommendation_runs
+            WHERE id NOT IN (
+              SELECT id FROM recommendation_runs ORDER BY datetime(created_at) DESC, id DESC LIMIT 100
+            )
+            """
+        )
+        conn.commit()
 
 
 def recommendation_drift(tracks: list[dict]) -> RecommendationDrift:
@@ -2457,7 +2541,7 @@ def recommendation_drift(tracks: list[dict]) -> RecommendationDrift:
         if track.get("analysis_provider") == "clap" and track.get("analysis_embedding")
     ]
     repeat_artist_percent = max(0.0, ((total - len(unique_artists)) / total) * 100) if unique_artists else 0.0
-    return RecommendationDrift(
+    drift = RecommendationDrift(
         total_tracks=total,
         familiar_percent=round((len(familiar) / total) * 100, 2),
         exploration_percent=round((len(exploratory) / total) * 100, 2),
@@ -2468,6 +2552,8 @@ def recommendation_drift(tracks: list[dict]) -> RecommendationDrift:
         unique_artists=len(unique_artists),
         unique_albums=len(unique_albums),
     )
+    drift.warnings = recommendation_warnings(drift)
+    return drift
 
 
 def profile_from_row(row) -> RecommendationProfile:
@@ -2485,6 +2571,28 @@ def profile_from_row(row) -> RecommendationProfile:
     )
 
 
+def recommendation_run_from_row(row) -> RecommendationRun:
+    try:
+        settings = AutoDjRequest.model_validate(json.loads(row["settings_json"]))
+    except Exception:
+        settings = AutoDjRequest()
+    try:
+        drift = RecommendationDrift.model_validate(json.loads(row["drift_json"]))
+    except Exception:
+        drift = RecommendationDrift()
+    try:
+        track_ids = [int(value) for value in json.loads(row["track_ids_json"] or "[]")]
+    except Exception:
+        track_ids = []
+    return RecommendationRun(
+        id=int(row["id"]),
+        settings=settings,
+        drift=drift,
+        track_ids=track_ids,
+        created_at=row["created_at"],
+    )
+
+
 @app.get("/autodj/profiles", response_model=list[RecommendationProfile])
 def list_recommendation_profiles() -> list[RecommendationProfile]:
     with connect() as conn:
@@ -2496,6 +2604,65 @@ def list_recommendation_profiles() -> list[RecommendationProfile]:
             """
         ).fetchall()
     return [profile_from_row(row) for row in rows]
+
+
+@app.get("/autodj/history", response_model=list[RecommendationRun])
+def recommendation_history(limit: int = Query(default=30, ge=1, le=100)) -> list[RecommendationRun]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, settings_json, drift_json, track_ids_json, created_at
+            FROM recommendation_runs
+            ORDER BY datetime(created_at) DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [recommendation_run_from_row(row) for row in rows]
+
+
+@app.post("/autodj/profiles/compare", response_model=list[RecommendationProfileComparison])
+def compare_recommendation_profiles(
+    request: RecommendationProfileComparisonRequest,
+) -> list[RecommendationProfileComparison]:
+    with connect() as conn:
+        if request.profile_ids:
+            placeholders = ",".join("?" for _ in request.profile_ids)
+            rows = conn.execute(
+                f"""
+                SELECT id, name, settings_json, is_default, created_at, updated_at
+                FROM recommendation_profiles
+                WHERE id IN ({placeholders})
+                ORDER BY is_default DESC, lower(name) ASC
+                """,
+                tuple(request.profile_ids),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT id, name, settings_json, is_default, created_at, updated_at
+                FROM recommendation_profiles
+                ORDER BY is_default DESC, lower(name) ASC
+                LIMIT 8
+                """
+            ).fetchall()
+
+    comparisons: list[RecommendationProfileComparison] = []
+    for row in rows[:8]:
+        profile = profile_from_row(row)
+        settings = profile.settings.model_copy(update={
+            "seed_track_id": request.seed_track_id,
+            "seed": request.seed,
+        })
+        tracks = generate_queue(settings)
+        comparisons.append(
+            RecommendationProfileComparison(
+                profile=profile,
+                drift=recommendation_drift(tracks),
+                top_tracks=tracks[:5],
+            )
+        )
+    return comparisons
 
 
 @app.post("/autodj/profiles", response_model=RecommendationProfile)

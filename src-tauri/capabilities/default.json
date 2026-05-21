@@ -3,5 +3,11 @@
   "identifier": "default",
   "description": "Default desktop window capability set.",
   "windows": ["main", "mini-player"],
-  "permissions": ["core:default", "core:webview:allow-create-webview-window", "dialog:allow-open"]
+  "permissions": [
+    "core:default",
+    "core:webview:allow-create-webview-window",
+    "core:window:allow-set-always-on-top",
+    "core:window:allow-set-size",
+    "dialog:allow-open"
+  ]
 }

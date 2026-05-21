@@ -408,6 +408,7 @@ export interface RecommendationDrift {
   average_rating: number | null;
   unique_artists: number;
   unique_albums: number;
+  warnings: string[];
 }
 
 export interface RecommendationProfile {
@@ -417,6 +418,20 @@ export interface RecommendationProfile {
   is_default: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface RecommendationRun {
+  id: number;
+  settings: AutoDjSettings;
+  drift: RecommendationDrift;
+  track_ids: number[];
+  created_at: string;
+}
+
+export interface RecommendationProfileComparison {
+  profile: RecommendationProfile;
+  drift: RecommendationDrift;
+  top_tracks: QueueTrack[];
 }
 
 export interface ExportResponse {

@@ -144,6 +144,24 @@ CREATE TABLE IF NOT EXISTS recommendation_profiles (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS recommendation_runs (
+  id INTEGER PRIMARY KEY,
+  settings_json TEXT NOT NULL,
+  drift_json TEXT NOT NULL,
+  track_ids_json TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS artwork_cache (
+  path_key TEXT PRIMARY KEY,
+  path TEXT NOT NULL,
+  file_modified_at TEXT NOT NULL,
+  file_size INTEGER NOT NULL,
+  media_type TEXT NOT NULL,
+  data BLOB NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
 CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album);
 CREATE INDEX IF NOT EXISTS idx_tracks_rating ON tracks(rating);
@@ -157,6 +175,7 @@ CREATE INDEX IF NOT EXISTS idx_autodj_avoid_rules_scope ON autodj_avoid_rules(sc
 CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_track_id ON recommendation_feedback(track_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_scan_error_samples_created_at ON scan_error_samples(created_at);
 CREATE INDEX IF NOT EXISTS idx_recommendation_profiles_default ON recommendation_profiles(is_default);
+CREATE INDEX IF NOT EXISTS idx_recommendation_runs_created_at ON recommendation_runs(created_at);
 """
 
 
