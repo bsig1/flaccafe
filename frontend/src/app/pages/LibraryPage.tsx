@@ -5,7 +5,6 @@ import {
   BarChart3,
   Download,
   FolderOpen,
-  ListMusic,
   MoreHorizontal,
   Pencil,
   Play,
@@ -25,6 +24,7 @@ import {
   X,
 } from "lucide-react";
 import type {
+  DragEvent as ReactDragEvent,
   MouseEvent as ReactMouseEvent,
   UIEvent as ReactUIEvent,
 } from "react";
@@ -39,7 +39,6 @@ import {
 } from "../../lib/api";
 import {
   placeFloatingMenu,
-  toggleOrderedValue,
 } from "../../lib/uiInteractions";
 import type {
   AlbumSummary,
@@ -58,6 +57,7 @@ import {
 import { BulkMetadataModal } from "../components/modals";
 import { QuickStartPanel } from "../components/QuickStartPanel";
 import { TrackDetailsPanel } from "../components/TrackDetailsPanel";
+import { LibraryViewTabs } from "./library/LibraryViewTabs";
 import {
   ColumnContextMenu,
   LibraryColumnDefinition,
@@ -83,6 +83,7 @@ import {
   formatShortDate,
   formatTime,
   libraryColumnDefinitions,
+  libraryColumnKeySet,
   librarySelectionColumnWidth,
   normalizeLibraryColumns,
   trackGenre,
@@ -259,11 +260,15 @@ export function LibraryPage({
   const [selectedTrackIds, setSelectedTrackIds] = useState<Set<number>>(() => new Set());
   const [showAllDuplicateGroups, setShowAllDuplicateGroups] = useState(false);
   const [bulkMetadataOpen, setBulkMetadataOpen] = useState(false);
+  const [draggedColumn, setDraggedColumn] = useState<MetadataColumnKey | null>(null);
+  const [dragOverColumn, setDragOverColumn] = useState<MetadataColumnKey | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const selectionAnchorId = useRef<number | null>(null);
 
   const visibleColumns = normalizeLibraryColumns(libraryVisibleColumns);
-  const visibleColumnDefs = libraryColumnDefinitions.filter((column) => visibleColumns.includes(column.key));
+  const visibleColumnDefs = visibleColumns
+    .map((key) => libraryColumnDefinitions.find((column) => column.key === key))
+    .filter((column): column is LibraryColumnDefinition => Boolean(column));
   const tableWidth = librarySelectionColumnWidth + columnWidths.play + visibleColumnDefs.reduce((total, column) => total + columnWidths[column.key], 0);
   const rowPadding = compactRows ? "px-3 py-2" : "px-3 py-3";
   const activeAlbum = albums.find((album) => album.id === selectedAlbumId) ?? null;
@@ -503,7 +508,111 @@ export function LibraryPage({
     if (visibleColumns.includes(column) && visibleColumns.length <= 1) {
       return;
     }
-    setLibraryVisibleColumns(toggleOrderedValue(visibleColumns, column, libraryColumnDefinitions.map((definition) => definition.key)));
+    setLibraryVisibleColumns(
+      visibleColumns.includes(column)
+        ? visibleColumns.filter((visibleColumn) => visibleColumn !== column)
+        : [...visibleColumns, column],
+    );
+  }
+
+  function moveVisibleColumn(source: MetadataColumnKey, target: MetadataColumnKey, placement: "before" | "after") {
+    if (source === target) {
+      return;
+    }
+    const nextColumns = [...visibleColumns];
+    const sourceIndex = nextColumns.indexOf(source);
+    const targetIndex = nextColumns.indexOf(target);
+    if (sourceIndex < 0 || targetIndex < 0) {
+      return;
+    }
+    const [moved] = nextColumns.splice(sourceIndex, 1);
+    const currentTargetIndex = nextColumns.indexOf(target);
+    nextColumns.splice(placement === "after" ? currentTargetIndex + 1 : currentTargetIndex, 0, moved);
+    setLibraryVisibleColumns(nextColumns);
+  }
+
+  function handleColumnDragStart(event: ReactDragEvent<HTMLTableCellElement>, column: string) {
+    if (!libraryColumnKeySet.has(column as MetadataColumnKey)) {
+      return;
+    }
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", column);
+    setDraggedColumn(column as MetadataColumnKey);
+    setDragOverColumn(null);
+    setColumnMenu(null);
+  }
+
+  function handleColumnDragOver(event: ReactDragEvent<HTMLTableCellElement>, column: string) {
+    if (!draggedColumn || draggedColumn === column || !libraryColumnKeySet.has(column as MetadataColumnKey)) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setDragOverColumn(column as MetadataColumnKey);
+  }
+
+  function handleColumnDrop(event: ReactDragEvent<HTMLTableCellElement>, column: string) {
+    event.preventDefault();
+    const source = event.dataTransfer.getData("text/plain") || draggedColumn;
+    if (source && libraryColumnKeySet.has(source as MetadataColumnKey) && libraryColumnKeySet.has(column as MetadataColumnKey)) {
+      const bounds = event.currentTarget.getBoundingClientRect();
+      const placement = event.clientX > bounds.left + bounds.width / 2 ? "after" : "before";
+      moveVisibleColumn(source as MetadataColumnKey, column as MetadataColumnKey, placement);
+    }
+    setDraggedColumn(null);
+    setDragOverColumn(null);
+  }
+
+  function handleColumnDragEnd() {
+    setDraggedColumn(null);
+    setDragOverColumn(null);
+  }
+
+  function columnFromPoint(x: number, y: number): MetadataColumnKey | null {
+    const target = document.elementFromPoint(x, y) as HTMLElement | null;
+    const header = target?.closest<HTMLElement>("[data-library-column]");
+    const column = header?.dataset.libraryColumn;
+    return column && libraryColumnKeySet.has(column as MetadataColumnKey) ? (column as MetadataColumnKey) : null;
+  }
+
+  function handleColumnPointerDragStart(event: ReactMouseEvent<HTMLButtonElement>, column: string) {
+    if (!libraryColumnKeySet.has(column as MetadataColumnKey)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+
+    const sourceColumn = column as MetadataColumnKey;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "grabbing";
+    document.body.style.userSelect = "none";
+    setDraggedColumn(sourceColumn);
+    setDragOverColumn(null);
+
+    function handleMove(moveEvent: MouseEvent) {
+      const targetColumn = columnFromPoint(moveEvent.clientX, moveEvent.clientY);
+      setDragOverColumn(targetColumn && targetColumn !== sourceColumn ? targetColumn : null);
+    }
+
+    function handleUp(upEvent: MouseEvent) {
+      const targetColumn = columnFromPoint(upEvent.clientX, upEvent.clientY);
+      if (targetColumn && targetColumn !== sourceColumn) {
+        const header = document.querySelector<HTMLElement>(`[data-library-column="${targetColumn}"]`);
+        const bounds = header?.getBoundingClientRect();
+        const placement = bounds && upEvent.clientX > bounds.left + bounds.width / 2 ? "after" : "before";
+        moveVisibleColumn(sourceColumn, targetColumn, placement);
+      }
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      setDraggedColumn(null);
+      setDragOverColumn(null);
+      window.removeEventListener("mousemove", handleMove);
+      window.removeEventListener("mouseup", handleUp);
+    }
+
+    window.addEventListener("mousemove", handleMove);
+    window.addEventListener("mouseup", handleUp);
   }
 
   function columnTextClass(column: LibraryColumnDefinition) {
@@ -535,6 +644,22 @@ export function LibraryPage({
         return display(trackGenre(track), "-");
       case "bitrate":
         return formatBitrate(track.bitrate);
+      case "replaygain_track_gain_db":
+        return track.replaygain_track_gain_db === null || track.replaygain_track_gain_db === undefined
+          ? "-"
+          : `${track.replaygain_track_gain_db.toFixed(2)} dB`;
+      case "replaygain_album_gain_db":
+        return track.replaygain_album_gain_db === null || track.replaygain_album_gain_db === undefined
+          ? "-"
+          : `${track.replaygain_album_gain_db.toFixed(2)} dB`;
+      case "replaygain_track_peak":
+        return track.replaygain_track_peak === null || track.replaygain_track_peak === undefined
+          ? "-"
+          : track.replaygain_track_peak.toFixed(3);
+      case "replaygain_album_peak":
+        return track.replaygain_album_peak === null || track.replaygain_album_peak === undefined
+          ? "-"
+          : track.replaygain_album_peak.toFixed(3);
       case "analysis_genre":
         return display(track.analysis_genre, "-");
       case "analysis_genre_confidence":
@@ -601,6 +726,14 @@ export function LibraryPage({
             onSort={handleSort}
             onResize={handleResize}
             align={column.align}
+            draggableColumn={column.key}
+            isDragging={draggedColumn === column.key}
+            isDragOver={dragOverColumn === column.key}
+            onColumnDragStart={handleColumnDragStart}
+            onColumnDragOver={handleColumnDragOver}
+            onColumnDrop={handleColumnDrop}
+            onColumnDragEnd={handleColumnDragEnd}
+            onColumnPointerDragStart={handleColumnPointerDragStart}
           />
         ))}
       </tr>
@@ -660,15 +793,6 @@ export function LibraryPage({
     ));
   }
 
-  const primaryLibraryViews = [
-    { id: "tracks" as const, label: "Tracks", icon: ListMusic },
-    { id: "albums" as const, label: "Albums", icon: Album },
-    { id: "playlists" as const, label: "Playlists", icon: ListMusic },
-  ];
-  const utilityLibraryViews = [
-    { id: "smart" as const, label: "Smart Playlists", icon: Wand2 },
-    { id: "health" as const, label: "Library Health", icon: ShieldCheck },
-  ];
   const contextSelectionTracks =
     contextMenu && selectedTrackIds.has(contextMenu.track.id) ? selectedTracks : contextMenu ? [contextMenu.track] : [];
   const contextSelectionIds = contextSelectionTracks.map((track) => track.id);
@@ -723,60 +847,7 @@ export function LibraryPage({
         </div>
       </header>
       <div className="flex min-h-14 flex-wrap items-center justify-between gap-3 border-b border-line bg-[rgb(var(--color-strip))] px-6 py-3">
-        <div className="flex max-w-full flex-wrap items-center gap-1 rounded border border-line bg-panel p-1">
-          {primaryLibraryViews.map((item) => {
-            const Icon = item.icon;
-            const active = libraryView === item.id;
-            return (
-              <button
-                key={item.id}
-                className={`inline-flex h-8 items-center gap-2 rounded px-3 text-sm transition ${
-                  active ? "bg-white/10 text-white" : "text-muted hover:text-white"
-                }`}
-                type="button"
-                onClick={() => setLibraryView(item.id)}
-              >
-                <Icon size={15} />
-                {item.label}
-              </button>
-            );
-          })}
-          <details className="relative" data-auto-close>
-            <summary
-              className={`inline-flex h-8 cursor-pointer list-none items-center gap-2 rounded px-3 text-sm transition [&::-webkit-details-marker]:hidden ${
-                libraryView === "smart" || libraryView === "health"
-                  ? "bg-white/10 text-white"
-                  : "text-muted hover:text-white"
-              }`}
-              title="Library tools"
-            >
-              <MoreHorizontal size={15} />
-              Tools
-            </summary>
-            <div className="absolute left-0 top-10 z-40 w-52 overflow-hidden rounded border border-line bg-[rgb(var(--color-popover))] py-1 text-sm shadow-2xl">
-              {utilityLibraryViews.map((item) => {
-                const Icon = item.icon;
-                const active = libraryView === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    className={`flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10 ${
-                      active ? "text-white" : "text-muted"
-                    }`}
-                    type="button"
-                    onClick={(event) => {
-                      setLibraryView(item.id);
-                      event.currentTarget.closest("details")?.removeAttribute("open");
-                    }}
-                  >
-                    <Icon size={15} />
-                    {item.label}
-                  </button>
-                );
-              })}
-            </div>
-          </details>
-        </div>
+        <LibraryViewTabs libraryView={libraryView} setLibraryView={setLibraryView} />
 
         <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
           <button
@@ -1374,7 +1445,7 @@ export function LibraryPage({
           <div className="mb-2 flex items-center justify-between gap-3">
             <div>
               <div className="font-semibold text-white">Visible Columns</div>
-              <div className="text-xs text-muted">Right-click the table header to edit this list.</div>
+              <div className="text-xs text-muted">Drag headers to reorder. Right-click here to show or hide fields.</div>
             </div>
             <button
               className="rounded border border-line px-2 py-1 text-xs text-muted hover:text-white"

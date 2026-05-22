@@ -5,7 +5,11 @@ import {
   GripVertical,
   Star,
 } from "lucide-react";
-import type { MouseEvent as ReactMouseEvent,ReactNode } from "react";
+import type {
+  DragEvent as ReactDragEvent,
+  MouseEvent as ReactMouseEvent,
+  ReactNode,
+} from "react";
 import { useState } from "react";
 
 import type {
@@ -31,6 +35,14 @@ export function ResizableHeader({
   onSort,
   onResize,
   align = "left",
+  draggableColumn,
+  isDragging = false,
+  isDragOver = false,
+  onColumnDragStart,
+  onColumnDragOver,
+  onColumnDrop,
+  onColumnDragEnd,
+  onColumnPointerDragStart,
 }: {
   label: string;
   column: string;
@@ -40,6 +52,14 @@ export function ResizableHeader({
   onSort: (key: SortKey) => void;
   onResize: (column: string, width: number) => void;
   align?: "left" | "right";
+  draggableColumn?: string;
+  isDragging?: boolean;
+  isDragOver?: boolean;
+  onColumnDragStart?: (event: ReactDragEvent<HTMLTableCellElement>, column: string) => void;
+  onColumnDragOver?: (event: ReactDragEvent<HTMLTableCellElement>, column: string) => void;
+  onColumnDrop?: (event: ReactDragEvent<HTMLTableCellElement>, column: string) => void;
+  onColumnDragEnd?: () => void;
+  onColumnPointerDragStart?: (event: ReactMouseEvent<HTMLButtonElement>, column: string) => void;
 }) {
   function handleResizeStart(event: ReactMouseEvent<HTMLButtonElement>) {
     event.preventDefault();
@@ -61,11 +81,34 @@ export function ResizableHeader({
   }
 
   return (
-    <th className="relative border-r border-line/50 px-3 py-0 font-medium" style={{ width }}>
+    <th
+      className={`relative border-r border-line/50 px-3 py-0 font-medium transition ${
+        draggableColumn ? "cursor-grab active:cursor-grabbing" : ""
+      } ${isDragging ? "opacity-45" : ""} ${isDragOver ? "bg-moss/10 ring-1 ring-inset ring-moss/40" : ""}`}
+      draggable={Boolean(draggableColumn)}
+      data-library-column={draggableColumn}
+      style={{ width }}
+      title={draggableColumn ? "Drag to move this column" : undefined}
+      onDragStart={(event) => draggableColumn && onColumnDragStart?.(event, draggableColumn)}
+      onDragOver={(event) => draggableColumn && onColumnDragOver?.(event, draggableColumn)}
+      onDrop={(event) => draggableColumn && onColumnDrop?.(event, draggableColumn)}
+      onDragEnd={onColumnDragEnd}
+    >
+      {draggableColumn && (
+        <button
+          type="button"
+          className="absolute left-0 top-0 grid h-full w-4 cursor-grab place-items-center text-line hover:text-moss active:cursor-grabbing"
+          title={`Move ${label} column`}
+          onClick={(event) => event.stopPropagation()}
+          onMouseDown={(event) => onColumnPointerDragStart?.(event, draggableColumn)}
+        >
+          <GripVertical size={12} />
+        </button>
+      )}
       {sortKey ? (
         <button
           type="button"
-          className={`flex h-10 w-full items-center gap-1.5 uppercase hover:text-white ${
+          className={`flex h-10 w-full items-center gap-1.5 uppercase hover:text-white ${draggableColumn ? "pl-2" : ""} ${
             align === "right" ? "justify-end" : "justify-start"
           }`}
           onClick={() => onSort(sortKey)}
@@ -74,7 +117,7 @@ export function ResizableHeader({
           {sortIndicator(sort, sortKey)}
         </button>
       ) : (
-        <div className="flex h-10 items-center uppercase">{label}</div>
+        <div className={`flex h-10 items-center uppercase ${draggableColumn ? "pl-2" : ""}`}>{label}</div>
       )}
       <button
         type="button"

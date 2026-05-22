@@ -26,16 +26,20 @@ import {
   display,
   formatPlaybackTime,
   miniPlayerChannelName,
+  readMiniPlayerAlwaysOnTop,
+  readMiniPlayerSize,
   readMiniPlayerSnapshot,
   sendMiniPlayerCommand,
   storageKeys,
   useRangeWheelControls,
+  writeMiniPlayerAlwaysOnTop,
+  writeMiniPlayerSize,
 } from "../shared";
 
 export function MiniPlayerWindow() {
   useRangeWheelControls();
   const [snapshot, setSnapshot] = useState<MiniPlayerSnapshot>(readMiniPlayerSnapshot);
-  const [alwaysOnTop, setAlwaysOnTop] = useState(false);
+  const [alwaysOnTop, setAlwaysOnTop] = useState(readMiniPlayerAlwaysOnTop);
   const track = snapshot.track;
   const duration = snapshot.duration || track?.duration_seconds || 0;
   const progressPercent = duration > 0 ? Math.min(100, (snapshot.currentTime / duration) * 100) : 0;
@@ -68,6 +72,11 @@ export function MiniPlayerWindow() {
   useEffect(() => {
     setArtworkFailed(false);
   }, [track?.id]);
+
+  useEffect(() => {
+    const size = readMiniPlayerSize();
+    void applyMiniPlayerChrome(alwaysOnTop, size.width, size.height);
+  }, []);
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
@@ -117,20 +126,31 @@ export function MiniPlayerWindow() {
 
   async function toggleAlwaysOnTop() {
     try {
-      const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
       const next = !alwaysOnTop;
-      await getCurrentWebviewWindow().setAlwaysOnTop(next);
+      const size = readMiniPlayerSize();
+      await applyMiniPlayerChrome(next, size.width, size.height);
+      writeMiniPlayerAlwaysOnTop(next);
       setAlwaysOnTop(next);
     } catch {
-      setAlwaysOnTop((current) => !current);
+      setAlwaysOnTop((current) => {
+        writeMiniPlayerAlwaysOnTop(!current);
+        return !current;
+      });
     }
   }
 
   async function snapMiniPlayer(width: number, height: number) {
+    writeMiniPlayerSize(width, height);
+    await applyMiniPlayerChrome(alwaysOnTop, width, height);
+  }
+
+  async function applyMiniPlayerChrome(nextAlwaysOnTop: boolean, width: number, height: number) {
     try {
       const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
       const { LogicalSize } = await import("@tauri-apps/api/dpi");
-      await getCurrentWebviewWindow().setSize(new LogicalSize(width, height));
+      const currentWindow = getCurrentWebviewWindow();
+      await currentWindow.setAlwaysOnTop(nextAlwaysOnTop);
+      await currentWindow.setSize(new LogicalSize(width, height));
     } catch {
       // Browser preview cannot resize a Tauri window.
     }

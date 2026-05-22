@@ -25,7 +25,13 @@ class Track(BaseModel):
     year: int | None = None
     duration_seconds: float | None = None
     bitrate: int | None = None
+    replaygain_track_gain_db: float | None = None
+    replaygain_album_gain_db: float | None = None
+    replaygain_track_peak: float | None = None
+    replaygain_album_peak: float | None = None
     audio_fingerprint: str | None = None
+    acoustic_fingerprint: str | None = None
+    acoustic_fingerprint_updated_at: str | None = None
     rating: float | None = None
     play_count: int = 0
     skip_count: int = 0
@@ -156,6 +162,7 @@ class DuplicateGroup(BaseModel):
     duration_spread_seconds: float | None = None
     bitrate_spread: int | None = None
     shared_fingerprint: bool = False
+    shared_acoustic_fingerprint: bool = False
     average_audio_similarity: float | None = None
     path_roots: list[str] = Field(default_factory=list)
     analyzed_tracks: int = 0
@@ -207,6 +214,7 @@ class FilenameTagInferencePreview(BaseModel):
     current: dict[str, Any] = Field(default_factory=dict)
     inferred: dict[str, Any] = Field(default_factory=dict)
     changed_fields: list[str] = Field(default_factory=list)
+    accepted: bool = True
     applied: bool = False
     error: str | None = None
 
@@ -250,6 +258,17 @@ class FileOrganizationResponse(BaseModel):
     removed_empty_folders: int = 0
 
 
+class FileOrganizationReportRequest(FileOrganizationRequest):
+    report_path: str | None = None
+
+
+class FileOrganizationReportResponse(BaseModel):
+    report_path: str
+    total: int = 0
+    changed_count: int = 0
+    collisions: int = 0
+
+
 class CsvMetadataExportRequest(BaseModel):
     csv_path: str | None = None
     track_ids: list[int] | None = Field(default=None, max_length=10000)
@@ -265,7 +284,9 @@ class CsvMetadataExportResponse(BaseModel):
 class CsvMetadataImportRequest(BaseModel):
     csv_path: str
     track_ids: list[int] | None = Field(default=None, max_length=10000)
+    column_map: dict[str, str] = Field(default_factory=dict)
     missing_only: bool = True
+    clear_blank_fields: bool = False
     apply: bool = False
     limit: int = Field(default=10000, ge=1, le=100000)
 
@@ -278,6 +299,7 @@ class CsvMetadataImportPreview(BaseModel):
     current: dict[str, Any] = Field(default_factory=dict)
     imported: dict[str, Any] = Field(default_factory=dict)
     changed_fields: list[str] = Field(default_factory=list)
+    conflict_fields: list[str] = Field(default_factory=list)
     applied: bool = False
     error: str | None = None
 
@@ -303,6 +325,119 @@ class CsvMetadataImportReportResponse(BaseModel):
     matched: int = 0
     changed: int = 0
     errors: int = 0
+
+
+class DuplicateActionRequest(BaseModel):
+    action: Literal["keep_best", "remove_selected", "export_report"]
+    track_ids: list[int] = Field(default_factory=list, max_length=10000)
+    groups: list[list[int]] = Field(default_factory=list, max_length=1000)
+    delete_files: bool = False
+    report_path: str | None = None
+
+
+class DuplicateActionResponse(BaseModel):
+    action: str
+    affected: int = 0
+    removed_track_ids: list[int] = Field(default_factory=list)
+    deleted_files: int = 0
+    report_path: str | None = None
+    errors: list[str] = Field(default_factory=list)
+
+
+class DuplicateReviewRequest(BaseModel):
+    track_ids: list[int] = Field(default_factory=list, max_length=10000)
+    groups: list[list[int]] = Field(default_factory=list, max_length=1000)
+    limit: int = Field(default=500, ge=1, le=5000)
+
+
+class DuplicateReviewResponse(BaseModel):
+    tracks: list[Track] = Field(default_factory=list)
+    groups: list[DuplicateGroup] = Field(default_factory=list)
+    missing_track_ids: list[int] = Field(default_factory=list)
+
+
+class ChromaprintConfigRequest(BaseModel):
+    fpcalc_path: str | None = None
+
+
+class ChromaprintStatusResponse(BaseModel):
+    available: bool = False
+    configured_path: str | None = None
+    resolved_path: str | None = None
+    version: str | None = None
+    tool_directory: str
+    checked_paths: list[str] = Field(default_factory=list)
+    message: str
+    errors: list[str] = Field(default_factory=list)
+
+
+class ChromaprintInstallRequest(BaseModel):
+    source_url: str | None = None
+
+
+class ChromaprintInstallResponse(BaseModel):
+    installed: bool = False
+    fpcalc_path: str | None = None
+    source_url: str
+    message: str
+    errors: list[str] = Field(default_factory=list)
+
+
+class AcousticFingerprintRequest(BaseModel):
+    track_ids: list[int] | None = Field(default=None, max_length=10000)
+    overwrite: bool = False
+    limit: int = Field(default=200, ge=1, le=10000)
+
+
+class AcousticFingerprintResponse(BaseModel):
+    tool_available: bool
+    processed: int = 0
+    updated: int = 0
+    skipped: int = 0
+    errors: list[str] = Field(default_factory=list)
+
+
+class BulkUndoLogEntry(BaseModel):
+    id: int
+    batch_id: str | None = None
+    action_type: str
+    summary: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+
+
+class BulkUndoBatchEntry(BaseModel):
+    batch_id: str
+    action_type: str
+    entries: int = 0
+    summary: str
+    first_created_at: str
+    last_created_at: str
+
+
+class BulkUndoRestoreResponse(BaseModel):
+    entry_id: int
+    batch_id: str | None = None
+    action_type: str
+    restored: bool = False
+    affected_track_ids: list[int] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
+class ReportFileRequest(BaseModel):
+    report_path: str
+    max_bytes: int = Field(default=750_000, ge=1024, le=5_000_000)
+
+
+class ReportFileResponse(BaseModel):
+    report_path: str
+    exists: bool = False
+    size_bytes: int = 0
+    modified_at: str | None = None
+    parsed_json: Any | None = None
+    raw_text: str | None = None
+    truncated: bool = False
+    error: str | None = None
 
 
 class ScanRequest(BaseModel):

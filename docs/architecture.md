@@ -9,7 +9,7 @@ React UI
   -> SQLite, mutagen scanner, file tag writer, recommender, CLAP analysis
 ```
 
-The app started with a local FastAPI backend because the scanner, metadata handling, and recommender are Python-first. React talks to ordinary HTTP endpoints, which keeps the frontend easy to run in a browser preview and keeps backend behavior testable without the desktop shell. Tauri owns native concerns: windowing, folder dialogs, file reveal/open actions, process management, app icons, and Windows media controls.
+The app started with a local FastAPI backend because the scanner, metadata handling, and recommender are Python-first. React talks to ordinary HTTP endpoints, which keeps the frontend easy to run in a browser preview and keeps backend behavior testable without the desktop shell. Tauri owns native concerns: windowing, folder dialogs, file reveal/open actions, process management, app icons, Windows media controls, and the optional Rust playback engine.
 
 ## Runtime Shape
 
@@ -19,6 +19,8 @@ The app started with a local FastAPI backend because the scanner, metadata handl
 - Optional CLAP/Torch dependencies live outside the bundled backend in an app-managed ML runtime.
 
 ## Repo Layout
+
+For the maintained file-tree guide, see [Project Structure](project-structure.md). The sketch below is the architecture-oriented view of the same boundaries.
 
 ```text
 backend/
@@ -45,6 +47,7 @@ frontend/
       player/             bottom player and detached mini-player window
     lib/
       api.ts              typed HTTP API helpers
+      nativePlayback.ts   Tauri bridge for experimental Rust playback
       tauriMedia.ts       Windows media-control bridge
       uiInteractions.ts   menu positioning and small UI helpers
     config/
@@ -58,6 +61,7 @@ src-tauri/
   tauri.conf.json         Tauri v2 config and bundle metadata
   capabilities/           allowed Tauri commands
   src/main.rs             backend launcher, folder reveal, media-control commands
+  src/native_playback.rs  rodio/cpal/Symphonia playback commands
 
 scripts/
   dev.ps1                 Windows-friendly dev server runner
@@ -85,6 +89,7 @@ Tauri should stay thin. It can:
 
 - Start, stop, and restart the backend process.
 - Open folders, reveal files, and show native dialogs.
+- Play local audio through the optional Rust playback engine.
 - Publish Windows System Media Transport Controls state.
 - Package the app and declare capabilities.
 

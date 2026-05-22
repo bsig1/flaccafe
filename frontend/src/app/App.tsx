@@ -98,24 +98,46 @@ import {
   updateSettings,
   updateTrackMetadata,
   updateTrackRating,
+  applyDuplicateAction,
+  exportFileOrganizationReport,
+  fetchBulkUndoLog,
+  fetchBulkUndoBatches,
+  fetchChromaprintSetup,
+  fetchDuplicateReview,
+  readReportFile,
+  restoreBulkUndoBatch,
+  restoreBulkUndoEntry,
+  runAcousticFingerprintPass,
+  saveChromaprintSetup,
+  installChromaprintTool,
 } from "../lib/api";
 import {
   placeFloatingMenu,
 } from "../lib/uiInteractions";
 import type {
   AlbumSummary,
+  AcousticFingerprintResponse,
   ArtistInfoResponse,
   AudioAnalysisCoverage,
   AudioAnalysisProgress,
   AutoDjAvoidRule,
   AutoDjSettings,
+  BulkUndoLogEntry,
+  BulkUndoBatchEntry,
+  BulkUndoRestoreResponse,
+  ChromaprintInstallResponse,
   CacheClearTarget,
+  ChromaprintStatusResponse,
   ClapInstallDevice,
   ClapInstallProgress,
   ClapStatusResponse,
   CsvMetadataExportResponse,
   CsvMetadataImportReportResponse,
   CsvMetadataImportResponse,
+  DuplicateActionRequest,
+  DuplicateActionResponse,
+  DuplicateReviewResponse,
+  FileOrganizationReportResponse,
   FileOrganizationResponse,
   FilenameTagInferenceResponse,
   LibraryHealthResponse,
@@ -129,6 +151,7 @@ import type {
   RecommendationDrift,
   RecommendationProfile,
   RecommendationRun,
+  ReportFileResponse,
   ScanProgress,
   ScanResult,
   SettingsResponse,
@@ -147,6 +170,7 @@ import { AnalysisPage } from "./pages/AnalysisPage";
 import { ArtistPage } from "./pages/ArtistPage";
 import { AutoDjPage } from "./pages/AutoDjPage";
 import { BackendRecoveryPage } from "./pages/BackendRecoveryPage";
+import { FileManagementPage } from "./pages/FileManagementPage";
 import { HistoryPage } from "./pages/HistoryPage";
 import { LibraryPage } from "./pages/LibraryPage";
 import { NowPlayingPage } from "./pages/NowPlayingPage";
@@ -264,9 +288,19 @@ export default function App() {
   const [libraryHealth, setLibraryHealth] = useState<LibraryHealthResponse | null>(null);
   const [filenameTagPreview, setFilenameTagPreview] = useState<FilenameTagInferenceResponse | null>(null);
   const [fileOrganizationPreview, setFileOrganizationPreview] = useState<FileOrganizationResponse | null>(null);
+  const [fileOrganizationReport, setFileOrganizationReport] = useState<FileOrganizationReportResponse | null>(null);
   const [metadataCsvExport, setMetadataCsvExport] = useState<CsvMetadataExportResponse | null>(null);
   const [metadataCsvImportPreview, setMetadataCsvImportPreview] = useState<CsvMetadataImportResponse | null>(null);
   const [metadataCsvImportReport, setMetadataCsvImportReport] = useState<CsvMetadataImportReportResponse | null>(null);
+  const [duplicateActionResult, setDuplicateActionResult] = useState<DuplicateActionResponse | null>(null);
+  const [duplicateReview, setDuplicateReview] = useState<DuplicateReviewResponse | null>(null);
+  const [chromaprintSetup, setChromaprintSetup] = useState<ChromaprintStatusResponse | null>(null);
+  const [chromaprintInstallResult, setChromaprintInstallResult] = useState<ChromaprintInstallResponse | null>(null);
+  const [acousticFingerprintResult, setAcousticFingerprintResult] = useState<AcousticFingerprintResponse | null>(null);
+  const [bulkUndoLog, setBulkUndoLog] = useState<BulkUndoLogEntry[]>([]);
+  const [bulkUndoBatches, setBulkUndoBatches] = useState<BulkUndoBatchEntry[]>([]);
+  const [bulkUndoRestoreResult, setBulkUndoRestoreResult] = useState<BulkUndoRestoreResponse | null>(null);
+  const [reportFile, setReportFile] = useState<ReportFileResponse | null>(null);
   const [historyEvents, setHistoryEvents] = useState<PlayEventEntry[]>([]);
   const [selectedAlbumId, setSelectedAlbumId] = useState<number | null>(null);
   const [selectedAlbumTracks, setSelectedAlbumTracks] = useState<Track[]>([]);
@@ -1776,10 +1810,11 @@ export default function App() {
     }
   }
 
-  async function handlePreviewFilenameTags(pattern: string, missingOnly: boolean) {
+  async function handlePreviewFilenameTags(pattern: string, missingOnly: boolean, trackIds?: number[] | null) {
     try {
       const response = await inferFilenameTags({
         pattern,
+        track_ids: trackIds?.length ? trackIds : null,
         missing_only: missingOnly,
         apply: false,
         limit: 200,
@@ -1791,13 +1826,14 @@ export default function App() {
     }
   }
 
-  async function handleApplyFilenameTags(pattern: string, missingOnly: boolean) {
+  async function handleApplyFilenameTags(pattern: string, missingOnly: boolean, trackIds?: number[] | null) {
     if (!window.confirm("Apply inferred filename tags to the library? This uses the current file-write setting for audio tags.")) {
       return;
     }
     try {
       const response = await inferFilenameTags({
         pattern,
+        track_ids: trackIds?.length ? trackIds : null,
         missing_only: missingOnly,
         apply: true,
         limit: 10000,
@@ -1813,12 +1849,13 @@ export default function App() {
   async function handlePreviewFileOrganization(
     template: string,
     baseFolder?: string | null,
-    options?: { collisionStrategy?: "skip" | "auto_rename"; cleanupEmptyFolders?: boolean },
+    options?: { collisionStrategy?: "skip" | "auto_rename"; cleanupEmptyFolders?: boolean; trackIds?: number[] | null },
   ) {
     try {
       const response = await organizeFiles({
         template,
         base_folder: baseFolder || null,
+        track_ids: options?.trackIds?.length ? options.trackIds : null,
         collision_strategy: options?.collisionStrategy ?? "skip",
         cleanup_empty_folders: options?.cleanupEmptyFolders ?? false,
         apply: false,
@@ -1834,7 +1871,7 @@ export default function App() {
   async function handleApplyFileOrganization(
     template: string,
     baseFolder?: string | null,
-    options?: { collisionStrategy?: "skip" | "auto_rename"; cleanupEmptyFolders?: boolean },
+    options?: { collisionStrategy?: "skip" | "auto_rename"; cleanupEmptyFolders?: boolean; trackIds?: number[] | null },
   ) {
     if (!window.confirm("Move audio files on disk and update FLAC Cafe paths? Preview first and make sure the target folder is right.")) {
       return;
@@ -1843,6 +1880,7 @@ export default function App() {
       const response = await organizeFiles({
         template,
         base_folder: baseFolder || null,
+        track_ids: options?.trackIds?.length ? options.trackIds : null,
         collision_strategy: options?.collisionStrategy ?? "skip",
         cleanup_empty_folders: options?.cleanupEmptyFolders ?? false,
         apply: true,
@@ -1859,9 +1897,31 @@ export default function App() {
     }
   }
 
-  async function handleExportMetadataCsv() {
+  async function handleExportFileOrganizationReport(
+    template: string,
+    baseFolder?: string | null,
+    options?: { collisionStrategy?: "skip" | "auto_rename"; cleanupEmptyFolders?: boolean; trackIds?: number[] | null },
+  ) {
     try {
-      const response = await exportMetadataCsv({ limit: 200000 });
+      const response = await exportFileOrganizationReport({
+        template,
+        base_folder: baseFolder || null,
+        track_ids: options?.trackIds?.length ? options.trackIds : null,
+        collision_strategy: options?.collisionStrategy ?? "skip",
+        cleanup_empty_folders: options?.cleanupEmptyFolders ?? false,
+        apply: false,
+        limit: 10000,
+      });
+      setFileOrganizationReport(response);
+      setStatus(`Exported file organization report to ${response.report_path}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not export file organization report");
+    }
+  }
+
+  async function handleExportMetadataCsv(trackIds?: number[] | null) {
+    try {
+      const response = await exportMetadataCsv({ track_ids: trackIds?.length ? trackIds : null, limit: 200000 });
       setMetadataCsvExport(response);
       setStatus(`Exported ${response.track_count.toLocaleString()} tracks to ${response.csv_path}`);
     } catch (error) {
@@ -1869,7 +1929,11 @@ export default function App() {
     }
   }
 
-  async function handlePreviewMetadataCsv(csvPath: string, missingOnly: boolean) {
+  async function handlePreviewMetadataCsv(
+    csvPath: string,
+    missingOnly: boolean,
+    options?: { trackIds?: number[] | null; columnMap?: Record<string, string>; clearBlankFields?: boolean },
+  ) {
     const trimmedPath = csvPath.trim();
     if (!trimmedPath) {
       setStatus("Choose a CSV path first");
@@ -1878,7 +1942,10 @@ export default function App() {
     try {
       const response = await importMetadataCsv({
         csv_path: trimmedPath,
+        track_ids: options?.trackIds?.length ? options.trackIds : null,
+        column_map: options?.columnMap ?? {},
         missing_only: missingOnly,
+        clear_blank_fields: options?.clearBlankFields ?? false,
         apply: false,
         limit: 10000,
       });
@@ -1889,7 +1956,11 @@ export default function App() {
     }
   }
 
-  async function handleApplyMetadataCsv(csvPath: string, missingOnly: boolean) {
+  async function handleApplyMetadataCsv(
+    csvPath: string,
+    missingOnly: boolean,
+    options?: { trackIds?: number[] | null; columnMap?: Record<string, string>; clearBlankFields?: boolean },
+  ) {
     const trimmedPath = csvPath.trim();
     if (!trimmedPath) {
       setStatus("Choose a CSV path first");
@@ -1901,7 +1972,10 @@ export default function App() {
     try {
       const response = await importMetadataCsv({
         csv_path: trimmedPath,
+        track_ids: options?.trackIds?.length ? options.trackIds : null,
+        column_map: options?.columnMap ?? {},
         missing_only: missingOnly,
+        clear_blank_fields: options?.clearBlankFields ?? false,
         apply: true,
         limit: 10000,
       });
@@ -1913,7 +1987,11 @@ export default function App() {
     }
   }
 
-  async function handleExportMetadataCsvReport(csvPath: string, missingOnly: boolean) {
+  async function handleExportMetadataCsvReport(
+    csvPath: string,
+    missingOnly: boolean,
+    options?: { trackIds?: number[] | null; columnMap?: Record<string, string>; clearBlankFields?: boolean },
+  ) {
     const trimmedPath = csvPath.trim();
     if (!trimmedPath) {
       setStatus("Choose a CSV path first");
@@ -1922,7 +2000,10 @@ export default function App() {
     try {
       const response = await exportMetadataCsvImportReport({
         csv_path: trimmedPath,
+        track_ids: options?.trackIds?.length ? options.trackIds : null,
+        column_map: options?.columnMap ?? {},
         missing_only: missingOnly,
+        clear_blank_fields: options?.clearBlankFields ?? false,
         apply: false,
         limit: 10000,
       });
@@ -1930,6 +2011,192 @@ export default function App() {
       setStatus(`Exported CSV dry-run report to ${response.report_path}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not export CSV report");
+    }
+  }
+
+  async function handleDuplicateAction(request: DuplicateActionRequest) {
+    if (request.action !== "export_report") {
+      const count = request.groups?.length
+        ? request.groups.reduce((total, group) => total + group.length, 0)
+        : request.track_ids?.length ?? 0;
+      const deleteWarning = request.delete_files ? " This will also delete selected audio files from disk." : "";
+      if (!window.confirm(`Apply duplicate action to ${count.toLocaleString()} track references?${deleteWarning}`)) {
+        return;
+      }
+    }
+    try {
+      const response = await applyDuplicateAction(request);
+      setDuplicateActionResult(response);
+      await Promise.all([refreshTracks(), loadAlbums(), loadLibraryStats(), loadBulkUndoLog()]);
+      if (response.report_path) {
+        setStatus(`Exported duplicate report to ${response.report_path}`);
+      } else {
+        setStatus(`Duplicate action affected ${response.affected.toLocaleString()} track${response.affected === 1 ? "" : "s"}`);
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not apply duplicate action");
+    }
+  }
+
+  async function handleLoadDuplicateReview(trackIds: number[], groups: number[][]) {
+    try {
+      const response = await fetchDuplicateReview({
+        track_ids: trackIds,
+        groups,
+        limit: 1000,
+      });
+      setDuplicateReview(response);
+      setStatus(
+        `Loaded ${response.tracks.length.toLocaleString()} review track${response.tracks.length === 1 ? "" : "s"}`
+          + (response.missing_track_ids.length ? `; ${response.missing_track_ids.length.toLocaleString()} missing IDs` : ""),
+      );
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not load duplicate review");
+    }
+  }
+
+  async function handleRevealTracksByIds(trackIds: number[]) {
+    const uniqueIds = Array.from(new Set(trackIds)).slice(0, 30);
+    let foundTracks = findTracksByIds(uniqueIds);
+    if (foundTracks.length < uniqueIds.length) {
+      try {
+        const response = await fetchDuplicateReview({ track_ids: uniqueIds, limit: uniqueIds.length });
+        const byId = new Map(foundTracks.map((track) => [track.id, track]));
+        for (const track of response.tracks) {
+          byId.set(track.id, track);
+        }
+        foundTracks = uniqueIds.map((trackId) => byId.get(trackId)).filter((track): track is Track => Boolean(track));
+        setDuplicateReview(response);
+      } catch {
+        // Fall back to the tracks already loaded in the UI.
+      }
+    }
+    if (!foundTracks.length) {
+      setStatus("Those track IDs were not found in the library.");
+      return;
+    }
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      for (const track of foundTracks) {
+        await invoke("reveal_in_file_explorer", { path: track.path });
+      }
+      setStatus(`Opened ${foundTracks.length.toLocaleString()} track location${foundTracks.length === 1 ? "" : "s"}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Reveal in Explorer is available in the desktop app.");
+    }
+  }
+
+  async function loadChromaprintSetup() {
+    try {
+      setChromaprintSetup(await fetchChromaprintSetup());
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not check Chromaprint setup");
+    }
+  }
+
+  async function handleSaveChromaprintSetup(fpcalcPath: string | null) {
+    try {
+      const response = await saveChromaprintSetup({ fpcalc_path: fpcalcPath });
+      setChromaprintSetup(response);
+      setStatus(response.message);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not save Chromaprint setup");
+    }
+  }
+
+  async function handleInstallChromaprintTool() {
+    if (!window.confirm("Download Chromaprint fpcalc from the official AcoustID GitHub release and install it into FLAC Cafe's local tool folder?")) {
+      return;
+    }
+    try {
+      setStatus("Downloading Chromaprint fpcalc...");
+      const response = await installChromaprintTool();
+      setChromaprintInstallResult(response);
+      await loadChromaprintSetup();
+      setStatus(response.message);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not install Chromaprint");
+    }
+  }
+
+  async function handleRunAcousticFingerprintPass(trackIds: number[] | null, overwrite: boolean, limit: number) {
+    try {
+      const response = await runAcousticFingerprintPass({
+        track_ids: trackIds?.length ? trackIds : null,
+        overwrite,
+        limit,
+      });
+      setAcousticFingerprintResult(response);
+      await loadChromaprintSetup();
+      await Promise.all([refreshTracks(), loadLibraryStats()]);
+      setStatus(
+        response.tool_available
+          ? `Updated ${response.updated.toLocaleString()} acoustic fingerprint${response.updated === 1 ? "" : "s"}`
+          : response.errors[0] ?? "Acoustic fingerprint tool is not available",
+      );
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not run acoustic fingerprint pass");
+    }
+  }
+
+  async function loadBulkUndoLog() {
+    try {
+      setBulkUndoLog(await fetchBulkUndoLog(50));
+      setBulkUndoBatches(await fetchBulkUndoBatches(30));
+    } catch {
+      setBulkUndoLog([]);
+      setBulkUndoBatches([]);
+    }
+  }
+
+  async function handleRestoreBulkUndoEntry(entryId: number) {
+    if (!window.confirm("Restore this bulk action? This may move files or rewrite metadata back to the previous values.")) {
+      return;
+    }
+    try {
+      const response = await restoreBulkUndoEntry(entryId);
+      setBulkUndoRestoreResult(response);
+      await Promise.all([refreshTracks(), loadAlbums(), loadLibraryStats(), loadBulkUndoLog()]);
+      setStatus(
+        response.restored
+          ? `Restored undo entry ${entryId}`
+          : response.errors[0] ?? `Could not restore undo entry ${entryId}`,
+      );
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not restore undo entry");
+    }
+  }
+
+  async function handleRestoreBulkUndoBatch(batchId: string) {
+    if (!window.confirm("Restore this entire bulk-action batch? This can move files or rewrite metadata back to the previous values.")) {
+      return;
+    }
+    try {
+      const response = await restoreBulkUndoBatch(batchId);
+      setBulkUndoRestoreResult(response);
+      await Promise.all([refreshTracks(), loadAlbums(), loadLibraryStats(), loadBulkUndoLog()]);
+      setStatus(
+        response.restored
+          ? `Restored batch ${batchId}`
+          : response.errors[0] ?? `Could not restore batch ${batchId}`,
+      );
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not restore undo batch");
+    }
+  }
+
+  async function handleReadReportFile(reportPath: string) {
+    const trimmedPath = reportPath.trim();
+    if (!trimmedPath) {
+      setStatus("Choose a report path first");
+      return;
+    }
+    try {
+      const response = await readReportFile({ report_path: trimmedPath });
+      setReportFile(response);
+      setStatus(response.exists ? `Loaded report ${response.report_path}` : response.error ?? "Report file was not found");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not load report");
     }
   }
 
@@ -2147,6 +2414,8 @@ export default function App() {
     void loadAutoDjAvoidRules();
     void loadRecommendationProfiles();
     void loadRecommendationHistory();
+    void loadBulkUndoLog();
+    void loadChromaprintSetup();
   }, []);
 
   useEffect(() => {
@@ -2158,6 +2427,10 @@ export default function App() {
   useEffect(() => {
     if (activePage === "history") {
       void loadHistory();
+    }
+    if (activePage === "fileManagement") {
+      void loadBulkUndoLog();
+      void loadChromaprintSetup();
     }
   }, [activePage]);
 
@@ -2174,6 +2447,7 @@ export default function App() {
         ["artist", "page.artist"],
         ["history", "page.history"],
         ["autodj", "page.autodj"],
+        ["fileManagement", "page.fileManagement"],
         ["settings", "page.settings"],
       ];
       const match = shortcuts.find(([, action]) => shortcutMatchesEvent(uiPreferences.keyboardShortcuts[action], event));
@@ -2525,6 +2799,47 @@ export default function App() {
               onDeleteRecommendationProfile={handleDeleteRecommendationProfile}
               onSetDefaultRecommendationProfile={handleSetDefaultRecommendationProfile}
             />
+          ) : activePage === "fileManagement" ? (
+            <FileManagementPage
+              folderPath={folderPath}
+              onClearArtistCache={handleClearArtistCache}
+              onClearLibraryCaches={handleClearLibraryCaches}
+              filenameTagPreview={filenameTagPreview}
+              onPreviewFilenameTags={handlePreviewFilenameTags}
+              onApplyFilenameTags={handleApplyFilenameTags}
+              fileOrganizationPreview={fileOrganizationPreview}
+              fileOrganizationReport={fileOrganizationReport}
+              onPreviewFileOrganization={handlePreviewFileOrganization}
+              onApplyFileOrganization={handleApplyFileOrganization}
+              onExportFileOrganizationReport={handleExportFileOrganizationReport}
+              metadataCsvExport={metadataCsvExport}
+              metadataCsvImportPreview={metadataCsvImportPreview}
+              metadataCsvImportReport={metadataCsvImportReport}
+              onExportMetadataCsv={handleExportMetadataCsv}
+              onPreviewMetadataCsv={handlePreviewMetadataCsv}
+              onApplyMetadataCsv={handleApplyMetadataCsv}
+              onExportMetadataCsvReport={handleExportMetadataCsvReport}
+              duplicateActionResult={duplicateActionResult}
+              duplicateReview={duplicateReview}
+              onDuplicateAction={handleDuplicateAction}
+              onLoadDuplicateReview={handleLoadDuplicateReview}
+              onRevealTracksByIds={handleRevealTracksByIds}
+              chromaprintSetup={chromaprintSetup}
+              onRefreshChromaprintSetup={loadChromaprintSetup}
+              onSaveChromaprintSetup={handleSaveChromaprintSetup}
+              chromaprintInstallResult={chromaprintInstallResult}
+              onInstallChromaprintTool={handleInstallChromaprintTool}
+              acousticFingerprintResult={acousticFingerprintResult}
+              onRunAcousticFingerprintPass={handleRunAcousticFingerprintPass}
+              bulkUndoLog={bulkUndoLog}
+              bulkUndoBatches={bulkUndoBatches}
+              bulkUndoRestoreResult={bulkUndoRestoreResult}
+              onRefreshUndoLog={loadBulkUndoLog}
+              onRestoreUndoEntry={handleRestoreBulkUndoEntry}
+              onRestoreUndoBatch={handleRestoreBulkUndoBatch}
+              reportFile={reportFile}
+              onReadReportFile={handleReadReportFile}
+            />
           ) : activePage === "settings" ? (
             <SettingsPage
               settings={settings}
@@ -2575,20 +2890,6 @@ export default function App() {
               onOpenSourceFolder={() => void handleOpenSourceFolder("source")}
               onOpenThemeFolder={() => void handleOpenSourceFolder("themes")}
               onClearArtistCache={handleClearArtistCache}
-              onClearLibraryCaches={handleClearLibraryCaches}
-              filenameTagPreview={filenameTagPreview}
-              onPreviewFilenameTags={handlePreviewFilenameTags}
-              onApplyFilenameTags={handleApplyFilenameTags}
-              fileOrganizationPreview={fileOrganizationPreview}
-              onPreviewFileOrganization={handlePreviewFileOrganization}
-              onApplyFileOrganization={handleApplyFileOrganization}
-              metadataCsvExport={metadataCsvExport}
-              metadataCsvImportPreview={metadataCsvImportPreview}
-              metadataCsvImportReport={metadataCsvImportReport}
-              onExportMetadataCsv={handleExportMetadataCsv}
-              onPreviewMetadataCsv={handlePreviewMetadataCsv}
-              onApplyMetadataCsv={handleApplyMetadataCsv}
-              onExportMetadataCsvReport={handleExportMetadataCsvReport}
             />
           ) : null}
         </div>
@@ -2603,7 +2904,13 @@ export default function App() {
           autoPlay={autoPlayOnTrackChange}
           fadeMs={uiPreferences.playerFadeMs}
           skipThresholdPercent={uiPreferences.skipThresholdPercent}
+          playbackEngine={uiPreferences.playbackEngine}
+          nativeOutputDeviceId={uiPreferences.nativeOutputDeviceId}
+          nativeBufferFrames={uiPreferences.nativeBufferFrames}
           miniPlayer={uiPreferences.miniPlayer}
+          replayGainMode={uiPreferences.replayGainMode}
+          replayGainPreampDb={uiPreferences.replayGainPreampDb}
+          replayGainPreventClipping={uiPreferences.replayGainPreventClipping}
           keyboardShortcuts={uiPreferences.keyboardShortcuts}
           playbackMode={playbackMode}
           setPlaybackMode={setPlaybackMode}

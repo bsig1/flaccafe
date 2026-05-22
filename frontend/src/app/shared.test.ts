@@ -4,9 +4,12 @@ import {
   defaultKeyboardShortcuts,
   formatShortcut,
   normalizeKeyboardShortcuts,
+  replayGainMultiplier,
+  shortcutConflictGroups,
   shortcutFromEvent,
   shortcutMatchesEvent,
 } from "./shared";
+import type { Track } from "../types/api";
 
 describe("keyboard shortcuts", () => {
   it("keeps defaults when stored shortcuts are missing or malformed", () => {
@@ -26,5 +29,43 @@ describe("keyboard shortcuts", () => {
     expect(shortcut).toEqual({ key: "ArrowRight", ctrl: false, alt: true, shift: false });
     expect(shortcut && shortcutMatchesEvent(shortcut, event)).toBe(true);
     expect(shortcut && formatShortcut(shortcut)).toBe("Alt + ArrowRight");
+  });
+
+  it("reports shortcut conflicts for imported presets", () => {
+    const shortcuts = normalizeKeyboardShortcuts({
+      "page.library": { key: "L", ctrl: true, alt: false, shift: false },
+      "page.autodj": { key: "L", ctrl: true, alt: false, shift: false },
+    });
+
+    expect(shortcutConflictGroups(shortcuts)).toContainEqual(["page.library", "page.autodj"]);
+  });
+});
+
+describe("ReplayGain", () => {
+  const track = {
+    replaygain_track_gain_db: -6,
+    replaygain_album_gain_db: -3,
+  } as Track;
+
+  it("leaves volume untouched when disabled or missing tags", () => {
+    expect(replayGainMultiplier(track, "off", 6)).toBe(1);
+    expect(replayGainMultiplier(null, "track", 0)).toBe(1);
+    expect(replayGainMultiplier({} as Track, "album", 0)).toBe(1);
+  });
+
+  it("converts track and album gain tags into volume multipliers", () => {
+    expect(replayGainMultiplier(track, "track", 0)).toBeCloseTo(0.501, 3);
+    expect(replayGainMultiplier(track, "album", 0)).toBeCloseTo(0.708, 3);
+    expect(replayGainMultiplier(track, "track", 3)).toBeCloseTo(0.708, 3);
+  });
+
+  it("uses ReplayGain peak tags to prevent clipping", () => {
+    const loudTrack = {
+      replaygain_track_gain_db: 6,
+      replaygain_track_peak: 1.25,
+    } as Track;
+
+    expect(replayGainMultiplier(loudTrack, "track", 0, true)).toBeCloseTo(0.8, 3);
+    expect(replayGainMultiplier(loudTrack, "track", 0, false)).toBeGreaterThan(1);
   });
 });

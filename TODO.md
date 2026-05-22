@@ -1,17 +1,10 @@
 # TODO
 
 ## Installer
+- Smoke-test `FLAC Cafe_0.2.0_x64_en-US.msi` from the Start Menu on a clean Windows profile: startup self-check, support bundle, MP3/FLAC scan/playback, AutoDJ export, and uninstall.
 - Add a real MSI uninstall-time checkbox for removing FLAC Cafe AppData, including database, model cache, logs, and ML runtime.
 - Promote the CI installer smoke check into a full MSI build/install/uninstall test once GitHub Actions runtime is stable enough for WiX.
 - Run `scripts/validate_clap_runtime.ps1 -RequireInstalled` on a clean Windows VM after installing the optional ML runtime.
-
-## Library Workflow
-- Add an optional true acoustic fingerprint pass for duplicates that do not share exact file chunks.
-- Add batch duplicate actions for very large duplicate sets: keep best, remove selected, reveal selected, and export review report.
-- Add CSV import profiles with saved column mappings, conflict review, and "clear blank fields" controls.
-- Extend the filename-tag inference tool with per-track accept/reject controls and import/export for saved pattern presets.
-- Extend the tag-based file organizer with selected-track scope and a reviewable move report before applying large batches.
-- Add an undo log for bulk metadata imports and file organization batches.
 
 ## MusicBee-Inspired Feature Gaps
 - Add folder watching with background incremental rescans, including a clear pending-changes view before applying moves, deletes, or tag updates.
@@ -26,22 +19,13 @@
 - Add podcast subscriptions and episode download management as an optional non-core module.
 - Add web radio bookmarks and stream playback as an optional non-core module.
 - Add Last.fm/ListenBrainz scrobbling, loved-track sync, and optional import of historical play counts/ratings.
-- Add a 10/15-band equalizer, basic DSP chain, and ReplayGain/loudness controls once the playback engine is mature enough.
-- Investigate WASAPI/ASIO or native audio-output support for users who want lower-level Windows audio routing than WebView playback.
+- Add a 10/15-band equalizer and basic DSP chain once the playback engine is mature enough.
+- Add a dedicated WASAPI exclusive-mode or ASIO backend if cpal shared-mode output is not enough for advanced users.
+- Add native queue preloading and sample-accurate gapless transition validation for adjacent album tracks.
+- Add richer native playback diagnostics, including a compact Settings panel for recent rodio/cpal/Symphonia failures.
 - Add visualizers, theater/party mode, and a more customizable Now Playing screen.
 - Add a skin/plugin extension story for advanced users without making the core app harder to maintain.
 - Add importers for MusicBee, iTunes, Windows Media Player, and common playlist/library export formats.
-
-## Playback
-- Add ReplayGain or loudness normalization support.
-- Persist detached mini-player preferences for always-on-top and preferred snap size.
-- Add a fallback playback path or user-facing recommendation for files the WebView codec diagnostic reports as unsupported.
-
-## UI Polish
-- Add browser-level smoke tests against a running Vite/Tauri preview, beyond the current frontend interaction unit tests.
-- Continue splitting the largest page files, especially Library and AutoDJ, into smaller focused components.
-- Add an in-app report viewer for CSV import previews, file organization previews, and profile comparison JSON exports.
-- Add shortcut conflict detection and import/export for keyboard shortcut presets.
 
 ## Recommendations
 - Add A/B feedback controls that compare two generated queues and learn from the chosen one.
@@ -49,9 +33,11 @@
 - Add import/share support for exported recommendation profile comparison reports.
 
 ## Documentation
-- Add screenshots to the README once the FLAC Cafe theme settles.
 - Add a short keyboard-shortcuts user guide once the shortcut list settles.
 - Add a troubleshooting page for codec support, backend startup, and optional ML runtime issues.
+- Add a lightweight docs index page if the docs folder grows beyond the current single-screen list.
 
 ## Project
 - Add release artifacts to CI once MSI builds are reliable enough to publish from GitHub Actions.
+- Extend the Playwright smoke suite to launch a packaged Tauri build when CI has reliable WebView2 support.
+- Keep decomposing the largest feature pages as new UI work lands, especially File Management and Settings.

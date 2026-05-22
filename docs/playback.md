@@ -1,23 +1,35 @@
 # Playback
 
-Playback is intentionally local and lightweight. FLAC Cafe uses the Tauri WebView audio element instead of a custom decoder engine.
+Playback is intentionally local and lightweight. FLAC Cafe defaults to the Tauri WebView audio element, with an experimental native Rust engine available in Settings > Player.
 
 ## Codec Coverage
 
-Direct playback depends on the codecs supported by the installed WebView2 runtime. MP3 and most common AAC files are expected to work. FLAC works on current Windows WebView2 builds. Ogg, Opus, WAV, and AIFF may vary by runtime and file encoding.
+WebView playback depends on the codecs supported by the installed WebView2 runtime. MP3 and most common AAC files are expected to work. FLAC works on current Windows WebView2 builds. Ogg, Opus, WAV, and AIFF may vary by runtime and file encoding.
 
 Unsupported files should remain in the library, recommendation engine, and playlists even when direct playback is unavailable.
 
 Settings > Player includes a WebView codec diagnostic that calls the local audio element's `canPlayType` support check for MP3, FLAC, AAC, Ogg Vorbis, Opus, WAV, and AIFF. Treat "probably" as good, "maybe" as worth trying, and "not reported" as a warning that WebView2 may refuse direct playback for that format.
 
+The native Rust engine uses `rodio` for playback, `cpal` for output, and Symphonia-backed decoding through rodio's codec features. It is meant to prove the lower-level path without making it the only playback option yet. Native output stream errors are captured and surfaced through the player status toast when the desktop command reports them.
+
+Settings > Player can list native output devices in the desktop app. The selected device and buffer size are passed into the Rust engine when playback starts. On Windows this is currently cpal's WASAPI shared-mode path; exclusive mode needs a dedicated WASAPI backend rather than the generic rodio bridge.
+
 ## Player Behavior
 
 - The queue lives in React state and can be reordered from the queue handle.
-- The next track is preloaded for smoother transitions.
-- Fade and crossfade duration is controlled by the Player settings.
+- The WebView engine preloads the next track for smoother transitions.
+- Fade and crossfade duration is controlled by the Player settings. WebView crossfade uses two audio elements; native crossfade uses overlapping rodio players on the same mixer, then stops the old player after the fade.
 - Volume and mute are stored locally in browser storage.
+- ReplayGain can be applied from embedded track or album gain tags with an optional preamp.
 - The compact bottom player is a single setting; older saved `playerLayout: "compact"` preferences are still treated as compact mode.
-- The detached mini player communicates with the main app through `BroadcastChannel`.
+- The detached mini player communicates with the main app through `BroadcastChannel`, and its always-on-top state plus snap size are persisted.
+- If a file cannot be decoded by WebView2, the player bar can open it in the user's default Windows audio app.
+
+## ReplayGain
+
+Library scans read common `replaygain_track_gain`, `track_gain`, `replaygain_album_gain`, `album_gain`, `replaygain_track_peak`, `track_peak`, `replaygain_album_peak`, and `album_peak` tags into SQLite. Settings > Player exposes Off, Track, and Album modes plus a small preamp control.
+
+The player applies ReplayGain as a volume multiplier during WebView or native playback. When peak protection is enabled, FLAC Cafe caps the multiplier using embedded peak tags to avoid obvious digital clipping. Tracks without ReplayGain tags keep normal volume, and the app does not write ReplayGain tags back into audio files.
 
 ## Skip Tracking
 
@@ -43,7 +55,8 @@ Keyboard shortcuts are editable in Settings > Keyboard Shortcuts. Media keys are
 
 ## Not In Scope Yet
 
-- A custom native decoder pipeline.
-- DSP effects beyond simple volume/fade scheduling.
-- ReplayGain or loudness normalization.
+- A fully custom native decoder pipeline.
+- WASAPI exclusive mode or ASIO.
+- Native queue preloading and sample-accurate gapless transition validation.
+- DSP effects beyond simple volume, fade, crossfade, and ReplayGain scheduling.
 - Guaranteed gapless playback for every codec.

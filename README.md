@@ -27,12 +27,14 @@ The MVP uses FastAPI because it keeps the music logic in Python, keeps React foc
 ## Repo Layout
 
 ```text
-backend/       Python API, database, scanner, recommender, ML runtime, playlist export
-frontend/      React/TypeScript app, grouped by app, lib, config, and types
-src-tauri/     Tauri v2 shell, backend launcher, Windows media controls
-scripts/       Windows dev, test, packaging, and runtime helper scripts
-docs/          architecture, playback, themes, CLAP, and release notes
+backend/       Python API, SQLite, scanner, recommender, library tools
+frontend/      React/TypeScript UI, typed API clients, themes, player surfaces
+src-tauri/     Tauri v2 shell, backend launcher, native commands, Windows media controls
+scripts/       Windows dev, test, validation, packaging, and runtime helpers
+docs/          maintainer guides, feature docs, release docs, and project structure
 ```
+
+For the detailed tree, ownership notes, and ignored/generated directories, see [Project Structure](docs/project-structure.md).
 
 ## Development
 
@@ -104,6 +106,7 @@ Before publishing, follow [docs/release-checklist.md](docs/release-checklist.md)
 ## More Docs
 
 - [Architecture](docs/architecture.md)
+- [Project Structure](docs/project-structure.md)
 - [Playback](docs/playback.md)
 - [Themes](docs/themes.md)
 - [CLAP Analysis](docs/clap-analysis.md)

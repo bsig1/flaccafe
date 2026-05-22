@@ -9,15 +9,18 @@ import csv
 import json
 import logging
 from logging.handlers import RotatingFileHandler
+import os
 import re
 import shutil
 import sqlite3
+import subprocess
+import uuid
 import zipfile
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib import error as urlerror
-from urllib import parse, request
+from urllib import parse, request as urlrequest
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -72,6 +75,15 @@ from .schemas import (
     BackupResponse,
     CacheClearRequest,
     CacheClearResponse,
+    AcousticFingerprintRequest,
+    AcousticFingerprintResponse,
+    BulkUndoBatchEntry,
+    BulkUndoLogEntry,
+    BulkUndoRestoreResponse,
+    ChromaprintConfigRequest,
+    ChromaprintInstallRequest,
+    ChromaprintInstallResponse,
+    ChromaprintStatusResponse,
     ClapInstallProgress,
     ClapInstallRequest,
     ClapInstallStartResponse,
@@ -83,10 +95,16 @@ from .schemas import (
     CsvMetadataImportRequest,
     CsvMetadataImportResponse,
     DuplicateGroup,
+    DuplicateActionRequest,
+    DuplicateActionResponse,
+    DuplicateReviewRequest,
+    DuplicateReviewResponse,
     DiagnosticItem,
     ExportRequest,
     ExportResponse,
     FileOrganizationChange,
+    FileOrganizationReportRequest,
+    FileOrganizationReportResponse,
     FileOrganizationRequest,
     FileOrganizationResponse,
     FilenameTagInferencePreview,
@@ -106,6 +124,8 @@ from .schemas import (
     PlaylistTrackRequest,
     PlayEventEntry,
     RatingRequest,
+    ReportFileRequest,
+    ReportFileResponse,
     RecommendationFeedbackRequest,
     RecommendationDrift,
     RecommendationProfile,
@@ -193,10 +213,20 @@ TRACK_COLUMNS = """
     id, path, title, artist, album, album_artist, track_number,
     disc_number, genre, analysis_provider, analysis_model, analysis_genre,
     analysis_genre_confidence, analysis_genre_tags, analysis_updated_at,
-    analysis_embedding, year, duration_seconds, bitrate, audio_fingerprint,
+    analysis_embedding, year, duration_seconds, bitrate,
+    replaygain_track_gain_db, replaygain_album_gain_db,
+    replaygain_track_peak, replaygain_album_peak, audio_fingerprint,
+    acoustic_fingerprint, acoustic_fingerprint_updated_at,
     rating, play_count, skip_count, last_played_at, last_skipped_at,
     date_added, file_modified_at
 """
+
+TRACK_FIELD_NAMES = [field.strip() for field in TRACK_COLUMNS.replace("\n", " ").split(",") if field.strip()]
+
+CHROMAPRINT_WINDOWS_URL = (
+    "https://github.com/acoustid/chromaprint/releases/download/v1.6.0/"
+    "chromaprint-fpcalc-1.6.0-windows-x86_64.zip"
+)
 
 TRACK_JOIN_COLUMNS = """
     tracks.id AS id, tracks.path AS path, tracks.title AS title,
@@ -209,7 +239,14 @@ TRACK_JOIN_COLUMNS = """
     tracks.analysis_embedding AS analysis_embedding,
     tracks.analysis_updated_at AS analysis_updated_at,
     tracks.year AS year, tracks.duration_seconds AS duration_seconds,
-    tracks.bitrate AS bitrate, tracks.audio_fingerprint AS audio_fingerprint,
+    tracks.bitrate AS bitrate,
+    tracks.replaygain_track_gain_db AS replaygain_track_gain_db,
+    tracks.replaygain_album_gain_db AS replaygain_album_gain_db,
+    tracks.replaygain_track_peak AS replaygain_track_peak,
+    tracks.replaygain_album_peak AS replaygain_album_peak,
+    tracks.audio_fingerprint AS audio_fingerprint,
+    tracks.acoustic_fingerprint AS acoustic_fingerprint,
+    tracks.acoustic_fingerprint_updated_at AS acoustic_fingerprint_updated_at,
     tracks.rating AS rating, tracks.play_count AS play_count, tracks.skip_count AS skip_count,
     tracks.last_played_at AS last_played_at, tracks.last_skipped_at AS last_skipped_at,
     tracks.date_added AS date_added, tracks.file_modified_at AS file_modified_at
@@ -372,6 +409,8 @@ def duplicate_keep_recommendation(tracks: list[dict]) -> tuple[int | None, str |
             value += min(80, int(track["bitrate"]) / 4000)
         if track.get("audio_fingerprint"):
             value += 20
+        if track.get("acoustic_fingerprint"):
+            value += 25
         if track.get("analysis_embedding"):
             value += 15
         if track.get("duration_seconds"):
@@ -391,6 +430,8 @@ def duplicate_keep_recommendation(tracks: list[dict]) -> tuple[int | None, str |
         reasons.append("has CLAP analysis")
     if selected.get("audio_fingerprint"):
         reasons.append("has file fingerprint")
+    if selected.get("acoustic_fingerprint"):
+        reasons.append("has acoustic fingerprint")
     return int(selected["id"]), ", ".join(reasons) if reasons else "best available metadata"
 
 
@@ -416,15 +457,19 @@ def duplicate_group_from_tracks(key: str, tracks: list[dict], base_reason: str) 
     ]
     bitrates = [int(track["bitrate"]) for track in tracks if isinstance(track.get("bitrate"), int)]
     fingerprints = [track.get("audio_fingerprint") for track in tracks if track.get("audio_fingerprint")]
+    acoustic_fingerprints = [track.get("acoustic_fingerprint") for track in tracks if track.get("acoustic_fingerprint")]
     duration_spread = round(max(durations) - min(durations), 3) if len(durations) >= 2 else None
     bitrate_spread = max(bitrates) - min(bitrates) if len(bitrates) >= 2 else None
     shared_fingerprint = bool(fingerprints and len(set(fingerprints)) < len(fingerprints))
+    shared_acoustic_fingerprint = bool(acoustic_fingerprints and len(set(acoustic_fingerprints)) < len(acoustic_fingerprints))
     path_roots = sorted({str(Path(track["path"]).parent) for track in tracks if track.get("path")})[:6]
     analyzed_tracks = sum(1 for track in tracks if track.get("analysis_embedding"))
     keep_id, keep_reason = duplicate_keep_recommendation(tracks)
     reasons = [base_reason]
     if shared_fingerprint:
         reasons.append("matching fingerprint")
+    if shared_acoustic_fingerprint:
+        reasons.append("matching acoustic fingerprint")
     if duration_spread is not None:
         reasons.append("same duration" if duration_spread <= 2 else f"duration spread {duration_spread:.1f}s")
     if bitrate_spread is not None:
@@ -440,6 +485,7 @@ def duplicate_group_from_tracks(key: str, tracks: list[dict], base_reason: str) 
         duration_spread_seconds=duration_spread,
         bitrate_spread=bitrate_spread,
         shared_fingerprint=shared_fingerprint,
+        shared_acoustic_fingerprint=shared_acoustic_fingerprint,
         average_audio_similarity=average_embedding_similarity(tracks),
         path_roots=path_roots,
         analyzed_tracks=analyzed_tracks,
@@ -1236,11 +1282,11 @@ def lrclib_payload_response(track_id: int, payload: dict) -> LyricsResponse | No
 
 
 def lrclib_read_json(url: str, params: dict[str, object]) -> object:
-    api_request = request.Request(
+    api_request = urlrequest.Request(
         f"{url}?{parse.urlencode(params)}",
         headers={"User-Agent": WIKIPEDIA_USER_AGENT},
     )
-    with request.urlopen(api_request, timeout=10) as response:
+    with urlrequest.urlopen(api_request, timeout=10) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -1305,7 +1351,7 @@ def artist_cache_key(artist_name: str) -> str:
 
 def wikipedia_request(params: dict[str, object]) -> dict:
     url = f"{WIKIPEDIA_API_URL}?{parse.urlencode(params)}"
-    api_request = request.Request(
+    api_request = urlrequest.Request(
         url,
         headers={
             "Accept": "application/json",
@@ -1313,7 +1359,7 @@ def wikipedia_request(params: dict[str, object]) -> dict:
             "User-Agent": WIKIPEDIA_USER_AGENT,
         },
     )
-    with request.urlopen(api_request, timeout=6) as response:
+    with urlrequest.urlopen(api_request, timeout=6) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -2047,6 +2093,32 @@ def library_health(limit: int = Query(default=80, ge=1, le=500)) -> LibraryHealt
             )
             label = f"File fingerprint {str(key['audio_fingerprint'])[:10]}"
             append_duplicate_group(label, tracks, "matching file fingerprint")
+        acoustic_keys = conn.execute(
+            """
+            SELECT acoustic_fingerprint, count(*) AS tracks
+            FROM tracks
+            WHERE acoustic_fingerprint IS NOT NULL AND trim(acoustic_fingerprint) <> ''
+            GROUP BY acoustic_fingerprint
+            HAVING count(*) > 1
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        for key in acoustic_keys:
+            tracks = rows_to_dicts(
+                conn.execute(
+                    f"""
+                    SELECT {TRACK_COLUMNS}
+                    FROM tracks
+                    WHERE acoustic_fingerprint = ?
+                    ORDER BY lower(coalesce(artist, '')), lower(coalesce(album, '')), path ASC
+                    LIMIT ?
+                    """,
+                    (key["acoustic_fingerprint"], limit),
+                )
+            )
+            label = f"Acoustic fingerprint {str(key['acoustic_fingerprint'])[:10]}"
+            append_duplicate_group(label, tracks, "matching acoustic fingerprint")
     return LibraryHealthResponse(
         missing_files=missing_files,
         missing_metadata=missing,
@@ -2148,6 +2220,16 @@ def resolve_json_tool_path(json_path: str | None, default_name: str) -> Path:
     return target
 
 
+def resolve_existing_json_report_path(json_path: str) -> Path:
+    text = json_path.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Report path is required")
+    target = Path(text).expanduser()
+    if not target.is_absolute():
+        target = (EXPORT_DIR / target).resolve()
+    return target
+
+
 def csv_text(value: object) -> str | None:
     if value is None:
         return None
@@ -2180,17 +2262,24 @@ def csv_rating(value: object) -> float | None:
     return rating
 
 
-def parse_csv_import_values(row: dict[str, str | None]) -> dict[str, object | None]:
+def parse_csv_import_values(
+    row: dict[str, str | None],
+    column_map: dict[str, str] | None = None,
+    clear_blank_fields: bool = False,
+) -> dict[str, object | None]:
     imported: dict[str, object | None] = {}
     for field in CSV_IMPORT_FIELDS:
-        if field not in row:
+        column_name = (column_map or {}).get(field, field)
+        if column_name not in row:
+            continue
+        if csv_text(row[column_name]) is None and not clear_blank_fields:
             continue
         if field in {"track_number", "disc_number", "year"}:
-            imported[field] = csv_int(row[field], field)
+            imported[field] = csv_int(row[column_name], field)
         elif field == "rating":
-            imported[field] = csv_rating(row[field])
+            imported[field] = csv_rating(row[column_name])
         else:
-            imported[field] = csv_text(row[field])
+            imported[field] = csv_text(row[column_name])
     return imported
 
 
@@ -2217,6 +2306,14 @@ def csv_import_changes(track: dict, imported: dict[str, object | None], missing_
         if not csv_values_equal(track.get(field), value):
             changes[field] = value
     return changes
+
+
+def csv_conflict_fields(track: dict, changes: dict[str, object | None]) -> list[str]:
+    return sorted(
+        field
+        for field, value in changes.items()
+        if not csv_value_missing(track.get(field)) and not csv_values_equal(track.get(field), value)
+    )
 
 
 def csv_import_track(conn, row: dict[str, str | None], allowed_ids: set[int] | None) -> dict | None:
@@ -2311,6 +2408,7 @@ def build_metadata_csv_import_response(request: CsvMetadataImportRequest) -> Csv
     changed = 0
     applied = 0
     errors: list[str] = []
+    batch_id = new_undo_batch_id("csv-import") if request.apply else None
 
     with connect() as conn:
         for index, row in enumerate(rows, start=2):
@@ -2327,15 +2425,23 @@ def build_metadata_csv_import_response(request: CsvMetadataImportRequest) -> Csv
                 preview.path = track["path"]
                 preview.matched = True
                 preview.current = {field: track.get(field) for field in CSV_IMPORT_FIELDS}
-                imported = parse_csv_import_values(row)
+                imported = parse_csv_import_values(row, request.column_map, request.clear_blank_fields)
                 preview.imported = imported
                 changes = csv_import_changes(track, imported, request.missing_only)
                 preview.changed_fields = sorted(changes.keys())
+                preview.conflict_fields = csv_conflict_fields(track, changes)
                 matched += 1
                 if changes:
                     changed += 1
 
                 if request.apply and changes:
+                    write_bulk_undo_log(
+                        conn,
+                        "csv_metadata_import",
+                        f"CSV metadata import row {index}",
+                        {"track": track, "changes": changes, "csv_path": str(source), "row_number": index},
+                        batch_id,
+                    )
                     metadata_changes = {field: value for field, value in changes.items() if field in EDITABLE_METADATA_FIELDS}
                     if metadata_changes:
                         apply_track_metadata_update(conn, int(track["id"]), metadata_changes)
@@ -2360,6 +2466,294 @@ def build_metadata_csv_import_response(request: CsvMetadataImportRequest) -> Csv
         errors=errors[:50],
         previews=previews,
     )
+
+
+def new_undo_batch_id(prefix: str) -> str:
+    return f"{prefix}-{uuid.uuid4().hex[:12]}"
+
+
+def write_bulk_undo_log(
+    conn,
+    action_type: str,
+    summary: str,
+    payload: dict[str, object],
+    batch_id: str | None = None,
+) -> int:
+    cursor = conn.execute(
+        """
+        INSERT INTO bulk_action_undo_log(batch_id, action_type, summary, payload_json)
+        VALUES(?, ?, ?, ?)
+        """,
+        (batch_id, action_type, summary, json.dumps(payload, ensure_ascii=True, default=str)),
+    )
+    return int(cursor.lastrowid)
+
+
+def chromaprint_tool_dir() -> Path:
+    return APP_STORAGE_ROOT / "tools" / "chromaprint"
+
+
+def fpcalc_candidate_paths(configured_path: str | None = None) -> list[Path]:
+    executable = "fpcalc.exe" if os.name == "nt" else "fpcalc"
+    repo_root = Path(__file__).resolve().parents[2]
+    candidates: list[Path] = []
+    if configured_path:
+        configured = Path(configured_path).expanduser()
+        candidates.append(configured / executable if configured.is_dir() else configured)
+    candidates.extend(
+        [
+            chromaprint_tool_dir() / executable,
+            APP_STORAGE_ROOT / "tools" / executable,
+            repo_root / "tools" / "chromaprint" / executable,
+            repo_root / "tools" / executable,
+        ]
+    )
+    which_path = shutil.which("fpcalc")
+    if which_path:
+        candidates.append(Path(which_path))
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            key = str(candidate.expanduser().resolve()).lower()
+        except OSError:
+            key = str(candidate.expanduser()).lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(candidate.expanduser())
+    return unique
+
+
+def resolve_fpcalc_path(conn: sqlite3.Connection | None = None) -> tuple[Path | None, str | None, list[Path]]:
+    configured = get_setting(conn, "chromaprint_fpcalc_path") if conn is not None else None
+    candidates = fpcalc_candidate_paths(configured)
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate.resolve(), configured, candidates
+    return None, configured, candidates
+
+
+def fpcalc_version(fpcalc_path: Path) -> str | None:
+    try:
+        completed = subprocess.run(
+            [str(fpcalc_path), "-version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    output = (completed.stdout or completed.stderr).strip()
+    return output.splitlines()[0] if output else None
+
+
+def chromaprint_status(conn: sqlite3.Connection) -> ChromaprintStatusResponse:
+    fpcalc_path, configured, candidates = resolve_fpcalc_path(conn)
+    tool_dir = chromaprint_tool_dir()
+    checked_paths = [str(candidate) for candidate in candidates]
+    if fpcalc_path is None:
+        return ChromaprintStatusResponse(
+            available=False,
+            configured_path=configured,
+            tool_directory=str(tool_dir),
+            checked_paths=checked_paths,
+            message=(
+                f"fpcalc was not found. Save a path below, or place fpcalc.exe in {tool_dir} "
+                "so FLAC Cafe can use it without editing PATH."
+            ),
+        )
+    return ChromaprintStatusResponse(
+        available=True,
+        configured_path=configured,
+        resolved_path=str(fpcalc_path),
+        version=fpcalc_version(fpcalc_path),
+        tool_directory=str(tool_dir),
+        checked_paths=checked_paths,
+        message="Chromaprint fpcalc is ready for acoustic fingerprint analysis.",
+    )
+
+
+def remove_tracks_for_action(
+    conn,
+    track_ids: list[int],
+    delete_files: bool,
+    batch_id: str | None = None,
+) -> tuple[list[int], int, list[str]]:
+    removed: list[int] = []
+    deleted_files = 0
+    errors: list[str] = []
+    if not track_ids:
+        return removed, deleted_files, errors
+    unique_ids = list(dict.fromkeys(track_ids))
+    placeholders = ",".join("?" for _ in unique_ids)
+    rows = rows_to_dicts(
+        conn.execute(
+            f"SELECT path_key, {TRACK_COLUMNS} FROM tracks WHERE id IN ({placeholders})",
+            unique_ids,
+        )
+    )
+    for track in rows:
+        track_id = int(track["id"])
+        write_bulk_undo_log(
+            conn,
+            "track_remove",
+            f"Removed {track.get('title') or Path(track['path']).name}",
+            {"track": track, "delete_file": delete_files},
+            batch_id,
+        )
+        path = Path(track["path"])
+        if delete_files and path.exists():
+            try:
+                path.unlink()
+                deleted_files += 1
+            except OSError as exc:
+                errors.append(f"{path}: {exc}")
+                continue
+        conn.execute("DELETE FROM tracks WHERE id = ?", (track_id,))
+        conn.execute("DELETE FROM track_metadata_cache WHERE path_key = ?", (track.get("path_key"),))
+        removed.append(track_id)
+    delete_orphan_albums(conn)
+    return removed, deleted_files, errors
+
+
+def duplicate_groups_for_report(limit: int = 500) -> list[dict]:
+    health = library_health(limit=limit)
+    return [group.model_dump(mode="json") for group in health.duplicate_groups]
+
+
+def tracks_by_ids(conn, track_ids: list[int]) -> tuple[list[dict], list[int]]:
+    unique_ids = list(dict.fromkeys(track_ids))
+    if not unique_ids:
+        return [], []
+    placeholders = ",".join("?" for _ in unique_ids)
+    rows = rows_to_dicts(
+        conn.execute(
+            f"SELECT path_key, {TRACK_COLUMNS} FROM tracks WHERE id IN ({placeholders})",
+            unique_ids,
+        )
+    )
+    by_id = {int(row["id"]): row for row in rows}
+    return [by_id[track_id] for track_id in unique_ids if track_id in by_id], [
+        track_id for track_id in unique_ids if track_id not in by_id
+    ]
+
+
+def acoustic_fingerprint_for_path(path: Path, fpcalc_path: str) -> str:
+    completed = subprocess.run(
+        [fpcalc_path, "-json", str(path)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if completed.returncode != 0:
+        message = completed.stderr.strip() or completed.stdout.strip() or "fpcalc failed"
+        raise OSError(message)
+    payload = json.loads(completed.stdout)
+    fingerprint = str(payload.get("fingerprint") or "").strip()
+    if not fingerprint:
+        raise OSError("fpcalc did not return a fingerprint")
+    return fingerprint
+
+
+def restore_csv_metadata_import(conn, payload: dict[str, object]) -> tuple[list[int], list[str]]:
+    track = payload.get("track")
+    changes = payload.get("changes")
+    if not isinstance(track, dict) or not isinstance(changes, dict):
+        return [], ["Undo payload is missing CSV metadata details"]
+    track_id = int(track.get("id") or 0)
+    if track_id <= 0:
+        return [], ["Undo payload is missing track id"]
+    existing = conn.execute("SELECT id FROM tracks WHERE id = ?", (track_id,)).fetchone()
+    if existing is None:
+        return [], [f"Track {track_id} is no longer in the library"]
+    metadata_changes = {
+        field: track.get(field)
+        for field in changes
+        if field in EDITABLE_METADATA_FIELDS
+    }
+    if metadata_changes:
+        apply_track_metadata_update(conn, track_id, metadata_changes)
+    if "rating" in changes:
+        apply_track_rating_update(conn, track_id, track.get("rating"))
+    return [track_id], []
+
+
+def restore_file_organization(conn, payload: dict[str, object]) -> tuple[list[int], list[str]]:
+    track_id = int(payload.get("track_id") or 0)
+    source_text = str(payload.get("to") or "").strip()
+    target_text = str(payload.get("from") or "").strip()
+    if track_id <= 0 or not source_text or not target_text:
+        return [], ["Undo payload is missing file move details"]
+    source = Path(source_text).expanduser()
+    target = Path(target_text).expanduser()
+    if not source.exists():
+        return [], [f"Moved file is missing: {source}"]
+    if target.exists():
+        return [], [f"Original path already exists: {target}"]
+    row = conn.execute("SELECT id FROM tracks WHERE id = ?", (track_id,)).fetchone()
+    if row is None:
+        return [], [f"Track {track_id} is no longer in the library"]
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(source), str(target))
+    modified_at = datetime.fromtimestamp(target.stat().st_mtime, timezone.utc).replace(microsecond=0).isoformat()
+    old_key = str(payload.get("new_path_key") or path_key(source))
+    restored_key = str(payload.get("previous_path_key") or path_key(target))
+    conn.execute(
+        """
+        UPDATE tracks
+        SET path = ?, path_key = ?, file_modified_at = ?, updated_at = datetime('now')
+        WHERE id = ?
+        """,
+        (str(target), restored_key, modified_at, track_id),
+    )
+    conn.execute("DELETE FROM track_metadata_cache WHERE path_key IN (?, ?)", (old_key, restored_key))
+    return [track_id], []
+
+
+def restore_removed_track(conn, payload: dict[str, object]) -> tuple[list[int], list[str]]:
+    track = payload.get("track")
+    if not isinstance(track, dict):
+        return [], ["Undo payload is missing removed track data"]
+    track_id = int(track.get("id") or 0)
+    track_path_text = str(track.get("path") or "").strip()
+    if track_id <= 0 or not track_path_text:
+        return [], ["Undo payload is missing removed track id or path"]
+    track_path = Path(track_path_text).expanduser()
+    if not track_path.exists():
+        return [], [f"Audio file no longer exists: {track_path}"]
+    restored_key = str(track.get("path_key") or path_key(track_path))
+    conflict = conn.execute(
+        "SELECT id FROM tracks WHERE id = ? OR path_key = ?",
+        (track_id, restored_key),
+    ).fetchone()
+    if conflict is not None:
+        return [], [f"Track id or path is already present in the library: {track_id}"]
+    columns = ["id", "path_key", *[field for field in TRACK_FIELD_NAMES if field != "id"]]
+    values = []
+    for column in columns:
+        if column == "path_key":
+            values.append(restored_key)
+        else:
+            values.append(track.get(column))
+    placeholders = ",".join("?" for _ in columns)
+    conn.execute(
+        f"INSERT INTO tracks({', '.join(columns)}) VALUES({placeholders})",
+        values,
+    )
+    return [track_id], []
+
+
+def restore_bulk_undo_entry(conn, action_type: str, payload: dict[str, object]) -> tuple[list[int], list[str]]:
+    if action_type == "csv_metadata_import":
+        return restore_csv_metadata_import(conn, payload)
+    if action_type == "file_organization":
+        return restore_file_organization(conn, payload)
+    if action_type == "track_remove":
+        return restore_removed_track(conn, payload)
+    return [], [f"Undo is not supported for {action_type}"]
 
 
 @app.post("/library/maintenance/clear", response_model=CacheClearResponse)
@@ -2426,6 +2820,7 @@ def organize_files_from_tags(request: FileOrganizationRequest) -> FileOrganizati
         changes: list[FileOrganizationChange] = []
         applied = 0
         removed_empty_folders = 0
+        batch_id = new_undo_batch_id("file-organize") if request.apply else None
         for track in rows:
             current_path = Path(track["path"])
             target_path = organization_target_path(track, base_folder, request.template)
@@ -2468,6 +2863,19 @@ def organize_files_from_tags(request: FileOrganizationRequest) -> FileOrganizati
                             (str(target_path), new_key, modified_at, int(track["id"])),
                         )
                         conn.execute("DELETE FROM track_metadata_cache WHERE path_key IN (?, ?)", (old_key, new_key))
+                        write_bulk_undo_log(
+                            conn,
+                            "file_organization",
+                            f"Moved {track.get('title') or current_path.name}",
+                            {
+                                "track_id": int(track["id"]),
+                                "from": str(current_path),
+                                "to": str(target_path),
+                                "previous_path_key": old_key,
+                                "new_path_key": new_key,
+                            },
+                            batch_id,
+                        )
                         change.applied = True
                         applied += 1
                         if request.cleanup_empty_folders:
@@ -2485,6 +2893,41 @@ def organize_files_from_tags(request: FileOrganizationRequest) -> FileOrganizati
         changed_count=sum(1 for change in changes if change.changed),
         applied=applied,
         removed_empty_folders=removed_empty_folders,
+    )
+
+
+@app.post("/library/tools/organize-files/report", response_model=FileOrganizationReportResponse)
+def export_file_organization_report(request: FileOrganizationReportRequest) -> FileOrganizationReportResponse:
+    preview_request = FileOrganizationRequest(
+        template=request.template,
+        base_folder=request.base_folder,
+        track_ids=request.track_ids,
+        collision_strategy=request.collision_strategy,
+        cleanup_empty_folders=request.cleanup_empty_folders,
+        apply=False,
+        limit=request.limit,
+    )
+    response = organize_files_from_tags(preview_request)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    target = resolve_json_tool_path(request.report_path, f"flac-cafe-file-organization-{stamp}.json")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "template": response.template,
+        "base_folder": response.base_folder,
+        "total": response.total,
+        "changed_count": response.changed_count,
+        "changes": [change.model_dump(mode="json") for change in response.changes],
+    }
+    try:
+        target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Could not write file organization report: {exc}") from exc
+    return FileOrganizationReportResponse(
+        report_path=str(target),
+        total=response.total,
+        changed_count=response.changed_count,
+        collisions=sum(1 for change in response.changes if change.collision),
     )
 
 
@@ -2516,7 +2959,9 @@ def export_metadata_csv_import_report(request: CsvMetadataImportReportRequest) -
     preview_request = CsvMetadataImportRequest(
         csv_path=request.csv_path,
         track_ids=request.track_ids,
+        column_map=request.column_map,
         missing_only=request.missing_only,
+        clear_blank_fields=request.clear_blank_fields,
         apply=False,
         limit=request.limit,
     )
@@ -2546,6 +2991,418 @@ def export_metadata_csv_import_report(request: CsvMetadataImportReportRequest) -
         changed=response.changed,
         errors=len(response.errors),
     )
+
+
+@app.post("/library/duplicates/action", response_model=DuplicateActionResponse)
+def apply_duplicate_action(request: DuplicateActionRequest) -> DuplicateActionResponse:
+    errors: list[str] = []
+    removed_track_ids: list[int] = []
+    deleted_files = 0
+    if request.action == "export_report":
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        target = resolve_json_tool_path(request.report_path, f"flac-cafe-duplicates-{stamp}.json")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        selected_ids = set(request.track_ids)
+        groups = duplicate_groups_for_report()
+        if selected_ids:
+            groups = [
+                group
+                for group in groups
+                if any(track.get("id") in selected_ids for track in group.get("tracks", []))
+            ]
+        payload = {
+            "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "groups": groups,
+        }
+        try:
+            target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=f"Could not write duplicate report: {exc}") from exc
+        return DuplicateActionResponse(action=request.action, affected=len(groups), report_path=str(target))
+
+    if request.action == "keep_best":
+        groups = request.groups or ([request.track_ids] if request.track_ids else [])
+        ids_to_remove: list[int] = []
+        batch_id = new_undo_batch_id("duplicate-keep")
+        with connect() as conn:
+            for group in groups:
+                unique_ids = list(dict.fromkeys(group))
+                if len(unique_ids) < 2:
+                    continue
+                placeholders = ",".join("?" for _ in unique_ids)
+                tracks = rows_to_dicts(conn.execute(f"SELECT path_key, {TRACK_COLUMNS} FROM tracks WHERE id IN ({placeholders})", unique_ids))
+                keep_id, _reason = duplicate_keep_recommendation(tracks)
+                ids_to_remove.extend(int(track["id"]) for track in tracks if int(track["id"]) != keep_id)
+            removed_track_ids, deleted_files, errors = remove_tracks_for_action(conn, ids_to_remove, request.delete_files, batch_id)
+            conn.commit()
+        return DuplicateActionResponse(
+            action=request.action,
+            affected=len(removed_track_ids),
+            removed_track_ids=removed_track_ids,
+            deleted_files=deleted_files,
+            errors=errors,
+        )
+
+    batch_id = new_undo_batch_id("duplicate-remove")
+    with connect() as conn:
+        removed_track_ids, deleted_files, errors = remove_tracks_for_action(conn, request.track_ids, request.delete_files, batch_id)
+        conn.commit()
+    return DuplicateActionResponse(
+        action=request.action,
+        affected=len(removed_track_ids),
+        removed_track_ids=removed_track_ids,
+        deleted_files=deleted_files,
+        errors=errors,
+    )
+
+
+@app.post("/library/duplicates/review", response_model=DuplicateReviewResponse)
+def review_duplicates(request: DuplicateReviewRequest) -> DuplicateReviewResponse:
+    groups: list[DuplicateGroup] = []
+    missing: list[int] = []
+    with connect() as conn:
+        selected_tracks, missing_ids = tracks_by_ids(conn, request.track_ids[: request.limit])
+        missing.extend(missing_ids)
+        if request.groups:
+            for index, group_ids in enumerate(request.groups[: request.limit], start=1):
+                group_tracks, group_missing = tracks_by_ids(conn, group_ids)
+                missing.extend(group_missing)
+                if len(group_tracks) > 1:
+                    groups.append(duplicate_group_from_tracks(f"Review group {index}", group_tracks, "selected review group"))
+        elif len(selected_tracks) > 1:
+            groups.append(duplicate_group_from_tracks("Selected tracks", selected_tracks, "selected review set"))
+        if not selected_tracks and not request.groups:
+            health = library_health(limit=request.limit)
+            groups = health.duplicate_groups
+            seen: dict[int, dict] = {}
+            for group in groups:
+                for track in group.tracks:
+                    seen[track.id] = track.model_dump(mode="json")
+            selected_tracks = list(seen.values())
+    return DuplicateReviewResponse(
+        tracks=[Track(**track) for track in selected_tracks],
+        groups=groups,
+        missing_track_ids=list(dict.fromkeys(missing)),
+    )
+
+
+@app.get("/library/tools/acoustic-fingerprints/setup", response_model=ChromaprintStatusResponse)
+def get_chromaprint_setup() -> ChromaprintStatusResponse:
+    with connect() as conn:
+        return chromaprint_status(conn)
+
+
+@app.patch("/library/tools/acoustic-fingerprints/setup", response_model=ChromaprintStatusResponse)
+def update_chromaprint_setup(request: ChromaprintConfigRequest) -> ChromaprintStatusResponse:
+    with connect() as conn:
+        text = request.fpcalc_path.strip() if request.fpcalc_path else ""
+        if not text:
+            set_setting(conn, "chromaprint_fpcalc_path", None)
+            conn.commit()
+            return chromaprint_status(conn)
+        candidate = Path(text).expanduser()
+        executable = "fpcalc.exe" if os.name == "nt" else "fpcalc"
+        if candidate.is_dir():
+            candidate = candidate / executable
+        if not candidate.exists() or not candidate.is_file():
+            status = chromaprint_status(conn)
+            status.configured_path = text
+            status.errors.append(f"fpcalc was not found at {candidate}")
+            status.message = "The saved path was not valid. Choose fpcalc.exe or put it in the FLAC Cafe tool folder."
+            return status
+        set_setting(conn, "chromaprint_fpcalc_path", str(candidate.resolve()))
+        conn.commit()
+        return chromaprint_status(conn)
+
+
+@app.post("/library/tools/acoustic-fingerprints/install", response_model=ChromaprintInstallResponse)
+def install_chromaprint_tool(request: ChromaprintInstallRequest) -> ChromaprintInstallResponse:
+    if os.name != "nt":
+        return ChromaprintInstallResponse(
+            installed=False,
+            source_url=request.source_url or CHROMAPRINT_WINDOWS_URL,
+            message="Guided Chromaprint install is currently Windows-only. Save an fpcalc path instead.",
+            errors=["Unsupported platform for the bundled Windows fpcalc package."],
+        )
+
+    source_url = request.source_url or CHROMAPRINT_WINDOWS_URL
+    tool_dir = chromaprint_tool_dir()
+    archive_path = tool_dir / "chromaprint-fpcalc.zip"
+    tool_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        api_request = urlrequest.Request(source_url, headers={"User-Agent": "FLAC-Cafe"})
+        with urlrequest.urlopen(api_request, timeout=60) as response:
+            archive_path.write_bytes(response.read())
+        with zipfile.ZipFile(archive_path) as archive:
+            fpcalc_members = [name for name in archive.namelist() if Path(name).name.lower() == "fpcalc.exe"]
+            if not fpcalc_members:
+                raise OSError("Downloaded archive did not contain fpcalc.exe")
+            member = fpcalc_members[0]
+            with archive.open(member) as source, (tool_dir / "fpcalc.exe").open("wb") as target:
+                shutil.copyfileobj(source, target)
+        archive_path.unlink(missing_ok=True)
+        fpcalc_path = tool_dir / "fpcalc.exe"
+        with connect() as conn:
+            set_setting(conn, "chromaprint_fpcalc_path", str(fpcalc_path.resolve()))
+            conn.commit()
+        return ChromaprintInstallResponse(
+            installed=True,
+            fpcalc_path=str(fpcalc_path.resolve()),
+            source_url=source_url,
+            message="Chromaprint fpcalc was installed for FLAC Cafe.",
+        )
+    except (OSError, zipfile.BadZipFile, TimeoutError, urlerror.URLError) as exc:
+        return ChromaprintInstallResponse(
+            installed=False,
+            source_url=source_url,
+            message="Could not install Chromaprint fpcalc automatically.",
+            errors=[str(exc)],
+        )
+
+
+@app.post("/library/tools/acoustic-fingerprints", response_model=AcousticFingerprintResponse)
+def run_acoustic_fingerprint_pass(request: AcousticFingerprintRequest) -> AcousticFingerprintResponse:
+    processed = 0
+    updated = 0
+    skipped = 0
+    errors: list[str] = []
+    with connect() as conn:
+        fpcalc_path, _configured, candidates = resolve_fpcalc_path(conn)
+        if fpcalc_path is None:
+            return AcousticFingerprintResponse(
+                tool_available=False,
+                errors=[
+                    "Chromaprint fpcalc was not found. Save a path in File Management or place fpcalc.exe in "
+                    f"{chromaprint_tool_dir()}.",
+                    *[f"Checked: {candidate}" for candidate in candidates[:6]],
+                ],
+            )
+        rows = tool_track_rows(conn, request.track_ids, request.limit)
+        for track in rows:
+            if track.get("acoustic_fingerprint") and not request.overwrite:
+                skipped += 1
+                continue
+            processed += 1
+            path = Path(track["path"])
+            if not path.exists():
+                errors.append(f"{track['path']}: missing file")
+                continue
+            try:
+                fingerprint = acoustic_fingerprint_for_path(path, str(fpcalc_path))
+            except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+                errors.append(f"{path.name}: {exc}")
+                continue
+            conn.execute(
+                """
+                UPDATE tracks
+                SET acoustic_fingerprint = ?,
+                    acoustic_fingerprint_updated_at = ?,
+                    updated_at = datetime('now')
+                WHERE id = ?
+                """,
+                (
+                    fingerprint,
+                    datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+                    int(track["id"]),
+                ),
+            )
+            updated += 1
+        conn.commit()
+    return AcousticFingerprintResponse(
+        tool_available=True,
+        processed=processed,
+        updated=updated,
+        skipped=skipped,
+        errors=errors[:100],
+    )
+
+
+@app.get("/library/tools/undo-log", response_model=list[BulkUndoLogEntry])
+def list_bulk_undo_log(limit: int = Query(default=30, ge=1, le=200)) -> list[BulkUndoLogEntry]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, batch_id, action_type, summary, payload_json, created_at
+            FROM bulk_action_undo_log
+            ORDER BY datetime(created_at) DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    entries: list[BulkUndoLogEntry] = []
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        entries.append(
+            BulkUndoLogEntry(
+                id=int(row["id"]),
+                batch_id=row["batch_id"],
+                action_type=row["action_type"],
+                summary=row["summary"],
+                payload=payload,
+                created_at=row["created_at"],
+            )
+        )
+    return entries
+
+
+@app.get("/library/tools/undo-batches", response_model=list[BulkUndoBatchEntry])
+def list_bulk_undo_batches(limit: int = Query(default=30, ge=1, le=200)) -> list[BulkUndoBatchEntry]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT batch_id,
+                   action_type,
+                   count(*) AS entries,
+                   min(created_at) AS first_created_at,
+                   max(created_at) AS last_created_at,
+                   min(summary) AS summary
+            FROM bulk_action_undo_log
+            WHERE batch_id IS NOT NULL AND trim(batch_id) <> ''
+              AND action_type IN ('csv_metadata_import', 'file_organization', 'track_remove')
+            GROUP BY batch_id, action_type
+            ORDER BY datetime(max(created_at)) DESC, max(id) DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [
+        BulkUndoBatchEntry(
+            batch_id=row["batch_id"],
+            action_type=row["action_type"],
+            entries=int(row["entries"]),
+            summary=row["summary"],
+            first_created_at=row["first_created_at"],
+            last_created_at=row["last_created_at"],
+        )
+        for row in rows
+    ]
+
+
+@app.post("/library/tools/undo-batches/{batch_id}/restore", response_model=BulkUndoRestoreResponse)
+def restore_bulk_undo_batch(batch_id: str) -> BulkUndoRestoreResponse:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, batch_id, action_type, summary, payload_json, created_at
+            FROM bulk_action_undo_log
+            WHERE batch_id = ?
+              AND action_type IN ('csv_metadata_import', 'file_organization', 'track_remove')
+            ORDER BY id DESC
+            """,
+            (batch_id,),
+        ).fetchall()
+        if not rows:
+            raise HTTPException(status_code=404, detail="Undo batch was not found")
+        affected: list[int] = []
+        errors: list[str] = []
+        action_type = rows[0]["action_type"]
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+            except json.JSONDecodeError:
+                errors.append(f"Entry {row['id']}: invalid payload")
+                continue
+            entry_affected, entry_errors = restore_bulk_undo_entry(conn, row["action_type"], payload)
+            affected.extend(entry_affected)
+            errors.extend(f"Entry {row['id']}: {error}" for error in entry_errors)
+        restored = not errors
+        if affected:
+            write_bulk_undo_log(
+                conn,
+                "undo_restore",
+                f"Restored batch {batch_id}",
+                {
+                    "restored_batch_id": batch_id,
+                    "restored_action_type": action_type,
+                    "affected_track_ids": affected,
+                    "errors": errors,
+                },
+            )
+        conn.commit()
+    return BulkUndoRestoreResponse(
+        entry_id=0,
+        batch_id=batch_id,
+        action_type=action_type,
+        restored=restored,
+        affected_track_ids=list(dict.fromkeys(affected)),
+        errors=errors[:100],
+    )
+
+
+@app.post("/library/tools/undo-log/{entry_id}/restore", response_model=BulkUndoRestoreResponse)
+def restore_bulk_undo_log_entry(entry_id: int) -> BulkUndoRestoreResponse:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, batch_id, action_type, summary, payload_json, created_at
+            FROM bulk_action_undo_log
+            WHERE id = ?
+            """,
+            (entry_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Undo log entry was not found")
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail="Undo log entry payload is invalid") from exc
+        affected, errors = restore_bulk_undo_entry(conn, row["action_type"], payload)
+        restored = not errors
+        if restored:
+            write_bulk_undo_log(
+                conn,
+                "undo_restore",
+                f"Restored {row['summary']}",
+                {
+                    "restored_entry_id": entry_id,
+                    "restored_batch_id": row["batch_id"],
+                    "restored_action_type": row["action_type"],
+                    "affected_track_ids": affected,
+                },
+            )
+        conn.commit()
+    return BulkUndoRestoreResponse(
+        entry_id=entry_id,
+        batch_id=row["batch_id"],
+        action_type=row["action_type"],
+        restored=restored,
+        affected_track_ids=affected,
+        errors=errors,
+    )
+
+
+@app.post("/library/tools/reports/read", response_model=ReportFileResponse)
+def read_report_file(request: ReportFileRequest) -> ReportFileResponse:
+    target = resolve_existing_json_report_path(request.report_path)
+    if not target.exists() or not target.is_file():
+        return ReportFileResponse(report_path=str(target), exists=False, error="Report file does not exist")
+    try:
+        stat = target.stat()
+        truncated = stat.st_size > request.max_bytes
+        raw_bytes = target.read_bytes()[: request.max_bytes]
+        raw_text = raw_bytes.decode("utf-8-sig", errors="replace")
+        parsed_json = None
+        error_message = None
+        if not truncated:
+            try:
+                parsed_json = json.loads(raw_text)
+            except json.JSONDecodeError as exc:
+                error_message = f"Could not parse JSON: {exc}"
+        return ReportFileResponse(
+            report_path=str(target),
+            exists=True,
+            size_bytes=stat.st_size,
+            modified_at=datetime.fromtimestamp(stat.st_mtime, timezone.utc).replace(microsecond=0).isoformat(),
+            parsed_json=parsed_json,
+            raw_text=raw_text,
+            truncated=truncated,
+            error=error_message,
+        )
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Could not read report: {exc}") from exc
 
 
 @app.get("/smart-playlists/presets", response_model=dict[str, SmartPlaylistRule])

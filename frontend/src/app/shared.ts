@@ -17,14 +17,16 @@ import type {
   Track,
 } from "../types/api";
 
-export type Page = "library" | "analysis" | "nowPlaying" | "artist" | "history" | "autodj" | "settings";
+export type Page = "library" | "analysis" | "nowPlaying" | "artist" | "history" | "autodj" | "fileManagement" | "settings";
 export type LibraryView = "tracks" | "albums" | "playlists" | "smart" | "health";
 export type BackendStatus = "unknown" | "ok" | "down" | "restarting";
 export type PlaybackMode = "normal" | "repeatOne" | "repeatQueue" | "stopAfterCurrent";
+export type PlaybackEngine = "webview" | "native";
 export type SortDirection = "asc" | "desc";
 export type UiDensity = "comfortable" | "compact";
 export type FontScale = "small" | "default" | "large";
 export type AutoDjExperience = "simple" | "advanced";
+export type ReplayGainMode = "off" | "track" | "album";
 export type KeyboardShortcutAction =
   | "page.library"
   | "page.analysis"
@@ -32,6 +34,7 @@ export type KeyboardShortcutAction =
   | "page.artist"
   | "page.history"
   | "page.autodj"
+  | "page.fileManagement"
   | "page.settings"
   | "playback.playPause"
   | "playback.previous"
@@ -55,6 +58,10 @@ export type SortKey =
   | "analysis_updated_at"
   | "year"
   | "bitrate"
+  | "replaygain_track_gain_db"
+  | "replaygain_album_gain_db"
+  | "replaygain_track_peak"
+  | "replaygain_album_peak"
   | "rating"
   | "duration_seconds"
   | "play_count"
@@ -79,6 +86,10 @@ export type MetadataColumnKey =
   | "analysis_updated_at"
   | "year"
   | "bitrate"
+  | "replaygain_track_gain_db"
+  | "replaygain_album_gain_db"
+  | "replaygain_track_peak"
+  | "replaygain_album_peak"
   | "rating"
   | "duration_seconds"
   | "play_count"
@@ -184,10 +195,19 @@ export interface UiPreferences {
   similarityWeight: number;
   playerFadeMs: number;
   skipThresholdPercent: number;
+  playbackEngine: PlaybackEngine;
+  nativeOutputDeviceId: string;
+  nativeBufferFrames: number;
   startupPage: Page;
   albumGrid: boolean;
   showToasts: boolean;
   miniPlayer: boolean;
+  miniPlayerAlwaysOnTop: boolean;
+  miniPlayerWidth: number;
+  miniPlayerHeight: number;
+  replayGainMode: ReplayGainMode;
+  replayGainPreampDb: number;
+  replayGainPreventClipping: boolean;
   themeAccent: ThemeAccent;
   density: UiDensity;
   fontScale: FontScale;
@@ -240,6 +260,8 @@ export const storageKeys = {
   quickStartDismissed: "flac-cafe-quick-start-dismissed",
   autoDjTemplates: "flac-cafe-autodj-templates",
   miniPlayerSnapshot: "flac-cafe-mini-player-snapshot",
+  miniPlayerAlwaysOnTop: "flac-cafe-mini-player-always-on-top",
+  miniPlayerSize: "flac-cafe-mini-player-size",
   playerVolume: "flac-cafe-player-volume",
   playerMuted: "flac-cafe-player-muted",
 } as const;
@@ -265,7 +287,8 @@ export const defaultKeyboardShortcuts: Record<KeyboardShortcutAction, KeyboardSh
   "page.artist": { key: "4", ctrl: true, alt: false, shift: false },
   "page.history": { key: "5", ctrl: true, alt: false, shift: false },
   "page.autodj": { key: "6", ctrl: true, alt: false, shift: false },
-  "page.settings": { key: "7", ctrl: true, alt: false, shift: false },
+  "page.fileManagement": { key: "7", ctrl: true, alt: false, shift: false },
+  "page.settings": { key: "8", ctrl: true, alt: false, shift: false },
   "playback.playPause": { key: "Space", ctrl: false, alt: false, shift: false },
   "playback.previous": { key: ",", ctrl: false, alt: true, shift: false },
   "playback.next": { key: ".", ctrl: false, alt: true, shift: false },
@@ -283,6 +306,7 @@ export const keyboardShortcutLabels: Record<KeyboardShortcutAction, string> = {
   "page.artist": "Artist page",
   "page.history": "History page",
   "page.autodj": "AutoDJ page",
+  "page.fileManagement": "File Management page",
   "page.settings": "Settings page",
   "playback.playPause": "Play / pause",
   "playback.previous": "Previous track",
@@ -297,7 +321,16 @@ export const keyboardShortcutLabels: Record<KeyboardShortcutAction, string> = {
 export const keyboardShortcutGroups: Array<{ title: string; actions: KeyboardShortcutAction[] }> = [
   {
     title: "Pages",
-    actions: ["page.library", "page.analysis", "page.nowPlaying", "page.artist", "page.history", "page.autodj", "page.settings"],
+    actions: [
+      "page.library",
+      "page.analysis",
+      "page.nowPlaying",
+      "page.artist",
+      "page.history",
+      "page.autodj",
+      "page.fileManagement",
+      "page.settings",
+    ],
   },
   {
     title: "Playback",
@@ -333,6 +366,10 @@ export const libraryColumnDefinitions: LibraryColumnDefinition[] = [
   { key: "track_number", label: "Track", category: "Metadata", defaultWidth: 90, sortKey: "track_number", align: "right" },
   { key: "disc_number", label: "Disc", category: "Metadata", defaultWidth: 80, sortKey: "disc_number", align: "right" },
   { key: "bitrate", label: "Bitrate", category: "Metadata", defaultWidth: 110, sortKey: "bitrate", align: "right" },
+  { key: "replaygain_track_gain_db", label: "Track Gain", category: "Metadata", defaultWidth: 110, align: "right" },
+  { key: "replaygain_album_gain_db", label: "Album Gain", category: "Metadata", defaultWidth: 110, align: "right" },
+  { key: "replaygain_track_peak", label: "Track Peak", category: "Metadata", defaultWidth: 110, align: "right" },
+  { key: "replaygain_album_peak", label: "Album Peak", category: "Metadata", defaultWidth: 110, align: "right" },
   { key: "play_count", label: "Plays", category: "Listening", defaultWidth: 90, sortKey: "play_count", align: "right" },
   { key: "skip_count", label: "Skips", category: "Listening", defaultWidth: 90, sortKey: "skip_count", align: "right" },
   { key: "last_played_at", label: "Last Played", category: "Listening", defaultWidth: 150, sortKey: "last_played_at" },
@@ -370,6 +407,10 @@ export const defaultLibraryColumnWidths: Record<LibraryColumnKey, number> = {
   disc_number: 80,
   genre: 150,
   bitrate: 110,
+  replaygain_track_gain_db: 110,
+  replaygain_album_gain_db: 110,
+  replaygain_track_peak: 110,
+  replaygain_album_peak: 110,
   analysis_genre: 160,
   analysis_genre_confidence: 110,
   analysis_provider: 120,
@@ -754,6 +795,92 @@ export function formatShortcut(shortcut: KeyboardShortcut): string {
     .join(" + ");
 }
 
+export function keyboardShortcutSignature(shortcut: KeyboardShortcut): string {
+  return `${shortcut.ctrl ? "1" : "0"}${shortcut.alt ? "1" : "0"}${shortcut.shift ? "1" : "0"}:${shortcut.key.toLowerCase()}`;
+}
+
+export function shortcutConflictGroups(shortcuts: Record<KeyboardShortcutAction, KeyboardShortcut>): KeyboardShortcutAction[][] {
+  const bySignature = new Map<string, KeyboardShortcutAction[]>();
+  for (const action of Object.keys(shortcuts) as KeyboardShortcutAction[]) {
+    const signature = keyboardShortcutSignature(shortcuts[action]);
+    bySignature.set(signature, [...(bySignature.get(signature) ?? []), action]);
+  }
+  return Array.from(bySignature.values()).filter((actions) => actions.length > 1);
+}
+
+export function replayGainMultiplier(track: Track | null, mode: ReplayGainMode, preampDb: number, preventClipping = true): number {
+  if (!track || mode === "off") {
+    return 1;
+  }
+  const gain =
+    mode === "album"
+      ? track.replaygain_album_gain_db ?? track.replaygain_track_gain_db
+      : track.replaygain_track_gain_db ?? track.replaygain_album_gain_db;
+  const peak =
+    mode === "album"
+      ? track.replaygain_album_peak ?? track.replaygain_track_peak
+      : track.replaygain_track_peak ?? track.replaygain_album_peak;
+  if (typeof gain !== "number" || !Number.isFinite(gain)) {
+    return 1;
+  }
+  const db = clampNumber(gain + preampDb, -24, 12);
+  const desired = clampNumber(Math.pow(10, db / 20), 0.05, 1.5);
+  if (!preventClipping || typeof peak !== "number" || !Number.isFinite(peak) || peak <= 0) {
+    return desired;
+  }
+  return clampNumber(Math.min(desired, 1 / peak), 0.05, 1.5);
+}
+
+export function readMiniPlayerAlwaysOnTop(): boolean {
+  const stored = window.localStorage.getItem(storageKeys.miniPlayerAlwaysOnTop);
+  if (stored !== null) {
+    return readBooleanFlag(window.localStorage, storageKeys.miniPlayerAlwaysOnTop, false);
+  }
+  try {
+    const prefs = JSON.parse(window.localStorage.getItem(storageKeys.uiPreferences) ?? "{}");
+    return Boolean(prefs.miniPlayerAlwaysOnTop);
+  } catch {
+    return false;
+  }
+}
+
+export function writeMiniPlayerAlwaysOnTop(value: boolean) {
+  writeBooleanFlag(window.localStorage, storageKeys.miniPlayerAlwaysOnTop, value);
+}
+
+export function readMiniPlayerSize(): { width: number; height: number } {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(storageKeys.miniPlayerSize) ?? "{}");
+    const prefs = JSON.parse(window.localStorage.getItem(storageKeys.uiPreferences) ?? "{}");
+    const width =
+      typeof parsed.width === "number"
+        ? clampNumber(parsed.width, 360, 900)
+        : typeof prefs.miniPlayerWidth === "number"
+          ? clampNumber(prefs.miniPlayerWidth, 360, 900)
+          : 420;
+    const height =
+      typeof parsed.height === "number"
+        ? clampNumber(parsed.height, 96, 220)
+        : typeof prefs.miniPlayerHeight === "number"
+          ? clampNumber(prefs.miniPlayerHeight, 96, 220)
+          : 118;
+    return { width, height };
+  } catch {
+    return { width: 420, height: 118 };
+  }
+}
+
+export function writeMiniPlayerSize(width: number, height: number) {
+  try {
+    window.localStorage.setItem(
+      storageKeys.miniPlayerSize,
+      JSON.stringify({ width: clampNumber(width, 360, 900), height: clampNumber(height, 96, 220) }),
+    );
+  } catch {
+    // Mini-player size is a convenience preference.
+  }
+}
+
 export function readRememberedDeleteChoice(): RememberedDeleteChoice | null {
   try {
     const value = window.localStorage.getItem(storageKeys.deleteChoice);
@@ -955,10 +1082,19 @@ export function readUiPreferences(): UiPreferences {
     similarityWeight: 1.4,
     playerFadeMs: DEFAULT_FADE_MS,
     skipThresholdPercent: 35,
+    playbackEngine: "webview",
+    nativeOutputDeviceId: "",
+    nativeBufferFrames: 0,
     startupPage: "library",
     albumGrid: true,
     showToasts: true,
     miniPlayer: false,
+    miniPlayerAlwaysOnTop: false,
+    miniPlayerWidth: 420,
+    miniPlayerHeight: 118,
+    replayGainMode: "off",
+    replayGainPreampDb: 0,
+    replayGainPreventClipping: true,
     themeAccent: "cafe",
     density: "comfortable",
     fontScale: "default",
@@ -973,11 +1109,35 @@ export function readUiPreferences(): UiPreferences {
       const parsed = JSON.parse(modern) as Partial<UiPreferences> & { playerLayout?: string };
       // Older builds stored compact mode as playerLayout; keep honoring it while using one setting now.
       const legacyMiniPlayer = parsed.playerLayout === "compact";
-      const validPages: Page[] = ["library", "analysis", "nowPlaying", "artist", "history", "autodj", "settings"];
+      const validPages: Page[] = ["library", "analysis", "nowPlaying", "artist", "history", "autodj", "fileManagement", "settings"];
       return {
         ...defaults,
         ...parsed,
         miniPlayer: typeof parsed.miniPlayer === "boolean" ? parsed.miniPlayer : legacyMiniPlayer,
+        miniPlayerAlwaysOnTop:
+          typeof parsed.miniPlayerAlwaysOnTop === "boolean" ? parsed.miniPlayerAlwaysOnTop : defaults.miniPlayerAlwaysOnTop,
+        miniPlayerWidth: typeof parsed.miniPlayerWidth === "number" ? clampNumber(parsed.miniPlayerWidth, 360, 900) : defaults.miniPlayerWidth,
+        miniPlayerHeight: typeof parsed.miniPlayerHeight === "number" ? clampNumber(parsed.miniPlayerHeight, 96, 220) : defaults.miniPlayerHeight,
+        replayGainMode: ["off", "track", "album"].includes(parsed.replayGainMode as ReplayGainMode)
+          ? (parsed.replayGainMode as ReplayGainMode)
+          : defaults.replayGainMode,
+        replayGainPreampDb:
+          typeof parsed.replayGainPreampDb === "number"
+            ? clampNumber(parsed.replayGainPreampDb, -12, 12)
+            : defaults.replayGainPreampDb,
+        playbackEngine: ["webview", "native"].includes(parsed.playbackEngine as PlaybackEngine)
+          ? (parsed.playbackEngine as PlaybackEngine)
+          : defaults.playbackEngine,
+        nativeOutputDeviceId:
+          typeof parsed.nativeOutputDeviceId === "string" ? parsed.nativeOutputDeviceId : defaults.nativeOutputDeviceId,
+        nativeBufferFrames:
+          typeof parsed.nativeBufferFrames === "number"
+            ? clampNumber(parsed.nativeBufferFrames, 0, 16_384)
+            : defaults.nativeBufferFrames,
+        replayGainPreventClipping:
+          typeof parsed.replayGainPreventClipping === "boolean"
+            ? parsed.replayGainPreventClipping
+            : defaults.replayGainPreventClipping,
         startupPage: validPages.includes(parsed.startupPage as Page) ? (parsed.startupPage as Page) : defaults.startupPage,
         themeAccent: ["cafe", "mint", "rose", "blue"].includes(parsed.themeAccent as ThemeAccent)
           ? (parsed.themeAccent as ThemeAccent)

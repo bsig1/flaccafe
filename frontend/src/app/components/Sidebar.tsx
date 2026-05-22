@@ -3,6 +3,7 @@ import {
   Clock3,
   Coffee,
   FileText,
+  FolderCog,
   Library,
   Settings,
   UserRound,
@@ -37,6 +38,7 @@ export function Sidebar({
     { id: "artist" as const, label: "Artist", icon: UserRound },
     { id: "history" as const, label: "History", icon: Clock3 },
     { id: "analysis" as const, label: "Analysis", icon: BarChart3 },
+    { id: "fileManagement" as const, label: "File Management", icon: FolderCog },
     { id: "settings" as const, label: "Settings", icon: Settings },
   ];
 

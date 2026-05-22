@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useState,
 } from "react";
 import type {
@@ -17,7 +18,6 @@ import {
   RotateCcw,
   ShieldCheck,
   Star,
-  Upload,
   Wand2,
 } from "lucide-react";
 
@@ -30,15 +30,15 @@ import {
   themeAccentLabels,
   themeOrder,
 } from "../../config/theme";
+import {
+  nativeListOutputDevices,
+} from "../../lib/nativePlayback";
+import type {
+  NativeAudioDevice,
+} from "../../lib/nativePlayback";
 import type {
   AudioAnalysisProgress,
-  CacheClearTarget,
   ClapStatusResponse,
-  CsvMetadataExportResponse,
-  CsvMetadataImportReportResponse,
-  CsvMetadataImportResponse,
-  FileOrganizationResponse,
-  FilenameTagInferenceResponse,
   LogTailResponse,
   ScanProgress,
   ScanResult,
@@ -62,33 +62,12 @@ import {
   formatTime,
   keyboardShortcutGroups,
   keyboardShortcutLabels,
+  normalizeKeyboardShortcuts,
+  shortcutConflictGroups,
   shortcutFromEvent,
+  writeMiniPlayerAlwaysOnTop,
+  writeMiniPlayerSize,
 } from "../shared";
-
-const DEFAULT_FILENAME_TAG_PATTERNS = [
-  "<Album Artist> - <Album> [<Year>]/<Track#> - <Artist> - <Title>",
-  "<Album Artist>/<Album>/<Track#> - <Title>",
-  "<Artist> - <Album>/<Disc#>-<Track#> - <Title>",
-  "<Genre>/<Artist>/<Album> (<Year>)/<Track#> - <Title>",
-];
-
-const FILENAME_TAG_PRESETS_KEY = "flacCafeFilenameTagPresets";
-
-function readFilenameTagPresets(): string[] {
-  if (typeof window === "undefined") {
-    return [];
-  }
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(FILENAME_TAG_PRESETS_KEY) ?? "[]");
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeFilenameTagPresets(patterns: string[]) {
-  window.localStorage.setItem(FILENAME_TAG_PRESETS_KEY, JSON.stringify(patterns));
-}
 
 const CODEC_TESTS = [
   { label: "MP3", type: "audio/mpeg" },
@@ -98,6 +77,14 @@ const CODEC_TESTS = [
   { label: "Opus", type: "audio/ogg; codecs=\"opus\"" },
   { label: "WAV", type: "audio/wav" },
   { label: "AIFF", type: "audio/aiff" },
+];
+
+const NATIVE_BUFFER_OPTIONS = [
+  { value: 0, label: "Device default" },
+  { value: 512, label: "Low latency 512" },
+  { value: 1024, label: "Balanced 1024" },
+  { value: 2048, label: "Stable 2048" },
+  { value: 4096, label: "Very stable 4096" },
 ];
 
 interface CodecSupportRow {
@@ -166,20 +153,6 @@ export function SettingsPage({
   onOpenSourceFolder,
   onOpenThemeFolder,
   onClearArtistCache,
-  onClearLibraryCaches,
-  filenameTagPreview,
-  onPreviewFilenameTags,
-  onApplyFilenameTags,
-  fileOrganizationPreview,
-  onPreviewFileOrganization,
-  onApplyFileOrganization,
-  metadataCsvExport,
-  metadataCsvImportPreview,
-  metadataCsvImportReport,
-  onExportMetadataCsv,
-  onPreviewMetadataCsv,
-  onApplyMetadataCsv,
-  onExportMetadataCsvReport,
 }: {
   settings: SettingsResponse | null;
   folderPath: string;
@@ -229,44 +202,14 @@ export function SettingsPage({
   onOpenSourceFolder: () => void;
   onOpenThemeFolder: () => void;
   onClearArtistCache: () => void;
-  onClearLibraryCaches: (targets: CacheClearTarget[]) => void | Promise<void>;
-  filenameTagPreview: FilenameTagInferenceResponse | null;
-  onPreviewFilenameTags: (pattern: string, missingOnly: boolean) => void | Promise<void>;
-  onApplyFilenameTags: (pattern: string, missingOnly: boolean) => void | Promise<void>;
-  fileOrganizationPreview: FileOrganizationResponse | null;
-  onPreviewFileOrganization: (
-    template: string,
-    baseFolder?: string | null,
-    options?: { collisionStrategy?: "skip" | "auto_rename"; cleanupEmptyFolders?: boolean },
-  ) => void | Promise<void>;
-  onApplyFileOrganization: (
-    template: string,
-    baseFolder?: string | null,
-    options?: { collisionStrategy?: "skip" | "auto_rename"; cleanupEmptyFolders?: boolean },
-  ) => void | Promise<void>;
-  metadataCsvExport: CsvMetadataExportResponse | null;
-  metadataCsvImportPreview: CsvMetadataImportResponse | null;
-  metadataCsvImportReport: CsvMetadataImportReportResponse | null;
-  onExportMetadataCsv: () => void | Promise<void>;
-  onPreviewMetadataCsv: (csvPath: string, missingOnly: boolean) => void | Promise<void>;
-  onApplyMetadataCsv: (csvPath: string, missingOnly: boolean) => void | Promise<void>;
-  onExportMetadataCsvReport: (csvPath: string, missingOnly: boolean) => void | Promise<void>;
 }) {
-  const [filenameTagPattern, setFilenameTagPattern] = useState("<Album Artist> - <Album> [<Year>]/<Track#> - <Artist> - <Title>");
-  const [filenameTagMissingOnly, setFilenameTagMissingOnly] = useState(true);
-  const [filenameTagPresets, setFilenameTagPresets] = useState(readFilenameTagPresets);
-  const [organizeTemplate, setOrganizeTemplate] = useState("<Album Artist>/<Album> (<Year>)/<Track#> - <Title>");
-  const [organizeBaseFolder, setOrganizeBaseFolder] = useState("");
-  const [organizeCollisionStrategy, setOrganizeCollisionStrategy] = useState<"skip" | "auto_rename">("skip");
-  const [organizeCleanupEmptyFolders, setOrganizeCleanupEmptyFolders] = useState(false);
-  const [metadataCsvPath, setMetadataCsvPath] = useState("");
-  const [metadataCsvMissingOnly, setMetadataCsvMissingOnly] = useState(true);
   const [shortcutCaptureAction, setShortcutCaptureAction] = useState<KeyboardShortcutAction | null>(null);
   const [shortcutMessage, setShortcutMessage] = useState<string | null>(null);
-  const [presetMessage, setPresetMessage] = useState<string | null>(null);
+  const [shortcutPresetJson, setShortcutPresetJson] = useState("");
   const [codecSupport, setCodecSupport] = useState(detectCodecSupport);
-  const allFilenameTagPresets = Array.from(new Set([...DEFAULT_FILENAME_TAG_PATTERNS, ...filenameTagPresets]));
-  const isCustomFilenameTagPreset = filenameTagPresets.includes(filenameTagPattern);
+  const [nativeDevices, setNativeDevices] = useState<NativeAudioDevice[]>([]);
+  const [nativeDeviceMessage, setNativeDeviceMessage] = useState<string | null>(null);
+  const shortcutConflicts = shortcutConflictGroups(uiPreferences.keyboardShortcuts);
   const progressPercent = Math.max(0, Math.min(100, scanProgress?.percent ?? 0));
   const hasCount = Boolean(scanProgress && scanProgress.total_files > 0);
   const audioProgressPercent = Math.max(0, Math.min(100, audioAnalysisProgress?.percent ?? 0));
@@ -278,26 +221,19 @@ export function SettingsPage({
         ? "border-red-400/40 bg-red-500/10 text-red-300"
         : "border-line bg-ink text-muted";
 
-  function saveCurrentFilenameTagPreset() {
-    const trimmed = filenameTagPattern.trim();
-    if (!trimmed || allFilenameTagPresets.includes(trimmed)) {
-      return;
-    }
-    const next = [...filenameTagPresets, trimmed];
-    setFilenameTagPresets(next);
-    writeFilenameTagPresets(next);
-    setPresetMessage("Pattern saved");
-  }
+  useEffect(() => {
+    void refreshNativeDevices();
+  }, []);
 
-  function deleteCurrentFilenameTagPreset() {
-    if (!isCustomFilenameTagPreset) {
-      return;
+  async function refreshNativeDevices() {
+    try {
+      const devices = await nativeListOutputDevices();
+      setNativeDevices(devices);
+      setNativeDeviceMessage(devices.length ? null : "No native output devices reported.");
+    } catch {
+      setNativeDevices([]);
+      setNativeDeviceMessage("Native output devices are only available in the desktop app.");
     }
-    const next = filenameTagPresets.filter((pattern) => pattern !== filenameTagPattern);
-    setFilenameTagPresets(next);
-    writeFilenameTagPresets(next);
-    setFilenameTagPattern(DEFAULT_FILENAME_TAG_PATTERNS[0]);
-    setPresetMessage("Pattern deleted");
   }
 
   function updateShortcut(action: KeyboardShortcutAction, event: ReactKeyboardEvent<HTMLButtonElement>) {
@@ -342,6 +278,24 @@ export function SettingsPage({
     setUiPreferences((current) => ({ ...current, keyboardShortcuts: defaultKeyboardShortcuts }));
     setShortcutCaptureAction(null);
     setShortcutMessage("Keyboard shortcuts reset");
+  }
+
+  function exportShortcutPreset() {
+    setShortcutPresetJson(JSON.stringify(uiPreferences.keyboardShortcuts, null, 2));
+    setShortcutMessage("Shortcut preset exported below");
+  }
+
+  function importShortcutPreset() {
+    try {
+      const parsed = JSON.parse(shortcutPresetJson);
+      setUiPreferences((current) => ({
+        ...current,
+        keyboardShortcuts: normalizeKeyboardShortcuts(parsed),
+      }));
+      setShortcutMessage("Shortcut preset imported");
+    } catch (error) {
+      setShortcutMessage(error instanceof Error ? error.message : "Could not import shortcut preset");
+    }
   }
 
   return (
@@ -581,6 +535,32 @@ export function SettingsPage({
                 </button>
               </div>
               {shortcutMessage && <div className="rounded border border-moss/30 bg-moss/10 px-3 py-2 text-xs text-moss">{shortcutMessage}</div>}
+              {shortcutConflicts.length > 0 && (
+                <div className="rounded border border-ember/40 bg-ember/10 px-3 py-2 text-xs text-ember">
+                  Conflicts:{" "}
+                  {shortcutConflicts
+                    .map((actions) => actions.map((action) => keyboardShortcutLabels[action]).join(" / "))
+                    .join("; ")}
+                </div>
+              )}
+              <div className="grid gap-2 rounded border border-line/70 bg-ink p-3">
+                <div className="flex flex-wrap gap-2">
+                  <button className="secondary-button h-8" type="button" onClick={exportShortcutPreset}>
+                    <Download size={14} />
+                    Export Preset
+                  </button>
+                  <button className="secondary-button h-8" type="button" onClick={importShortcutPreset}>
+                    <FileText size={14} />
+                    Import Preset
+                  </button>
+                </div>
+                <textarea
+                  className="min-h-20 rounded border border-line bg-panel px-3 py-2 font-mono text-xs text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
+                  value={shortcutPresetJson}
+                  placeholder="Shortcut preset JSON"
+                  onChange={(event) => setShortcutPresetJson(event.target.value)}
+                />
+              </div>
               {keyboardShortcutGroups.map((group) => (
                 <div key={group.title} className="grid gap-2 rounded border border-line/70 bg-ink p-3">
                   <div className="text-xs font-medium uppercase text-muted">{group.title}</div>
@@ -784,6 +764,74 @@ export function SettingsPage({
 
           <DisclosureSection title="Player" description="Fade, skip tracking, and playback presentation">
             <div className="grid gap-3 text-sm text-neutral-200">
+            <label className="grid gap-2 rounded border border-line/70 bg-ink p-3">
+              <span className="text-xs uppercase text-muted">Playback Engine</span>
+              <select
+                className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                value={uiPreferences.playbackEngine}
+                onChange={(event) =>
+                  setUiPreferences((current) => ({
+                    ...current,
+                    playbackEngine: event.target.value as UiPreferences["playbackEngine"],
+                  }))
+                }
+              >
+                <option value="webview">WebView audio</option>
+                <option value="native">Native Rust audio</option>
+              </select>
+              <span className="text-xs text-muted">
+                Native playback uses Rust with rodio/cpal/Symphonia for broader local codec support. WebView remains the safest default while the native engine matures.
+              </span>
+            </label>
+            <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="font-medium text-white">Native output</div>
+                  <div className="text-xs text-muted">Used when Playback Engine is set to Native Rust audio.</div>
+                </div>
+                <button className="secondary-button h-8" type="button" onClick={() => void refreshNativeDevices()}>
+                  <RefreshCw size={14} />
+                  Recheck
+                </button>
+              </div>
+              <label className="grid gap-2">
+                <span className="text-xs uppercase text-muted">Output Device</span>
+                <select
+                  className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                  value={uiPreferences.nativeOutputDeviceId}
+                  onChange={(event) =>
+                    setUiPreferences((current) => ({ ...current, nativeOutputDeviceId: event.target.value }))
+                  }
+                >
+                  <option value="">System default</option>
+                  {nativeDevices.map((device) => (
+                    <option key={device.id} value={device.id}>
+                      {device.name}{device.is_default ? " (default)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="grid gap-2">
+                <span className="text-xs uppercase text-muted">Output Buffer</span>
+                <select
+                  className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                  value={uiPreferences.nativeBufferFrames}
+                  onChange={(event) =>
+                    setUiPreferences((current) => ({ ...current, nativeBufferFrames: Number(event.target.value) }))
+                  }
+                >
+                  {NATIVE_BUFFER_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {nativeDeviceMessage && <div className="text-xs text-muted">{nativeDeviceMessage}</div>}
+              <div className="rounded border border-line/70 bg-panel px-3 py-2 text-xs text-muted">
+                WASAPI shared output is handled by cpal on Windows. Exclusive mode needs a dedicated WASAPI backend, so it stays out of the current rodio bridge.
+              </div>
+            </div>
             <label className="flex items-center justify-between gap-4">
               <span className="text-muted">Compact bottom player</span>
               <input
@@ -798,6 +846,88 @@ export function SettingsPage({
                 }
               />
             </label>
+            <label className="flex items-center justify-between gap-4">
+              <span className="text-muted">Detached mini-player always on top</span>
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-moss"
+                checked={uiPreferences.miniPlayerAlwaysOnTop}
+                onChange={(event) => {
+                  const value = event.target.checked;
+                  writeMiniPlayerAlwaysOnTop(value);
+                  setUiPreferences((current) => ({ ...current, miniPlayerAlwaysOnTop: value }));
+                }}
+              />
+            </label>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <NumberField
+                label="Mini Player Width"
+                min={360}
+                max={900}
+                value={uiPreferences.miniPlayerWidth}
+                onChange={(value) => {
+                  writeMiniPlayerSize(value, uiPreferences.miniPlayerHeight);
+                  setUiPreferences((current) => ({ ...current, miniPlayerWidth: value }));
+                }}
+              />
+              <NumberField
+                label="Mini Player Height"
+                min={96}
+                max={220}
+                value={uiPreferences.miniPlayerHeight}
+                onChange={(value) => {
+                  writeMiniPlayerSize(uiPreferences.miniPlayerWidth, value);
+                  setUiPreferences((current) => ({ ...current, miniPlayerHeight: value }));
+                }}
+              />
+            </div>
+            <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
+              <label className="grid gap-2">
+                <span className="text-xs uppercase text-muted">ReplayGain / Loudness</span>
+                <select
+                  className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                  value={uiPreferences.replayGainMode}
+                  onChange={(event) =>
+                    setUiPreferences((current) => ({
+                      ...current,
+                      replayGainMode: event.target.value as UiPreferences["replayGainMode"],
+                    }))
+                  }
+                >
+                  <option value="off">Off</option>
+                  <option value="track">Track gain</option>
+                  <option value="album">Album gain</option>
+                </select>
+              </label>
+              <label className="grid gap-2">
+                <span className="text-xs uppercase text-muted">ReplayGain Preamp {uiPreferences.replayGainPreampDb.toFixed(1)} dB</span>
+                <input
+                  type="range"
+                  min={-12}
+                  max={12}
+                  step={0.5}
+                  value={uiPreferences.replayGainPreampDb}
+                  onChange={(event) =>
+                    setUiPreferences((current) => ({ ...current, replayGainPreampDb: Number(event.target.value) }))
+                  }
+                  className="accent-moss"
+                />
+              </label>
+              <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-panel px-3 py-2">
+                <span className="text-muted">Prevent clipping with ReplayGain peak tags</span>
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-moss"
+                  checked={uiPreferences.replayGainPreventClipping}
+                  onChange={(event) =>
+                    setUiPreferences((current) => ({ ...current, replayGainPreventClipping: event.target.checked }))
+                  }
+                />
+              </label>
+              <div className="text-xs text-muted">
+                FLAC Cafe reads embedded ReplayGain gain and peak tags during scans and applies gain during playback. Tracks without tags play at normal volume.
+              </div>
+            </div>
             <label className="grid gap-2">
               <span className="text-xs uppercase text-muted">Fade Length {uiPreferences.playerFadeMs}ms</span>
               <input
@@ -835,7 +965,9 @@ export function SettingsPage({
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <div className="font-medium text-white">WebView codec support</div>
-                  <div className="text-xs text-muted">Reported by the local WebView2 audio element on this machine.</div>
+                  <div className="text-xs text-muted">
+                    Reported by WebView2. Unsupported files can still be opened in your default Windows audio app from the player bar.
+                  </div>
                 </div>
                 <button className="secondary-button h-8" type="button" onClick={() => setCodecSupport(detectCodecSupport())}>
                   <RefreshCw size={14} />
@@ -861,352 +993,6 @@ export function SettingsPage({
                 ))}
               </div>
             </div>
-            </div>
-          </DisclosureSection>
-
-          <DisclosureSection title="Library Tools" description="Filename tags, file organization, and cache cleanup">
-            <div className="grid gap-4 text-sm text-neutral-200">
-              <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
-                <div>
-                  <div className="font-medium text-white">Infer tags from filenames</div>
-                  <div className="mt-1 text-xs text-muted">
-                    Use MusicBee-style folder naming patterns to fill missing title, artist, album, year, disc, genre, and track fields.
-                  </div>
-                </div>
-                <label className="grid gap-2">
-                  <span className="text-xs uppercase text-muted">Pattern</span>
-                  <div className="flex flex-wrap gap-2">
-                    <select
-                      className="h-9 min-w-0 flex-1 rounded border border-line bg-panel px-3 font-mono text-xs text-white outline-none ring-moss/40 focus:ring-2"
-                      value={allFilenameTagPresets.includes(filenameTagPattern) ? filenameTagPattern : ""}
-                      onChange={(event) => {
-                        if (event.target.value) {
-                          setFilenameTagPattern(event.target.value);
-                        }
-                      }}
-                    >
-                      <option value="" disabled>
-                        Choose saved pattern
-                      </option>
-                      {allFilenameTagPresets.map((pattern) => (
-                        <option key={pattern} value={pattern}>
-                          {pattern}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      className="secondary-button h-9"
-                      type="button"
-                      disabled={!filenameTagPattern.trim() || allFilenameTagPresets.includes(filenameTagPattern.trim())}
-                      onClick={saveCurrentFilenameTagPreset}
-                    >
-                      Save Pattern
-                    </button>
-                    <button
-                      className="secondary-button h-9"
-                      type="button"
-                      disabled={!isCustomFilenameTagPreset}
-                      onClick={deleteCurrentFilenameTagPreset}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                  <input
-                    className="h-9 rounded border border-line bg-panel px-3 font-mono text-xs text-white outline-none ring-moss/40 focus:ring-2"
-                    value={filenameTagPattern}
-                    onChange={(event) => setFilenameTagPattern(event.target.value)}
-                  />
-                  {presetMessage && <span className="text-xs text-moss">{presetMessage}</span>}
-                </label>
-                <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-panel px-3 py-2">
-                  <span className="text-muted">Only fill empty fields</span>
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4 accent-moss"
-                    checked={filenameTagMissingOnly}
-                    onChange={(event) => setFilenameTagMissingOnly(event.target.checked)}
-                  />
-                </label>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={() => void onPreviewFilenameTags(filenameTagPattern, filenameTagMissingOnly)}
-                  >
-                    <Wand2 size={15} />
-                    Preview Tags
-                  </button>
-                  <button
-                    className="primary-button"
-                    type="button"
-                    onClick={() => void onApplyFilenameTags(filenameTagPattern, filenameTagMissingOnly)}
-                  >
-                    <FileText size={15} />
-                    Apply Tags
-                  </button>
-                </div>
-                {filenameTagPreview && (
-                  <div className="rounded border border-line bg-panel p-3 text-xs">
-                    <div className="mb-2 text-neutral-200">
-                      {filenameTagPreview.matches.toLocaleString()} matches, {filenameTagPreview.applied.toLocaleString()} applied
-                    </div>
-                    <div className="grid gap-1">
-                      {filenameTagPreview.previews.slice(0, 5).map((preview) => (
-                        <div key={preview.track_id} className="grid gap-1 rounded bg-ink px-2 py-1.5">
-                          <div className="truncate text-muted">{preview.path}</div>
-                          <div className="truncate text-neutral-200">
-                            {preview.matched
-                              ? preview.changed_fields.length
-                                ? preview.changed_fields.join(", ")
-                                : "Matched; no fields need changes"
-                              : "No match"}
-                            {preview.error ? ` - ${preview.error}` : ""}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
-                <div>
-                  <div className="font-medium text-white">Organize files from tags</div>
-                  <div className="mt-1 text-xs text-muted">
-                    Preview tag-based folder moves before applying. FLAC Cafe updates SQLite paths after each successful move.
-                  </div>
-                </div>
-                <label className="grid gap-2">
-                  <span className="text-xs uppercase text-muted">Template</span>
-                  <input
-                    className="h-9 rounded border border-line bg-panel px-3 font-mono text-xs text-white outline-none ring-moss/40 focus:ring-2"
-                    value={organizeTemplate}
-                    onChange={(event) => setOrganizeTemplate(event.target.value)}
-                  />
-                </label>
-                <label className="grid gap-2">
-                  <span className="text-xs uppercase text-muted">Base Folder</span>
-                  <input
-                    className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
-                    value={organizeBaseFolder}
-                    placeholder={folderPath || "Leave empty to use the music folder"}
-                    onChange={(event) => setOrganizeBaseFolder(event.target.value)}
-                  />
-                </label>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <label className="grid gap-2">
-                    <span className="text-xs uppercase text-muted">Name Collisions</span>
-                    <select
-                      className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
-                      value={organizeCollisionStrategy}
-                      onChange={(event) => setOrganizeCollisionStrategy(event.target.value as "skip" | "auto_rename")}
-                    >
-                      <option value="skip">Skip existing files</option>
-                      <option value="auto_rename">Auto-rename with (2)</option>
-                    </select>
-                  </label>
-                  <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-panel px-3 py-2">
-                    <span className="text-muted">Remove empty source folders</span>
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 accent-moss"
-                      checked={organizeCleanupEmptyFolders}
-                      onChange={(event) => setOrganizeCleanupEmptyFolders(event.target.checked)}
-                    />
-                  </label>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={() =>
-                      void onPreviewFileOrganization(organizeTemplate, organizeBaseFolder, {
-                        collisionStrategy: organizeCollisionStrategy,
-                        cleanupEmptyFolders: organizeCleanupEmptyFolders,
-                      })
-                    }
-                  >
-                    <FileText size={15} />
-                    Preview Moves
-                  </button>
-                  <button
-                    className="primary-button"
-                    type="button"
-                    onClick={() =>
-                      void onApplyFileOrganization(organizeTemplate, organizeBaseFolder, {
-                        collisionStrategy: organizeCollisionStrategy,
-                        cleanupEmptyFolders: organizeCleanupEmptyFolders,
-                      })
-                    }
-                  >
-                    <FolderOpen size={15} />
-                    Move Files
-                  </button>
-                </div>
-                {fileOrganizationPreview && (
-                  <div className="rounded border border-line bg-panel p-3 text-xs">
-                    <div className="mb-2 text-neutral-200">
-                      {fileOrganizationPreview.changed_count.toLocaleString()} possible moves, {fileOrganizationPreview.applied.toLocaleString()} applied
-                      {fileOrganizationPreview.removed_empty_folders
-                        ? `, ${fileOrganizationPreview.removed_empty_folders.toLocaleString()} empty folders removed`
-                        : ""}
-                    </div>
-                    <div className="grid gap-1">
-                      {fileOrganizationPreview.changes.slice(0, 5).map((change) => (
-                        <div key={change.track_id} className="grid gap-1 rounded bg-ink px-2 py-1.5">
-                          <div className="truncate text-muted">{change.current_path}</div>
-                          <div className={change.error || change.collision ? "truncate text-ember" : "truncate text-neutral-200"}>
-                            {change.target_path}
-                            {change.collision ? " - collision" : ""}
-                            {change.error ? ` - ${change.error}` : ""}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
-                <div>
-                  <div className="font-medium text-white">CSV metadata cleanup</div>
-                  <div className="mt-1 text-xs text-muted">
-                    Export editable metadata for spreadsheet cleanup, then preview the CSV before importing changes.
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button className="secondary-button" type="button" onClick={() => void onExportMetadataCsv()}>
-                    <Download size={15} />
-                    Export CSV
-                  </button>
-                  {metadataCsvExport && (
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      onClick={() => setMetadataCsvPath(metadataCsvExport.csv_path)}
-                    >
-                      <FileText size={15} />
-                      Use Last Export
-                    </button>
-                  )}
-                </div>
-                {metadataCsvExport && (
-                  <div className="rounded border border-line bg-panel px-3 py-2 text-xs text-muted">
-                    <div className="truncate">{metadataCsvExport.csv_path}</div>
-                    <div>{metadataCsvExport.track_count.toLocaleString()} tracks exported</div>
-                  </div>
-                )}
-                <label className="grid gap-2">
-                  <span className="text-xs uppercase text-muted">Import CSV Path</span>
-                  <input
-                    className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
-                    value={metadataCsvPath}
-                    placeholder="Paste the exported CSV path"
-                    onChange={(event) => setMetadataCsvPath(event.target.value)}
-                  />
-                </label>
-                <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-panel px-3 py-2">
-                  <span className="text-muted">Only fill empty fields on import</span>
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4 accent-moss"
-                    checked={metadataCsvMissingOnly}
-                    onChange={(event) => setMetadataCsvMissingOnly(event.target.checked)}
-                  />
-                </label>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={() => void onPreviewMetadataCsv(metadataCsvPath, metadataCsvMissingOnly)}
-                  >
-                    <EyeOff size={15} />
-                    Preview Import
-                  </button>
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={() => void onExportMetadataCsvReport(metadataCsvPath, metadataCsvMissingOnly)}
-                  >
-                    <Download size={15} />
-                    Export Dry Run
-                  </button>
-                  <button
-                    className="primary-button"
-                    type="button"
-                    onClick={() => void onApplyMetadataCsv(metadataCsvPath, metadataCsvMissingOnly)}
-                  >
-                    <Upload size={15} />
-                    Import CSV
-                  </button>
-                </div>
-                {metadataCsvImportPreview && (
-                  <div className="rounded border border-line bg-panel p-3 text-xs">
-                    <div className="mb-2 text-neutral-200">
-                      {metadataCsvImportPreview.changed.toLocaleString()} changed rows,{" "}
-                      {metadataCsvImportPreview.applied.toLocaleString()} applied
-                    </div>
-                    <div className="grid gap-1">
-                      {metadataCsvImportPreview.previews.slice(0, 5).map((preview) => (
-                        <div key={`${preview.row_number}-${preview.track_id ?? "missing"}`} className="grid gap-1 rounded bg-ink px-2 py-1.5">
-                          <div className="truncate text-muted">
-                            Row {preview.row_number}
-                            {preview.path ? ` - ${preview.path}` : ""}
-                          </div>
-                          <div className={preview.error ? "truncate text-ember" : "truncate text-neutral-200"}>
-                            {preview.error ??
-                              (preview.changed_fields.length
-                                ? preview.changed_fields.join(", ")
-                                : preview.matched
-                                  ? "Matched; no fields need changes"
-                                  : "No match")}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {metadataCsvImportReport && (
-                  <div className="rounded border border-line bg-panel px-3 py-2 text-xs text-muted">
-                    <div className="truncate">{metadataCsvImportReport.report_path}</div>
-                    <div>
-                      {metadataCsvImportReport.changed.toLocaleString()} changed rows,{" "}
-                      {metadataCsvImportReport.errors.toLocaleString()} errors captured
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
-                <div>
-                  <div className="font-medium text-white">Cache maintenance</div>
-                  <div className="mt-1 text-xs text-muted">
-                    Clear derived data without touching tracks, ratings, playlists, lyrics, or audio files.
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button className="secondary-button" type="button" onClick={() => void onClearLibraryCaches(["artwork"])}>
-                    <RefreshCw size={15} />
-                    Artwork
-                  </button>
-                  <button className="secondary-button" type="button" onClick={() => void onClearLibraryCaches(["metadata"])}>
-                    <RefreshCw size={15} />
-                    Metadata
-                  </button>
-                  <button className="secondary-button" type="button" onClick={() => void onClearLibraryCaches(["recommendation_history"])}>
-                    <RefreshCw size={15} />
-                    AutoDJ History
-                  </button>
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={() => void onClearLibraryCaches(["artist", "artwork", "metadata", "recommendation_history", "scan_errors"])}
-                  >
-                    <RefreshCw size={15} />
-                    All Caches
-                  </button>
-                </div>
-              </div>
             </div>
           </DisclosureSection>
 

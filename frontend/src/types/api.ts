@@ -18,7 +18,13 @@ export interface Track {
   year: number | null;
   duration_seconds: number | null;
   bitrate: number | null;
+  replaygain_track_gain_db?: number | null;
+  replaygain_album_gain_db?: number | null;
+  replaygain_track_peak?: number | null;
+  replaygain_album_peak?: number | null;
   audio_fingerprint: string | null;
+  acoustic_fingerprint?: string | null;
+  acoustic_fingerprint_updated_at?: string | null;
   rating: number | null;
   play_count: number;
   skip_count: number;
@@ -117,6 +123,7 @@ export interface DuplicateGroup {
   duration_spread_seconds: number | null;
   bitrate_spread: number | null;
   shared_fingerprint: boolean;
+  shared_acoustic_fingerprint?: boolean;
   average_audio_similarity: number | null;
   path_roots: string[];
   analyzed_tracks: number;
@@ -168,6 +175,7 @@ export interface FilenameTagInferencePreview {
   current: Record<string, unknown>;
   inferred: Record<string, unknown>;
   changed_fields: string[];
+  accepted?: boolean;
   applied: boolean;
   error: string | null;
 }
@@ -211,6 +219,17 @@ export interface FileOrganizationResponse {
   removed_empty_folders: number;
 }
 
+export interface FileOrganizationReportRequest extends FileOrganizationRequest {
+  report_path?: string | null;
+}
+
+export interface FileOrganizationReportResponse {
+  report_path: string;
+  total: number;
+  changed_count: number;
+  collisions: number;
+}
+
 export interface CsvMetadataExportRequest {
   csv_path?: string | null;
   track_ids?: number[] | null;
@@ -226,7 +245,9 @@ export interface CsvMetadataExportResponse {
 export interface CsvMetadataImportRequest {
   csv_path: string;
   track_ids?: number[] | null;
+  column_map?: Record<string, string>;
   missing_only?: boolean;
+  clear_blank_fields?: boolean;
   apply?: boolean;
   limit?: number;
 }
@@ -239,6 +260,7 @@ export interface CsvMetadataImportPreview {
   current: Record<string, unknown>;
   imported: Record<string, unknown>;
   changed_fields: string[];
+  conflict_fields: string[];
   applied: boolean;
   error: string | null;
 }
@@ -264,6 +286,119 @@ export interface CsvMetadataImportReportResponse {
   matched: number;
   changed: number;
   errors: number;
+}
+
+export interface DuplicateActionRequest {
+  action: "keep_best" | "remove_selected" | "export_report";
+  track_ids?: number[];
+  groups?: number[][];
+  delete_files?: boolean;
+  report_path?: string | null;
+}
+
+export interface DuplicateActionResponse {
+  action: string;
+  affected: number;
+  removed_track_ids: number[];
+  deleted_files: number;
+  report_path: string | null;
+  errors: string[];
+}
+
+export interface DuplicateReviewRequest {
+  track_ids?: number[];
+  groups?: number[][];
+  limit?: number;
+}
+
+export interface DuplicateReviewResponse {
+  tracks: Track[];
+  groups: DuplicateGroup[];
+  missing_track_ids: number[];
+}
+
+export interface ChromaprintConfigRequest {
+  fpcalc_path?: string | null;
+}
+
+export interface ChromaprintStatusResponse {
+  available: boolean;
+  configured_path: string | null;
+  resolved_path: string | null;
+  version: string | null;
+  tool_directory: string;
+  checked_paths: string[];
+  message: string;
+  errors: string[];
+}
+
+export interface ChromaprintInstallRequest {
+  source_url?: string | null;
+}
+
+export interface ChromaprintInstallResponse {
+  installed: boolean;
+  fpcalc_path: string | null;
+  source_url: string;
+  message: string;
+  errors: string[];
+}
+
+export interface AcousticFingerprintRequest {
+  track_ids?: number[] | null;
+  overwrite?: boolean;
+  limit?: number;
+}
+
+export interface AcousticFingerprintResponse {
+  tool_available: boolean;
+  processed: number;
+  updated: number;
+  skipped: number;
+  errors: string[];
+}
+
+export interface BulkUndoLogEntry {
+  id: number;
+  batch_id: string | null;
+  action_type: string;
+  summary: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface BulkUndoBatchEntry {
+  batch_id: string;
+  action_type: string;
+  entries: number;
+  summary: string;
+  first_created_at: string;
+  last_created_at: string;
+}
+
+export interface BulkUndoRestoreResponse {
+  entry_id: number;
+  batch_id: string | null;
+  action_type: string;
+  restored: boolean;
+  affected_track_ids: number[];
+  errors: string[];
+}
+
+export interface ReportFileRequest {
+  report_path: string;
+  max_bytes?: number;
+}
+
+export interface ReportFileResponse {
+  report_path: string;
+  exists: boolean;
+  size_bytes: number;
+  modified_at: string | null;
+  parsed_json: unknown | null;
+  raw_text: string | null;
+  truncated: boolean;
+  error: string | null;
 }
 
 export interface AudioAnalysisCoverage {

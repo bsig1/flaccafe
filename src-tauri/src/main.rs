@@ -7,11 +7,11 @@ use tauri::path::BaseDirectory;
 
 #[cfg(not(debug_assertions))]
 use std::net::{SocketAddr, TcpStream};
+use std::path::PathBuf;
+use std::process::Child;
+use std::process::Command;
 #[cfg(not(debug_assertions))]
 use std::process::Stdio;
-use std::process::Command;
-use std::process::Child;
-use std::path::PathBuf;
 use std::sync::Mutex;
 #[cfg(not(debug_assertions))]
 use std::thread;
@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
+mod native_playback;
 mod smtc;
 
 #[derive(Default)]
@@ -234,6 +235,33 @@ fn reveal_in_file_explorer(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_file_with_default_app(path: String) -> Result<(), String> {
+    let path = std::path::PathBuf::from(path);
+    if !path.exists() || !path.is_file() {
+        return Err("Audio file does not exist".to_string());
+    }
+
+    #[cfg(windows)]
+    {
+        Command::new("cmd")
+            .args(["/C", "start", "", &path.display().to_string()])
+            .creation_flags(0x08000000)
+            .spawn()
+            .map_err(|error| format!("Could not open default app: {error}"))?;
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    {
+        Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|error| format!("Could not open default app: {error}"))?;
+        Ok(())
+    }
+}
+
+#[tauri::command]
 fn open_source_folder(kind: Option<String>) -> Result<(), String> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let source_root = manifest_dir
@@ -241,7 +269,11 @@ fn open_source_folder(kind: Option<String>) -> Result<(), String> {
         .ok_or_else(|| "Could not resolve source folder".to_string())?;
     // Developer-facing convenience: Settings can reveal either the repo root or editable theme files.
     let target = match kind.as_deref() {
-        Some("themes") => source_root.join("frontend").join("src").join("config").join("themes"),
+        Some("themes") => source_root
+            .join("frontend")
+            .join("src")
+            .join("config")
+            .join("themes"),
         _ => source_root.to_path_buf(),
     };
 
@@ -274,12 +306,23 @@ fn backend_restart(app: tauri::AppHandle) -> Result<String, String> {
 fn main() {
     let app = tauri::Builder::default()
         .manage(smtc::SmtcState::default())
+        .manage(native_playback::NativePlaybackState::default())
         .manage(BackendState::default())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             backend_restart,
             open_source_folder,
+            open_file_with_default_app,
             reveal_in_file_explorer,
+            native_playback::native_play_file,
+            native_playback::native_crossfade_to_file,
+            native_playback::native_resume,
+            native_playback::native_pause,
+            native_playback::native_stop,
+            native_playback::native_seek,
+            native_playback::native_set_volume,
+            native_playback::native_status,
+            native_playback::native_list_output_devices,
             smtc::smtc_update_state,
             smtc::smtc_clear
         ])

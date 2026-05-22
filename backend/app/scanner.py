@@ -79,6 +79,26 @@ def parse_rating(tags: dict[str, Any]) -> float | None:
     return max(0.5, min(5.0, round(stars * 2) / 2))
 
 
+def parse_replaygain_gain(tags: dict[str, Any], *keys: str) -> float | None:
+    text = first_text(tags, *keys)
+    if not text:
+        return None
+    match = re.search(r"[-+]?\d+(?:\.\d+)?", text)
+    if not match:
+        return None
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None
+
+
+def parse_replaygain_peak(tags: dict[str, Any], *keys: str) -> float | None:
+    peak = parse_replaygain_gain(tags, *keys)
+    if peak is None or peak <= 0:
+        return None
+    return peak
+
+
 def file_fingerprint(path: Path) -> str:
     """Fast content fingerprint for duplicate resolution, not acoustic matching."""
     size = path.stat().st_size
@@ -132,6 +152,10 @@ def read_metadata(path: Path) -> dict[str, Any]:
         "year": parse_year(tags),
         "duration_seconds": duration,
         "bitrate": bitrate,
+        "replaygain_track_gain_db": parse_replaygain_gain(tags, "replaygain_track_gain", "track_gain"),
+        "replaygain_album_gain_db": parse_replaygain_gain(tags, "replaygain_album_gain", "album_gain"),
+        "replaygain_track_peak": parse_replaygain_peak(tags, "replaygain_track_peak", "track_peak"),
+        "replaygain_album_peak": parse_replaygain_peak(tags, "replaygain_album_peak", "album_peak"),
         "audio_fingerprint": file_fingerprint(path),
         "rating": parse_rating(tags),
         "file_modified_at": file_modified_at(path),
@@ -260,6 +284,10 @@ def upsert_track(conn, metadata: dict[str, Any]) -> str:
     values = {
         **metadata,
         "bitrate": metadata.get("bitrate"),
+        "replaygain_track_gain_db": metadata.get("replaygain_track_gain_db"),
+        "replaygain_album_gain_db": metadata.get("replaygain_album_gain_db"),
+        "replaygain_track_peak": metadata.get("replaygain_track_peak"),
+        "replaygain_album_peak": metadata.get("replaygain_album_peak"),
         "audio_fingerprint": metadata.get("audio_fingerprint"),
     }
     existing = conn.execute(
@@ -273,12 +301,16 @@ def upsert_track(conn, metadata: dict[str, Any]) -> str:
             INSERT INTO tracks(
               path, path_key, title, artist, album, album_artist, album_id,
               track_number, disc_number, genre, year, duration_seconds, rating,
-              bitrate, audio_fingerprint, file_modified_at, date_added, updated_at
+              bitrate, replaygain_track_gain_db, replaygain_album_gain_db,
+              replaygain_track_peak, replaygain_album_peak,
+              audio_fingerprint, file_modified_at, date_added, updated_at
             )
             VALUES(
               :path, :path_key, :title, :artist, :album, :album_artist, :album_id,
               :track_number, :disc_number, :genre, :year, :duration_seconds, :rating,
-              :bitrate, :audio_fingerprint, :file_modified_at, :now, :now
+              :bitrate, :replaygain_track_gain_db, :replaygain_album_gain_db,
+              :replaygain_track_peak, :replaygain_album_peak,
+              :audio_fingerprint, :file_modified_at, :now, :now
             )
             """,
             {**values, "album_id": album_id, "now": now},
@@ -302,6 +334,10 @@ def upsert_track(conn, metadata: dict[str, Any]) -> str:
             year = :year,
             duration_seconds = :duration_seconds,
             bitrate = :bitrate,
+            replaygain_track_gain_db = :replaygain_track_gain_db,
+            replaygain_album_gain_db = :replaygain_album_gain_db,
+            replaygain_track_peak = :replaygain_track_peak,
+            replaygain_album_peak = :replaygain_album_peak,
             audio_fingerprint = :audio_fingerprint,
             rating = :rating,
             file_modified_at = :file_modified_at,

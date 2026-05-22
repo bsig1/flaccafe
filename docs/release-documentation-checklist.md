@@ -9,6 +9,7 @@ Run this before packaging or tagging a FLAC Cafe release.
 - Run `cargo check` from `src-tauri`.
 - Confirm `docs/backend-routes.md` is current. `npm run check:routes` is included in `npm run test`.
 - Read `README.md` and confirm the What Works, Development, Optional CLAP Runtime, Checks, and Packaging sections match the release.
+- Read `docs/project-structure.md` after moving files, adding new top-level folders, or changing generated output locations.
 - Read `docs/playback.md` after playback changes, especially codec support, shortcuts, SMTC, and skip tracking.
 - Read `docs/library-tools.md` after scanner, metadata, CSV, or file organization changes.
 - Read `docs/csv-metadata-cleanup.md` after CSV import/export behavior changes.

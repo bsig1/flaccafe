@@ -8,9 +8,18 @@ import type {
   AutoDjAvoidRule,
   AutoDjResponse,
   AutoDjSettings,
+  AcousticFingerprintRequest,
+  AcousticFingerprintResponse,
   BackupResponse,
+  BulkUndoBatchEntry,
+  BulkUndoLogEntry,
+  BulkUndoRestoreResponse,
   CacheClearResponse,
   CacheClearTarget,
+  ChromaprintConfigRequest,
+  ChromaprintInstallRequest,
+  ChromaprintInstallResponse,
+  ChromaprintStatusResponse,
   ClapConfigRequest,
   ClapInstallProgress,
   ClapInstallRequest,
@@ -23,7 +32,13 @@ import type {
   CsvMetadataImportRequest,
   CsvMetadataImportResponse,
   ExportResponse,
+  DuplicateActionRequest,
+  DuplicateActionResponse,
+  DuplicateReviewRequest,
+  DuplicateReviewResponse,
   FileOrganizationRequest,
+  FileOrganizationReportRequest,
+  FileOrganizationReportResponse,
   FileOrganizationResponse,
   FilenameTagInferenceRequest,
   FilenameTagInferenceResponse,
@@ -38,6 +53,8 @@ import type {
   RecommendationProfileComparison,
   RecommendationProfileComparisonExportResponse,
   RecommendationRun,
+  ReportFileRequest,
+  ReportFileResponse,
   ScanProgress,
   ScanResult,
   ScanStartResponse,
@@ -143,6 +160,15 @@ export function organizeFiles(requestBody: FileOrganizationRequest): Promise<Fil
   });
 }
 
+export function exportFileOrganizationReport(
+  requestBody: FileOrganizationReportRequest,
+): Promise<FileOrganizationReportResponse> {
+  return request<FileOrganizationReportResponse>("/library/tools/organize-files/report", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
 export function exportMetadataCsv(requestBody: CsvMetadataExportRequest = {}): Promise<CsvMetadataExportResponse> {
   return request<CsvMetadataExportResponse>("/library/tools/export-metadata-csv", {
     method: "POST",
@@ -161,6 +187,70 @@ export function exportMetadataCsvImportReport(
   requestBody: CsvMetadataImportReportRequest,
 ): Promise<CsvMetadataImportReportResponse> {
   return request<CsvMetadataImportReportResponse>("/library/tools/import-metadata-csv/report", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function applyDuplicateAction(requestBody: DuplicateActionRequest): Promise<DuplicateActionResponse> {
+  return request<DuplicateActionResponse>("/library/duplicates/action", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function fetchDuplicateReview(requestBody: DuplicateReviewRequest): Promise<DuplicateReviewResponse> {
+  return request<DuplicateReviewResponse>("/library/duplicates/review", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function fetchChromaprintSetup(): Promise<ChromaprintStatusResponse> {
+  return request<ChromaprintStatusResponse>("/library/tools/acoustic-fingerprints/setup");
+}
+
+export function saveChromaprintSetup(requestBody: ChromaprintConfigRequest): Promise<ChromaprintStatusResponse> {
+  return request<ChromaprintStatusResponse>("/library/tools/acoustic-fingerprints/setup", {
+    method: "PATCH",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function installChromaprintTool(requestBody: ChromaprintInstallRequest = {}): Promise<ChromaprintInstallResponse> {
+  return request<ChromaprintInstallResponse>("/library/tools/acoustic-fingerprints/install", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function runAcousticFingerprintPass(
+  requestBody: AcousticFingerprintRequest,
+): Promise<AcousticFingerprintResponse> {
+  return request<AcousticFingerprintResponse>("/library/tools/acoustic-fingerprints", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function fetchBulkUndoLog(limit = 30): Promise<BulkUndoLogEntry[]> {
+  return request<BulkUndoLogEntry[]>(`/library/tools/undo-log?limit=${limit}`);
+}
+
+export function fetchBulkUndoBatches(limit = 30): Promise<BulkUndoBatchEntry[]> {
+  return request<BulkUndoBatchEntry[]>(`/library/tools/undo-batches?limit=${limit}`);
+}
+
+export function restoreBulkUndoEntry(entryId: number): Promise<BulkUndoRestoreResponse> {
+  return request<BulkUndoRestoreResponse>(`/library/tools/undo-log/${entryId}/restore`, { method: "POST" });
+}
+
+export function restoreBulkUndoBatch(batchId: string): Promise<BulkUndoRestoreResponse> {
+  return request<BulkUndoRestoreResponse>(`/library/tools/undo-batches/${encodeURIComponent(batchId)}/restore`, { method: "POST" });
+}
+
+export function readReportFile(requestBody: ReportFileRequest): Promise<ReportFileResponse> {
+  return request<ReportFileResponse>("/library/tools/reports/read", {
     method: "POST",
     body: JSON.stringify(requestBody),
   });

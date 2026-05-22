@@ -24,6 +24,16 @@ import {
   albumArtworkUrl,
   audioUrl,
 } from "../../lib/api";
+import {
+  nativeCrossfadeToFile,
+  nativePause,
+  nativePlayFile,
+  nativeResume,
+  nativeSeek,
+  nativeSetVolume,
+  nativeStatus,
+  nativeStop,
+} from "../../lib/nativePlayback";
 import type { SmtcButtonPayload } from "../../lib/tauriMedia";
 import {
   clearSmtcState,
@@ -41,6 +51,7 @@ import {
   KeyboardShortcutAction,
   KeyboardShortcut,
   MiniPlayerCommand,
+  PlaybackEngine,
   PlaybackMode,
   clampNumber,
   display,
@@ -50,6 +61,7 @@ import {
   publishMiniPlayerSnapshot,
   readStoredMuted,
   readStoredVolume,
+  replayGainMultiplier,
   shouldRecordTrackAsPlayed,
   shortcutMatchesEvent,
   trackGenre,
@@ -67,7 +79,13 @@ export function PlayerBar({
   autoPlay,
   fadeMs,
   skipThresholdPercent,
+  playbackEngine,
+  nativeOutputDeviceId,
+  nativeBufferFrames,
   miniPlayer,
+  replayGainMode,
+  replayGainPreampDb,
+  replayGainPreventClipping,
   keyboardShortcuts,
   playbackMode,
   setPlaybackMode,
@@ -84,7 +102,13 @@ export function PlayerBar({
   autoPlay: boolean;
   fadeMs: number;
   skipThresholdPercent: number;
+  playbackEngine: PlaybackEngine;
+  nativeOutputDeviceId: string;
+  nativeBufferFrames: number;
   miniPlayer: boolean;
+  replayGainMode: "off" | "track" | "album";
+  replayGainPreampDb: number;
+  replayGainPreventClipping: boolean;
   keyboardShortcuts: Record<KeyboardShortcutAction, KeyboardShortcut>;
   playbackMode: PlaybackMode;
   setPlaybackMode: (mode: PlaybackMode) => void;
@@ -94,10 +118,14 @@ export function PlayerBar({
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const nextAudioRef = useRef<HTMLAudioElement | null>(null);
   const fadeTimerRef = useRef<number | null>(null);
+  const nativeFadeTimerRef = useRef<number | null>(null);
   const crossfadeTimerRef = useRef<number | null>(null);
   const endFadeTrackRef = useRef<number | null>(null);
   const crossfadeTrackRef = useRef<number | null>(null);
   const handoffRef = useRef<{ trackId: number; currentTime: number } | null>(null);
+  const nativeLoadedTrackIdRef = useRef<number | null>(null);
+  const nativeEndedTrackIdRef = useRef<number | null>(null);
+  const lastNativeStreamErrorRef = useRef<string | null>(null);
   const smtcActionRef = useRef<(payload: SmtcButtonPayload) => void>(() => {});
   const miniPlayerChannelRef = useRef<BroadcastChannel | null>(null);
   const miniPlayerCommandRef = useRef<(command: MiniPlayerCommand) => void>(() => {});
@@ -116,18 +144,32 @@ export function PlayerBar({
   const progressPercent = effectiveDuration > 0 ? Math.min(100, (currentTime / effectiveDuration) * 100) : 0;
   const smtcPositionSecond = Math.floor(currentTime);
   const trackSwitchFadeMs = Math.min(fadeMs, 160);
-  const outputVolume = muted ? 0 : volume;
+  const replayGain = replayGainMultiplier(currentTrack, replayGainMode, replayGainPreampDb, replayGainPreventClipping);
+  const outputVolume = muted ? 0 : clampNumber(volume * replayGain, 0, 1);
+  const useNativePlayback = playbackEngine === "native";
 
   useEffect(() => {
     return () => {
       cancelFade();
+      cancelNativeFade();
       cancelCrossfade();
       miniPlayerChannelRef.current?.close();
+      void nativeStop().catch(() => {
+        // Native playback is best-effort during shutdown.
+      });
     };
   }, []);
 
   useEffect(() => {
     writeStoredAudioControls(volume, muted);
+    if (useNativePlayback) {
+      if (nativeFadeTimerRef.current === null) {
+        void nativeSetVolume(outputVolume).catch(() => {
+          // The native engine may be unavailable in browser preview.
+        });
+      }
+      return;
+    }
     if (fadeTimerRef.current === null && crossfadeTimerRef.current === null) {
       if (audioRef.current) {
         audioRef.current.volume = outputVolume;
@@ -136,7 +178,19 @@ export function PlayerBar({
         nextAudioRef.current.volume = 0;
       }
     }
-  }, [volume, muted, outputVolume]);
+  }, [volume, muted, outputVolume, useNativePlayback]);
+
+  useEffect(() => {
+    if (useNativePlayback) {
+      audioRef.current?.pause();
+      return;
+    }
+    nativeLoadedTrackIdRef.current = null;
+    nativeEndedTrackIdRef.current = null;
+    void nativeStop().catch(() => {
+      // The command is not available in a plain Vite browser preview.
+    });
+  }, [useNativePlayback]);
 
   useEffect(() => {
     if (!("BroadcastChannel" in window)) {
@@ -172,6 +226,13 @@ export function PlayerBar({
     }
   }
 
+  function cancelNativeFade() {
+    if (nativeFadeTimerRef.current !== null) {
+      window.clearInterval(nativeFadeTimerRef.current);
+      nativeFadeTimerRef.current = null;
+    }
+  }
+
   function cancelCrossfade() {
     if (crossfadeTimerRef.current !== null) {
       window.clearInterval(crossfadeTimerRef.current);
@@ -203,6 +264,110 @@ export function PlayerBar({
         afterFade?.();
       }
     }, 16);
+  }
+
+  function fadeNativeVolume(targetVolume: number, durationMs: number, afterFade?: () => void, startVolumeOverride?: number) {
+    cancelNativeFade();
+    const clampedTarget = clampNumber(targetVolume, 0, 1.5);
+    if (durationMs <= 0) {
+      void nativeSetVolume(clampedTarget).finally(() => afterFade?.());
+      return;
+    }
+    const startVolume = startVolumeOverride ?? (muted ? 0 : outputVolume);
+    const startedAt = window.performance.now();
+    nativeFadeTimerRef.current = window.setInterval(() => {
+      const elapsed = window.performance.now() - startedAt;
+      const progress = Math.min(1, elapsed / durationMs);
+      const nextVolume = startVolume + (clampedTarget - startVolume) * progress;
+      void nativeSetVolume(nextVolume).catch(() => {
+        // Keep the UI responsive even if the native engine is unavailable.
+      });
+      if (progress >= 1) {
+        cancelNativeFade();
+        afterFade?.();
+      }
+    }, 16);
+  }
+
+  async function startNativeTrack(track: Track, startSeconds = 0) {
+    cancelNativeFade();
+    cancelCrossfade();
+    const startVolume = fadeMs > 0 ? 0 : outputVolume;
+    try {
+      const status = await nativePlayFile({
+        path: track.path,
+        volume: startVolume,
+        startSeconds,
+        deviceId: nativeOutputDeviceId,
+        bufferFrames: nativeBufferFrames,
+      });
+      nativeLoadedTrackIdRef.current = track.id;
+      nativeEndedTrackIdRef.current = null;
+      lastNativeStreamErrorRef.current = null;
+      setDuration(status.duration_seconds ?? track.duration_seconds ?? 0);
+      setCurrentTime(status.position_seconds);
+      onPlaybackTime(status.position_seconds);
+      setIsPlaying(true);
+      if (fadeMs > 0) {
+        fadeNativeVolume(outputVolume, fadeMs, undefined, 0);
+      }
+    } catch (error) {
+      setIsPlaying(false);
+      nativeLoadedTrackIdRef.current = null;
+      setStatus(error instanceof Error ? error.message : "Native playback could not start for this file.");
+    }
+  }
+
+  async function startNativeCrossfade(nextTrack: Track, recordCompletion = true) {
+    if (!currentTrack || crossfadeTrackRef.current === currentTrack.id) {
+      return;
+    }
+    crossfadeTrackRef.current = currentTrack.id;
+    cancelNativeFade();
+    try {
+      const status = await nativeCrossfadeToFile({
+        path: nextTrack.path,
+        volume: outputVolume,
+        durationMs: Math.max(0, fadeMs),
+        deviceId: nativeOutputDeviceId,
+        bufferFrames: nativeBufferFrames,
+      });
+      nativeLoadedTrackIdRef.current = nextTrack.id;
+      nativeEndedTrackIdRef.current = null;
+      lastNativeStreamErrorRef.current = null;
+      setDuration(status.duration_seconds ?? nextTrack.duration_seconds ?? 0);
+      setCurrentTime(status.position_seconds);
+      onPlaybackTime(status.position_seconds);
+      setIsPlaying(true);
+      if (recordCompletion) {
+        void onTrackEnded(currentTrack.id);
+      }
+      onSelectTrack(nextTrack, queue, { suppressExitRecord: true });
+    } catch (error) {
+      crossfadeTrackRef.current = null;
+      setStatus(error instanceof Error ? error.message : "Native crossfade could not start.");
+    }
+  }
+
+  async function resumeNativeWithFade() {
+    if (!currentTrack) {
+      return;
+    }
+    if (nativeLoadedTrackIdRef.current !== currentTrack.id || nativeEndedTrackIdRef.current === currentTrack.id) {
+      await startNativeTrack(currentTrack);
+      return;
+    }
+    try {
+      cancelNativeFade();
+      await nativeSetVolume(fadeMs > 0 ? 0 : outputVolume);
+      await nativeResume();
+      setIsPlaying(true);
+      if (fadeMs > 0) {
+        fadeNativeVolume(outputVolume, fadeMs, undefined, 0);
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Native playback could not resume.");
+    }
   }
 
   async function startCrossfade(nextTrack: Track) {
@@ -245,6 +410,10 @@ export function PlayerBar({
   }
 
   async function playWithFade() {
+    if (useNativePlayback) {
+      await resumeNativeWithFade();
+      return;
+    }
     const audio = audioRef.current;
     if (!audio) {
       return;
@@ -270,6 +439,19 @@ export function PlayerBar({
   }
 
   function pauseWithFade() {
+    if (useNativePlayback) {
+      fadeNativeVolume(0, fadeMs, () => {
+        void nativePause()
+          .then(() => {
+            setIsPlaying(false);
+            return nativeSetVolume(outputVolume);
+          })
+          .catch((error) => {
+            setStatus(error instanceof Error ? error.message : "Native playback could not pause.");
+          });
+      });
+      return;
+    }
     const audio = audioRef.current;
     if (!audio) {
       return;
@@ -290,8 +472,25 @@ export function PlayerBar({
     setIsPlaying(false);
     endFadeTrackRef.current = null;
     crossfadeTrackRef.current = null;
+    nativeEndedTrackIdRef.current = null;
 
     if (!currentTrack) {
+      if (useNativePlayback) {
+        nativeLoadedTrackIdRef.current = null;
+        void nativeStop().catch(() => {
+          // Native playback may not be available in browser preview.
+        });
+      }
+      return;
+    }
+    if (useNativePlayback) {
+      if (autoPlay) {
+        if (nativeLoadedTrackIdRef.current === currentTrack.id) {
+          setIsPlaying(true);
+          return;
+        }
+        void startNativeTrack(currentTrack);
+      }
       return;
     }
     const audio = audioRef.current;
@@ -311,7 +510,7 @@ export function PlayerBar({
     if (autoPlay) {
       void playWithFade();
     }
-  }, [currentTrack?.id, autoPlay]);
+  }, [currentTrack?.id, autoPlay, useNativePlayback]);
 
   function syncDuration() {
     const audio = audioRef.current;
@@ -332,12 +531,29 @@ export function PlayerBar({
       effectiveDuration > 0 ? Math.min(Math.max(0, nextTime), effectiveDuration) : Math.max(0, nextTime);
     setCurrentTime(boundedTime);
     onPlaybackTime(boundedTime);
+    if (useNativePlayback) {
+      void nativeSeek(boundedTime).catch((error) => {
+        setStatus(error instanceof Error ? error.message : "Native seek failed.");
+      });
+      return;
+    }
     if (audio && Number.isFinite(nextTime)) {
       audio.currentTime = boundedTime;
     }
   }
 
   async function togglePlayback() {
+    if (useNativePlayback) {
+      if (!currentTrack) {
+        return;
+      }
+      if (isPlaying) {
+        pauseWithFade();
+      } else {
+        await playWithFade();
+      }
+      return;
+    }
     const audio = audioRef.current;
     if (!audio || !currentTrack) {
       return;
@@ -365,6 +581,19 @@ export function PlayerBar({
     setMuted((current) => !current);
   }
 
+  async function openCurrentTrackExternally() {
+    if (!currentTrack) {
+      return;
+    }
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("open_file_with_default_app", { path: currentTrack.path });
+      setStatus("Opened track in the system default audio app");
+    } catch {
+      setStatus("This file may not be supported by WebView playback. Use Reveal to open it with another local player.");
+    }
+  }
+
   function playRelative(offset: number, recordExit = true) {
     const nextTrack = queue[currentIndex + offset];
     if (nextTrack) {
@@ -375,6 +604,18 @@ export function PlayerBar({
       cancelCrossfade();
       crossfadeTrackRef.current = null;
       nextAudioRef.current?.pause();
+      if (useNativePlayback) {
+        if (isPlaying && fadeMs > 0) {
+          void startNativeCrossfade(nextTrack, false);
+          return;
+        }
+        fadeNativeVolume(0, trackSwitchFadeMs, () => {
+          void nativeStop().finally(() => {
+            onSelectTrack(nextTrack, queue, { suppressExitRecord: true });
+          });
+        });
+        return;
+      }
       if (audio && !audio.paused) {
         fadeVolume(0, trackSwitchFadeMs, () => {
           audio.pause();
@@ -400,6 +641,12 @@ export function PlayerBar({
     if (hasNext) {
       playRelative(1, false);
     } else {
+      if (useNativePlayback) {
+        await nativeStop().catch(() => {
+          // Native stop is best-effort here; the UI state still updates.
+        });
+        nativeLoadedTrackIdRef.current = null;
+      }
       const audio = audioRef.current;
       audio?.pause();
       setIsPlaying(false);
@@ -484,6 +731,69 @@ export function PlayerBar({
     }
   }
 
+  useEffect(() => {
+    if (!useNativePlayback) {
+      return;
+    }
+    let canceled = false;
+    const pollNativeStatus = async () => {
+      try {
+        const status = await nativeStatus();
+        if (canceled) {
+          return;
+        }
+        setIsPlaying(status.is_playing);
+        setCurrentTime(status.position_seconds);
+        onPlaybackTime(status.position_seconds);
+        if (status.duration_seconds !== null) {
+          setDuration(status.duration_seconds);
+        }
+        const latestStreamError = status.stream_errors.length
+          ? status.stream_errors[status.stream_errors.length - 1]
+          : null;
+        if (latestStreamError && latestStreamError !== lastNativeStreamErrorRef.current) {
+          lastNativeStreamErrorRef.current = latestStreamError;
+          setStatus(latestStreamError);
+        }
+        const nativeDuration = status.duration_seconds ?? currentTrack?.duration_seconds ?? 0;
+        const nativeCrossfadeLeadSeconds = Math.max(0.12, fadeMs / 1000);
+        if (
+          currentTrack &&
+          preloadedNextTrack &&
+          playbackMode !== "stopAfterCurrent" &&
+          playbackMode !== "repeatOne" &&
+          fadeMs > 0 &&
+          status.is_playing &&
+          nativeDuration > nativeCrossfadeLeadSeconds * 2 &&
+          nativeDuration - status.position_seconds <= nativeCrossfadeLeadSeconds &&
+          crossfadeTrackRef.current !== currentTrack.id
+        ) {
+          await startNativeCrossfade(preloadedNextTrack);
+          return;
+        }
+        if (
+          currentTrack &&
+          status.ended &&
+          nativeLoadedTrackIdRef.current === currentTrack.id &&
+          nativeEndedTrackIdRef.current !== currentTrack.id
+        ) {
+          nativeEndedTrackIdRef.current = currentTrack.id;
+          await handleEnded();
+        }
+      } catch {
+        // Native status is unavailable in browser preview and before the desktop command is ready.
+      }
+    };
+    void pollNativeStatus();
+    const timer = window.setInterval(() => {
+      void pollNativeStatus();
+    }, 120);
+    return () => {
+      canceled = true;
+      window.clearInterval(timer);
+    };
+  }, [useNativePlayback, currentTrack?.id, playbackMode, currentIndex, queue, fadeMs, preloadedNextTrack?.id, outputVolume]);
+
   const artworkSrc = currentTrack && !artworkFailed ? albumArtworkUrl(currentTrack.id) : null;
 
   miniPlayerCommandRef.current = (command: MiniPlayerCommand) => {
@@ -500,13 +810,13 @@ export function PlayerBar({
 
   smtcActionRef.current = (payload: SmtcButtonPayload) => {
     if (payload.command === "play") {
-      if (currentTrack && audioRef.current?.paused) {
+      if (currentTrack && !isPlaying) {
         void playWithFade();
       }
       return;
     }
     if (payload.command === "pause") {
-      if (currentTrack && !audioRef.current?.paused) {
+      if (currentTrack && isPlaying) {
         pauseWithFade();
       }
       return;
@@ -645,7 +955,7 @@ export function PlayerBar({
       className={`grid shrink-0 items-center border-t border-line bg-[rgb(var(--color-sidebar))] px-4 ${
         miniPlayer
           ? "h-20 grid-cols-[minmax(180px,280px)_1fr_minmax(120px,150px)] gap-3"
-          : "h-28 grid-cols-[minmax(240px,360px)_1fr_minmax(150px,210px)] gap-5"
+          : "h-28 grid-cols-[minmax(220px,340px)_1fr_minmax(260px,320px)] gap-5"
       }`}
     >
       <div className="flex min-w-0 items-center gap-3">
@@ -714,7 +1024,7 @@ export function PlayerBar({
           </button>
         </div>
 
-        {currentTrack ? (
+        {!useNativePlayback && currentTrack ? (
           <audio
             key={currentTrack.id}
             ref={audioRef}
@@ -733,15 +1043,15 @@ export function PlayerBar({
               const code = audioRef.current?.error?.code;
               const message =
                 code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
-                  ? "This file or stream could not be played by the current WebView codec stack."
+                  ? "This file is not supported by the current WebView codec stack. Use the external-player button for a fallback."
                   : "Audio source failed to load. The backend may need a restart, or the file may be missing.";
               setStatus(message);
             }}
           />
-        ) : (
+        ) : !useNativePlayback ? (
           <audio ref={audioRef} className="hidden" />
-        )}
-        {preloadedNextTrack && (
+        ) : null}
+        {!useNativePlayback && preloadedNextTrack && (
           <audio
             key={`next-${preloadedNextTrack.id}`}
             ref={nextAudioRef}
@@ -769,14 +1079,13 @@ export function PlayerBar({
         </div>
       </div>
 
-      <div className="min-w-0 text-right text-xs text-muted">
+      <div className="flex min-w-0 flex-col items-end justify-center gap-1.5 text-right text-xs text-muted">
         {currentTrack && !miniPlayer && (
-          <>
-            <div className="truncate">{display(trackGenre(currentTrack), "")}</div>
-            <div className="mt-1 truncate text-neutral-400">{display(currentTrack.year, "")}</div>
-          </>
+          <div className="w-full truncate text-neutral-400">
+            {[trackGenre(currentTrack), currentTrack.year].filter(Boolean).join(" - ")}
+          </div>
         )}
-        <div className="mt-2 flex items-center justify-end gap-2">
+        <div className="flex items-center justify-end gap-2">
           <button
             className={`icon-button h-7 w-7 ${muted || volume === 0 ? "border-ember text-ember" : ""}`}
             type="button"
@@ -796,46 +1105,57 @@ export function PlayerBar({
             onChange={handleVolumeChange}
           />
         </div>
-        {currentTrack && !miniPlayer && (
-          <div className="mt-2 flex justify-end">
-            <RatingStars rating={currentTrack.rating} onChange={(rating) => onRating(currentTrack.id, rating)} />
+        <div className="flex max-w-full items-center justify-end gap-2">
+          {currentTrack && !miniPlayer && (
+            <div className="shrink min-w-0 scale-90 origin-right">
+              <RatingStars rating={currentTrack.rating} onChange={(rating) => onRating(currentTrack.id, rating)} />
+            </div>
+          )}
+          <div className="flex shrink-0 justify-end gap-1">
+            <button
+              className="icon-button h-7 w-7"
+              type="button"
+              title="Open detached mini player"
+              onClick={() => void onOpenMiniPlayer()}
+            >
+              <ExternalLink size={13} />
+            </button>
+            <button
+              className="icon-button h-7 w-7"
+              type="button"
+              title="Open in default audio app"
+              disabled={!currentTrack}
+              onClick={() => void openCurrentTrackExternally()}
+            >
+              <CircleStop size={13} />
+            </button>
+            <button
+              className={`icon-button h-7 w-7 ${
+                playbackMode === "repeatQueue" || playbackMode === "repeatOne" ? "border-moss text-moss" : ""
+              }`}
+              type="button"
+              title={playbackMode === "repeatOne" ? "Repeat one" : "Repeat queue"}
+              onClick={() =>
+                setPlaybackMode(
+                  playbackMode === "normal"
+                    ? "repeatQueue"
+                    : playbackMode === "repeatQueue"
+                      ? "repeatOne"
+                      : "normal",
+                )
+              }
+            >
+              <Repeat size={13} />
+            </button>
+            <button
+              className={`icon-button h-7 w-7 ${playbackMode === "stopAfterCurrent" ? "border-ember text-ember" : ""}`}
+              type="button"
+              title="Stop after current"
+              onClick={() => setPlaybackMode(playbackMode === "stopAfterCurrent" ? "normal" : "stopAfterCurrent")}
+            >
+              <CircleStop size={13} />
+            </button>
           </div>
-        )}
-        <div className="mt-2 flex justify-end gap-1">
-          <button
-            className="icon-button h-7 w-7"
-            type="button"
-            title="Open detached mini player"
-            onClick={() => void onOpenMiniPlayer()}
-          >
-            <ExternalLink size={13} />
-          </button>
-          <button
-            className={`icon-button h-7 w-7 ${
-              playbackMode === "repeatQueue" || playbackMode === "repeatOne" ? "border-moss text-moss" : ""
-            }`}
-            type="button"
-            title={playbackMode === "repeatOne" ? "Repeat one" : "Repeat queue"}
-            onClick={() =>
-              setPlaybackMode(
-                playbackMode === "normal"
-                  ? "repeatQueue"
-                  : playbackMode === "repeatQueue"
-                    ? "repeatOne"
-                    : "normal",
-              )
-            }
-          >
-            <Repeat size={13} />
-          </button>
-          <button
-            className={`icon-button h-7 w-7 ${playbackMode === "stopAfterCurrent" ? "border-ember text-ember" : ""}`}
-            type="button"
-            title="Stop after current"
-            onClick={() => setPlaybackMode(playbackMode === "stopAfterCurrent" ? "normal" : "stopAfterCurrent")}
-          >
-            <CircleStop size={13} />
-          </button>
         </div>
       </div>
     </section>

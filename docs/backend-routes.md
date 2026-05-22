@@ -26,9 +26,21 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `POST /library/maintenance/clear` clears derived caches.
 - `POST /library/tools/infer-tags` previews or applies filename-based tag inference.
 - `POST /library/tools/organize-files` previews or applies tag-based file moves.
+- `POST /library/tools/organize-files/report` writes a JSON file-organization preview report.
 - `POST /library/tools/export-metadata-csv` exports track metadata for spreadsheet cleanup.
 - `POST /library/tools/import-metadata-csv` previews or applies spreadsheet metadata changes.
 - `POST /library/tools/import-metadata-csv/report` writes a JSON dry-run import report.
+- `POST /library/duplicates/action` exports duplicate reports or applies batch duplicate cleanup actions.
+- `POST /library/duplicates/review` fetches arbitrary duplicate-review tracks and recommendation groups.
+- `GET /library/tools/acoustic-fingerprints/setup` checks configured, bundled, and PATH-based `fpcalc` locations.
+- `PATCH /library/tools/acoustic-fingerprints/setup` saves or clears a custom `fpcalc` path.
+- `POST /library/tools/acoustic-fingerprints/install` downloads the official Windows Chromaprint `fpcalc` tool into the app tool folder.
+- `POST /library/tools/acoustic-fingerprints` runs an optional Chromaprint fingerprint pass when `fpcalc` is available.
+- `GET /library/tools/undo-log` lists recent bulk metadata, duplicate, and file organization actions.
+- `POST /library/tools/undo-log/{entry_id}/restore` restores a supported bulk action.
+- `GET /library/tools/undo-batches` lists grouped undo transactions for bulk library actions.
+- `POST /library/tools/undo-batches/{batch_id}/restore` restores a grouped undo transaction.
+- `POST /library/tools/reports/read` loads a generated JSON report for in-app viewing.
 - `POST /scan` runs a synchronous library scan.
 - `POST /scan/start` starts an asynchronous scan job.
 - `GET /scan/jobs/{job_id}` returns scan progress.

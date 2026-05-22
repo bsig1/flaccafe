@@ -1,7 +1,6 @@
 import {
   ArrowDown,
   ArrowUp,
-  Download,
   GripVertical,
   Info,
   Play,
@@ -40,6 +39,7 @@ import type {
   SimilarTrack,
   Track,
 } from "../../types/api";
+import { AutoDjHeader } from "./autodj/AutoDjHeader";
 import {
   DragGhostPreview,
   NumberField,
@@ -364,30 +364,14 @@ export function AutoDjPage({
   return (
     <main className="flex min-w-0 flex-1 flex-col">
       <DragGhostPreview ghost={queueDragGhost} />
-      <header className="flex h-16 items-center justify-between border-b border-line px-6">
-        <div>
-          <h1 className="text-lg font-semibold text-white">AutoDJ</h1>
-          <p className="text-xs text-muted">{queue.length} tracks in queue</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button className="primary-button" type="button" onClick={handleGenerate} disabled={busy}>
-            <Wand2 size={17} />
-            {busy ? "Generating" : "Generate Queue"}
-          </button>
-          <button className="secondary-button" type="button" onClick={handleExport}>
-            <Download size={17} />
-            Export .m3u
-          </button>
-          <button className="secondary-button" type="button" disabled={queue.length === 0} onClick={() => onAddTracksToPlaylist(queue.map((track) => track.id))}>
-            <Plus size={17} />
-            Add Queue
-          </button>
-          <button className="secondary-button" type="button" disabled={queue.length === 0} onClick={() => setQueue([])}>
-            <X size={17} />
-            Clear
-          </button>
-        </div>
-      </header>
+      <AutoDjHeader
+        queueLength={queue.length}
+        busy={busy}
+        onGenerate={handleGenerate}
+        onExport={handleExport}
+        onAddQueue={() => onAddTracksToPlaylist(queue.map((track) => track.id))}
+        onClear={() => setQueue([])}
+      />
 
       <div className="grid min-h-0 flex-1 grid-cols-[320px_minmax(0,1fr)]">
         <section className="min-h-0 overflow-auto border-r border-line p-5">

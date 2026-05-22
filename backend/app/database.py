@@ -41,7 +41,13 @@ CREATE TABLE IF NOT EXISTS tracks (
   year INTEGER,
   duration_seconds REAL,
   bitrate INTEGER,
+  replaygain_track_gain_db REAL,
+  replaygain_album_gain_db REAL,
+  replaygain_track_peak REAL,
+  replaygain_album_peak REAL,
   audio_fingerprint TEXT,
+  acoustic_fingerprint TEXT,
+  acoustic_fingerprint_updated_at TEXT,
   rating REAL CHECK (rating IS NULL OR rating BETWEEN 0.5 AND 5),
   play_count INTEGER NOT NULL DEFAULT 0,
   skip_count INTEGER NOT NULL DEFAULT 0,
@@ -170,6 +176,15 @@ CREATE TABLE IF NOT EXISTS artwork_cache (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS bulk_action_undo_log (
+  id INTEGER PRIMARY KEY,
+  batch_id TEXT,
+  action_type TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
 CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album);
 CREATE INDEX IF NOT EXISTS idx_tracks_rating ON tracks(rating);
@@ -185,6 +200,7 @@ CREATE INDEX IF NOT EXISTS idx_scan_error_samples_created_at ON scan_error_sampl
 CREATE INDEX IF NOT EXISTS idx_recommendation_profiles_default ON recommendation_profiles(is_default);
 CREATE INDEX IF NOT EXISTS idx_recommendation_runs_created_at ON recommendation_runs(created_at);
 CREATE INDEX IF NOT EXISTS idx_track_lyrics_updated_at ON track_lyrics(updated_at);
+CREATE INDEX IF NOT EXISTS idx_bulk_action_undo_log_batch ON bulk_action_undo_log(batch_id);
 """
 
 
@@ -292,11 +308,25 @@ def ensure_track_analysis_columns(conn: sqlite3.Connection) -> None:
         "analysis_embedding": "ALTER TABLE tracks ADD COLUMN analysis_embedding TEXT",
         "analysis_updated_at": "ALTER TABLE tracks ADD COLUMN analysis_updated_at TEXT",
         "bitrate": "ALTER TABLE tracks ADD COLUMN bitrate INTEGER",
+        "replaygain_track_gain_db": "ALTER TABLE tracks ADD COLUMN replaygain_track_gain_db REAL",
+        "replaygain_album_gain_db": "ALTER TABLE tracks ADD COLUMN replaygain_album_gain_db REAL",
+        "replaygain_track_peak": "ALTER TABLE tracks ADD COLUMN replaygain_track_peak REAL",
+        "replaygain_album_peak": "ALTER TABLE tracks ADD COLUMN replaygain_album_peak REAL",
         "audio_fingerprint": "ALTER TABLE tracks ADD COLUMN audio_fingerprint TEXT",
+        "acoustic_fingerprint": "ALTER TABLE tracks ADD COLUMN acoustic_fingerprint TEXT",
+        "acoustic_fingerprint_updated_at": "ALTER TABLE tracks ADD COLUMN acoustic_fingerprint_updated_at TEXT",
     }
     for column, sql in additions.items():
         if column not in columns:
             conn.execute(sql)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tracks_acoustic_fingerprint ON tracks(acoustic_fingerprint)")
+    undo_columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(bulk_action_undo_log)").fetchall()
+    }
+    if "batch_id" not in undo_columns:
+        conn.execute("ALTER TABLE bulk_action_undo_log ADD COLUMN batch_id TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_bulk_action_undo_log_batch ON bulk_action_undo_log(batch_id)")
 
 
 def rows_to_dicts(rows: Iterable[sqlite3.Row]) -> list[dict[str, Any]]:

@@ -31,6 +31,7 @@ def insert_track(path: Path, **overrides: object) -> int:
         "duration_seconds": overrides.get("duration_seconds", 180.0),
         "bitrate": overrides.get("bitrate"),
         "audio_fingerprint": overrides.get("audio_fingerprint"),
+        "acoustic_fingerprint": overrides.get("acoustic_fingerprint"),
         "analysis_embedding": overrides.get("analysis_embedding"),
         "rating": overrides.get("rating"),
     }
@@ -39,11 +40,11 @@ def insert_track(path: Path, **overrides: object) -> int:
             """
             INSERT INTO tracks(
               path, path_key, title, artist, album, album_artist, track_number, disc_number, genre, year,
-              duration_seconds, bitrate, audio_fingerprint, analysis_embedding, rating, updated_at
+              duration_seconds, bitrate, audio_fingerprint, acoustic_fingerprint, analysis_embedding, rating, updated_at
             )
             VALUES(
               :path, :path_key, :title, :artist, :album, :album_artist, :track_number, :disc_number, :genre,
-              :year, :duration_seconds, :bitrate, :audio_fingerprint, :analysis_embedding, :rating, datetime('now')
+              :year, :duration_seconds, :bitrate, :audio_fingerprint, :acoustic_fingerprint, :analysis_embedding, :rating, datetime('now')
             )
             """,
             values,
@@ -229,6 +230,24 @@ class ApiTests(unittest.TestCase):
             row = conn.execute("SELECT path FROM tracks WHERE id = ?", (track_id,)).fetchone()
         self.assertEqual(Path(row["path"]), new_path)
 
+        undo = self.client.get("/library/tools/undo-log")
+        self.assertEqual(undo.status_code, 200)
+        self.assertIsNotNone(undo.json()[0]["batch_id"])
+        batches = self.client.get("/library/tools/undo-batches")
+        self.assertEqual(batches.status_code, 200)
+        self.assertEqual(batches.json()[0]["batch_id"], undo.json()[0]["batch_id"])
+        self.assertEqual(batches.json()[0]["entries"], 1)
+
+        restore = self.client.post(f"/library/tools/undo-batches/{batches.json()[0]['batch_id']}/restore")
+        self.assertEqual(restore.status_code, 200)
+        self.assertTrue(restore.json()["restored"])
+        self.assertEqual(restore.json()["batch_id"], batches.json()[0]["batch_id"])
+        self.assertTrue(source.exists())
+        self.assertFalse(new_path.exists())
+        with connect() as conn:
+            restored = conn.execute("SELECT path FROM tracks WHERE id = ?", (track_id,)).fetchone()
+        self.assertEqual(Path(restored["path"]), source)
+
     def test_organize_files_can_auto_rename_collisions_and_clean_empty_source_folders(self) -> None:
         music_dir = self.root / "Music"
         source = music_dir / "Loose" / "loose.mp3"
@@ -274,6 +293,33 @@ class ApiTests(unittest.TestCase):
         with connect() as conn:
             row = conn.execute("SELECT path FROM tracks WHERE id = ?", (track_id,)).fetchone()
         self.assertEqual(Path(row["path"]), renamed_target)
+
+    def test_file_organization_report_exports_preview_json(self) -> None:
+        source = self.root / "report-me.mp3"
+        source.write_bytes(b"audio")
+        track_id = insert_track(source, title="Report Song", artist="Reporter", album="Reports", album_artist="Reporter", year=2026)
+        report_path = self.root / "move-report.json"
+
+        response = self.client.post(
+            "/library/tools/organize-files/report",
+            json={
+                "track_ids": [track_id],
+                "base_folder": str(self.root / "Organized"),
+                "template": "<Album Artist>/<Album>/<Title>",
+                "report_path": str(report_path),
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(report_path.exists())
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["changed_count"], 1)
+        self.assertEqual(payload["changes"][0]["track_id"], track_id)
+
+        read_response = self.client.post("/library/tools/reports/read", json={"report_path": str(report_path)})
+        self.assertEqual(read_response.status_code, 200)
+        self.assertTrue(read_response.json()["exists"])
+        self.assertEqual(read_response.json()["parsed_json"]["changed_count"], 1)
 
     def test_metadata_csv_export_and_import_updates_editable_fields(self) -> None:
         audio_file = self.root / "csv-track.mp3"
@@ -334,6 +380,165 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(payload["matched"], 1)
         self.assertIn("previews", payload)
         report_path.unlink(missing_ok=True)
+
+    def test_metadata_csv_import_supports_column_maps_blank_clearing_and_undo_log(self) -> None:
+        audio_file = self.root / "mapped-csv-track.mp3"
+        audio_file.write_bytes(b"audio")
+        track_id = insert_track(audio_file, title="Old Title", album="Old Album", rating=2.0)
+        csv_path = self.root / "mapped.csv"
+        with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["id", "Name", "AlbumName", "Stars"])
+            writer.writeheader()
+            writer.writerow({"id": track_id, "Name": "Mapped Title", "AlbumName": "", "Stars": "5"})
+
+        preview = self.client.post(
+            "/library/tools/import-metadata-csv",
+            json={
+                "csv_path": str(csv_path),
+                "column_map": {"title": "Name", "album": "AlbumName", "rating": "Stars"},
+                "missing_only": False,
+                "clear_blank_fields": True,
+                "apply": False,
+            },
+        )
+        self.assertEqual(preview.status_code, 200)
+        body = preview.json()
+        self.assertEqual(body["changed"], 1)
+        self.assertEqual(set(body["previews"][0]["changed_fields"]), {"album", "rating", "title"})
+        self.assertIn("album", body["previews"][0]["conflict_fields"])
+
+        apply_response = self.client.post(
+            "/library/tools/import-metadata-csv",
+            json={
+                "csv_path": str(csv_path),
+                "column_map": {"title": "Name", "album": "AlbumName", "rating": "Stars"},
+                "missing_only": False,
+                "clear_blank_fields": True,
+                "apply": True,
+            },
+        )
+        self.assertEqual(apply_response.status_code, 200)
+        with connect() as conn:
+            row = conn.execute("SELECT title, album, rating FROM tracks WHERE id = ?", (track_id,)).fetchone()
+        self.assertEqual(row["title"], "Mapped Title")
+        self.assertIsNone(row["album"])
+        self.assertEqual(row["rating"], 5.0)
+
+        undo = self.client.get("/library/tools/undo-log")
+        self.assertEqual(undo.status_code, 200)
+        self.assertEqual(undo.json()[0]["action_type"], "csv_metadata_import")
+
+        restore = self.client.post(f"/library/tools/undo-log/{undo.json()[0]['id']}/restore")
+        self.assertEqual(restore.status_code, 200)
+        self.assertTrue(restore.json()["restored"])
+        with connect() as conn:
+            restored = conn.execute("SELECT title, album, rating FROM tracks WHERE id = ?", (track_id,)).fetchone()
+        self.assertEqual(restored["title"], "Old Title")
+        self.assertEqual(restored["album"], "Old Album")
+        self.assertEqual(restored["rating"], 2.0)
+
+    def test_duplicate_actions_can_remove_selected_and_export_reports(self) -> None:
+        first = self.root / "dup-action-a.mp3"
+        second = self.root / "dup-action-b.mp3"
+        first.write_bytes(b"a")
+        second.write_bytes(b"b")
+        first_id = insert_track(first, title="Dup", artist="Artist", audio_fingerprint="same")
+        second_id = insert_track(second, title="Dup", artist="Artist", audio_fingerprint="same")
+        report_path = self.root / "duplicates.json"
+
+        report = self.client.post(
+            "/library/duplicates/action",
+            json={"action": "export_report", "track_ids": [first_id, second_id], "report_path": str(report_path)},
+        )
+        self.assertEqual(report.status_code, 200)
+        self.assertTrue(report_path.exists())
+        self.assertGreaterEqual(report.json()["affected"], 1)
+
+        remove = self.client.post(
+            "/library/duplicates/action",
+            json={"action": "remove_selected", "track_ids": [second_id], "delete_files": False},
+        )
+        self.assertEqual(remove.status_code, 200)
+        self.assertEqual(remove.json()["removed_track_ids"], [second_id])
+        self.assertTrue(second.exists())
+        with connect() as conn:
+            remaining = conn.execute("SELECT count(*) AS count FROM tracks WHERE id = ?", (second_id,)).fetchone()["count"]
+        self.assertEqual(remaining, 0)
+
+        undo = self.client.get("/library/tools/undo-log")
+        restore = self.client.post(f"/library/tools/undo-log/{undo.json()[0]['id']}/restore")
+        self.assertEqual(restore.status_code, 200)
+        self.assertTrue(restore.json()["restored"])
+        with connect() as conn:
+            restored = conn.execute("SELECT count(*) AS count FROM tracks WHERE id = ?", (second_id,)).fetchone()["count"]
+        self.assertEqual(restored, 1)
+
+    def test_duplicate_review_fetches_arbitrary_track_ids(self) -> None:
+        first = self.root / "review-a.mp3"
+        second = self.root / "review-b.mp3"
+        first.write_bytes(b"a")
+        second.write_bytes(b"b")
+        first_id = insert_track(first, title="Review", artist="Artist", rating=4.0, bitrate=256000)
+        second_id = insert_track(second, title="Review", artist="Artist", rating=2.0, bitrate=128000)
+
+        response = self.client.post(
+            "/library/duplicates/review",
+            json={"track_ids": [first_id, second_id, 999999], "groups": [[first_id, second_id]]},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual([track["id"] for track in body["tracks"]], [first_id, second_id])
+        self.assertEqual(body["missing_track_ids"], [999999])
+        self.assertEqual(body["groups"][0]["recommended_keep_id"], first_id)
+
+    def test_acoustic_fingerprint_pass_reports_missing_tool_and_updates_when_available(self) -> None:
+        audio_file = self.root / "fingerprint.mp3"
+        audio_file.write_bytes(b"audio")
+        track_id = insert_track(audio_file)
+
+        with patch("backend.app.main.shutil.which", return_value=None):
+            missing = self.client.post("/library/tools/acoustic-fingerprints", json={"track_ids": [track_id]})
+        self.assertEqual(missing.status_code, 200)
+        self.assertFalse(missing.json()["tool_available"])
+
+        fake_fpcalc = self.root / "path-fpcalc.exe"
+        fake_fpcalc.write_bytes(b"not a real executable")
+        with patch("backend.app.main.shutil.which", return_value=str(fake_fpcalc)), patch(
+            "backend.app.main.acoustic_fingerprint_for_path",
+            return_value="acoustic-token",
+        ):
+            updated = self.client.post("/library/tools/acoustic-fingerprints", json={"track_ids": [track_id]})
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["updated"], 1)
+        with connect() as conn:
+            row = conn.execute("SELECT acoustic_fingerprint FROM tracks WHERE id = ?", (track_id,)).fetchone()
+        self.assertEqual(row["acoustic_fingerprint"], "acoustic-token")
+
+    def test_chromaprint_setup_can_use_saved_fpcalc_path_without_path(self) -> None:
+        fake_fpcalc = self.root / "fpcalc.exe"
+        fake_fpcalc.write_bytes(b"not a real executable")
+        audio_file = self.root / "configured-fingerprint.mp3"
+        audio_file.write_bytes(b"audio")
+        track_id = insert_track(audio_file)
+
+        setup = self.client.patch(
+            "/library/tools/acoustic-fingerprints/setup",
+            json={"fpcalc_path": str(fake_fpcalc)},
+        )
+        self.assertEqual(setup.status_code, 200)
+        self.assertTrue(setup.json()["available"])
+        self.assertEqual(Path(setup.json()["resolved_path"]), fake_fpcalc)
+
+        with patch("backend.app.main.shutil.which", return_value=None), patch(
+            "backend.app.main.acoustic_fingerprint_for_path",
+            return_value="configured-token",
+        ) as fingerprint:
+            updated = self.client.post("/library/tools/acoustic-fingerprints", json={"track_ids": [track_id]})
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["updated"], 1)
+        fingerprint.assert_called_once()
+        self.assertEqual(Path(fingerprint.call_args.args[1]), fake_fpcalc)
 
     def test_clear_library_caches_endpoint_removes_derived_rows(self) -> None:
         audio_file = self.root / "cached.mp3"
@@ -427,6 +632,7 @@ class ApiTests(unittest.TestCase):
             rating=5.0,
             bitrate=320000,
             audio_fingerprint="same-fast-fingerprint",
+            acoustic_fingerprint="same-acoustic-fingerprint",
             analysis_embedding=json.dumps([1.0, 0.0]),
         )
         second_id = insert_track(
@@ -436,6 +642,7 @@ class ApiTests(unittest.TestCase):
             rating=3.0,
             bitrate=128000,
             audio_fingerprint="same-fast-fingerprint",
+            acoustic_fingerprint="same-acoustic-fingerprint",
             analysis_embedding=json.dumps([0.95, 0.05]),
         )
 
@@ -446,6 +653,7 @@ class ApiTests(unittest.TestCase):
         duplicate = next(group for group in groups if group["key"] == "Duplicate Song - Duplicate Artist")
         self.assertEqual(duplicate["recommended_keep_id"], first_id)
         self.assertTrue(duplicate["shared_fingerprint"])
+        self.assertTrue(duplicate["shared_acoustic_fingerprint"])
         self.assertEqual(duplicate["bitrate_spread"], 192000)
         self.assertEqual({track["id"] for track in duplicate["tracks"]}, {first_id, second_id})
 
@@ -606,7 +814,7 @@ class ApiTests(unittest.TestCase):
             def read(self) -> bytes:
                 return json.dumps({"syncedLyrics": "[00:01.00] hello", "plainLyrics": "hello"}).encode("utf-8")
 
-        with patch("backend.app.main.request.urlopen", return_value=FakeResponse()):
+        with patch("backend.app.main.urlrequest.urlopen", return_value=FakeResponse()):
             response = self.client.post(f"/tracks/{track_id}/lyrics/fetch")
 
         self.assertEqual(response.status_code, 200)
