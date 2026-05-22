@@ -75,6 +75,14 @@ The device sync tool is a preview-first copy/export job for USB drives, phone fo
 
 Preview before applying. Apply creates the target folder when needed, copies only missing or older files, and writes playlists that point at the copied files with relative paths when file copying is enabled.
 
+## CD Ripper
+
+The CD Ripper panel on the File Management page detects local CD drives, checks for external extraction tools, looks up album metadata through MusicBrainz, and starts background rip jobs to FLAC, MP3, or WAV.
+
+Secure extraction is tool-backed. Put `cdparanoia.exe`, `cdda2wav.exe`, or `icedax.exe` in the app CD tool folder, or make one available on `PATH`. FLAC and MP3 encoding use the same FFmpeg setup as Audio Conversion. If an AccurateRip-capable tool is installed, FLAC Cafe reports that capability; current rip jobs always write local SHA-256 verification hashes so a rip has an audit trail even when official AccurateRip database matching is unavailable.
+
+CD playback uses Windows CD audio control for quick track checks. It is intentionally separate from the local-file player and does not add ripped tracks to the library until the output folder is scanned.
+
 ## CSV Metadata Cleanup
 
 The CSV metadata tool exports the library to a UTF-8 CSV with stable identifiers, paths, common tags, ratings, play counts, and analysis columns. The import path is preview-first and matches rows by track id first, then by path key.

@@ -65,6 +65,15 @@ from .audio_conversion_jobs import (
     resolve_ffmpeg_path,
     start_audio_conversion_job,
 )
+from .cd_ripping import (
+    cancel_cd_rip_job,
+    cd_rip_setup,
+    get_cd_rip_job,
+    lookup_cd_metadata,
+    play_cd_track,
+    start_cd_rip_job,
+    stop_cd_playback,
+)
 from .clap_analysis import save_config as save_clap_config
 from .clap_analysis import status as clap_status
 from .clap_install_jobs import get_clap_install_job, start_clap_install_job
@@ -95,6 +104,14 @@ from .schemas import (
     AudioConversionSetupRequest,
     AudioConversionSetupResponse,
     AudioConversionStartResponse,
+    CdPlaybackRequest,
+    CdPlaybackResponse,
+    CdRipMetadataRequest,
+    CdRipMetadataResponse,
+    CdRipProgress,
+    CdRipSetupResponse,
+    CdRipStartRequest,
+    CdRipStartResponse,
     AutoDjRequest,
     AutoDjAvoidRequest,
     AutoDjAvoidRule,
@@ -2855,6 +2872,61 @@ def cancel_audio_conversion(job_id: str) -> dict:
     if job is None:
         raise HTTPException(status_code=404, detail="Audio conversion job not found")
     return job
+
+
+@app.get("/library/tools/cd-rip/setup", response_model=CdRipSetupResponse)
+def get_cd_rip_setup() -> CdRipSetupResponse:
+    return CdRipSetupResponse(**cd_rip_setup())
+
+
+@app.post("/library/tools/cd-rip/metadata", response_model=CdRipMetadataResponse)
+def get_cd_rip_metadata(request: CdRipMetadataRequest) -> CdRipMetadataResponse:
+    return CdRipMetadataResponse(**lookup_cd_metadata(request))
+
+
+@app.post("/library/tools/cd-rip/jobs", response_model=CdRipStartResponse)
+def start_cd_rip(request: CdRipStartRequest) -> CdRipStartResponse:
+    setup = cd_rip_setup()
+    if request.output_format != "wav" and not setup["ffmpeg_available"]:
+        raise HTTPException(status_code=400, detail="FFmpeg is required to encode ripped CD audio to FLAC or MP3.")
+    if request.secure_mode and not setup["secure_ripping_available"]:
+        raise HTTPException(status_code=400, detail="Secure CD ripping requires cdparanoia, cdda2wav, or icedax.")
+    if not request.secure_mode and not (setup["secure_ripping_available"] or setup["ffmpeg_available"]):
+        raise HTTPException(status_code=400, detail="No compatible CD ripping tool was found.")
+    job = start_cd_rip_job(request)
+    return CdRipStartResponse(job_id=job["job_id"], status=job["status"])
+
+
+@app.get("/library/tools/cd-rip/jobs/{job_id}", response_model=CdRipProgress)
+def get_cd_rip_progress(job_id: str) -> dict:
+    job = get_cd_rip_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="CD rip job not found")
+    return job
+
+
+@app.post("/library/tools/cd-rip/jobs/{job_id}/cancel", response_model=CdRipProgress)
+def cancel_cd_rip(job_id: str) -> dict:
+    job = cancel_cd_rip_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="CD rip job not found")
+    return job
+
+
+@app.post("/library/tools/cd-rip/playback/play", response_model=CdPlaybackResponse)
+def play_cd_track_route(request: CdPlaybackRequest) -> CdPlaybackResponse:
+    try:
+        return CdPlaybackResponse(**play_cd_track(request.track_number))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/library/tools/cd-rip/playback/stop", response_model=CdPlaybackResponse)
+def stop_cd_playback_route() -> CdPlaybackResponse:
+    try:
+        return CdPlaybackResponse(**stop_cd_playback())
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/library/health", response_model=LibraryHealthResponse)

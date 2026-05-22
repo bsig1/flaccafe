@@ -40,6 +40,7 @@ backend/
 │   ├── playlist.py          M3U export/import helpers
 │   ├── scan_jobs.py         async scan job tracking
 │   ├── analysis_jobs.py     async audio-analysis job tracking
+│   ├── cd_ripping.py        CD drive detection, MusicBrainz lookup, ripping jobs, and playback commands
 │   ├── clap_analysis.py     optional CLAP genre/embedding analysis
 │   ├── clap_install_jobs.py optional ML runtime installation jobs
 │   ├── ml_runtime.py        app-managed optional ML environment activation

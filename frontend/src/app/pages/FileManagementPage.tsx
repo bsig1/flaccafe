@@ -65,6 +65,7 @@ import {
   type AudioConversionOptions,
 } from "./file-management/AudioConversionSection";
 import { CacheUndoLogSection } from "./file-management/CacheUndoLogSection";
+import { CdRipperSection } from "./file-management/CdRipperSection";
 import { ReportViewerSection } from "./file-management/ReportViewerSection";
 import {
   CSV_IMPORT_FIELDS,
@@ -1600,6 +1601,8 @@ export function FileManagementPage({
               )}
             </div>
           </DisclosureSection>
+
+          <CdRipperSection setStatus={setStatus} />
 
           <AudioConversionSection
             scopedTrackIds={scopedTrackIds}

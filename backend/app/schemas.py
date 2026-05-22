@@ -1097,6 +1097,154 @@ class AudioConversionProgress(BaseModel):
     error: str | None = None
 
 
+class CdRipTrackMetadata(BaseModel):
+    track_number: int = Field(ge=1, le=999)
+    disc_number: int | None = Field(default=1, ge=1, le=99)
+    title: str | None = None
+    artist: str | None = None
+    duration_seconds: float | None = None
+    source_label: str | None = None
+
+
+class CdRipDrive(BaseModel):
+    id: str
+    path: str | None = None
+    label: str
+    volume_name: str | None = None
+    media_loaded: bool = False
+    track_count: int | None = None
+    tracks: list[CdRipTrackMetadata] = Field(default_factory=list)
+
+
+class CdRipToolStatus(BaseModel):
+    name: str
+    purpose: str
+    available: bool = False
+    path: str | None = None
+    version: str | None = None
+    checked_paths: list[str] = Field(default_factory=list)
+
+
+class CdRipSetupResponse(BaseModel):
+    available: bool = False
+    tool_directory: str
+    drives: list[CdRipDrive] = Field(default_factory=list)
+    tools: list[CdRipToolStatus] = Field(default_factory=list)
+    ffmpeg_available: bool = False
+    ffmpeg_path: str | None = None
+    secure_ripping_available: bool = False
+    cd_text_available: bool = False
+    accuraterip_available: bool = False
+    message: str
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CdRipMetadataRequest(BaseModel):
+    drive_id: str | None = None
+    album_title: str | None = None
+    album_artist: str | None = None
+    release_id: str | None = None
+    limit: int = Field(default=5, ge=1, le=10)
+
+
+class CdRipReleaseCandidate(BaseModel):
+    release_id: str
+    title: str | None = None
+    artist: str | None = None
+    date: str | None = None
+    year: int | None = None
+    country: str | None = None
+    track_count: int = 0
+    confidence: float = 0.0
+    artwork_thumbnail_url: str | None = None
+    tracks: list[CdRipTrackMetadata] = Field(default_factory=list)
+
+
+class CdRipMetadataResponse(BaseModel):
+    drive_id: str | None = None
+    source: str
+    query: dict[str, str | None] = Field(default_factory=dict)
+    candidates: list[CdRipReleaseCandidate] = Field(default_factory=list)
+    cd_text_available: bool = False
+    disc_id: str | None = None
+    message: str
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CdRipStartRequest(BaseModel):
+    drive_id: str
+    output_folder: str
+    output_format: Literal["flac", "mp3", "wav"] = "flac"
+    track_numbers: list[int] | None = Field(default=None, max_length=120)
+    tracks: list[CdRipTrackMetadata] = Field(default_factory=list, max_length=120)
+    album_title: str | None = None
+    album_artist: str | None = None
+    year: int | None = Field(default=None, ge=1800, le=3000)
+    genre: str | None = None
+    secure_mode: bool = True
+    verify: bool = True
+    overwrite: bool = False
+    bitrate_kbps: int | None = Field(default=None, ge=32, le=1411)
+
+    @field_validator("drive_id", "output_folder")
+    @classmethod
+    def cd_rip_required_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("value is required")
+        return cleaned
+
+
+class CdRipStartResponse(BaseModel):
+    job_id: str
+    status: str
+
+
+class CdRipVerificationEntry(BaseModel):
+    track_number: int
+    path: str
+    sha256: str
+    bytes: int
+    accuraterip_checked: bool = False
+    accuraterip_match: bool | None = None
+    message: str
+
+
+class CdRipProgress(BaseModel):
+    job_id: str
+    drive_id: str
+    output_folder: str
+    output_format: str
+    status: str
+    phase: str | None = None
+    message: str | None = None
+    total_tracks: int = 0
+    processed_tracks: int = 0
+    ripped_tracks: int = 0
+    skipped_tracks: int = 0
+    current_track: str | None = None
+    errors: list[str] = Field(default_factory=list)
+    log: list[str] = Field(default_factory=list)
+    verification: list[CdRipVerificationEntry] = Field(default_factory=list)
+    started_at: str
+    finished_at: str | None = None
+    elapsed_seconds: float
+    eta_seconds: float | None = None
+    percent: float
+    error: str | None = None
+
+
+class CdPlaybackRequest(BaseModel):
+    drive_id: str | None = None
+    track_number: int = Field(default=1, ge=1, le=999)
+
+
+class CdPlaybackResponse(BaseModel):
+    status: str
+    track_number: int | None = None
+    message: str
+
+
 class ClapConfigRequest(BaseModel):
     model_id: str | None = Field(default=None, max_length=200)
     cache_dir: str | None = None

@@ -844,6 +844,167 @@ class ApiTests(unittest.TestCase):
         self.assertIn("-b:a 192k", command_text)
         self.assertIn("0:v?", command_text)
 
+    def test_cd_rip_setup_reports_drives_and_tools(self) -> None:
+        ffmpeg = self.root / "ffmpeg.exe"
+        ffmpeg.write_bytes(b"fake")
+
+        def fake_tool(name: str, purpose: str) -> dict:
+            return {
+                "name": name,
+                "purpose": purpose,
+                "available": name in {"cdparanoia", "cdda2wav"},
+                "path": str(self.root / f"{name}.exe") if name in {"cdparanoia", "cdda2wav"} else None,
+                "version": f"{name} test" if name in {"cdparanoia", "cdda2wav"} else None,
+                "checked_paths": [],
+            }
+
+        with (
+            patch("backend.app.cd_ripping.detect_cd_drives", return_value=[
+                {
+                    "id": "D:",
+                    "path": "D:\\",
+                    "label": "Test CD Drive",
+                    "volume_name": "Test Disc",
+                    "media_loaded": True,
+                    "track_count": 2,
+                    "tracks": [
+                        {"track_number": 1, "title": "Track 01"},
+                        {"track_number": 2, "title": "Track 02"},
+                    ],
+                }
+            ]),
+            patch("backend.app.cd_ripping.find_tool", side_effect=fake_tool),
+            patch("backend.app.cd_ripping.resolve_ffmpeg_path", return_value=(ffmpeg, None, [ffmpeg])),
+        ):
+            response = self.client.get("/library/tools/cd-rip/setup")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["secure_ripping_available"])
+        self.assertTrue(body["cd_text_available"])
+        self.assertTrue(body["ffmpeg_available"])
+        self.assertEqual(body["drives"][0]["id"], "D:")
+        self.assertEqual(body["drives"][0]["track_count"], 2)
+
+    def test_cd_rip_metadata_uses_musicbrainz_release_tracks(self) -> None:
+        search_release = {"id": "release-1", "title": "Lookup Album"}
+        release = {
+            "id": "release-1",
+            "title": "Lookup Album",
+            "artist-credit": [{"name": "Lookup Artist"}],
+            "date": "2001-05-01",
+            "country": "US",
+            "media": [
+                {
+                    "tracks": [
+                        {"position": 1, "title": "First Song", "length": 180000, "artist-credit": [{"name": "Lookup Artist"}]},
+                        {"position": 2, "title": "Second Song", "length": 200000, "artist-credit": [{"name": "Lookup Artist"}]},
+                    ],
+                }
+            ],
+        }
+        fake_setup = {
+            "available": True,
+            "tool_directory": str(self.root),
+            "drives": [],
+            "tools": [],
+            "ffmpeg_available": True,
+            "ffmpeg_path": str(self.root / "ffmpeg.exe"),
+            "secure_ripping_available": True,
+            "cd_text_available": True,
+            "accuraterip_available": False,
+            "message": "ready",
+            "warnings": [],
+        }
+
+        with (
+            patch("backend.app.cd_ripping.cd_rip_setup", return_value=fake_setup),
+            patch("backend.app.cd_ripping.search_releases", return_value=[search_release]),
+            patch("backend.app.cd_ripping.lookup_release", return_value=release),
+            patch("backend.app.cd_ripping.cover_art_for_release", return_value={"thumbnail_url": "https://example.test/cover.jpg"}),
+        ):
+            response = self.client.post(
+                "/library/tools/cd-rip/metadata",
+                json={"drive_id": "D:", "album_title": "Lookup Album", "album_artist": "Lookup Artist"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["candidates"][0]["release_id"], "release-1")
+        self.assertEqual(body["candidates"][0]["year"], 2001)
+        self.assertEqual(body["candidates"][0]["tracks"][0]["title"], "First Song")
+        self.assertEqual(body["candidates"][0]["tracks"][1]["duration_seconds"], 200.0)
+
+    def test_cd_rip_job_writes_target_and_verification(self) -> None:
+        target = self.root / "Rips"
+        ffmpeg = self.root / "ffmpeg.exe"
+        ripper = self.root / "cdparanoia.exe"
+        ffmpeg.write_bytes(b"fake")
+        ripper.write_bytes(b"fake")
+        fake_setup = {
+            "available": True,
+            "tool_directory": str(self.root),
+            "drives": [],
+            "tools": [
+                {"name": "cdparanoia", "purpose": "secure", "available": True, "path": str(ripper), "version": None, "checked_paths": []},
+            ],
+            "ffmpeg_available": True,
+            "ffmpeg_path": str(ffmpeg),
+            "secure_ripping_available": True,
+            "cd_text_available": False,
+            "accuraterip_available": False,
+            "message": "ready",
+            "warnings": [],
+        }
+
+        commands: list[list[str]] = []
+
+        def fake_cd_command(command: list[str]) -> str:
+            commands.append(command)
+            output = Path(command[-1])
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(b"audio")
+            return "ok"
+
+        request = {
+            "drive_id": "D:",
+            "output_folder": str(target),
+            "output_format": "flac",
+            "track_numbers": [1],
+            "tracks": [{"track_number": 1, "title": "First Song", "artist": "Artist"}],
+            "album_title": "Album",
+            "album_artist": "Artist",
+            "year": 2001,
+            "secure_mode": True,
+            "verify": True,
+            "overwrite": True,
+        }
+
+        with (
+            patch("backend.app.main.cd_rip_setup", return_value=fake_setup),
+            patch("backend.app.cd_ripping.cd_rip_setup", return_value=fake_setup),
+            patch("backend.app.cd_ripping.resolve_ffmpeg_path", return_value=(ffmpeg, None, [ffmpeg])),
+            patch("backend.app.cd_ripping.run_cd_command", side_effect=fake_cd_command),
+        ):
+            started = self.client.post("/library/tools/cd-rip/jobs", json=request)
+            self.assertEqual(started.status_code, 200)
+            job_id = started.json()["job_id"]
+            latest = None
+            for _ in range(30):
+                latest = self.client.get(f"/library/tools/cd-rip/jobs/{job_id}")
+                self.assertEqual(latest.status_code, 200)
+                if latest.json()["status"] in {"completed", "failed", "canceled"}:
+                    break
+                time.sleep(0.05)
+
+        self.assertIsNotNone(latest)
+        self.assertEqual(latest.json()["status"], "completed")
+        self.assertEqual(latest.json()["ripped_tracks"], 1)
+        self.assertEqual(latest.json()["verification"][0]["track_number"], 1)
+        self.assertTrue((target / "Artist" / "Album" / "01 - First Song.flac").exists())
+        self.assertGreaterEqual(len(commands), 2)
+        self.assertIn("-metadata title=First Song", " ".join(commands[-1]))
+
     def test_duplicate_actions_can_remove_selected_and_export_reports(self) -> None:
         first = self.root / "dup-action-a.mp3"
         second = self.root / "dup-action-b.mp3"

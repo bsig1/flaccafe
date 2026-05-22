@@ -62,6 +62,13 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `POST /library/tools/audio-conversion/jobs` starts an audio conversion job.
 - `GET /library/tools/audio-conversion/jobs/{job_id}` returns audio conversion job progress.
 - `POST /library/tools/audio-conversion/jobs/{job_id}/cancel` cancels an audio conversion job.
+- `GET /library/tools/cd-rip/setup` reports CD drives, extraction tools, encoder availability, CD-Text support, and verification capability.
+- `POST /library/tools/cd-rip/metadata` searches MusicBrainz release metadata for a disc before ripping.
+- `POST /library/tools/cd-rip/jobs` starts a background CD ripping job to FLAC, MP3, or WAV.
+- `GET /library/tools/cd-rip/jobs/{job_id}` returns CD ripping progress and verification hashes.
+- `POST /library/tools/cd-rip/jobs/{job_id}/cancel` cancels a CD ripping job after the current track finishes.
+- `POST /library/tools/cd-rip/playback/play` starts Windows CD audio playback for a selected track.
+- `POST /library/tools/cd-rip/playback/stop` stops Windows CD audio playback.
 - `POST /library/tools/export-metadata-csv` exports track metadata for spreadsheet cleanup.
 - `POST /library/tools/import-metadata-csv` previews or applies spreadsheet metadata changes.
 - `POST /library/tools/import-metadata-csv/report` writes a JSON dry-run import report.

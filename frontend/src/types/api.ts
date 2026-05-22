@@ -1008,6 +1008,143 @@ export interface AudioConversionProgress {
   error: string | null;
 }
 
+export interface CdRipTrackMetadata {
+  track_number: number;
+  disc_number?: number | null;
+  title?: string | null;
+  artist?: string | null;
+  duration_seconds?: number | null;
+  source_label?: string | null;
+}
+
+export interface CdRipDrive {
+  id: string;
+  path: string | null;
+  label: string;
+  volume_name: string | null;
+  media_loaded: boolean;
+  track_count: number | null;
+  tracks: CdRipTrackMetadata[];
+}
+
+export interface CdRipToolStatus {
+  name: string;
+  purpose: string;
+  available: boolean;
+  path: string | null;
+  version: string | null;
+  checked_paths: string[];
+}
+
+export interface CdRipSetupResponse {
+  available: boolean;
+  tool_directory: string;
+  drives: CdRipDrive[];
+  tools: CdRipToolStatus[];
+  ffmpeg_available: boolean;
+  ffmpeg_path: string | null;
+  secure_ripping_available: boolean;
+  cd_text_available: boolean;
+  accuraterip_available: boolean;
+  message: string;
+  warnings: string[];
+}
+
+export interface CdRipMetadataRequest {
+  drive_id?: string | null;
+  album_title?: string | null;
+  album_artist?: string | null;
+  release_id?: string | null;
+  limit?: number;
+}
+
+export interface CdRipReleaseCandidate {
+  release_id: string;
+  title: string | null;
+  artist: string | null;
+  date: string | null;
+  year: number | null;
+  country: string | null;
+  track_count: number;
+  confidence: number;
+  artwork_thumbnail_url: string | null;
+  tracks: CdRipTrackMetadata[];
+}
+
+export interface CdRipMetadataResponse {
+  drive_id: string | null;
+  source: string;
+  query: Record<string, string | null>;
+  candidates: CdRipReleaseCandidate[];
+  cd_text_available: boolean;
+  disc_id: string | null;
+  message: string;
+  warnings: string[];
+}
+
+export type CdRipOutputFormat = "flac" | "mp3" | "wav";
+
+export interface CdRipStartRequest {
+  drive_id: string;
+  output_folder: string;
+  output_format?: CdRipOutputFormat;
+  track_numbers?: number[] | null;
+  tracks?: CdRipTrackMetadata[];
+  album_title?: string | null;
+  album_artist?: string | null;
+  year?: number | null;
+  genre?: string | null;
+  secure_mode?: boolean;
+  verify?: boolean;
+  overwrite?: boolean;
+  bitrate_kbps?: number | null;
+}
+
+export interface CdRipStartResponse {
+  job_id: string;
+  status: string;
+}
+
+export interface CdRipVerificationEntry {
+  track_number: number;
+  path: string;
+  sha256: string;
+  bytes: number;
+  accuraterip_checked: boolean;
+  accuraterip_match: boolean | null;
+  message: string;
+}
+
+export interface CdRipProgress {
+  job_id: string;
+  drive_id: string;
+  output_folder: string;
+  output_format: CdRipOutputFormat | string;
+  status: "pending" | "running" | "canceling" | "canceled" | "completed" | "failed" | string;
+  phase: string | null;
+  message: string | null;
+  total_tracks: number;
+  processed_tracks: number;
+  ripped_tracks: number;
+  skipped_tracks: number;
+  current_track: string | null;
+  errors: string[];
+  log: string[];
+  verification: CdRipVerificationEntry[];
+  started_at: string;
+  finished_at: string | null;
+  elapsed_seconds: number;
+  eta_seconds: number | null;
+  percent: number;
+  error: string | null;
+}
+
+export interface CdPlaybackResponse {
+  status: string;
+  track_number: number | null;
+  message: string;
+}
+
 export interface ClapStatusResponse {
   installed: boolean;
   dependencies: Record<string, boolean>;

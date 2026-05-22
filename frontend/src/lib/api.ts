@@ -32,6 +32,13 @@ import type {
   ChromaprintInstallRequest,
   ChromaprintInstallResponse,
   ChromaprintStatusResponse,
+  CdPlaybackResponse,
+  CdRipMetadataRequest,
+  CdRipMetadataResponse,
+  CdRipProgress,
+  CdRipSetupResponse,
+  CdRipStartRequest,
+  CdRipStartResponse,
   ClapConfigRequest,
   ClapInstallProgress,
   ClapInstallRequest,
@@ -515,6 +522,43 @@ export function fetchAudioConversionProgress(jobId: string): Promise<AudioConver
 
 export function cancelAudioConversion(jobId: string): Promise<AudioConversionProgress> {
   return request<AudioConversionProgress>(`/library/tools/audio-conversion/jobs/${jobId}/cancel`, { method: "POST" });
+}
+
+export function fetchCdRipSetup(): Promise<CdRipSetupResponse> {
+  return request<CdRipSetupResponse>("/library/tools/cd-rip/setup");
+}
+
+export function lookupCdRipMetadata(requestBody: CdRipMetadataRequest): Promise<CdRipMetadataResponse> {
+  return request<CdRipMetadataResponse>("/library/tools/cd-rip/metadata", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function startCdRip(requestBody: CdRipStartRequest): Promise<CdRipStartResponse> {
+  return request<CdRipStartResponse>("/library/tools/cd-rip/jobs", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function fetchCdRipProgress(jobId: string): Promise<CdRipProgress> {
+  return request<CdRipProgress>(`/library/tools/cd-rip/jobs/${jobId}`);
+}
+
+export function cancelCdRip(jobId: string): Promise<CdRipProgress> {
+  return request<CdRipProgress>(`/library/tools/cd-rip/jobs/${jobId}/cancel`, { method: "POST" });
+}
+
+export function playCdTrack(trackNumber: number, driveId?: string | null): Promise<CdPlaybackResponse> {
+  return request<CdPlaybackResponse>("/library/tools/cd-rip/playback/play", {
+    method: "POST",
+    body: JSON.stringify({ drive_id: driveId ?? null, track_number: trackNumber }),
+  });
+}
+
+export function stopCdPlayback(): Promise<CdPlaybackResponse> {
+  return request<CdPlaybackResponse>("/library/tools/cd-rip/playback/stop", { method: "POST" });
 }
 
 export function fetchClapStatus(): Promise<ClapStatusResponse> {
