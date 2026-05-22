@@ -250,6 +250,68 @@ def conflicts_with_cooldown(
     return artist_conflict or album_conflict
 
 
+def track_is_exploratory(track: dict[str, Any]) -> bool:
+    return track.get("rating") is None or int(track.get("play_count") or 0) == 0
+
+
+def repeat_artist_percent_for_tracks(tracks: list[dict[str, Any]]) -> float:
+    if not tracks:
+        return 0.0
+    unique_artists = {
+        token
+        for track in tracks
+        for token in (artist_tokens(track.get("artist")) or {normalize_token(track.get("artist"))})
+        if token
+    }
+    if not unique_artists:
+        return 0.0
+    return max(0.0, ((len(tracks) - len(unique_artists)) / len(tracks)) * 100)
+
+
+def target_drift_adjustment(
+    selected_tracks: list[dict[str, Any]],
+    track: dict[str, Any],
+    request: AutoDjRequest,
+) -> tuple[float, str]:
+    # Drift targets are soft nudges layered over the regular scorer. They help a
+    # saved profile say "stay around 15% unrated" or "keep repeat artists under
+    # 20%" without turning AutoDJ into a rigid constraint solver.
+    next_tracks = [*selected_tracks, track]
+    score = 0.0
+    reasons: list[str] = []
+
+    if request.target_unrated_percent is not None:
+        target_fraction = request.target_unrated_percent / 100
+        current_unrated = sum(1 for item in selected_tracks if item.get("rating") is None)
+        current_fraction = current_unrated / len(selected_tracks) if selected_tracks else 0.0
+        if track.get("rating") is None and current_fraction < target_fraction:
+            score += 0.75
+            reasons.append("unrated target")
+        elif track.get("rating") is not None and current_fraction < target_fraction:
+            score -= 0.45
+            reasons.append("unrated target")
+
+    if request.target_exploration_percent is not None:
+        target_fraction = request.target_exploration_percent / 100
+        current_exploratory = sum(1 for item in selected_tracks if track_is_exploratory(item))
+        current_fraction = current_exploratory / len(selected_tracks) if selected_tracks else 0.0
+        if track_is_exploratory(track) and current_fraction < target_fraction:
+            score += 0.6
+            reasons.append("exploration target")
+        elif not track_is_exploratory(track) and current_fraction < target_fraction:
+            score -= 0.35
+            reasons.append("exploration target")
+
+    if request.max_repeat_artist_percent is not None:
+        projected_repeat = repeat_artist_percent_for_tracks(next_tracks)
+        overage = projected_repeat - request.max_repeat_artist_percent
+        if overage > 0:
+            score -= min(4.0, 0.16 * overage)
+            reasons.append("repeat artist target")
+
+    return score, ", ".join(reasons)
+
+
 def similarity_adjustment(
     track: dict[str, Any],
     seed_track: dict[str, Any],
@@ -364,15 +426,33 @@ def generate_queue(request: AutoDjRequest) -> list[dict[str, Any]]:
     queue: list[dict[str, Any]] = []
     recent_artists: list[set[str]] = []
     recent_albums: list[str] = []
-    target_unrated = round(request.queue_length * request.unrated_exploration_percent / 100)
+    target_unrated_percent = (
+        request.target_unrated_percent
+        if request.target_unrated_percent is not None
+        else request.unrated_exploration_percent
+    )
+    target_unrated = round(request.queue_length * target_unrated_percent / 100)
+    target_exploratory = (
+        round(request.queue_length * request.target_exploration_percent / 100)
+        if request.target_exploration_percent is not None
+        else None
+    )
     chosen_unrated = 0
+    chosen_exploratory = 0
 
     while remaining and len(queue) < request.queue_length:
         slots_left = request.queue_length - len(queue)
         unrated_needed = max(0, target_unrated - chosen_unrated)
         must_pick_unrated = unrated_needed >= slots_left
+        exploration_needed = max(0, (target_exploratory or 0) - chosen_exploratory)
+        must_pick_exploratory = target_exploratory is not None and exploration_needed >= slots_left
 
-        pool = [track for track in remaining if not must_pick_unrated or track.get("rating") is None]
+        pool = [
+            track
+            for track in remaining
+            if (not must_pick_unrated or track.get("rating") is None)
+            and (not must_pick_exploratory or track_is_exploratory(track))
+        ]
         if not pool:
             pool = remaining
 
@@ -393,6 +473,13 @@ def generate_queue(request: AutoDjRequest) -> list[dict[str, Any]]:
             for track in pool
             for score, reason, breakdown in [score_track(track, request, now, rng, seed_track)]
         ]
+        for candidate in candidates:
+            drift_delta, drift_reason = target_drift_adjustment(queue, candidate.track, request)
+            if drift_delta:
+                candidate.score += drift_delta
+                candidate.breakdown["targets"] = round(drift_delta, 3)
+                candidate.breakdown["total"] = round(candidate.score, 3)
+                candidate.reason += f", {drift_reason}"
 
         if not strict_pool:
             # If the library is tiny or dominated by one artist, do not dead-end
@@ -418,6 +505,8 @@ def generate_queue(request: AutoDjRequest) -> list[dict[str, Any]]:
 
         if picked.track.get("rating") is None:
             chosen_unrated += 1
+        if track_is_exploratory(picked.track):
+            chosen_exploratory += 1
         recent_artists.insert(0, artist_tokens(picked.track.get("artist")))
         recent_albums.insert(0, album_token(picked.track.get("album")))
         recent_artists = recent_artists[: max(1, request.artist_cooldown)]

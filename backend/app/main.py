@@ -16,6 +16,7 @@ import sqlite3
 import subprocess
 import uuid
 import zipfile
+import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,7 +37,17 @@ from .library_tools import (
     changed_metadata,
     infer_metadata_from_filename,
     organization_target_path,
+    sanitize_path_component,
 )
+from .library_watcher import (
+    apply_folder_watch_changes,
+    get_folder_watch_status,
+    refresh_folder_watch_now,
+    start_folder_watcher,
+    start_folder_watcher_from_settings,
+    stop_folder_watcher,
+)
+from .musicbrainz_autotag import metadata_changes, preview_auto_tags
 from .analysis_jobs import (
     cancel_audio_analysis_job,
     get_audio_analysis_job,
@@ -72,11 +83,18 @@ from .schemas import (
     AutoDjAvoidRequest,
     AutoDjAvoidRule,
     AutoDjResponse,
+    AutoTagPreview,
+    AutoTagRequest,
+    AutoTagResponse,
     BackupResponse,
     CacheClearRequest,
     CacheClearResponse,
     AcousticFingerprintRequest,
     AcousticFingerprintResponse,
+    AlbumArtworkCandidate,
+    AlbumArtworkCandidatesResponse,
+    AlbumArtworkUpdateRequest,
+    AlbumArtworkUpdateResponse,
     BulkUndoBatchEntry,
     BulkUndoLogEntry,
     BulkUndoRestoreResponse,
@@ -100,6 +118,10 @@ from .schemas import (
     DuplicateReviewRequest,
     DuplicateReviewResponse,
     DiagnosticItem,
+    DeviceSyncChange,
+    DeviceSyncPlaylistExport,
+    DeviceSyncRequest,
+    DeviceSyncResponse,
     ExportRequest,
     ExportResponse,
     FileOrganizationChange,
@@ -107,6 +129,11 @@ from .schemas import (
     FileOrganizationReportResponse,
     FileOrganizationRequest,
     FileOrganizationResponse,
+    FolderWatchApplyRequest,
+    FolderWatchApplyResponse,
+    FolderWatchRefreshRequest,
+    FolderWatchStartRequest,
+    FolderWatchStatus,
     FilenameTagInferencePreview,
     FilenameTagInferenceRequest,
     FilenameTagInferenceResponse,
@@ -114,6 +141,9 @@ from .schemas import (
     ClapConfigRequest,
     ClapStatusResponse,
     LibraryHealthResponse,
+    InboxResponse,
+    InboxReviewRequest,
+    InboxReviewResponse,
     LibraryStatsResponse,
     LyricsResponse,
     LyricsUpdateRequest,
@@ -127,10 +157,17 @@ from .schemas import (
     ReportFileRequest,
     ReportFileResponse,
     RecommendationFeedbackRequest,
+    RecommendationAbChoiceRequest,
+    RecommendationAbChoiceResponse,
+    RecommendationAbQueue,
+    RecommendationAbTestRequest,
+    RecommendationAbTestResponse,
     RecommendationDrift,
     RecommendationProfile,
     RecommendationProfileComparison,
     RecommendationProfileComparisonExportResponse,
+    RecommendationProfileComparisonImportRequest,
+    RecommendationProfileComparisonImportResponse,
     RecommendationProfileComparisonRequest,
     RecommendationProfileRequest,
     RecommendationRun,
@@ -146,6 +183,9 @@ from .schemas import (
     SimilarTrack,
     StartupDiagnosticsResponse,
     SupportBundleResponse,
+    TagRegexReplacePreview,
+    TagRegexReplaceRequest,
+    TagRegexReplaceResponse,
     Track,
     TrackDeleteResponse,
     TrackRestoreRequest,
@@ -855,26 +895,132 @@ def smart_tracks(rule: SmartPlaylistRule) -> list[dict]:
         )
 
 
-def parse_m3u_paths(playlist_path: str) -> list[Path]:
+def playlist_entry_path(entry: str, base_folder: Path) -> Path | None:
+    text = entry.strip().strip('"').strip("'")
+    if not text:
+        return None
+    if re.match(r"^[a-zA-Z]:[\\/]", text):
+        return Path(text).expanduser().resolve()
+
+    parsed = parse.urlparse(text)
+    if parsed.scheme in {"http", "https", "icy"}:
+        return None
+    if parsed.scheme == "file":
+        raw_path = parse.unquote(parsed.path)
+        if os.name == "nt" and re.match(r"^/[a-zA-Z]:", raw_path):
+            raw_path = raw_path[1:]
+        if parsed.netloc and parsed.netloc.lower() != "localhost":
+            raw_path = f"//{parsed.netloc}{raw_path}"
+        return Path(raw_path).expanduser().resolve()
+    if parsed.scheme:
+        return None
+
+    candidate = Path(parse.unquote(text))
+    if not candidate.is_absolute():
+        candidate = (base_folder / candidate).resolve()
+    return candidate
+
+
+def read_playlist_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        return path.read_text(encoding="latin-1", errors="ignore")
+
+
+def parse_m3u_paths(path: Path) -> list[Path]:
+    paths: list[Path] = []
+    for line in read_playlist_text(path).splitlines():
+        text = line.strip()
+        if not text or text.startswith("#"):
+            continue
+        candidate = playlist_entry_path(text, path.parent)
+        if candidate is not None:
+            paths.append(candidate)
+    return paths
+
+
+def parse_pls_paths(path: Path) -> list[Path]:
+    paths: list[Path] = []
+    for line in read_playlist_text(path).splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key.strip().lower().startswith("file"):
+            candidate = playlist_entry_path(value, path.parent)
+            if candidate is not None:
+                paths.append(candidate)
+    return paths
+
+
+def xml_local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1].lower()
+
+
+def parse_xspf_paths(path: Path) -> list[Path]:
+    try:
+        root = ET.fromstring(read_playlist_text(path))
+    except ET.ParseError as exc:
+        raise ValueError(f"Could not parse XSPF playlist: {exc}") from exc
+    paths: list[Path] = []
+    for element in root.iter():
+        if xml_local_name(element.tag) == "location" and element.text:
+            candidate = playlist_entry_path(element.text, path.parent)
+            if candidate is not None:
+                paths.append(candidate)
+    return paths
+
+
+def parse_wpl_paths(path: Path) -> list[Path]:
+    try:
+        root = ET.fromstring(read_playlist_text(path))
+    except ET.ParseError as exc:
+        raise ValueError(f"Could not parse WPL playlist: {exc}") from exc
+    paths: list[Path] = []
+    for element in root.iter():
+        if xml_local_name(element.tag) != "media":
+            continue
+        src = element.attrib.get("src")
+        if src:
+            candidate = playlist_entry_path(src, path.parent)
+            if candidate is not None:
+                paths.append(candidate)
+    return paths
+
+
+def parse_itunes_xml_paths(path: Path) -> list[Path]:
+    try:
+        root = ET.fromstring(read_playlist_text(path))
+    except ET.ParseError as exc:
+        raise ValueError(f"Could not parse iTunes XML: {exc}") from exc
+    paths: list[Path] = []
+    for parent in root.iter():
+        children = list(parent)
+        for index, child in enumerate(children[:-1]):
+            if xml_local_name(child.tag) == "key" and (child.text or "").strip() == "Location":
+                value = children[index + 1]
+                if xml_local_name(value.tag) == "string" and value.text:
+                    candidate = playlist_entry_path(value.text, path.parent)
+                    if candidate is not None:
+                        paths.append(candidate)
+    return paths
+
+
+def parse_playlist_paths(playlist_path: str) -> list[Path]:
     path = Path(playlist_path).expanduser().resolve()
     if not path.exists() or not path.is_file():
         raise ValueError(f"Playlist file does not exist: {path}")
 
-    try:
-        lines = path.read_text(encoding="utf-8-sig").splitlines()
-    except UnicodeDecodeError:
-        lines = path.read_text(encoding="latin-1", errors="ignore").splitlines()
-
-    paths: list[Path] = []
-    for line in lines:
-        text = line.strip()
-        if not text or text.startswith("#"):
-            continue
-        candidate = Path(text)
-        if not candidate.is_absolute():
-            candidate = (path.parent / candidate).resolve()
-        paths.append(candidate)
-    return paths
+    suffix = path.suffix.lower()
+    if suffix in {".m3u", ".m3u8"}:
+        return parse_m3u_paths(path)
+    if suffix == ".pls":
+        return parse_pls_paths(path)
+    if suffix == ".xspf":
+        return parse_xspf_paths(path)
+    if suffix == ".wpl":
+        return parse_wpl_paths(path)
+    if suffix == ".xml":
+        return parse_itunes_xml_paths(path)
+    raise ValueError("Supported playlist imports: .m3u, .m3u8, .pls, .xspf, .wpl, and iTunes .xml")
 
 
 def track_response(conn, track_id: int) -> dict:
@@ -1109,6 +1255,166 @@ def cached_artwork(path: Path) -> tuple[bytes, str] | None:
         )
         conn.commit()
     return data, media_type
+
+
+def image_media_type(path: Path) -> str | None:
+    return IMAGE_MEDIA_TYPES.get(path.suffix.lower())
+
+
+def image_candidate(path: Path, source: str, selected_path: Path | None = None) -> AlbumArtworkCandidate | None:
+    media_type = image_media_type(path)
+    if media_type is None or not path.exists() or not path.is_file():
+        return None
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return AlbumArtworkCandidate(
+        source=source,  # type: ignore[arg-type]
+        label=path.name,
+        path=str(path.resolve()),
+        media_type=media_type,
+        size_bytes=int(stat.st_size),
+        modified_at=datetime.fromtimestamp(stat.st_mtime, timezone.utc).replace(microsecond=0).isoformat(),
+        selected=selected_path is not None and path_key(path) == path_key(selected_path),
+    )
+
+
+def album_record(conn, album_id: int):
+    row = conn.execute("SELECT id, album, album_artist, year, artwork_path FROM albums WHERE id = ?", (album_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Album not found")
+    return row
+
+
+def album_track_rows(conn, album_id: int) -> list[dict]:
+    album_record(conn, album_id)
+    return rows_to_dicts(
+        conn.execute(
+            f"""
+            SELECT {TRACK_COLUMNS}
+            FROM tracks
+            WHERE album_id = ?
+            ORDER BY coalesce(disc_number, 0) ASC,
+                     coalesce(track_number, 0) ASC,
+                     lower(coalesce(title, '')) ASC,
+                     id ASC
+            """,
+            (album_id,),
+        )
+    )
+
+
+def album_artwork_candidates(conn, album_id: int) -> list[AlbumArtworkCandidate]:
+    album = album_record(conn, album_id)
+    selected_path = Path(album["artwork_path"]).expanduser() if album["artwork_path"] else None
+    tracks = album_track_rows(conn, album_id)
+    candidates: list[AlbumArtworkCandidate] = []
+    seen: set[str] = set()
+
+    def add(candidate: AlbumArtworkCandidate | None) -> None:
+        if candidate is None:
+            return
+        identity = candidate.path or f"embedded:{candidate.track_id}"
+        if identity in seen:
+            return
+        seen.add(identity)
+        candidates.append(candidate)
+
+    if selected_path is not None:
+        add(image_candidate(selected_path, "selected", selected_path))
+
+    folders = []
+    for track in tracks:
+        try:
+            folder = Path(track["path"]).expanduser().parent.resolve()
+        except OSError:
+            continue
+        if folder not in folders:
+            folders.append(folder)
+    preferred = {"cover", "folder", "front", "album", "albumart", "albumartsmall"}
+    for folder in folders:
+        try:
+            images = [path for path in folder.iterdir() if path.is_file() and image_media_type(path)]
+        except OSError:
+            continue
+        images.sort(
+            key=lambda path: (
+                0 if path.stem.replace(" ", "").casefold() in preferred else 1,
+                path.name.casefold(),
+            )
+        )
+        for image in images[:20]:
+            add(image_candidate(image, "sidecar", selected_path))
+
+    for track in tracks[:30]:
+        path = Path(track["path"])
+        if embedded_artwork(path) is None:
+            continue
+        candidates.append(
+            AlbumArtworkCandidate(
+                source="embedded",
+                label=f"Embedded: {track.get('title') or path.name}",
+                track_id=int(track["id"]),
+                selected=selected_path is None and len(candidates) == 0,
+            )
+        )
+    return candidates
+
+
+def unique_sidecar_artwork_path(folder: Path, filename: str, media_type: str) -> Path:
+    suffix = ".png" if media_type == "image/png" else ".webp" if media_type == "image/webp" else ".jpg"
+    base_name = sanitize_path_component(Path(filename).stem or "cover")
+    candidate = folder / f"{base_name}{suffix}"
+    if not candidate.exists():
+        return candidate
+    for index in range(2, 1000):
+        candidate = folder / f"{base_name} ({index}){suffix}"
+        if not candidate.exists():
+            return candidate
+    raise OSError("Could not find an available sidecar artwork filename")
+
+
+def download_cover_art(url: str) -> tuple[bytes, str]:
+    request = urlrequest.Request(
+        url,
+        headers={
+            "Accept": "image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8",
+            "User-Agent": "FLAC Cafe/0.2.1 (local library auto-tag artwork; https://github.com/)",
+        },
+    )
+    try:
+        with urlrequest.urlopen(request, timeout=20) as response:
+            media_type = response.headers.get_content_type()
+            if media_type not in {"image/jpeg", "image/png", "image/webp"}:
+                path_media_type = image_media_type(Path(parse.urlparse(response.url).path))
+                media_type = path_media_type or media_type
+            if media_type not in {"image/jpeg", "image/png", "image/webp"}:
+                raise ValueError(f"Unsupported artwork type: {media_type}")
+            data = response.read(12_000_000 + 1)
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise OSError(f"Could not download artwork: {exc}") from exc
+    if len(data) > 12_000_000:
+        raise OSError("Artwork is larger than 12 MB")
+    return data, media_type
+
+
+def save_auto_tag_artwork(conn, track_id: int, release_id: str, artwork_url: str) -> str | None:
+    row = conn.execute("SELECT id, path, album_id FROM tracks WHERE id = ?", (track_id,)).fetchone()
+    if row is None or row["album_id"] is None:
+        return None
+    path = Path(row["path"]).expanduser()
+    if not path.exists() or not path.is_file():
+        raise OSError("Track file is missing; artwork sidecar needs an album folder")
+    data, media_type = download_cover_art(artwork_url)
+    target = unique_sidecar_artwork_path(path.parent, f"cover-musicbrainz-{release_id[:8]}", media_type)
+    target.write_bytes(data)
+    artwork_path = str(target.resolve())
+    conn.execute("UPDATE albums SET artwork_path = ? WHERE id = ?", (artwork_path, int(row["album_id"])))
+    conn.execute("DELETE FROM artwork_cache")
+    return artwork_path
 
 
 def normalize_lyrics(value: object) -> str | None:
@@ -1580,7 +1886,11 @@ def save_artist_info(query_name: str, info: dict[str, str | None]) -> ArtistInfo
 async def lifespan(_app: FastAPI):
     configure_backend_file_logging()
     init_db()
-    yield
+    start_folder_watcher_from_settings()
+    try:
+        yield
+    finally:
+        stop_folder_watcher(update_setting=False)
 
 
 app = FastAPI(title="FLAC Cafe", lifespan=lifespan)
@@ -1985,6 +2295,158 @@ def library_stats() -> LibraryStatsResponse:
     )
 
 
+def inbox_counts(conn) -> tuple[int, int]:
+    row = conn.execute(
+        """
+        SELECT
+            sum(CASE WHEN coalesce(track_inbox_state.status, 'new') = 'new' THEN 1 ELSE 0 END) AS total_new,
+            sum(CASE WHEN track_inbox_state.status = 'reviewed' THEN 1 ELSE 0 END) AS total_reviewed
+        FROM tracks
+        LEFT JOIN track_inbox_state ON track_inbox_state.track_id = tracks.id
+        """
+    ).fetchone()
+    return int(row["total_new"] or 0), int(row["total_reviewed"] or 0)
+
+
+@app.get("/library/inbox", response_model=InboxResponse)
+def library_inbox(
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+) -> InboxResponse:
+    with connect() as conn:
+        total_new, total_reviewed = inbox_counts(conn)
+        tracks = rows_to_dicts(
+            conn.execute(
+                f"""
+                SELECT {TRACK_JOIN_COLUMNS}
+                FROM tracks
+                LEFT JOIN track_inbox_state ON track_inbox_state.track_id = tracks.id
+                WHERE coalesce(track_inbox_state.status, 'new') = 'new'
+                ORDER BY datetime(tracks.date_added) DESC,
+                         tracks.id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
+            )
+        )
+    return InboxResponse(
+        tracks=tracks,
+        total_new=total_new,
+        total_reviewed=total_reviewed,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@app.post("/library/inbox/review", response_model=InboxReviewResponse)
+def review_inbox_tracks(request: InboxReviewRequest) -> InboxReviewResponse:
+    with connect() as conn:
+        if request.all_new:
+            before_new, _before_reviewed = inbox_counts(conn)
+            conn.execute(
+                """
+                INSERT INTO track_inbox_state(track_id, status, reviewed_at, updated_at)
+                SELECT tracks.id, 'reviewed', datetime('now'), datetime('now')
+                FROM tracks
+                LEFT JOIN track_inbox_state ON track_inbox_state.track_id = tracks.id
+                WHERE track_inbox_state.track_id IS NULL
+                """
+            )
+            conn.execute(
+                """
+                UPDATE track_inbox_state
+                SET status = 'reviewed',
+                    reviewed_at = datetime('now'),
+                    updated_at = datetime('now')
+                WHERE status <> 'reviewed'
+                """
+            )
+            updated = before_new
+        else:
+            unique_ids = list(dict.fromkeys(request.track_ids))
+            if not unique_ids:
+                total_new, total_reviewed = inbox_counts(conn)
+                return InboxReviewResponse(total_new=total_new, total_reviewed=total_reviewed)
+            placeholders = ",".join("?" for _ in unique_ids)
+            existing_ids = [
+                int(row["id"])
+                for row in conn.execute(
+                    f"SELECT id FROM tracks WHERE id IN ({placeholders})",
+                    unique_ids,
+                )
+            ]
+            updated = 0
+            for track_id in existing_ids:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO track_inbox_state(track_id, status, reviewed_at, updated_at)
+                    VALUES(?, 'reviewed', datetime('now'), datetime('now'))
+                    ON CONFLICT(track_id) DO UPDATE SET
+                      status = 'reviewed',
+                      reviewed_at = excluded.reviewed_at,
+                      updated_at = excluded.updated_at
+                    WHERE track_inbox_state.status <> 'reviewed'
+                    """,
+                    (track_id,),
+                )
+                updated += int(cursor.rowcount if cursor.rowcount is not None else 0)
+        conn.commit()
+        total_new, total_reviewed = inbox_counts(conn)
+    return InboxReviewResponse(updated=updated, total_new=total_new, total_reviewed=total_reviewed)
+
+
+@app.get("/library/watch", response_model=FolderWatchStatus)
+def get_folder_watch(limit: int = Query(default=300, ge=1, le=5000)) -> dict:
+    return get_folder_watch_status(limit)
+
+
+@app.post("/library/watch/start", response_model=FolderWatchStatus)
+def start_folder_watch(request: FolderWatchStartRequest) -> dict:
+    folder_path = request.folder_path
+    with connect() as conn:
+        if not folder_path:
+            folder_path = get_setting(conn, "library_path")
+        if not folder_path:
+            raise HTTPException(status_code=400, detail="Choose a music folder before starting folder watch")
+        set_setting(conn, "folder_watch_enabled", "1")
+        set_setting(conn, "folder_watch_interval_seconds", str(request.interval_seconds))
+        conn.commit()
+
+    try:
+        return start_folder_watcher(folder_path, request.interval_seconds, request.limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/library/watch/stop", response_model=FolderWatchStatus)
+def stop_folder_watch(limit: int = Query(default=300, ge=1, le=5000)) -> dict:
+    return stop_folder_watcher(update_setting=True, limit=limit)
+
+
+@app.post("/library/watch/refresh", response_model=FolderWatchStatus)
+def refresh_folder_watch(request: FolderWatchRefreshRequest) -> dict:
+    folder_path = request.folder_path
+    if not folder_path:
+        with connect() as conn:
+            folder_path = get_setting(conn, "library_path")
+    try:
+        return refresh_folder_watch_now(folder_path, request.limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/library/watch/apply", response_model=FolderWatchApplyResponse)
+def apply_folder_watch(request: FolderWatchApplyRequest) -> dict:
+    try:
+        return apply_folder_watch_changes(
+            change_ids=request.change_ids,
+            apply_all=request.apply_all,
+            limit=request.limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/library/health", response_model=LibraryHealthResponse)
 def library_health(limit: int = Query(default=80, ge=1, le=500)) -> LibraryHealthResponse:
     with connect() as conn:
@@ -2364,6 +2826,86 @@ def unique_collision_path(target_path: Path) -> Path:
         if not candidate.exists():
             return candidate.resolve()
     raise OSError("Could not find an available target filename")
+
+
+def track_device_sync_target(track: dict, target_root: Path, library_root: Path | None, preserve_structure: bool) -> Path:
+    source = Path(track["path"]).expanduser()
+    if preserve_structure and library_root is not None:
+        try:
+            return (target_root / source.resolve().relative_to(library_root)).resolve()
+        except (OSError, ValueError):
+            pass
+    album_artist = sanitize_path_component(str(track.get("album_artist") or track.get("artist") or "Unknown Artist"))
+    album = sanitize_path_component(str(track.get("album") or "Unknown Album"))
+    filename = sanitize_path_component(source.name)
+    return (target_root / "Music" / album_artist / album / filename).resolve()
+
+
+def device_sync_track_rows(conn, request: DeviceSyncRequest) -> tuple[list[dict], dict[int, list[dict]]]:
+    tracks_by_id: dict[int, dict] = {}
+    playlist_map: dict[int, list[dict]] = {}
+    if request.playlist_ids:
+        for playlist_id in dict.fromkeys(request.playlist_ids):
+            playlist = conn.execute("SELECT id FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
+            if playlist is None:
+                playlist_map[playlist_id] = []
+                continue
+            rows = rows_to_dicts(
+                conn.execute(
+                    f"""
+                    SELECT {TRACK_JOIN_COLUMNS}
+                    FROM playlist_tracks
+                    JOIN tracks ON tracks.id = playlist_tracks.track_id
+                    WHERE playlist_tracks.playlist_id = ?
+                    ORDER BY playlist_tracks.position ASC, playlist_tracks.id ASC
+                    LIMIT ?
+                    """,
+                    (playlist_id, request.limit),
+                )
+            )
+            playlist_map[playlist_id] = rows
+            for track in rows:
+                tracks_by_id.setdefault(int(track["id"]), track)
+    for track in tool_track_rows(conn, request.track_ids, request.limit):
+        tracks_by_id.setdefault(int(track["id"]), track)
+    return list(tracks_by_id.values())[: request.limit], playlist_map
+
+
+def path_needs_copy(source: Path, target: Path) -> bool:
+    if not target.exists():
+        return True
+    try:
+        source_stat = source.stat()
+        target_stat = target.stat()
+    except OSError:
+        return True
+    return int(source_stat.st_size) != int(target_stat.st_size) or int(source_stat.st_mtime) > int(target_stat.st_mtime) + 1
+
+
+def write_device_playlist(
+    playlist_path: Path,
+    tracks: list[dict],
+    target_paths: dict[int, Path],
+    copy_files: bool,
+) -> int:
+    lines = ["#EXTM3U"]
+    for track in tracks:
+        track_id = int(track["id"])
+        path = target_paths.get(track_id) if copy_files else Path(track["path"]).expanduser()
+        if path is None:
+            continue
+        duration = int(float(track.get("duration_seconds") or -1))
+        title = track.get("title") or Path(track["path"]).stem
+        artist = track.get("artist") or "Unknown Artist"
+        lines.append(f"#EXTINF:{duration},{artist} - {title}")
+        try:
+            text_path = os.path.relpath(path, playlist_path.parent) if copy_files else str(path)
+        except ValueError:
+            text_path = str(path)
+        lines.append(text_path.replace("\\", "/"))
+    playlist_path.parent.mkdir(parents=True, exist_ok=True)
+    playlist_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return len(tracks)
 
 
 def remove_empty_source_folders(source_parent: Path, cleanup_root: Path | None) -> int:
@@ -2747,7 +3289,7 @@ def restore_removed_track(conn, payload: dict[str, object]) -> tuple[list[int], 
 
 
 def restore_bulk_undo_entry(conn, action_type: str, payload: dict[str, object]) -> tuple[list[int], list[str]]:
-    if action_type == "csv_metadata_import":
+    if action_type in {"csv_metadata_import", "regex_metadata_replace", "musicbrainz_auto_tag"}:
         return restore_csv_metadata_import(conn, payload)
     if action_type == "file_organization":
         return restore_file_organization(conn, payload)
@@ -2808,6 +3350,176 @@ def infer_tags_from_filenames(request: FilenameTagInferenceRequest) -> FilenameT
         if request.apply:
             conn.commit()
     return FilenameTagInferenceResponse(total=len(previews), matches=matches, applied=applied, previews=previews)
+
+
+@app.post("/library/tools/regex-tags", response_model=TagRegexReplaceResponse)
+def regex_replace_tags(request: TagRegexReplaceRequest) -> TagRegexReplaceResponse:
+    try:
+        expression = re.compile(request.pattern, 0 if request.case_sensitive else re.IGNORECASE)
+    except re.error as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid regular expression: {exc}") from exc
+
+    previews: list[TagRegexReplacePreview] = []
+    changed = 0
+    applied = 0
+    batch_id = new_undo_batch_id("regex-tags") if request.apply else None
+    with connect() as conn:
+        rows = tool_track_rows(conn, request.track_ids, request.limit)
+        for track in rows:
+            current_value = track.get(request.field)
+            current_text = None if current_value is None else str(current_value)
+            replacement = expression.sub(request.replacement, current_text) if current_text is not None else None
+            changed_here = current_text is not None and replacement != current_text
+            preview = TagRegexReplacePreview(
+                track_id=int(track["id"]),
+                path=track["path"],
+                field=request.field,
+                current=current_text,
+                replacement=replacement,
+                changed=changed_here,
+            )
+            if changed_here:
+                changed += 1
+            if request.apply and changed_here:
+                try:
+                    changes = {request.field: replacement}
+                    write_bulk_undo_log(
+                        conn,
+                        "regex_metadata_replace",
+                        f"Regex tag replace on {track.get('title') or Path(track['path']).name}",
+                        {
+                            "track": track,
+                            "changes": changes,
+                            "field": request.field,
+                            "pattern": request.pattern,
+                            "replacement": request.replacement,
+                        },
+                        batch_id,
+                    )
+                    apply_track_metadata_update(conn, int(track["id"]), changes)
+                    preview.applied = True
+                    applied += 1
+                except HTTPException as exc:
+                    preview.error = str(exc.detail)
+            previews.append(preview)
+        if request.apply:
+            conn.commit()
+    return TagRegexReplaceResponse(total=len(previews), changed=changed, applied=applied, previews=previews)
+
+
+def auto_tag_candidate_tracks(conn, request: AutoTagRequest) -> tuple[list[dict], list[int]]:
+    if request.album_id is not None:
+        return album_track_rows(conn, request.album_id)[: request.limit], []
+    if request.track_ids:
+        return tracks_by_ids(conn, request.track_ids[: request.limit])
+
+    where_clause = ""
+    if request.missing_only:
+        where_clause = """
+        WHERE title IS NULL OR trim(title) = ''
+           OR artist IS NULL OR trim(artist) = ''
+           OR album IS NULL OR trim(album) = ''
+           OR genre IS NULL OR trim(genre) = ''
+           OR year IS NULL
+        """
+    return rows_to_dicts(
+        conn.execute(
+            f"""
+            SELECT path_key, {TRACK_COLUMNS}
+            FROM tracks
+            {where_clause}
+            ORDER BY datetime(date_added) DESC, id DESC
+            LIMIT ?
+            """,
+            (request.limit,),
+        )
+    ), []
+
+
+@app.post("/library/tools/autotag", response_model=AutoTagResponse)
+def auto_tag_musicbrainz(request: AutoTagRequest) -> AutoTagResponse:
+    with connect() as conn:
+        tracks, missing_ids = auto_tag_candidate_tracks(conn, request)
+    if missing_ids:
+        raise HTTPException(status_code=404, detail=f"Track not found: {missing_ids[0]}")
+
+    previews = preview_auto_tags(
+        tracks,
+        mode=request.mode,
+        missing_only=request.missing_only,
+        candidate_limit=request.candidate_limit,
+        include_artwork=request.include_artwork,
+    )
+
+    applied = 0
+    artwork_saved = 0
+    errors: list[str] = []
+    if request.apply:
+        batch_id = new_undo_batch_id("autotag")
+        saved_release_ids: set[str] = set()
+        with connect() as conn:
+            for preview in previews:
+                track_id = int(preview["track_id"])
+                if preview.get("error"):
+                    errors.append(f"Track {track_id}: {preview['error']}")
+                    continue
+                changes = metadata_changes(preview.get("current") or {}, preview.get("proposed") or {}, request.missing_only)
+                try:
+                    if changes:
+                        row = conn.execute(
+                            f"SELECT path_key, {TRACK_COLUMNS} FROM tracks WHERE id = ?",
+                            (track_id,),
+                        ).fetchone()
+                        if row is None:
+                            raise HTTPException(status_code=404, detail="Track not found")
+                        write_bulk_undo_log(
+                            conn,
+                            "musicbrainz_auto_tag",
+                            f"MusicBrainz auto-tag: {row['title'] or Path(row['path']).name}",
+                            {
+                                "track": dict(row),
+                                "changes": changes,
+                                "source": "musicbrainz",
+                                "release_id": preview.get("release_id"),
+                                "recording_id": preview.get("recording_id"),
+                            },
+                            batch_id,
+                        )
+                        apply_track_metadata_update(conn, track_id, changes)
+                        preview["applied"] = True
+                        applied += 1
+
+                    release_id = str(preview.get("release_id") or "")
+                    artwork_url = str(preview.get("artwork_url") or "")
+                    if request.save_artwork and artwork_url and release_id and release_id not in saved_release_ids:
+                        saved_path = save_auto_tag_artwork(conn, track_id, release_id, artwork_url)
+                        if saved_path:
+                            saved_release_ids.add(release_id)
+                            preview["artwork_saved"] = True
+                            artwork_saved += 1
+                except HTTPException as exc:
+                    message = str(exc.detail)
+                    preview["error"] = message
+                    errors.append(f"Track {track_id}: {message}")
+                except Exception as exc:
+                    message = str(exc)
+                    preview["error"] = message
+                    errors.append(f"Track {track_id}: {message}")
+            conn.commit()
+
+    matched = sum(1 for preview in previews if not preview.get("error"))
+    changed = sum(1 for preview in previews if preview.get("changed_fields"))
+    artwork_matches = sum(1 for preview in previews if preview.get("artwork_url"))
+    return AutoTagResponse(
+        total=len(previews),
+        matched=matched,
+        changed=changed,
+        applied=applied,
+        artwork_matches=artwork_matches,
+        artwork_saved=artwork_saved,
+        errors=errors[:100],
+        previews=[AutoTagPreview(**preview) for preview in previews],
+    )
 
 
 @app.post("/library/tools/organize-files", response_model=FileOrganizationResponse)
@@ -2928,6 +3640,99 @@ def export_file_organization_report(request: FileOrganizationReportRequest) -> F
         total=response.total,
         changed_count=response.changed_count,
         collisions=sum(1 for change in response.changes if change.collision),
+    )
+
+
+@app.post("/library/tools/device-sync", response_model=DeviceSyncResponse)
+def sync_device_folder(request: DeviceSyncRequest) -> DeviceSyncResponse:
+    target_root = Path(request.target_folder).expanduser().resolve()
+    if request.apply:
+        try:
+            target_root.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=f"Could not create target folder: {exc}") from exc
+
+    with connect() as conn:
+        library_path = get_setting(conn, "library_path")
+        library_root = Path(library_path).expanduser().resolve() if library_path else None
+        tracks, playlist_map = device_sync_track_rows(conn, request)
+        playlists = {
+            int(row["id"]): row["name"]
+            for row in conn.execute(
+                "SELECT id, name FROM playlists ORDER BY lower(name)"
+            ).fetchall()
+        }
+
+    changes: list[DeviceSyncChange] = []
+    target_paths: dict[int, Path] = {}
+    copied_files = 0
+    skipped_files = 0
+    for track in tracks:
+        source = Path(track["path"]).expanduser()
+        target = track_device_sync_target(track, target_root, library_root, request.preserve_structure)
+        target_paths[int(track["id"])] = target
+        change = DeviceSyncChange(
+            track_id=int(track["id"]),
+            title=track.get("title"),
+            artist=track.get("artist"),
+            source_path=str(source),
+            target_path=str(target),
+        )
+        if not source.exists() or not source.is_file():
+            change.error = "Source file is missing"
+            skipped_files += 1
+        else:
+            change.changed = path_needs_copy(source, target)
+            if request.copy_files and request.apply and change.changed:
+                try:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, target)
+                    change.applied = True
+                    copied_files += 1
+                except OSError as exc:
+                    change.error = f"Could not copy file: {exc}"
+                    skipped_files += 1
+            elif not change.changed:
+                skipped_files += 1
+        changes.append(change)
+
+    playlist_exports: list[DeviceSyncPlaylistExport] = []
+    playlists_written = 0
+    if request.export_playlists:
+        for playlist_id in dict.fromkeys(request.playlist_ids):
+            name = playlists.get(playlist_id)
+            playlist_path = target_root / "Playlists" / f"{sanitize_path_component(name or f'Playlist {playlist_id}')}.m3u8"
+            export = DeviceSyncPlaylistExport(
+                playlist_id=playlist_id,
+                name=name or f"Playlist {playlist_id}",
+                playlist_path=str(playlist_path),
+                track_count=len(playlist_map.get(playlist_id, [])),
+            )
+            if name is None:
+                export.error = "Playlist not found"
+            elif request.apply:
+                try:
+                    write_device_playlist(
+                        playlist_path,
+                        playlist_map.get(playlist_id, []),
+                        target_paths,
+                        request.copy_files,
+                    )
+                    export.applied = True
+                    playlists_written += 1
+                except OSError as exc:
+                    export.error = f"Could not write playlist: {exc}"
+            playlist_exports.append(export)
+
+    return DeviceSyncResponse(
+        target_folder=str(target_root),
+        total_tracks=len(tracks),
+        changed_files=sum(1 for change in changes if change.changed),
+        copied_files=copied_files,
+        skipped_files=skipped_files,
+        playlists_written=playlists_written,
+        changes=changes,
+        playlist_exports=playlist_exports,
     )
 
 
@@ -3261,7 +4066,7 @@ def list_bulk_undo_batches(limit: int = Query(default=30, ge=1, le=200)) -> list
                    min(summary) AS summary
             FROM bulk_action_undo_log
             WHERE batch_id IS NOT NULL AND trim(batch_id) <> ''
-              AND action_type IN ('csv_metadata_import', 'file_organization', 'track_remove')
+              AND action_type IN ('csv_metadata_import', 'regex_metadata_replace', 'musicbrainz_auto_tag', 'file_organization', 'track_remove')
             GROUP BY batch_id, action_type
             ORDER BY datetime(max(created_at)) DESC, max(id) DESC
             LIMIT ?
@@ -3289,7 +4094,7 @@ def restore_bulk_undo_batch(batch_id: str) -> BulkUndoRestoreResponse:
             SELECT id, batch_id, action_type, summary, payload_json, created_at
             FROM bulk_action_undo_log
             WHERE batch_id = ?
-              AND action_type IN ('csv_metadata_import', 'file_organization', 'track_remove')
+              AND action_type IN ('csv_metadata_import', 'regex_metadata_replace', 'musicbrainz_auto_tag', 'file_organization', 'track_remove')
             ORDER BY id DESC
             """,
             (batch_id,),
@@ -3508,6 +4313,7 @@ def list_albums(
                     albums.album,
                     albums.album_artist,
                     albums.year,
+                    albums.artwork_path,
                     count(tracks.id) AS track_count,
                     sum(tracks.duration_seconds) AS duration_seconds,
                     avg(tracks.rating) AS average_rating,
@@ -3529,23 +4335,84 @@ def list_albums(
 @app.get("/albums/{album_id}/tracks", response_model=list[Track])
 def album_tracks(album_id: int) -> list[dict]:
     with connect() as conn:
-        row = conn.execute("SELECT id FROM albums WHERE id = ?", (album_id,)).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="Album not found")
-        return rows_to_dicts(
-            conn.execute(
-                f"""
-                SELECT {TRACK_COLUMNS}
-                FROM tracks
-                WHERE album_id = ?
-                ORDER BY coalesce(disc_number, 0) ASC,
-                         coalesce(track_number, 0) ASC,
-                         lower(coalesce(title, '')) ASC,
-                         id ASC
-                """,
-                (album_id,),
+        return album_track_rows(conn, album_id)
+
+
+@app.get("/albums/{album_id}/artwork")
+def album_artwork(album_id: int) -> Response:
+    with connect() as conn:
+        album = album_record(conn, album_id)
+        tracks = album_track_rows(conn, album_id)
+    if album["artwork_path"]:
+        selected = Path(album["artwork_path"]).expanduser()
+        media_type = image_media_type(selected)
+        if selected.exists() and selected.is_file() and media_type:
+            try:
+                return Response(
+                    content=selected.read_bytes(),
+                    media_type=media_type,
+                    headers={"Cache-Control": "private, max-age=3600"},
+                )
+            except OSError as exc:
+                raise HTTPException(status_code=404, detail=f"Could not read selected album artwork: {exc}") from exc
+
+    for track in tracks:
+        artwork = cached_artwork(Path(track["path"]))
+        if artwork is not None:
+            data, media_type = artwork
+            return Response(
+                content=data,
+                media_type=media_type,
+                headers={"Cache-Control": "private, max-age=3600"},
             )
-        )
+    raise HTTPException(status_code=404, detail="No album artwork found")
+
+
+@app.get("/albums/{album_id}/artwork-candidates", response_model=AlbumArtworkCandidatesResponse)
+def list_album_artwork_candidates(album_id: int) -> AlbumArtworkCandidatesResponse:
+    with connect() as conn:
+        candidates = album_artwork_candidates(conn, album_id)
+    return AlbumArtworkCandidatesResponse(album_id=album_id, candidates=candidates)
+
+
+@app.patch("/albums/{album_id}/artwork", response_model=AlbumArtworkUpdateResponse)
+def update_album_artwork(album_id: int, request: AlbumArtworkUpdateRequest) -> AlbumArtworkUpdateResponse:
+    with connect() as conn:
+        album_record(conn, album_id)
+        artwork_path: str | None = None
+        if request.clear:
+            conn.execute("UPDATE albums SET artwork_path = NULL WHERE id = ?", (album_id,))
+        elif request.artwork_path:
+            candidate = Path(request.artwork_path).expanduser().resolve()
+            if not candidate.exists() or not candidate.is_file() or image_media_type(candidate) is None:
+                raise HTTPException(status_code=400, detail="Artwork path must be a local jpg, png, or webp file")
+            artwork_path = str(candidate)
+            conn.execute("UPDATE albums SET artwork_path = ? WHERE id = ?", (artwork_path, album_id))
+        elif request.embedded_track_id and request.save_embedded_as_sidecar:
+            tracks = album_track_rows(conn, album_id)
+            track = next((item for item in tracks if int(item["id"]) == request.embedded_track_id), None)
+            if track is None:
+                raise HTTPException(status_code=404, detail="Embedded artwork track is not part of this album")
+            artwork = cached_artwork(Path(track["path"]))
+            if artwork is None:
+                raise HTTPException(status_code=404, detail="Selected track has no readable embedded artwork")
+            data, media_type = artwork
+            folder = Path(track["path"]).expanduser().parent
+            target = unique_sidecar_artwork_path(folder, request.sidecar_filename, media_type)
+            try:
+                target.write_bytes(data)
+            except OSError as exc:
+                raise HTTPException(status_code=400, detail=f"Could not save sidecar artwork: {exc}") from exc
+            artwork_path = str(target.resolve())
+            conn.execute("UPDATE albums SET artwork_path = ? WHERE id = ?", (artwork_path, album_id))
+        else:
+            raise HTTPException(status_code=400, detail="Choose artwork, save embedded artwork as a sidecar, or clear the selection")
+
+        conn.execute("DELETE FROM artwork_cache")
+        conn.commit()
+        row = album_record(conn, album_id)
+        candidates = album_artwork_candidates(conn, album_id)
+    return AlbumArtworkUpdateResponse(album_id=album_id, artwork_path=row["artwork_path"], candidates=candidates)
 
 
 @app.get("/playlists", response_model=list[PlaylistSummary])
@@ -3719,7 +4586,7 @@ def export_playlist(playlist_id: int, request: ExportRequest | None = None) -> E
 @app.post("/playlists/import", response_model=PlaylistSummary)
 def import_playlist(request: PlaylistImportRequest) -> dict:
     try:
-        imported_paths = parse_m3u_paths(request.playlist_path)
+        imported_paths = parse_playlist_paths(request.playlist_path)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -4113,6 +4980,97 @@ def recommendation_drift(tracks: list[dict]) -> RecommendationDrift:
     return drift
 
 
+def challenger_autodj_settings(base: AutoDjRequest) -> AutoDjRequest:
+    target_exploration = base.target_exploration_percent
+    if target_exploration is None:
+        target_exploration = min(100.0, max(base.unrated_exploration_percent + 12.0, 25.0))
+    target_unrated = base.target_unrated_percent
+    if target_unrated is None:
+        target_unrated = min(80.0, base.unrated_exploration_percent + 8.0)
+    return base.model_copy(
+        update={
+            "temperature": min(5.0, base.temperature + 0.35),
+            "unrated_exploration_percent": min(80.0, base.unrated_exploration_percent + 8.0),
+            "target_unrated_percent": target_unrated,
+            "target_exploration_percent": target_exploration,
+            "max_repeat_artist_percent": base.max_repeat_artist_percent
+            if base.max_repeat_artist_percent is not None
+            else 25.0,
+        }
+    )
+
+
+def build_ab_queue(label: str, settings: AutoDjRequest) -> RecommendationAbQueue:
+    tracks = generate_queue(settings)
+    drift = recommendation_drift(tracks)
+    record_recommendation_run(settings, drift, tracks)
+    return RecommendationAbQueue(label=label, settings=settings, drift=drift, tracks=tracks)
+
+
+@app.post("/autodj/ab-test", response_model=RecommendationAbTestResponse)
+def create_recommendation_ab_test(request: RecommendationAbTestRequest) -> RecommendationAbTestResponse:
+    seed = request.seed if request.seed is not None else int(datetime.now().timestamp()) % 1_000_000
+    base = request.base_settings.model_copy(
+        update={
+            "seed": seed,
+            "seed_track_id": request.seed_track_id
+            if request.seed_track_id is not None
+            else request.base_settings.seed_track_id,
+        }
+    )
+    challenger_source = request.challenger_settings or challenger_autodj_settings(base)
+    challenger = challenger_source.model_copy(
+        update={
+            "seed": seed + 1,
+            "seed_track_id": request.seed_track_id
+            if request.seed_track_id is not None
+            else challenger_source.seed_track_id,
+        }
+    )
+    return RecommendationAbTestResponse(
+        test_id=str(uuid.uuid4()),
+        generated_at=datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        queues=[
+            build_ab_queue("A", base),
+            build_ab_queue("B", challenger),
+        ],
+    )
+
+
+@app.post("/autodj/ab-test/choose", response_model=RecommendationAbChoiceResponse)
+def choose_recommendation_ab_test(request: RecommendationAbChoiceRequest) -> RecommendationAbChoiceResponse:
+    track_ids = list(dict.fromkeys(int(track_id) for track_id in request.chosen_track_ids))
+    if not track_ids:
+        return RecommendationAbChoiceResponse(status="ok", chosen_label=request.chosen_label, inserted_feedback=0)
+    placeholders = ",".join("?" for _ in track_ids)
+    with connect() as conn:
+        existing = {
+            int(row["id"])
+            for row in conn.execute(
+                f"SELECT id FROM tracks WHERE id IN ({placeholders})",
+                tuple(track_ids),
+            ).fetchall()
+        }
+        inserted = 0
+        for track_id in track_ids:
+            if track_id not in existing:
+                continue
+            conn.execute(
+                """
+                INSERT INTO recommendation_feedback(track_id, event_type, weight)
+                VALUES(?, 'add_to_queue', ?)
+                """,
+                (track_id, request.feedback_weight),
+            )
+            inserted += 1
+        conn.commit()
+    return RecommendationAbChoiceResponse(
+        status="ok",
+        chosen_label=request.chosen_label,
+        inserted_feedback=inserted,
+    )
+
+
 def profile_from_row(row) -> RecommendationProfile:
     try:
         settings = AutoDjRequest.model_validate(json.loads(row["settings_json"]))
@@ -4247,6 +5205,35 @@ def export_recommendation_profile_comparison(
     except OSError as exc:
         raise HTTPException(status_code=400, detail=f"Could not write profile comparison: {exc}") from exc
     return RecommendationProfileComparisonExportResponse(export_path=str(target), profile_count=len(comparisons))
+
+
+@app.post("/autodj/profiles/compare/import", response_model=RecommendationProfileComparisonImportResponse)
+def import_recommendation_profile_comparison(
+    request: RecommendationProfileComparisonImportRequest,
+) -> RecommendationProfileComparisonImportResponse:
+    path = Path(request.report_path)
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Recommendation comparison report not found")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail=f"Could not read comparison report: {exc}") from exc
+    raw_comparisons = payload.get("comparisons") if isinstance(payload, dict) else None
+    if not isinstance(raw_comparisons, list):
+        raise HTTPException(status_code=400, detail="Comparison report is missing a comparisons list")
+    comparisons: list[RecommendationProfileComparison] = []
+    for raw in raw_comparisons:
+        try:
+            comparisons.append(RecommendationProfileComparison.model_validate(raw))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid comparison entry: {exc}") from exc
+    return RecommendationProfileComparisonImportResponse(
+        report_path=str(path),
+        generated_at=payload.get("generated_at"),
+        seed=payload.get("seed"),
+        seed_track_id=payload.get("seed_track_id"),
+        comparisons=comparisons,
+    )
 
 
 @app.post("/autodj/profiles", response_model=RecommendationProfile)

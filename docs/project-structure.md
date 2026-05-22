@@ -33,6 +33,8 @@ backend/
 │   ├── scanner.py           recursive library scanning and mutagen metadata reads
 │   ├── file_tags.py         opt-in metadata, rating, and lyric writes to audio files
 │   ├── library_tools.py     filename-tag inference and file-organization helpers
+│   ├── library_watcher.py   background folder-watch detection and pending-change apply logic
+│   ├── musicbrainz_autotag.py MusicBrainz/Cover Art Archive auto-tag matching
 │   ├── recommender.py       AutoDJ scoring, cooldowns, drift, and similarity helpers
 │   ├── playlist.py          M3U export/import helpers
 │   ├── scan_jobs.py         async scan job tracking
@@ -67,7 +69,7 @@ frontend/
 │   │   ├── shared.ts        app types, constants, formatting, shortcuts, persisted preferences
 │   │   ├── shared.test.ts
 │   │   ├── components/      reusable app-specific UI pieces and modals
-│   │   ├── pages/           page-sized surfaces
+│   │   ├── pages/           page-sized surfaces, with per-page section folders for larger tools
 │   │   └── player/          bottom player and detached mini-player window
 │   ├── config/
 │   │   ├── theme.ts         theme/font registry
@@ -88,7 +90,7 @@ frontend/
 └── vitest.config.ts
 ```
 
-Add page-level UI in `frontend/src/app/pages/`. Add reusable controls in `frontend/src/app/components/`. Keep backend calls in `frontend/src/lib/api.ts` instead of calling `fetch` from page components. Keep native Tauri calls behind small bridge modules in `frontend/src/lib/`.
+Add page-level UI in `frontend/src/app/pages/`. When a page grows into several independent panels, keep the page as the coordinator and move those panels into a same-named subfolder such as `pages/settings/` or `pages/file-management/`. Add reusable controls in `frontend/src/app/components/`. Keep backend calls in `frontend/src/lib/api.ts` instead of calling `fetch` from page components. Keep native Tauri calls behind small bridge modules in `frontend/src/lib/`.
 
 ## Tauri Shell
 
@@ -120,6 +122,7 @@ scripts/
 ├── test_backend.ps1          backend unittest helper using `.venv` when available
 ├── check_backend_routes.py   verifies route docs against FastAPI decorators
 ├── build_msi.ps1             MSI packaging helper
+├── ci_installer_roundtrip.ps1 installs, health-checks, and uninstalls the MSI in CI/disposable profiles
 ├── installer_smoke.ps1       installer smoke-test helper
 ├── validate_clap_runtime.ps1 optional ML runtime validator
 ├── generate_icon.ps1         icon generation helper
@@ -132,6 +135,7 @@ Scripts are Windows-first because the app is currently Windows-first. Prefer add
 
 ```text
 docs/
+├── index.md
 ├── architecture.md
 ├── project-structure.md
 ├── backend-routes.md
@@ -141,6 +145,8 @@ docs/
 ├── playback.md
 ├── themes.md
 ├── clap-analysis.md
+├── keyboard-shortcuts.md
+├── troubleshooting.md
 ├── testing.md
 ├── release-checklist.md
 └── release-documentation-checklist.md

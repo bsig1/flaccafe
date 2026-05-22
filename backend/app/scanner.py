@@ -296,7 +296,7 @@ def upsert_track(conn, metadata: dict[str, Any]) -> str:
     now = utc_now()
 
     if existing is None:
-        conn.execute(
+        cursor = conn.execute(
             """
             INSERT INTO tracks(
               path, path_key, title, artist, album, album_artist, album_id,
@@ -314,6 +314,14 @@ def upsert_track(conn, metadata: dict[str, Any]) -> str:
             )
             """,
             {**values, "album_id": album_id, "now": now},
+        )
+        track_id = int(cursor.lastrowid)
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO track_inbox_state(track_id, status, reviewed_at, updated_at)
+            VALUES(?, 'new', NULL, ?)
+            """,
+            (track_id, now),
         )
         return "inserted"
 

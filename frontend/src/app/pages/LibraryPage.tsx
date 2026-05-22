@@ -3,6 +3,7 @@ import {
   ArrowDown,
   ArrowUp,
   BarChart3,
+  CheckCircle2,
   Download,
   FolderOpen,
   MoreHorizontal,
@@ -36,14 +37,21 @@ import {
 
 import {
   albumArtworkUrl,
+  albumCoverUrl,
+  chooseAlbumArtwork,
+  clearAlbumArtwork,
+  fetchAlbumArtworkCandidates,
+  saveEmbeddedAlbumArtwork,
 } from "../../lib/api";
 import {
   placeFloatingMenu,
 } from "../../lib/uiInteractions";
 import type {
   AlbumSummary,
+  AlbumArtworkCandidate,
   LibraryHealthResponse,
   LibraryStatsResponse,
+  InboxResponse,
   PlaylistSummary,
   SmartPlaylistRule,
   SmartPlaylistSummary,
@@ -105,6 +113,7 @@ export function LibraryPage({
   smartPlaylistName,
   libraryStats,
   libraryHealth,
+  inbox,
   targetPlaylistId,
   newPlaylistName,
   importPlaylistPath,
@@ -144,6 +153,7 @@ export function LibraryPage({
   onCreateSmartPlaylist,
   onDeleteSmartPlaylist,
   onSelectSmartPlaylist,
+  onReviewInboxTracks,
   onShuffleTracks,
   onQuickAutoDj,
   onAvoidAutoDj,
@@ -187,6 +197,7 @@ export function LibraryPage({
   smartPlaylistName: string;
   libraryStats: LibraryStatsResponse | null;
   libraryHealth: LibraryHealthResponse | null;
+  inbox: InboxResponse | null;
   targetPlaylistId: number | null;
   newPlaylistName: string;
   importPlaylistPath: string;
@@ -226,6 +237,7 @@ export function LibraryPage({
   onCreateSmartPlaylist: () => void;
   onDeleteSmartPlaylist: (smartPlaylistId: number) => void;
   onSelectSmartPlaylist: (smartPlaylistId: number) => void;
+  onReviewInboxTracks: (trackIds: number[], allNew?: boolean) => void | Promise<void>;
   onShuffleTracks: (tracks: Track[]) => void;
   onQuickAutoDj: (seedTrack?: Track | null) => void;
   onAvoidAutoDj: (scope: "track" | "artist" | "album" | "genre", track?: Track | null) => void | Promise<void>;
@@ -262,6 +274,9 @@ export function LibraryPage({
   const [bulkMetadataOpen, setBulkMetadataOpen] = useState(false);
   const [draggedColumn, setDraggedColumn] = useState<MetadataColumnKey | null>(null);
   const [dragOverColumn, setDragOverColumn] = useState<MetadataColumnKey | null>(null);
+  const [albumArtworkCandidates, setAlbumArtworkCandidates] = useState<AlbumArtworkCandidate[]>([]);
+  const [isAlbumArtworkOpen, setIsAlbumArtworkOpen] = useState(false);
+  const [albumArtworkStatus, setAlbumArtworkStatus] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const selectionAnchorId = useRef<number | null>(null);
 
@@ -278,6 +293,8 @@ export function LibraryPage({
       ? selectedAlbumTracks
       : libraryView === "playlists"
         ? selectedPlaylistTracks
+        : libraryView === "inbox"
+          ? inbox?.tracks ?? []
         : libraryView === "smart"
           ? smartTracks
           : tracks;
@@ -325,6 +342,12 @@ export function LibraryPage({
       window.removeEventListener("resize", closeMenu);
     };
   }, []);
+
+  useEffect(() => {
+    if (isAlbumArtworkOpen && activeAlbum) {
+      void loadAlbumArtworkCandidates(activeAlbum.id);
+    }
+  }, [activeAlbum?.id, isAlbumArtworkOpen]);
 
   useEffect(() => {
     function handleLibraryShortcut(event: KeyboardEvent) {
@@ -441,6 +464,58 @@ export function LibraryPage({
   function clearSelection() {
     setSelectedTrackIds(new Set());
     selectionAnchorId.current = null;
+  }
+
+  async function loadAlbumArtworkCandidates(albumId: number) {
+    try {
+      const response = await fetchAlbumArtworkCandidates(albumId);
+      setAlbumArtworkCandidates(response.candidates);
+      setAlbumArtworkStatus(
+        response.candidates.length
+          ? `${response.candidates.length.toLocaleString()} artwork candidate${response.candidates.length === 1 ? "" : "s"}`
+          : "No sidecar or embedded artwork candidates found",
+      );
+    } catch (error) {
+      setAlbumArtworkStatus(error instanceof Error ? error.message : "Could not load album artwork");
+    }
+  }
+
+  async function openAlbumArtworkManager(albumId: number) {
+    setIsAlbumArtworkOpen(true);
+    await loadAlbumArtworkCandidates(albumId);
+  }
+
+  async function chooseSidecarArtwork(albumId: number, path: string) {
+    try {
+      const response = await chooseAlbumArtwork(albumId, path);
+      setAlbumArtworkCandidates(response.candidates);
+      setAlbumArtworkStatus("Album artwork selected");
+      void refreshTracks();
+    } catch (error) {
+      setAlbumArtworkStatus(error instanceof Error ? error.message : "Could not choose album artwork");
+    }
+  }
+
+  async function saveEmbeddedArtwork(albumId: number, trackId: number) {
+    try {
+      const response = await saveEmbeddedAlbumArtwork(albumId, trackId);
+      setAlbumArtworkCandidates(response.candidates);
+      setAlbumArtworkStatus("Embedded artwork saved as sidecar");
+      void refreshTracks();
+    } catch (error) {
+      setAlbumArtworkStatus(error instanceof Error ? error.message : "Could not save embedded artwork");
+    }
+  }
+
+  async function clearSelectedAlbumArtwork(albumId: number) {
+    try {
+      const response = await clearAlbumArtwork(albumId);
+      setAlbumArtworkCandidates(response.candidates);
+      setAlbumArtworkStatus("Album artwork selection cleared");
+      void refreshTracks();
+    } catch (error) {
+      setAlbumArtworkStatus(error instanceof Error ? error.message : "Could not clear album artwork");
+    }
   }
 
   function handleScroll(event: ReactUIEvent<HTMLDivElement>) {
@@ -964,7 +1039,7 @@ export function LibraryPage({
               <div className={albumGrid ? "grid grid-cols-2 gap-3 p-3" : "grid"}>
                 {albums.map((album) => {
                   const active = album.id === selectedAlbumId;
-                  const artwork = album.artwork_track_id ? albumArtworkUrl(album.artwork_track_id) : null;
+                  const artwork = album.artwork_path || album.artwork_track_id ? albumCoverUrl(album.id) : null;
                   return (
                     <button
                       key={album.id}
@@ -1022,8 +1097,71 @@ export function LibraryPage({
                     <Shuffle size={15} />
                     Shuffle
                   </button>
+                  <button className="secondary-button" type="button" disabled={!activeAlbum} onClick={() => activeAlbum && void openAlbumArtworkManager(activeAlbum.id)}>
+                    <Album size={15} />
+                    Artwork
+                  </button>
                 </div>
               </div>
+              {activeAlbum && isAlbumArtworkOpen && (
+                <div className="border-b border-line bg-panel px-4 py-3">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-white">Album Artwork</div>
+                      <div className="text-xs text-muted">{albumArtworkStatus || "Choose a sidecar image or save embedded artwork as cover art."}</div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button className="secondary-button h-8" type="button" onClick={() => void loadAlbumArtworkCandidates(activeAlbum.id)}>
+                        <RefreshCw size={14} />
+                        Rescan
+                      </button>
+                      <button className="secondary-button h-8" type="button" onClick={() => void clearSelectedAlbumArtwork(activeAlbum.id)}>
+                        <X size={14} />
+                        Clear
+                      </button>
+                      <button className="icon-button h-8 w-8" type="button" title="Close artwork manager" onClick={() => setIsAlbumArtworkOpen(false)}>
+                        <X size={14} />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="grid max-h-56 gap-2 overflow-auto pr-1 md:grid-cols-2">
+                    {albumArtworkCandidates.map((candidate, index) => (
+                      <div key={candidate.path ?? `${candidate.source}-${candidate.track_id}-${index}`} className="grid gap-2 rounded border border-line/70 bg-ink p-2">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate text-sm text-neutral-200">
+                              {candidate.selected ? "Selected - " : ""}{candidate.label}
+                            </div>
+                            <div className="truncate text-xs text-muted">
+                              {candidate.source}
+                              {candidate.size_bytes ? ` - ${Math.round(candidate.size_bytes / 1024).toLocaleString()} KB` : ""}
+                            </div>
+                          </div>
+                          {candidate.selected && <CheckCircle2 className="shrink-0 text-moss" size={16} />}
+                        </div>
+                        {candidate.path && <div className="truncate text-xs text-muted">{candidate.path}</div>}
+                        <div className="flex flex-wrap gap-2">
+                          {candidate.path && (
+                            <button className="secondary-button h-8" type="button" onClick={() => void chooseSidecarArtwork(activeAlbum.id, candidate.path ?? "")}>
+                              Use
+                            </button>
+                          )}
+                          {candidate.source === "embedded" && candidate.track_id && (
+                            <button className="secondary-button h-8" type="button" onClick={() => void saveEmbeddedArtwork(activeAlbum.id, candidate.track_id ?? 0)}>
+                              Save Sidecar
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    {albumArtworkCandidates.length === 0 && (
+                      <div className="col-span-full rounded border border-line/70 bg-ink px-3 py-4 text-center text-xs text-muted">
+                        No artwork candidates found beside this album's files.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
               <table className="w-full table-fixed text-left text-sm" style={{ minWidth: tableWidth }}>
               <colgroup>
                   <col style={{ width: librarySelectionColumnWidth }} />
@@ -1060,7 +1198,7 @@ export function LibraryPage({
                   <input
                     className="h-9 min-w-0 flex-1 rounded border border-line bg-panel px-3 text-sm text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
                     value={importPlaylistPath}
-                    placeholder="Import .m3u path"
+                    placeholder="Import playlist path"
                     onChange={(event) => setImportPlaylistPath(event.target.value)}
                   />
                   <button className="icon-button" type="button" title="Import playlist" onClick={onImportPlaylist}>
@@ -1089,7 +1227,7 @@ export function LibraryPage({
                 })}
                 {playlists.length === 0 && (
                   <div className="px-4 py-10 text-center text-sm text-muted">
-                    Create a playlist or import an .m3u to start grouping tracks.
+                    Create a playlist or import M3U, PLS, XSPF, WPL, or iTunes XML.
                   </div>
                 )}
               </div>
@@ -1130,6 +1268,88 @@ export function LibraryPage({
                 </thead>
                 <tbody>{renderTrackRows(selectedPlaylistTracks, { removable: true })}</tbody>
               </table>
+            </section>
+          </div>
+        )}
+
+        {libraryView === "inbox" && (
+          <div className="grid min-h-full grid-cols-[320px_minmax(0,1fr)]">
+            <section className="border-r border-line p-4">
+              <div className="grid gap-3 text-sm">
+                <div className="rounded border border-line bg-panel p-3">
+                  <div className="text-xs uppercase text-muted">New Tracks</div>
+                  <div className="mt-1 text-2xl font-semibold text-white">{inbox?.total_new.toLocaleString() ?? "-"}</div>
+                </div>
+                <div className="rounded border border-line bg-panel p-3">
+                  <div className="text-xs uppercase text-muted">Reviewed</div>
+                  <div className="mt-1 text-2xl font-semibold text-moss">{inbox?.total_reviewed.toLocaleString() ?? "-"}</div>
+                </div>
+                <button
+                  className="primary-button justify-center"
+                  type="button"
+                  disabled={selectedIds.length === 0}
+                  onClick={() => void onReviewInboxTracks(selectedIds)}
+                >
+                  <CheckCircle2 size={15} />
+                  Review Selected
+                </button>
+                <button
+                  className="secondary-button justify-center"
+                  type="button"
+                  disabled={(inbox?.total_new ?? 0) === 0}
+                  onClick={() => void onReviewInboxTracks([], true)}
+                >
+                  <ShieldCheck size={15} />
+                  Review All
+                </button>
+                <button
+                  className="secondary-button justify-center"
+                  type="button"
+                  disabled={(inbox?.tracks.length ?? 0) === 0}
+                  onClick={() => onAddTracksToPlaylist((inbox?.tracks ?? []).map((track) => track.id))}
+                >
+                  <Plus size={15} />
+                  Add Visible
+                </button>
+              </div>
+            </section>
+            <section className="min-w-0">
+              <div className="sticky top-0 z-10 flex min-h-14 flex-wrap items-center justify-between gap-3 border-b border-line bg-ink px-4 py-3">
+                <div className="min-w-[180px]">
+                  <div className="text-sm font-semibold text-white">Inbox Review</div>
+                  <div className="text-xs text-muted">
+                    {(inbox?.tracks.length ?? 0).toLocaleString()} visible newly scanned tracks
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <button className="secondary-button" type="button" disabled={viewTracks.length === 0} onClick={() => onShuffleTracks(viewTracks)}>
+                    <Shuffle size={15} />
+                    Shuffle
+                  </button>
+                  <button className="secondary-button" type="button" disabled={viewTracks.length === 0} onClick={() => onExportTracks(viewTracks.map((track) => track.id))}>
+                    <Download size={15} />
+                    Export
+                  </button>
+                </div>
+              </div>
+              <table className="w-full table-fixed text-left text-sm" style={{ minWidth: tableWidth }}>
+                <colgroup>
+                  <col style={{ width: librarySelectionColumnWidth }} />
+                  <col style={{ width: columnWidths.play }} />
+                  {visibleColumnDefs.map((column) => (
+                    <col key={column.key} style={{ width: columnWidths[column.key] }} />
+                  ))}
+                </colgroup>
+                <thead className="border-b border-line bg-[rgb(var(--color-strip))] text-xs uppercase text-muted">
+                  {renderTableHeader(false)}
+                </thead>
+                <tbody>{renderTrackRows(inbox?.tracks ?? [])}</tbody>
+              </table>
+              {(inbox?.tracks.length ?? 0) === 0 && (
+                <div className="grid h-72 place-items-center px-6 text-center text-sm text-muted">
+                  Newly scanned tracks will appear here until you mark them reviewed.
+                </div>
+              )}
             </section>
           </div>
         )}

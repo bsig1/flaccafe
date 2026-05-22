@@ -105,10 +105,13 @@ Before publishing, follow [docs/release-checklist.md](docs/release-checklist.md)
 
 ## More Docs
 
+- [Docs Index](docs/index.md)
 - [Architecture](docs/architecture.md)
 - [Project Structure](docs/project-structure.md)
 - [Playback](docs/playback.md)
 - [Themes](docs/themes.md)
 - [CLAP Analysis](docs/clap-analysis.md)
+- [Keyboard Shortcuts](docs/keyboard-shortcuts.md)
+- [Troubleshooting](docs/troubleshooting.md)
 - [Testing](docs/testing.md)
 - [Release Documentation Checklist](docs/release-documentation-checklist.md)

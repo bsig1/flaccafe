@@ -18,7 +18,7 @@ import type {
 } from "../types/api";
 
 export type Page = "library" | "analysis" | "nowPlaying" | "artist" | "history" | "autodj" | "fileManagement" | "settings";
-export type LibraryView = "tracks" | "albums" | "playlists" | "smart" | "health";
+export type LibraryView = "tracks" | "albums" | "playlists" | "inbox" | "smart" | "health";
 export type BackendStatus = "unknown" | "ok" | "down" | "restarting";
 export type PlaybackMode = "normal" | "repeatOne" | "repeatQueue" | "stopAfterCurrent";
 export type PlaybackEngine = "webview" | "native";
@@ -443,6 +443,9 @@ export const defaultAutoDj: AutoDjSettings = {
   artist_cooldown: 6,
   album_cooldown: 10,
   unrated_exploration_percent: 12,
+  target_unrated_percent: null,
+  target_exploration_percent: null,
+  max_repeat_artist_percent: null,
   recently_played_cooldown_days: 14,
   seed_track_id: null,
   similarity_weight: 0,

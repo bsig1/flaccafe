@@ -63,10 +63,33 @@ export interface AlbumSummary {
   album: string | null;
   album_artist: string | null;
   year: number | null;
+  artwork_path?: string | null;
   track_count: number;
   duration_seconds: number | null;
   average_rating: number | null;
   artwork_track_id: number | null;
+}
+
+export interface AlbumArtworkCandidate {
+  source: "selected" | "sidecar" | "embedded";
+  label: string;
+  path: string | null;
+  track_id: number | null;
+  media_type: string | null;
+  size_bytes: number | null;
+  modified_at: string | null;
+  selected: boolean;
+}
+
+export interface AlbumArtworkCandidatesResponse {
+  album_id: number;
+  candidates: AlbumArtworkCandidate[];
+}
+
+export interface AlbumArtworkUpdateResponse {
+  album_id: number;
+  artwork_path: string | null;
+  candidates: AlbumArtworkCandidate[];
 }
 
 export interface PlaylistSummary {
@@ -154,6 +177,20 @@ export interface LibraryStatsResponse {
   skipped_events: number;
 }
 
+export interface InboxResponse {
+  tracks: Track[];
+  total_new: number;
+  total_reviewed: number;
+  limit: number;
+  offset: number;
+}
+
+export interface InboxReviewResponse {
+  updated: number;
+  total_new: number;
+  total_reviewed: number;
+}
+
 export type CacheClearTarget = "artist" | "artwork" | "metadata" | "recommendation_history" | "scan_errors";
 
 export interface CacheClearResponse {
@@ -230,6 +267,48 @@ export interface FileOrganizationReportResponse {
   collisions: number;
 }
 
+export interface DeviceSyncRequest {
+  target_folder: string;
+  playlist_ids?: number[];
+  track_ids?: number[] | null;
+  copy_files?: boolean;
+  export_playlists?: boolean;
+  preserve_structure?: boolean;
+  apply?: boolean;
+  limit?: number;
+}
+
+export interface DeviceSyncChange {
+  track_id: number;
+  title: string | null;
+  artist: string | null;
+  source_path: string;
+  target_path: string;
+  changed: boolean;
+  applied: boolean;
+  error: string | null;
+}
+
+export interface DeviceSyncPlaylistExport {
+  playlist_id: number;
+  name: string;
+  playlist_path: string;
+  track_count: number;
+  applied: boolean;
+  error: string | null;
+}
+
+export interface DeviceSyncResponse {
+  target_folder: string;
+  total_tracks: number;
+  changed_files: number;
+  copied_files: number;
+  skipped_files: number;
+  playlists_written: number;
+  changes: DeviceSyncChange[];
+  playlist_exports: DeviceSyncPlaylistExport[];
+}
+
 export interface CsvMetadataExportRequest {
   csv_path?: string | null;
   track_ids?: number[] | null;
@@ -286,6 +365,76 @@ export interface CsvMetadataImportReportResponse {
   matched: number;
   changed: number;
   errors: number;
+}
+
+export interface TagRegexReplaceRequest {
+  field: "title" | "artist" | "album" | "album_artist" | "genre";
+  pattern: string;
+  replacement: string;
+  case_sensitive?: boolean;
+  track_ids?: number[] | null;
+  apply?: boolean;
+  limit?: number;
+}
+
+export interface TagRegexReplacePreview {
+  track_id: number;
+  path: string;
+  field: string;
+  current: string | null;
+  replacement: string | null;
+  changed: boolean;
+  applied: boolean;
+  error: string | null;
+}
+
+export interface TagRegexReplaceResponse {
+  total: number;
+  changed: number;
+  applied: number;
+  previews: TagRegexReplacePreview[];
+}
+
+export interface AutoTagRequest {
+  mode?: "album" | "track";
+  album_id?: number | null;
+  track_ids?: number[] | null;
+  missing_only?: boolean;
+  include_artwork?: boolean;
+  save_artwork?: boolean;
+  apply?: boolean;
+  limit?: number;
+  candidate_limit?: number;
+}
+
+export interface AutoTagPreview {
+  track_id: number;
+  path: string;
+  current: Record<string, unknown>;
+  proposed: Record<string, unknown>;
+  changed_fields: string[];
+  confidence: number;
+  match_type: "album" | "track";
+  source: string;
+  release_id: string | null;
+  release_title: string | null;
+  recording_id: string | null;
+  artwork_url: string | null;
+  artwork_thumbnail_url: string | null;
+  applied: boolean;
+  artwork_saved: boolean;
+  error: string | null;
+}
+
+export interface AutoTagResponse {
+  total: number;
+  matched: number;
+  changed: number;
+  applied: number;
+  artwork_matches: number;
+  artwork_saved: number;
+  errors: string[];
+  previews: AutoTagPreview[];
 }
 
 export interface DuplicateActionRequest {
@@ -473,6 +622,48 @@ export interface ScanProgress {
   error: string | null;
 }
 
+export type FolderWatchChangeType = "added" | "modified" | "removed" | "moved";
+
+export interface FolderWatchChange {
+  id: string;
+  change_type: FolderWatchChangeType;
+  track_id: number | null;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  old_path: string | null;
+  new_path: string | null;
+  previous_modified_at: string | null;
+  file_modified_at: string | null;
+  file_size: number | null;
+  detected_at: string;
+  summary: string;
+}
+
+export interface FolderWatchStatus {
+  enabled: boolean;
+  folder_path: string | null;
+  status: "stopped" | "idle" | "scanning" | "error";
+  interval_seconds: number;
+  last_checked_at: string | null;
+  next_check_at: string | null;
+  pending_count: number;
+  counts: Record<FolderWatchChangeType, number>;
+  changes: FolderWatchChange[];
+  error: string | null;
+}
+
+export interface FolderWatchApplyResponse {
+  applied: number;
+  inserted: number;
+  updated: number;
+  removed: number;
+  moved: number;
+  skipped: number;
+  errors: string[];
+  status: FolderWatchStatus;
+}
+
 export interface ClapStatusResponse {
   installed: boolean;
   dependencies: Record<string, boolean>;
@@ -627,6 +818,9 @@ export interface AutoDjSettings {
   artist_cooldown: number;
   album_cooldown: number;
   unrated_exploration_percent: number;
+  target_unrated_percent?: number | null;
+  target_exploration_percent?: number | null;
+  max_repeat_artist_percent?: number | null;
   recently_played_cooldown_days: number;
   seed_track_id?: number | null;
   similarity_weight?: number;
@@ -642,6 +836,7 @@ export interface AutoDjSettings {
   genre_similarity_weight?: number;
   year_similarity_weight?: number;
   rating_similarity_weight?: number;
+  seed?: number | null;
 }
 
 export interface AutoDjAvoidRule {
@@ -698,6 +893,33 @@ export interface RecommendationProfileComparison {
 export interface RecommendationProfileComparisonExportResponse {
   export_path: string;
   profile_count: number;
+}
+
+export interface RecommendationProfileComparisonImportResponse {
+  report_path: string;
+  generated_at: string | null;
+  seed: number | null;
+  seed_track_id: number | null;
+  comparisons: RecommendationProfileComparison[];
+}
+
+export interface RecommendationAbQueue {
+  label: "A" | "B";
+  settings: AutoDjSettings;
+  drift: RecommendationDrift;
+  tracks: QueueTrack[];
+}
+
+export interface RecommendationAbTestResponse {
+  test_id: string;
+  generated_at: string;
+  queues: RecommendationAbQueue[];
+}
+
+export interface RecommendationAbChoiceResponse {
+  status: string;
+  chosen_label: "A" | "B";
+  inserted_feedback: number;
 }
 
 export interface ExportResponse {

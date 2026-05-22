@@ -35,6 +35,12 @@ jobs:
       - name: Install backend dependencies
         run: python -m pip install -r backend/requirements.txt
 
+      - name: Prepare packaging venv
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt pyinstaller
+
       - name: TypeScript check
         run: npm run check
 
@@ -62,3 +68,15 @@ jobs:
       - name: Rust check
         working-directory: src-tauri
         run: cargo check
+
+      - name: Build MSI
+        run: npm run package:msi
+
+      - name: MSI install/uninstall round-trip
+        run: powershell -ExecutionPolicy Bypass -File scripts/ci_installer_roundtrip.ps1
+
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flac-cafe-msi
+          path: src-tauri/target/release/bundle/msi/*.msi

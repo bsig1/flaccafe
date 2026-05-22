@@ -8,7 +8,10 @@ Use this before publishing an MSI.
 - Run `npm.cmd run build`.
 - Run `cargo test` from `src-tauri`.
 - Build the MSI with `npm.cmd run package:msi`.
+- Run `powershell -ExecutionPolicy Bypass -File scripts\installer_smoke.ps1`.
+- On a disposable profile, run `powershell -ExecutionPolicy Bypass -File scripts\ci_installer_roundtrip.ps1 -AllowAppDataCleanup`.
 - Confirm release notes were generated in `docs/release-notes/`.
+- Confirm GitHub Actions uploaded the MSI artifact for the release commit.
 
 ## Clean Windows Smoke Test
 

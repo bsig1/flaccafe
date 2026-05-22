@@ -166,6 +166,13 @@ CREATE TABLE IF NOT EXISTS track_lyrics (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS track_inbox_state (
+  track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'reviewed')),
+  reviewed_at TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS artwork_cache (
   path_key TEXT PRIMARY KEY,
   path TEXT NOT NULL,
@@ -200,6 +207,7 @@ CREATE INDEX IF NOT EXISTS idx_scan_error_samples_created_at ON scan_error_sampl
 CREATE INDEX IF NOT EXISTS idx_recommendation_profiles_default ON recommendation_profiles(is_default);
 CREATE INDEX IF NOT EXISTS idx_recommendation_runs_created_at ON recommendation_runs(created_at);
 CREATE INDEX IF NOT EXISTS idx_track_lyrics_updated_at ON track_lyrics(updated_at);
+CREATE INDEX IF NOT EXISTS idx_track_inbox_state_status ON track_inbox_state(status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_bulk_action_undo_log_batch ON bulk_action_undo_log(batch_id);
 """
 
@@ -229,6 +237,7 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
         migrate_half_star_ratings(active)
         ensure_track_analysis_columns(active)
         active.executescript(SCHEMA)
+        ensure_inbox_initialized(active)
         active.commit()
     finally:
         if own_connection:
@@ -327,6 +336,21 @@ def ensure_track_analysis_columns(conn: sqlite3.Connection) -> None:
     if "batch_id" not in undo_columns:
         conn.execute("ALTER TABLE bulk_action_undo_log ADD COLUMN batch_id TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_bulk_action_undo_log_batch ON bulk_action_undo_log(batch_id)")
+
+
+def ensure_inbox_initialized(conn: sqlite3.Connection) -> None:
+    initialized = get_setting(conn, "inbox_initialized")
+    if initialized:
+        return
+
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO track_inbox_state(track_id, status, reviewed_at, updated_at)
+        SELECT id, 'reviewed', datetime('now'), datetime('now')
+        FROM tracks
+        """
+    )
+    set_setting(conn, "inbox_initialized", "1")
 
 
 def rows_to_dicts(rows: Iterable[sqlite3.Row]) -> list[dict[str, Any]]:

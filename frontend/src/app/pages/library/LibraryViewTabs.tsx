@@ -1,5 +1,6 @@
 import {
   Album,
+  Inbox,
   ListMusic,
   MoreHorizontal,
   ShieldCheck,
@@ -23,6 +24,7 @@ export function LibraryViewTabs({
     { id: "playlists" as const, label: "Playlists", icon: ListMusic },
   ];
   const utilityLibraryViews = [
+    { id: "inbox" as const, label: "Inbox", icon: Inbox },
     { id: "smart" as const, label: "Smart Playlists", icon: Wand2 },
     { id: "health" as const, label: "Library Health", icon: ShieldCheck },
   ];
@@ -49,7 +51,7 @@ export function LibraryViewTabs({
       <details className="relative" data-auto-close>
         <summary
           className={`inline-flex h-8 cursor-pointer list-none items-center gap-2 rounded px-3 text-sm transition [&::-webkit-details-marker]:hidden ${
-            libraryView === "smart" || libraryView === "health"
+            libraryView === "inbox" || libraryView === "smart" || libraryView === "health"
               ? "bg-white/10 text-white"
               : "text-muted hover:text-white"
           }`}

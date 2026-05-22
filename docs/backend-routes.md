@@ -23,10 +23,20 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `POST /tracks/restore` rescans a previously removed file back into the library.
 - `GET /library/stats` returns dashboard counts.
 - `GET /library/health` returns missing files, duplicate groups, missing metadata, and unrated tracks.
+- `GET /library/inbox` returns newly scanned tracks waiting for review.
+- `POST /library/inbox/review` marks selected or all Inbox tracks as reviewed.
+- `GET /library/watch` returns background folder-watch status and pending changes.
+- `POST /library/watch/start` starts polling the library folder for add, move, remove, and tag/file timestamp changes.
+- `POST /library/watch/stop` stops the background folder watcher.
+- `POST /library/watch/refresh` immediately checks the watched folder without applying changes.
+- `POST /library/watch/apply` applies selected or all pending folder-watch changes to SQLite.
 - `POST /library/maintenance/clear` clears derived caches.
 - `POST /library/tools/infer-tags` previews or applies filename-based tag inference.
+- `POST /library/tools/regex-tags` previews or applies regex search/replace for common text tags.
+- `POST /library/tools/autotag` previews or applies MusicBrainz album/track metadata and optional Cover Art Archive sidecar artwork.
 - `POST /library/tools/organize-files` previews or applies tag-based file moves.
 - `POST /library/tools/organize-files/report` writes a JSON file-organization preview report.
+- `POST /library/tools/device-sync` previews or applies folder/device copy jobs and playlist exports.
 - `POST /library/tools/export-metadata-csv` exports track metadata for spreadsheet cleanup.
 - `POST /library/tools/import-metadata-csv` previews or applies spreadsheet metadata changes.
 - `POST /library/tools/import-metadata-csv/report` writes a JSON dry-run import report.
@@ -63,6 +73,9 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 
 - `GET /albums` lists album summaries.
 - `GET /albums/{album_id}/tracks` lists an album's tracks.
+- `GET /albums/{album_id}/artwork` serves selected, sidecar, or embedded album artwork.
+- `GET /albums/{album_id}/artwork-candidates` lists local sidecar and embedded artwork candidates.
+- `PATCH /albums/{album_id}/artwork` chooses sidecar artwork, saves embedded artwork as a sidecar, or clears a selection.
 - `GET /playlists` lists manual playlists.
 - `POST /playlists` creates a playlist.
 - `DELETE /playlists/{playlist_id}` deletes a playlist.
@@ -71,7 +84,7 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `DELETE /playlists/{playlist_id}/tracks/{track_id}` removes a track.
 - `PATCH /playlists/{playlist_id}/tracks/{track_id}/move` moves a track up or down.
 - `POST /playlists/{playlist_id}/export` writes an M3U playlist.
-- `POST /playlists/import` imports an M3U playlist.
+- `POST /playlists/import` imports M3U/M3U8, PLS, XSPF, WPL, and iTunes XML playlists.
 - `GET /smart-playlists/presets` lists built-in rules.
 - `GET /smart-playlists` lists saved smart playlists.
 - `POST /smart-playlists` saves a smart playlist.
@@ -100,6 +113,9 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `DELETE /autodj/profiles/{profile_id}` deletes a profile.
 - `POST /autodj/profiles/compare` compares generated queues across profiles.
 - `POST /autodj/profiles/compare/export` writes a JSON profile comparison report.
+- `POST /autodj/profiles/compare/import` loads a shared JSON profile comparison report.
+- `POST /autodj/ab-test` generates two queue candidates for side-by-side feedback.
+- `POST /autodj/ab-test/choose` records which generated candidate was preferred.
 - `GET /autodj/history` lists recent recommendation runs.
 - `GET /autodj/avoid` lists avoid rules.
 - `POST /autodj/avoid` creates an avoid rule.

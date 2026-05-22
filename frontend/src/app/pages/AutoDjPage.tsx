@@ -23,15 +23,19 @@ import {
 
 import {
   compareRecommendationProfiles,
+  chooseRecommendationAbTest,
+  createRecommendationAbTest,
   exportRecommendationProfileComparison,
   exportQueue,
   fetchSimilarTracks,
   generateAutoDj,
+  importRecommendationProfileComparison,
 } from "../../lib/api";
 import type {
   AutoDjAvoidRule,
   AutoDjSettings,
   QueueTrack,
+  RecommendationAbTestResponse,
   RecommendationDrift,
   RecommendationProfile,
   RecommendationProfileComparison,
@@ -127,6 +131,8 @@ export function AutoDjPage({
   const [profileComparisons, setProfileComparisons] = useState<RecommendationProfileComparison[]>([]);
   const [profileComparisonSeed, setProfileComparisonSeed] = useState<number | null>(null);
   const [isComparingProfiles, setIsComparingProfiles] = useState(false);
+  const [abTest, setAbTest] = useState<RecommendationAbTestResponse | null>(null);
+  const [isCreatingAbTest, setIsCreatingAbTest] = useState(false);
   const appliedDefaultProfileId = useRef<number | null>(null);
   const defaultProfile = recommendationProfiles.find((profile) => profile.is_default) ?? null;
   const presets: { label: string; settings: Partial<AutoDjSettings> }[] = [
@@ -330,6 +336,21 @@ export function AutoDjPage({
     }
   }
 
+  async function handleImportProfileComparison() {
+    const reportPath = window.prompt("Comparison report path");
+    if (!reportPath?.trim()) {
+      return;
+    }
+    try {
+      const response = await importRecommendationProfileComparison(reportPath.trim());
+      setProfileComparisons(response.comparisons);
+      setProfileComparisonSeed(response.seed);
+      setStatus(`Imported ${response.comparisons.length} profile comparisons`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Profile comparison import failed");
+    }
+  }
+
   async function handleExportProfileComparison() {
     if (recommendationProfiles.length < 2) {
       setStatus("Save at least two recommendation profiles before exporting a comparison");
@@ -345,6 +366,50 @@ export function AutoDjPage({
       setStatus(`Exported ${response.profile_count} profile comparisons to ${response.export_path}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Profile comparison export failed");
+    }
+  }
+
+  async function handleCreateAbTest() {
+    setIsCreatingAbTest(true);
+    try {
+      const response = await createRecommendationAbTest({
+        base_settings: settings,
+        seed_track_id: settings.seed_track_id ?? currentTrack?.id ?? null,
+        seed: Date.now() % 1_000_000,
+      });
+      setAbTest(response);
+      setStatus("Generated two AutoDJ candidates");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "A/B queue generation failed");
+    } finally {
+      setIsCreatingAbTest(false);
+    }
+  }
+
+  async function handleChooseAbQueue(label: "A" | "B") {
+    if (!abTest) {
+      return;
+    }
+    const chosen = abTest.queues.find((item) => item.label === label);
+    const rejected = abTest.queues.find((item) => item.label !== label);
+    if (!chosen) {
+      return;
+    }
+    try {
+      const response = await chooseRecommendationAbTest({
+        test_id: abTest.test_id,
+        chosen_label: label,
+        chosen_track_ids: chosen.tracks.map((track) => track.id),
+        rejected_track_ids: rejected?.tracks.map((track) => track.id) ?? [],
+      });
+      setSettings(chosen.settings);
+      setQueue(chosen.tracks);
+      setRecommendationDrift(chosen.drift);
+      setAbTest(null);
+      setStatus(`Chose queue ${label}; learned from ${response.inserted_feedback} tracks`);
+      void onRefreshHistory();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not save A/B feedback");
     }
   }
 
@@ -527,6 +592,9 @@ export function AutoDjPage({
                 <button className="text-xs text-muted hover:text-white" type="button" onClick={() => void handleExportProfileComparison()}>
                   Export
                 </button>
+                <button className="text-xs text-muted hover:text-white" type="button" onClick={() => void handleImportProfileComparison()}>
+                  Import
+                </button>
                 <button className="text-xs text-moss hover:text-white" type="button" onClick={() => saveCurrentProfile(false)}>
                   Save
                 </button>
@@ -587,6 +655,47 @@ export function AutoDjPage({
                 </div>
               </div>
             )}
+            <div className="mt-3 border-t border-line pt-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="text-xs font-medium uppercase text-muted">A/B Queue Feedback</div>
+                <button
+                  className="text-xs text-moss hover:text-white"
+                  type="button"
+                  disabled={isCreatingAbTest}
+                  onClick={() => void handleCreateAbTest()}
+                >
+                  {isCreatingAbTest ? "Generating" : "Generate A/B"}
+                </button>
+              </div>
+              {abTest ? (
+                <div className="grid gap-2">
+                  {abTest.queues.map((candidate) => (
+                    <div key={candidate.label} className="rounded border border-line/70 bg-panel p-2 text-xs">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <span className="font-semibold text-white">Queue {candidate.label}</span>
+                        <button
+                          className="text-moss hover:text-white"
+                          type="button"
+                          onClick={() => void handleChooseAbQueue(candidate.label)}
+                        >
+                          Choose
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-3 gap-1 text-[11px]">
+                        <span className="rounded bg-ink px-1.5 py-1 text-moss">Fav {candidate.drift.familiar_percent.toFixed(0)}%</span>
+                        <span className="rounded bg-ink px-1.5 py-1 text-ember">Explore {candidate.drift.exploration_percent.toFixed(0)}%</span>
+                        <span className="rounded bg-ink px-1.5 py-1 text-red-300">Repeat {candidate.drift.repeat_artist_percent.toFixed(0)}%</span>
+                      </div>
+                      <div className="mt-2 truncate text-[11px] text-muted">
+                        {candidate.tracks.slice(0, 3).map((track) => display(track.title, "Untitled")).join(" / ") || "No tracks"}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-xs text-muted">Compare two queues, pick the better one, and the recommender will bias future queues toward tracks like that choice.</div>
+              )}
+            </div>
             <button className="mt-2 w-full text-left text-xs text-muted hover:text-white" type="button" onClick={() => saveCurrentProfile(true)}>
               Save current settings as default profile
             </button>
@@ -620,6 +729,67 @@ export function AutoDjPage({
               value={settings.recently_played_cooldown_days}
               onChange={(value) => setSettings({ ...settings, recently_played_cooldown_days: value })}
             />
+            <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-xs font-medium uppercase text-muted">Drift Targets</div>
+                <button
+                  className="text-xs text-muted hover:text-white"
+                  type="button"
+                  onClick={() =>
+                    setSettings({
+                      ...settings,
+                      target_unrated_percent: null,
+                      target_exploration_percent: null,
+                      max_repeat_artist_percent: null,
+                    })
+                  }
+                >
+                  Clear
+                </button>
+              </div>
+              {(
+                [
+                  ["target_unrated_percent", "Unrated target", 0, 80],
+                  ["target_exploration_percent", "Exploration target", 0, 100],
+                  ["max_repeat_artist_percent", "Max repeat artist", 0, 95],
+                ] as const
+              ).map(([key, label, min, max]) => (
+                <label key={key} className="grid gap-1">
+                  <span className="flex items-center justify-between gap-2 text-xs text-muted">
+                    <span>{label}</span>
+                    <button
+                      className="text-[11px] text-muted hover:text-white"
+                      type="button"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        setSettings({
+                          ...settings,
+                          [key]: settings[key] === null || settings[key] === undefined
+                            ? key === "target_unrated_percent"
+                              ? settings.unrated_exploration_percent
+                              : key === "target_exploration_percent"
+                                ? 30
+                                : 25
+                            : null,
+                        });
+                      }}
+                    >
+                      {settings[key] === null || settings[key] === undefined ? "Off" : `${Number(settings[key]).toFixed(0)}%`}
+                    </button>
+                  </span>
+                  <input
+                    type="range"
+                    min={min}
+                    max={max}
+                    step={1}
+                    disabled={settings[key] === null || settings[key] === undefined}
+                    value={Number(settings[key] ?? (key === "target_unrated_percent" ? settings.unrated_exploration_percent : key === "target_exploration_percent" ? 30 : 25))}
+                    onChange={(event) => setSettings({ ...settings, [key]: Number(event.target.value) })}
+                    className="accent-moss disabled:opacity-40"
+                  />
+                </label>
+              ))}
+            </div>
             <label className="grid gap-2 text-sm text-neutral-200">
               <span className="text-xs uppercase text-muted">
                 Similarity {Number(settings.similarity_weight ?? 0).toFixed(1)}

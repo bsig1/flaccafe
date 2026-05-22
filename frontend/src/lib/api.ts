@@ -1,5 +1,7 @@
 import type {
   AlbumSummary,
+  AlbumArtworkCandidatesResponse,
+  AlbumArtworkUpdateResponse,
   ArtistInfoResponse,
   AudioAnalysisCoverage,
   AudioAnalysisProgress,
@@ -8,6 +10,8 @@ import type {
   AutoDjAvoidRule,
   AutoDjResponse,
   AutoDjSettings,
+  AutoTagRequest,
+  AutoTagResponse,
   AcousticFingerprintRequest,
   AcousticFingerprintResponse,
   BackupResponse,
@@ -34,15 +38,21 @@ import type {
   ExportResponse,
   DuplicateActionRequest,
   DuplicateActionResponse,
+  DeviceSyncRequest,
+  DeviceSyncResponse,
   DuplicateReviewRequest,
   DuplicateReviewResponse,
   FileOrganizationRequest,
   FileOrganizationReportRequest,
   FileOrganizationReportResponse,
   FileOrganizationResponse,
+  FolderWatchApplyResponse,
+  FolderWatchStatus,
   FilenameTagInferenceRequest,
   FilenameTagInferenceResponse,
   LibraryHealthResponse,
+  InboxResponse,
+  InboxReviewResponse,
   LibraryStatsResponse,
   LogTailResponse,
   LyricsResponse,
@@ -50,8 +60,11 @@ import type {
   PlayEventEntry,
   PlaylistSummary,
   RecommendationProfile,
+  RecommendationAbChoiceResponse,
+  RecommendationAbTestResponse,
   RecommendationProfileComparison,
   RecommendationProfileComparisonExportResponse,
+  RecommendationProfileComparisonImportResponse,
   RecommendationRun,
   ReportFileRequest,
   ReportFileResponse,
@@ -65,6 +78,8 @@ import type {
   SmartPlaylistSummary,
   StartupDiagnosticsResponse,
   SupportBundleResponse,
+  TagRegexReplaceRequest,
+  TagRegexReplaceResponse,
   Track,
   TrackDeleteResponse,
   TrackMetadataUpdate,
@@ -139,6 +154,24 @@ export function fetchLibraryHealth(limit = 80): Promise<LibraryHealthResponse> {
   return request<LibraryHealthResponse>(`/library/health?limit=${limit}`);
 }
 
+export function fetchLibraryInbox(limit = 200, offset = 0): Promise<InboxResponse> {
+  return request<InboxResponse>(`/library/inbox?limit=${limit}&offset=${offset}`);
+}
+
+export function reviewInboxTracks(trackIds: number[]): Promise<InboxReviewResponse> {
+  return request<InboxReviewResponse>("/library/inbox/review", {
+    method: "POST",
+    body: JSON.stringify({ track_ids: trackIds }),
+  });
+}
+
+export function reviewAllInboxTracks(): Promise<InboxReviewResponse> {
+  return request<InboxReviewResponse>("/library/inbox/review", {
+    method: "POST",
+    body: JSON.stringify({ all_new: true }),
+  });
+}
+
 export function clearLibraryCaches(targets: CacheClearTarget[]): Promise<CacheClearResponse> {
   return request<CacheClearResponse>("/library/maintenance/clear", {
     method: "POST",
@@ -155,6 +188,13 @@ export function inferFilenameTags(requestBody: FilenameTagInferenceRequest): Pro
 
 export function organizeFiles(requestBody: FileOrganizationRequest): Promise<FileOrganizationResponse> {
   return request<FileOrganizationResponse>("/library/tools/organize-files", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function syncDeviceFolder(requestBody: DeviceSyncRequest): Promise<DeviceSyncResponse> {
+  return request<DeviceSyncResponse>("/library/tools/device-sync", {
     method: "POST",
     body: JSON.stringify(requestBody),
   });
@@ -178,6 +218,20 @@ export function exportMetadataCsv(requestBody: CsvMetadataExportRequest = {}): P
 
 export function importMetadataCsv(requestBody: CsvMetadataImportRequest): Promise<CsvMetadataImportResponse> {
   return request<CsvMetadataImportResponse>("/library/tools/import-metadata-csv", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function replaceTagsWithRegex(requestBody: TagRegexReplaceRequest): Promise<TagRegexReplaceResponse> {
+  return request<TagRegexReplaceResponse>("/library/tools/regex-tags", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function autoTagMusicBrainz(requestBody: AutoTagRequest): Promise<AutoTagResponse> {
+  return request<AutoTagResponse>("/library/tools/autotag", {
     method: "POST",
     body: JSON.stringify(requestBody),
   });
@@ -253,6 +307,46 @@ export function readReportFile(requestBody: ReportFileRequest): Promise<ReportFi
   return request<ReportFileResponse>("/library/tools/reports/read", {
     method: "POST",
     body: JSON.stringify(requestBody),
+  });
+}
+
+export function fetchFolderWatchStatus(limit = 300): Promise<FolderWatchStatus> {
+  return request<FolderWatchStatus>(`/library/watch?limit=${limit}`);
+}
+
+export function startFolderWatch(folderPath?: string | null, intervalSeconds = 45, limit = 300): Promise<FolderWatchStatus> {
+  return request<FolderWatchStatus>("/library/watch/start", {
+    method: "POST",
+    body: JSON.stringify({
+      folder_path: folderPath || null,
+      interval_seconds: intervalSeconds,
+      limit,
+    }),
+  });
+}
+
+export function stopFolderWatch(limit = 300): Promise<FolderWatchStatus> {
+  return request<FolderWatchStatus>(`/library/watch/stop?limit=${limit}`, { method: "POST" });
+}
+
+export function refreshFolderWatch(folderPath?: string | null, limit = 300): Promise<FolderWatchStatus> {
+  return request<FolderWatchStatus>("/library/watch/refresh", {
+    method: "POST",
+    body: JSON.stringify({
+      folder_path: folderPath || null,
+      limit,
+    }),
+  });
+}
+
+export function applyFolderWatchChanges(changeIds: string[], applyAll = false, limit = 300): Promise<FolderWatchApplyResponse> {
+  return request<FolderWatchApplyResponse>("/library/watch/apply", {
+    method: "POST",
+    body: JSON.stringify({
+      change_ids: changeIds,
+      apply_all: applyAll,
+      limit,
+    }),
   });
 }
 
@@ -378,6 +472,39 @@ export function fetchAlbums(search = ""): Promise<AlbumSummary[]> {
 
 export function fetchAlbumTracks(albumId: number): Promise<Track[]> {
   return request<Track[]>(`/albums/${albumId}/tracks`);
+}
+
+export function fetchAlbumArtworkCandidates(albumId: number): Promise<AlbumArtworkCandidatesResponse> {
+  return request<AlbumArtworkCandidatesResponse>(`/albums/${albumId}/artwork-candidates`);
+}
+
+export function chooseAlbumArtwork(albumId: number, artworkPath: string): Promise<AlbumArtworkUpdateResponse> {
+  return request<AlbumArtworkUpdateResponse>(`/albums/${albumId}/artwork`, {
+    method: "PATCH",
+    body: JSON.stringify({ artwork_path: artworkPath }),
+  });
+}
+
+export function saveEmbeddedAlbumArtwork(albumId: number, embeddedTrackId: number, sidecarFilename = "cover"): Promise<AlbumArtworkUpdateResponse> {
+  return request<AlbumArtworkUpdateResponse>(`/albums/${albumId}/artwork`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      embedded_track_id: embeddedTrackId,
+      save_embedded_as_sidecar: true,
+      sidecar_filename: sidecarFilename,
+    }),
+  });
+}
+
+export function clearAlbumArtwork(albumId: number): Promise<AlbumArtworkUpdateResponse> {
+  return request<AlbumArtworkUpdateResponse>(`/albums/${albumId}/artwork`, {
+    method: "PATCH",
+    body: JSON.stringify({ clear: true }),
+  });
+}
+
+export function albumCoverUrl(albumId: number): string {
+  return `${API_BASE}/albums/${albumId}/artwork`;
 }
 
 export function fetchSmartPlaylistPresets(): Promise<Record<string, SmartPlaylistRule>> {
@@ -605,6 +732,38 @@ export function exportRecommendationProfileComparison(requestBody: {
   seed?: number | null;
 }): Promise<RecommendationProfileComparisonExportResponse> {
   return request<RecommendationProfileComparisonExportResponse>("/autodj/profiles/compare/export", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function importRecommendationProfileComparison(reportPath: string): Promise<RecommendationProfileComparisonImportResponse> {
+  return request<RecommendationProfileComparisonImportResponse>("/autodj/profiles/compare/import", {
+    method: "POST",
+    body: JSON.stringify({ report_path: reportPath }),
+  });
+}
+
+export function createRecommendationAbTest(requestBody: {
+  base_settings: AutoDjSettings;
+  challenger_settings?: AutoDjSettings | null;
+  seed_track_id?: number | null;
+  seed?: number | null;
+}): Promise<RecommendationAbTestResponse> {
+  return request<RecommendationAbTestResponse>("/autodj/ab-test", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function chooseRecommendationAbTest(requestBody: {
+  test_id?: string | null;
+  chosen_label: "A" | "B";
+  chosen_track_ids: number[];
+  rejected_track_ids?: number[];
+  feedback_weight?: number;
+}): Promise<RecommendationAbChoiceResponse> {
+  return request<RecommendationAbChoiceResponse>("/autodj/ab-test/choose", {
     method: "POST",
     body: JSON.stringify(requestBody),
   });

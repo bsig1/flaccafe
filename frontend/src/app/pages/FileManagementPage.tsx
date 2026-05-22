@@ -22,6 +22,7 @@ import {
 
 import type {
   AcousticFingerprintResponse,
+  AutoTagResponse,
   BulkUndoBatchEntry,
   BulkUndoLogEntry,
   BulkUndoRestoreResponse,
@@ -31,183 +32,70 @@ import type {
   CsvMetadataExportResponse,
   CsvMetadataImportReportResponse,
   CsvMetadataImportResponse,
+  DeviceSyncResponse,
   DuplicateActionRequest,
   DuplicateActionResponse,
   DuplicateReviewResponse,
   FileOrganizationReportResponse,
   FileOrganizationResponse,
+  FolderWatchChange,
+  FolderWatchStatus,
   FilenameTagInferenceResponse,
+  PlaylistSummary,
   ReportFileResponse,
+  TagRegexReplaceResponse,
 } from "../../types/api";
 import {
   DisclosureSection,
   NumberField,
 } from "../components/common";
-
-const DEFAULT_FILENAME_TAG_PATTERNS = [
-  "<Album Artist> - <Album> [<Year>]/<Track#> - <Artist> - <Title>",
-  "<Album Artist>/<Album>/<Track#> - <Title>",
-  "<Artist> - <Album>/<Disc#>-<Track#> - <Title>",
-  "<Genre>/<Artist>/<Album> (<Year>)/<Track#> - <Title>",
-];
-
-const FILENAME_TAG_PRESETS_KEY = "flacCafeFilenameTagPresets";
-const CSV_IMPORT_PROFILES_KEY = "flacCafeCsvImportProfiles";
-
-const CSV_IMPORT_FIELDS = [
-  "title",
-  "artist",
-  "album",
-  "album_artist",
-  "track_number",
-  "disc_number",
-  "genre",
-  "year",
-  "rating",
-] as const;
-
-type FileOrganizationOptions = {
-  collisionStrategy?: "skip" | "auto_rename";
-  cleanupEmptyFolders?: boolean;
-  trackIds?: number[] | null;
-};
-
-type CsvImportOptions = {
-  trackIds?: number[] | null;
-  columnMap?: Record<string, string>;
-  clearBlankFields?: boolean;
-};
-
-interface CsvImportProfile {
-  name: string;
-  columnMap: Record<string, string>;
-  missingOnly: boolean;
-  clearBlankFields: boolean;
-}
-
-function readFilenameTagPresets(): string[] {
-  if (typeof window === "undefined") {
-    return [];
-  }
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(FILENAME_TAG_PRESETS_KEY) ?? "[]");
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeFilenameTagPresets(patterns: string[]) {
-  window.localStorage.setItem(FILENAME_TAG_PRESETS_KEY, JSON.stringify(patterns));
-}
-
-function readCsvProfiles(): CsvImportProfile[] {
-  if (typeof window === "undefined") {
-    return [];
-  }
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(CSV_IMPORT_PROFILES_KEY) ?? "[]");
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    return parsed
-      .filter((profile): profile is CsvImportProfile => {
-        return Boolean(
-          profile &&
-            typeof profile.name === "string" &&
-            profile.name.trim() &&
-            typeof profile.columnMap === "object" &&
-            !Array.isArray(profile.columnMap),
-        );
-      })
-      .map((profile) => ({
-        name: profile.name.trim(),
-        columnMap: profile.columnMap,
-        missingOnly: profile.missingOnly !== false,
-        clearBlankFields: Boolean(profile.clearBlankFields),
-      }));
-  } catch {
-    return [];
-  }
-}
-
-function writeCsvProfiles(profiles: CsvImportProfile[]) {
-  window.localStorage.setItem(CSV_IMPORT_PROFILES_KEY, JSON.stringify(profiles));
-}
-
-function parseTrackIds(text: string): number[] {
-  return Array.from(
-    new Set(
-      text
-        .split(/[,\s]+/)
-        .map((chunk) => Number(chunk.trim()))
-        .filter((value) => Number.isInteger(value) && value > 0),
-    ),
-  );
-}
-
-function parseDuplicateGroups(text: string): number[][] {
-  return text
-    .split(/\r?\n/)
-    .map((line) => parseTrackIds(line))
-    .filter((group) => group.length > 1);
-}
-
-function formatJson(value: unknown): string {
-  return JSON.stringify(value, null, 2);
-}
-
-function previewLabel(value: unknown): string {
-  if (value === null || value === undefined || value === "") {
-    return "(blank)";
-  }
-  return String(value);
-}
-
-function currentScope(trackIds: number[]): number[] | null {
-  return trackIds.length ? trackIds : null;
-}
-
-function reportSummary(value: unknown): string {
-  if (!value || typeof value !== "object") {
-    return "JSON report";
-  }
-  const record = value as Record<string, unknown>;
-  const parts: string[] = [];
-  for (const key of ["total", "matched", "changed", "changed_count", "errors", "profile_count"]) {
-    const item = record[key];
-    if (typeof item === "number") {
-      parts.push(`${key.replace("_", " ")}: ${item.toLocaleString()}`);
-    }
-  }
-  if (Array.isArray(record.groups)) {
-    parts.push(`groups: ${record.groups.length.toLocaleString()}`);
-  }
-  if (Array.isArray(record.previews)) {
-    parts.push(`previews: ${record.previews.length.toLocaleString()}`);
-  }
-  if (Array.isArray(record.comparisons)) {
-    parts.push(`comparisons: ${record.comparisons.length.toLocaleString()}`);
-  }
-  return parts.length ? parts.join(" / ") : "JSON report";
-}
-
-function canRestoreUndo(actionType: string): boolean {
-  return ["csv_metadata_import", "file_organization", "track_remove"].includes(actionType);
-}
+import { CacheUndoLogSection } from "./file-management/CacheUndoLogSection";
+import { ReportViewerSection } from "./file-management/ReportViewerSection";
+import {
+  CSV_IMPORT_FIELDS,
+  DEFAULT_FILENAME_TAG_PATTERNS,
+  currentScope,
+  formatJson,
+  parseDuplicateGroups,
+  parseTrackIds,
+  previewLabel,
+  readCsvProfiles,
+  readFilenameTagPresets,
+  writeCsvProfiles,
+  writeFilenameTagPresets,
+} from "./file-management/fileManagementUtils";
+import type {
+  CsvImportOptions,
+  CsvImportProfile,
+  FileOrganizationOptions,
+} from "./file-management/fileManagementUtils";
 
 export function FileManagementPage({
   folderPath,
+  playlists,
   onClearArtistCache,
   onClearLibraryCaches,
   filenameTagPreview,
   onPreviewFilenameTags,
   onApplyFilenameTags,
+  tagRegexPreview,
+  onPreviewTagRegex,
+  onApplyTagRegex,
+  autoTagPreview,
+  onPreviewAutoTag,
+  onApplyAutoTag,
   fileOrganizationPreview,
   fileOrganizationReport,
+  folderWatchStatus,
   onPreviewFileOrganization,
   onApplyFileOrganization,
   onExportFileOrganizationReport,
+  onStartFolderWatch,
+  onStopFolderWatch,
+  onRefreshFolderWatch,
+  onApplyFolderWatch,
+  deviceSyncPreview,
+  onDeviceSync,
   metadataCsvExport,
   metadataCsvImportPreview,
   metadataCsvImportReport,
@@ -237,16 +125,63 @@ export function FileManagementPage({
   onReadReportFile,
 }: {
   folderPath: string;
+  playlists: PlaylistSummary[];
   onClearArtistCache: () => void;
   onClearLibraryCaches: (targets: CacheClearTarget[]) => void | Promise<void>;
   filenameTagPreview: FilenameTagInferenceResponse | null;
   onPreviewFilenameTags: (pattern: string, missingOnly: boolean, trackIds?: number[] | null) => void | Promise<void>;
   onApplyFilenameTags: (pattern: string, missingOnly: boolean, trackIds?: number[] | null) => void | Promise<void>;
+  tagRegexPreview: TagRegexReplaceResponse | null;
+  onPreviewTagRegex: (
+    field: "title" | "artist" | "album" | "album_artist" | "genre",
+    pattern: string,
+    replacement: string,
+    caseSensitive: boolean,
+    trackIds?: number[] | null,
+  ) => void | Promise<void>;
+  onApplyTagRegex: (
+    field: "title" | "artist" | "album" | "album_artist" | "genre",
+    pattern: string,
+    replacement: string,
+    caseSensitive: boolean,
+    trackIds?: number[] | null,
+  ) => void | Promise<void>;
+  autoTagPreview: AutoTagResponse | null;
+  onPreviewAutoTag: (
+    mode: "album" | "track",
+    missingOnly: boolean,
+    includeArtwork: boolean,
+    trackIds?: number[] | null,
+  ) => void | Promise<void>;
+  onApplyAutoTag: (
+    mode: "album" | "track",
+    missingOnly: boolean,
+    includeArtwork: boolean,
+    saveArtwork: boolean,
+    trackIds?: number[] | null,
+  ) => void | Promise<void>;
   fileOrganizationPreview: FileOrganizationResponse | null;
   fileOrganizationReport: FileOrganizationReportResponse | null;
+  folderWatchStatus: FolderWatchStatus | null;
   onPreviewFileOrganization: (template: string, baseFolder?: string | null, options?: FileOrganizationOptions) => void | Promise<void>;
   onApplyFileOrganization: (template: string, baseFolder?: string | null, options?: FileOrganizationOptions) => void | Promise<void>;
   onExportFileOrganizationReport: (template: string, baseFolder?: string | null, options?: FileOrganizationOptions) => void | Promise<void>;
+  onStartFolderWatch: (intervalSeconds: number) => void | Promise<void>;
+  onStopFolderWatch: () => void | Promise<void>;
+  onRefreshFolderWatch: () => void | Promise<void>;
+  onApplyFolderWatch: (changeIds: string[], applyAll?: boolean) => void | Promise<void>;
+  deviceSyncPreview: DeviceSyncResponse | null;
+  onDeviceSync: (
+    targetFolder: string,
+    options: {
+      playlistIds?: number[];
+      trackIds?: number[] | null;
+      copyFiles?: boolean;
+      exportPlaylists?: boolean;
+      preserveStructure?: boolean;
+      apply?: boolean;
+    },
+  ) => void | Promise<void>;
   metadataCsvExport: CsvMetadataExportResponse | null;
   metadataCsvImportPreview: CsvMetadataImportResponse | null;
   metadataCsvImportReport: CsvMetadataImportReportResponse | null;
@@ -282,10 +217,26 @@ export function FileManagementPage({
   const [filenamePresetMessage, setFilenamePresetMessage] = useState<string | null>(null);
   const [filenamePresetJson, setFilenamePresetJson] = useState("");
   const [acceptedFilenameTrackIds, setAcceptedFilenameTrackIds] = useState<Set<number>>(() => new Set());
+  const [tagRegexField, setTagRegexField] = useState<"title" | "artist" | "album" | "album_artist" | "genre">("artist");
+  const [tagRegexPattern, setTagRegexPattern] = useState("\\s+feat\\..*$");
+  const [tagRegexReplacement, setTagRegexReplacement] = useState("");
+  const [tagRegexCaseSensitive, setTagRegexCaseSensitive] = useState(false);
+  const [autoTagMode, setAutoTagMode] = useState<"album" | "track">("album");
+  const [autoTagMissingOnly, setAutoTagMissingOnly] = useState(true);
+  const [autoTagIncludeArtwork, setAutoTagIncludeArtwork] = useState(true);
+  const [autoTagSaveArtwork, setAutoTagSaveArtwork] = useState(false);
+  const [acceptedAutoTagTrackIds, setAcceptedAutoTagTrackIds] = useState<Set<number>>(() => new Set());
   const [organizeTemplate, setOrganizeTemplate] = useState("<Album Artist>/<Album> (<Year>)/<Track#> - <Title>");
   const [organizeBaseFolder, setOrganizeBaseFolder] = useState("");
   const [organizeCollisionStrategy, setOrganizeCollisionStrategy] = useState<"skip" | "auto_rename">("skip");
   const [organizeCleanupEmptyFolders, setOrganizeCleanupEmptyFolders] = useState(false);
+  const [watchIntervalSeconds, setWatchIntervalSeconds] = useState(folderWatchStatus?.interval_seconds ?? 45);
+  const [acceptedFolderWatchIds, setAcceptedFolderWatchIds] = useState<Set<string>>(() => new Set());
+  const [deviceSyncTarget, setDeviceSyncTarget] = useState("");
+  const [deviceSyncPlaylistIds, setDeviceSyncPlaylistIds] = useState<Set<number>>(() => new Set());
+  const [deviceSyncCopyFiles, setDeviceSyncCopyFiles] = useState(true);
+  const [deviceSyncExportPlaylists, setDeviceSyncExportPlaylists] = useState(true);
+  const [deviceSyncPreserveStructure, setDeviceSyncPreserveStructure] = useState(true);
   const [metadataCsvPath, setMetadataCsvPath] = useState("");
   const [metadataCsvMissingOnly, setMetadataCsvMissingOnly] = useState(true);
   const [metadataCsvClearBlankFields, setMetadataCsvClearBlankFields] = useState(false);
@@ -309,6 +260,23 @@ export function FileManagementPage({
   const duplicateGroups = useMemo(() => parseDuplicateGroups(duplicateGroupsText), [duplicateGroupsText]);
   const allFilenameTagPresets = Array.from(new Set([...DEFAULT_FILENAME_TAG_PATTERNS, ...filenameTagPresets]));
   const isCustomFilenameTagPreset = filenameTagPresets.includes(filenameTagPattern);
+  const folderWatchChanges = folderWatchStatus?.changes ?? [];
+  const folderWatchChangeKey = folderWatchChanges.map((change) => change.id).join("|");
+  const selectedWatchCount = folderWatchChanges.filter((change) => acceptedFolderWatchIds.has(change.id)).length;
+  const autoTagChangedIds = useMemo(
+    () =>
+      autoTagPreview?.previews
+        .filter((preview) => acceptedAutoTagTrackIds.has(preview.track_id) && !preview.error && preview.changed_fields.length > 0)
+        .map((preview) => preview.track_id) ?? [],
+    [acceptedAutoTagTrackIds, autoTagPreview],
+  );
+  const autoTagArtworkIds = useMemo(
+    () =>
+      autoTagPreview?.previews
+        .filter((preview) => acceptedAutoTagTrackIds.has(preview.track_id) && !preview.error && Boolean(preview.artwork_url))
+        .map((preview) => preview.track_id) ?? [],
+    [acceptedAutoTagTrackIds, autoTagPreview],
+  );
   const acceptedChangedFilenameIds = useMemo(
     () =>
       filenameTagPreview?.previews
@@ -330,6 +298,24 @@ export function FileManagementPage({
   useEffect(() => {
     setFpcalcPath(chromaprintSetup?.configured_path ?? chromaprintSetup?.resolved_path ?? "");
   }, [chromaprintSetup?.configured_path, chromaprintSetup?.resolved_path]);
+
+  useEffect(() => {
+    setWatchIntervalSeconds(folderWatchStatus?.interval_seconds ?? 45);
+  }, [folderWatchStatus?.interval_seconds]);
+
+  useEffect(() => {
+    setAcceptedFolderWatchIds(new Set(folderWatchChanges.map((change) => change.id)));
+  }, [folderWatchChangeKey]);
+
+  useEffect(() => {
+    const next = new Set<number>();
+    for (const preview of autoTagPreview?.previews ?? []) {
+      if (!preview.error && (preview.changed_fields.length > 0 || preview.artwork_url)) {
+        next.add(preview.track_id);
+      }
+    }
+    setAcceptedAutoTagTrackIds(next);
+  }, [autoTagPreview]);
 
   function saveCurrentFilenameTagPreset() {
     const trimmed = filenameTagPattern.trim();
@@ -483,6 +469,88 @@ export function FileManagementPage({
     return duplicateTrackIds.length ? duplicateTrackIds : scopedTrackIds;
   }
 
+  function deviceSyncOptions(apply = false) {
+    return {
+      playlistIds: Array.from(deviceSyncPlaylistIds),
+      trackIds: currentScope(scopedTrackIds),
+      copyFiles: deviceSyncCopyFiles,
+      exportPlaylists: deviceSyncExportPlaylists,
+      preserveStructure: deviceSyncPreserveStructure,
+      apply,
+    };
+  }
+
+  function toggleDeviceSyncPlaylist(playlistId: number) {
+    setDeviceSyncPlaylistIds((current) => {
+      const next = new Set(current);
+      if (next.has(playlistId)) {
+        next.delete(playlistId);
+      } else {
+        next.add(playlistId);
+      }
+      return next;
+    });
+  }
+
+  function toggleFolderWatchChange(changeId: string) {
+    setAcceptedFolderWatchIds((current) => {
+      const next = new Set(current);
+      if (next.has(changeId)) {
+        next.delete(changeId);
+      } else {
+        next.add(changeId);
+      }
+      return next;
+    });
+  }
+
+  function toggleAllFolderWatchChanges() {
+    setAcceptedFolderWatchIds((current) =>
+      current.size === folderWatchChanges.length ? new Set() : new Set(folderWatchChanges.map((change) => change.id)),
+    );
+  }
+
+  function folderWatchTypeLabel(change: FolderWatchChange): string {
+    if (change.change_type === "added") {
+      return "Add";
+    }
+    if (change.change_type === "modified") {
+      return "Update tags";
+    }
+    if (change.change_type === "removed") {
+      return "Remove";
+    }
+    return "Move";
+  }
+
+  function folderWatchTrackLabel(change: FolderWatchChange): string {
+    const title = change.title?.trim() || change.new_path?.split(/[\\/]/).pop() || change.old_path?.split(/[\\/]/).pop() || "Audio file";
+    const artist = change.artist?.trim();
+    return artist ? `${title} - ${artist}` : title;
+  }
+
+  function toggleAutoTagTrack(trackId: number) {
+    setAcceptedAutoTagTrackIds((current) => {
+      const next = new Set(current);
+      if (next.has(trackId)) {
+        next.delete(trackId);
+      } else {
+        next.add(trackId);
+      }
+      return next;
+    });
+  }
+
+  function autoTagFieldSummary(preview: NonNullable<typeof autoTagPreview>["previews"][number]): string {
+    if (preview.error) {
+      return preview.error;
+    }
+    if (!preview.changed_fields.length) {
+      return preview.artwork_url ? "Artwork match only" : "Matched; no field changes";
+    }
+    return preview.changed_fields.join(", ");
+  }
+
   return (
     <main className="flex min-w-0 flex-1 flex-col">
       <header className="flex h-16 items-center justify-between border-b border-line px-6">
@@ -513,6 +581,175 @@ export function FileManagementPage({
               </div>
             </div>
           </div>
+
+          <DisclosureSection title="Folder Watch" description="Background change detection with a review step before the database changes" defaultOpen>
+            <div className="grid gap-4 text-sm text-neutral-200">
+              <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-center">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      className={`rounded border px-2 py-1 text-xs uppercase ${
+                        folderWatchStatus?.enabled
+                          ? "border-moss/40 bg-moss/10 text-moss"
+                          : "border-line bg-panel text-muted"
+                      }`}
+                    >
+                      {folderWatchStatus?.enabled ? "watching" : "stopped"}
+                    </span>
+                    <span className="rounded border border-line bg-panel px-2 py-1 text-xs uppercase text-muted">
+                      {folderWatchStatus?.status ?? "idle"}
+                    </span>
+                    <span className="rounded border border-line bg-panel px-2 py-1 text-xs uppercase text-muted">
+                      {folderWatchStatus?.pending_count ?? 0} pending
+                    </span>
+                  </div>
+                  <div className="mt-2 truncate text-xs text-muted" title={folderWatchStatus?.folder_path ?? folderPath}>
+                    {(folderWatchStatus?.folder_path ?? folderPath) || "No watched folder yet"}
+                  </div>
+                  {folderWatchStatus?.error && <div className="mt-2 text-xs text-ember">{folderWatchStatus.error}</div>}
+                </div>
+                <div className="grid gap-2 sm:grid-cols-[130px_auto] sm:items-end">
+                  <NumberField
+                    label="Seconds"
+                    min={10}
+                    max={3600}
+                    value={watchIntervalSeconds}
+                    onChange={setWatchIntervalSeconds}
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <button className="secondary-button" type="button" onClick={() => void onRefreshFolderWatch()}>
+                      <RefreshCw size={15} />
+                      Check Now
+                    </button>
+                    <button className="secondary-button" type="button" onClick={() => void onStartFolderWatch(watchIntervalSeconds)}>
+                      <Eye size={15} />
+                      Watch
+                    </button>
+                    <button className="secondary-button" type="button" onClick={() => void onStopFolderWatch()}>
+                      Stop
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-2 sm:grid-cols-4">
+                {(["added", "modified", "moved", "removed"] as const).map((kind) => (
+                  <div key={kind} className="rounded border border-line/70 bg-ink px-3 py-2">
+                    <div className="text-lg font-semibold text-white">{folderWatchStatus?.counts?.[kind] ?? 0}</div>
+                    <div className="text-xs uppercase text-muted">
+                      {kind === "modified" ? "updates" : kind}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={folderWatchChanges.length === 0}
+                  onClick={toggleAllFolderWatchChanges}
+                >
+                  <ListChecks size={15} />
+                  {acceptedFolderWatchIds.size === folderWatchChanges.length ? "Clear" : "Select All"}
+                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-muted">
+                    {selectedWatchCount.toLocaleString()} selected
+                    {folderWatchStatus && folderWatchStatus.pending_count > folderWatchChanges.length
+                      ? `, showing ${folderWatchChanges.length.toLocaleString()} of ${folderWatchStatus.pending_count.toLocaleString()}`
+                      : ""}
+                  </span>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    disabled={selectedWatchCount === 0}
+                    onClick={() => void onApplyFolderWatch(Array.from(acceptedFolderWatchIds), false)}
+                  >
+                    <CheckCircle2 size={15} />
+                    Apply Selected
+                  </button>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={(folderWatchStatus?.pending_count ?? 0) === 0}
+                    onClick={() => void onApplyFolderWatch([], true)}
+                  >
+                    Apply All
+                  </button>
+                </div>
+              </div>
+
+              {folderWatchChanges.length > 0 ? (
+                <div className="max-h-96 overflow-auto rounded border border-line/70">
+                  <table className="w-full min-w-[820px] border-collapse text-left text-xs">
+                    <thead className="sticky top-0 bg-panel text-[11px] uppercase text-muted">
+                      <tr>
+                        <th className="w-10 px-2 py-2">
+                          <span className="sr-only">Apply</span>
+                        </th>
+                        <th className="px-2 py-2">Change</th>
+                        <th className="px-2 py-2">Track</th>
+                        <th className="px-2 py-2">Path</th>
+                        <th className="px-2 py-2">Detail</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {folderWatchChanges.map((change) => (
+                        <tr key={change.id} className="border-t border-line/60 bg-ink/70">
+                          <td className="px-2 py-2 align-top">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 accent-moss"
+                              checked={acceptedFolderWatchIds.has(change.id)}
+                              onChange={() => toggleFolderWatchChange(change.id)}
+                            />
+                          </td>
+                          <td className="whitespace-nowrap px-2 py-2 align-top font-medium text-neutral-200">
+                            {folderWatchTypeLabel(change)}
+                          </td>
+                          <td className="max-w-56 px-2 py-2 align-top">
+                            <div className="truncate text-neutral-200" title={folderWatchTrackLabel(change)}>
+                              {folderWatchTrackLabel(change)}
+                            </div>
+                            {change.album && <div className="truncate text-muted">{change.album}</div>}
+                          </td>
+                          <td className="max-w-80 px-2 py-2 align-top">
+                            {change.change_type === "moved" ? (
+                              <div className="grid gap-1">
+                                <div className="truncate text-muted" title={change.old_path ?? undefined}>
+                                  {change.old_path}
+                                </div>
+                                <div className="truncate text-neutral-200" title={change.new_path ?? undefined}>
+                                  {change.new_path}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="truncate text-muted" title={change.new_path ?? change.old_path ?? undefined}>
+                                {change.new_path ?? change.old_path}
+                              </div>
+                            )}
+                          </td>
+                          <td className="max-w-56 px-2 py-2 align-top">
+                            <div className="truncate text-muted">{change.summary}</div>
+                            {change.previous_modified_at && change.file_modified_at && (
+                              <div className="truncate text-muted">
+                                {change.previous_modified_at} {"->"} {change.file_modified_at}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="rounded border border-line/70 bg-ink px-3 py-6 text-center text-xs text-muted">
+                  No pending folder changes. The watcher will keep checking in the background while it is enabled.
+                </div>
+              )}
+            </div>
+          </DisclosureSection>
 
           <DisclosureSection title="Filename Tag Inference" description="Infer metadata from folder and file naming patterns" defaultOpen>
             <div className="grid gap-4 text-sm text-neutral-200">
@@ -708,6 +945,270 @@ export function FileManagementPage({
             </div>
           </DisclosureSection>
 
+          <DisclosureSection title="Regex Tag Cleanup" description="Preview and apply MusicBee-style search/replace for common text tags">
+            <div className="grid gap-4 text-sm text-neutral-200">
+              <div className="grid gap-3 md:grid-cols-[180px_1fr_1fr]">
+                <label className="grid gap-2">
+                  <span className="text-xs uppercase text-muted">Field</span>
+                  <select
+                    className="h-9 rounded border border-line bg-ink px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                    value={tagRegexField}
+                    onChange={(event) => setTagRegexField(event.target.value as typeof tagRegexField)}
+                  >
+                    <option value="title">Title</option>
+                    <option value="artist">Artist</option>
+                    <option value="album">Album</option>
+                    <option value="album_artist">Album Artist</option>
+                    <option value="genre">Genre</option>
+                  </select>
+                </label>
+                <label className="grid gap-2">
+                  <span className="text-xs uppercase text-muted">Find Regex</span>
+                  <input
+                    className="h-9 rounded border border-line bg-ink px-3 font-mono text-xs text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
+                    value={tagRegexPattern}
+                    placeholder="Example: \\s+feat\\..*$"
+                    onChange={(event) => setTagRegexPattern(event.target.value)}
+                  />
+                </label>
+                <label className="grid gap-2">
+                  <span className="text-xs uppercase text-muted">Replace With</span>
+                  <input
+                    className="h-9 rounded border border-line bg-ink px-3 font-mono text-xs text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
+                    value={tagRegexReplacement}
+                    placeholder="Leave blank to remove matches"
+                    onChange={(event) => setTagRegexReplacement(event.target.value)}
+                  />
+                </label>
+              </div>
+              <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-ink px-3 py-2">
+                <span className="text-muted">Case sensitive match</span>
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-moss"
+                  checked={tagRegexCaseSensitive}
+                  onChange={(event) => setTagRegexCaseSensitive(event.target.checked)}
+                />
+              </label>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() =>
+                    void onPreviewTagRegex(
+                      tagRegexField,
+                      tagRegexPattern,
+                      tagRegexReplacement,
+                      tagRegexCaseSensitive,
+                      currentScope(scopedTrackIds),
+                    )
+                  }
+                >
+                  <Eye size={15} />
+                  Preview Replace
+                </button>
+                <button
+                  className="primary-button"
+                  type="button"
+                  disabled={(tagRegexPreview?.changed ?? 1) === 0}
+                  onClick={() =>
+                    void onApplyTagRegex(
+                      tagRegexField,
+                      tagRegexPattern,
+                      tagRegexReplacement,
+                      tagRegexCaseSensitive,
+                      currentScope(scopedTrackIds),
+                    )
+                  }
+                >
+                  <Wand2 size={15} />
+                  Apply Replace
+                </button>
+              </div>
+              {tagRegexPreview && (
+                <div className="rounded border border-line bg-ink p-3 text-xs">
+                  <div className="mb-2 text-neutral-200">
+                    {tagRegexPreview.changed.toLocaleString()} changed, {tagRegexPreview.applied.toLocaleString()} applied
+                  </div>
+                  <div className="grid max-h-80 gap-1 overflow-auto pr-1">
+                    {tagRegexPreview.previews.slice(0, 60).map((preview) => (
+                      <div key={preview.track_id} className="grid gap-1 rounded bg-panel px-2 py-1.5">
+                        <div className="truncate text-muted">{preview.path}</div>
+                        <div className={preview.error ? "truncate text-ember" : preview.changed ? "truncate text-neutral-200" : "truncate text-muted"}>
+                          {preview.error ??
+                            (preview.changed
+                              ? `${preview.current ?? ""} -> ${preview.replacement ?? ""}`
+                              : "No change")}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </DisclosureSection>
+
+          <DisclosureSection title="MusicBrainz Auto-Tag" description="Preview album or track matches, missing-field fills, and Cover Art Archive artwork">
+            <div className="grid gap-4 text-sm text-neutral-200">
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="grid gap-2">
+                  <span className="text-xs uppercase text-muted">Match Mode</span>
+                  <select
+                    className="h-9 rounded border border-line bg-ink px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                    value={autoTagMode}
+                    onChange={(event) => setAutoTagMode(event.target.value as "album" | "track")}
+                  >
+                    <option value="album">Album / release</option>
+                    <option value="track">Individual tracks</option>
+                  </select>
+                </label>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-ink px-3 py-2">
+                    <span className="text-muted">Missing only</span>
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-moss"
+                      checked={autoTagMissingOnly}
+                      onChange={(event) => setAutoTagMissingOnly(event.target.checked)}
+                    />
+                  </label>
+                  <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-ink px-3 py-2">
+                    <span className="text-muted">Find artwork</span>
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-moss"
+                      checked={autoTagIncludeArtwork}
+                      onChange={(event) => setAutoTagIncludeArtwork(event.target.checked)}
+                    />
+                  </label>
+                  <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-ink px-3 py-2">
+                    <span className="text-muted">Save cover</span>
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-ember"
+                      checked={autoTagSaveArtwork}
+                      onChange={(event) => setAutoTagSaveArtwork(event.target.checked)}
+                    />
+                  </label>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="text-xs text-muted">
+                  {scopedTrackIds.length
+                    ? `${scopedTrackIds.length.toLocaleString()} scoped track${scopedTrackIds.length === 1 ? "" : "s"}`
+                    : "Blank scope uses recently added tracks with missing metadata"}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => void onPreviewAutoTag(autoTagMode, autoTagMissingOnly, autoTagIncludeArtwork, currentScope(scopedTrackIds))}
+                  >
+                    <Eye size={15} />
+                    Preview Matches
+                  </button>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    disabled={Boolean(autoTagPreview) && autoTagChangedIds.length === 0 && (!autoTagSaveArtwork || autoTagArtworkIds.length === 0)}
+                    onClick={() =>
+                      void onApplyAutoTag(
+                        autoTagMode,
+                        autoTagMissingOnly,
+                        autoTagIncludeArtwork,
+                        autoTagSaveArtwork,
+                        autoTagPreview
+                          ? Array.from(new Set([...autoTagChangedIds, ...(autoTagSaveArtwork ? autoTagArtworkIds : [])]))
+                          : currentScope(scopedTrackIds),
+                      )
+                    }
+                  >
+                    <Wand2 size={15} />
+                    {autoTagPreview ? "Apply Accepted" : "Apply Auto-Tags"}
+                  </button>
+                </div>
+              </div>
+
+              {autoTagPreview && (
+                <div className="rounded border border-line bg-ink p-3 text-xs">
+                  <div className="mb-3 grid gap-2 sm:grid-cols-4">
+                    <div>
+                      <div className="font-semibold text-white">{autoTagPreview.matched}</div>
+                      <div className="text-muted">Matched</div>
+                    </div>
+                    <div>
+                      <div className="font-semibold text-moss">{autoTagPreview.changed}</div>
+                      <div className="text-muted">With changes</div>
+                    </div>
+                    <div>
+                      <div className="font-semibold text-ember">{autoTagPreview.artwork_matches}</div>
+                      <div className="text-muted">Artwork matches</div>
+                    </div>
+                    <div>
+                      <div className="font-semibold text-white">{acceptedAutoTagTrackIds.size}</div>
+                      <div className="text-muted">Accepted</div>
+                    </div>
+                  </div>
+                  <div className="grid max-h-96 gap-1 overflow-auto pr-1">
+                    {autoTagPreview.previews.slice(0, 80).map((preview) => (
+                      <label key={preview.track_id} className="grid grid-cols-[auto_52px_1fr] gap-3 rounded bg-panel px-2 py-2">
+                        <input
+                          type="checkbox"
+                          className="mt-4 h-4 w-4 accent-moss"
+                          checked={acceptedAutoTagTrackIds.has(preview.track_id)}
+                          disabled={Boolean(preview.error) || (preview.changed_fields.length === 0 && !preview.artwork_url)}
+                          onChange={() => toggleAutoTagTrack(preview.track_id)}
+                        />
+                        <div className="h-12 w-12 overflow-hidden rounded border border-line bg-ink">
+                          {preview.artwork_thumbnail_url ? (
+                            <img className="h-full w-full object-cover" src={preview.artwork_thumbnail_url} alt="" />
+                          ) : (
+                            <div className="flex h-full items-center justify-center text-[10px] text-muted">No art</div>
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="truncate font-medium text-neutral-200">
+                              {preview.proposed.title ? String(preview.proposed.title) : preview.path.split(/[\\/]/).pop()}
+                            </span>
+                            <span className="rounded border border-line px-1.5 py-0.5 text-[10px] uppercase text-muted">
+                              {(preview.confidence * 100).toFixed(0)}%
+                            </span>
+                            <span className="rounded border border-line px-1.5 py-0.5 text-[10px] uppercase text-muted">
+                              {preview.match_type}
+                            </span>
+                          </div>
+                          <div className="truncate text-muted">
+                            {[preview.proposed.artist, preview.proposed.album].filter(Boolean).map(String).join(" - ")}
+                          </div>
+                          <div className={preview.error ? "truncate text-ember" : "truncate text-moss"}>
+                            {autoTagFieldSummary(preview)}
+                          </div>
+                          {preview.release_title && (
+                            <div className="truncate text-muted">
+                              Release: {preview.release_title}
+                              {preview.release_id ? ` (${preview.release_id})` : ""}
+                            </div>
+                          )}
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                  {autoTagPreview.errors.length > 0 && (
+                    <details className="mt-3 text-xs text-ember">
+                      <summary>Auto-tag errors</summary>
+                      <div className="mt-2 grid gap-1">
+                        {autoTagPreview.errors.slice(0, 20).map((error) => (
+                          <div key={error} className="truncate">{error}</div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                </div>
+              )}
+            </div>
+          </DisclosureSection>
+
           <DisclosureSection title="File Organizer" description="Preview tag-based moves and export a review report">
             <div className="grid gap-4 text-sm text-neutral-200">
               <label className="grid gap-2">
@@ -790,6 +1291,125 @@ export function FileManagementPage({
                   <div className="truncate">{fileOrganizationReport.report_path}</div>
                   <div>
                     {fileOrganizationReport.changed_count.toLocaleString()} changes, {fileOrganizationReport.collisions.toLocaleString()} collisions
+                  </div>
+                </div>
+              )}
+            </div>
+          </DisclosureSection>
+
+          <DisclosureSection title="Device Sync Folder" description="Preview copy jobs and playlist exports for a phone, USB drive, or portable player">
+            <div className="grid gap-4 text-sm text-neutral-200">
+              <label className="grid gap-2">
+                <span className="text-xs uppercase text-muted">Target Folder</span>
+                <input
+                  className="h-9 rounded border border-line bg-ink px-3 text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
+                  value={deviceSyncTarget}
+                  placeholder="Example: E:\\Music"
+                  onChange={(event) => setDeviceSyncTarget(event.target.value)}
+                />
+              </label>
+              <div className="grid gap-2 md:grid-cols-3">
+                <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-ink px-3 py-2">
+                  <span className="text-muted">Copy audio files</span>
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 accent-moss"
+                    checked={deviceSyncCopyFiles}
+                    onChange={(event) => setDeviceSyncCopyFiles(event.target.checked)}
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-ink px-3 py-2">
+                  <span className="text-muted">Export playlists</span>
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 accent-moss"
+                    checked={deviceSyncExportPlaylists}
+                    onChange={(event) => setDeviceSyncExportPlaylists(event.target.checked)}
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-ink px-3 py-2">
+                  <span className="text-muted">Preserve folders</span>
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 accent-moss"
+                    checked={deviceSyncPreserveStructure}
+                    onChange={(event) => setDeviceSyncPreserveStructure(event.target.checked)}
+                  />
+                </label>
+              </div>
+              <div className="rounded border border-line bg-ink p-3">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <div className="text-xs uppercase text-muted">Playlists</div>
+                  <button
+                    className="text-xs text-moss hover:text-white"
+                    type="button"
+                    onClick={() =>
+                      setDeviceSyncPlaylistIds(
+                        deviceSyncPlaylistIds.size === playlists.length
+                          ? new Set()
+                          : new Set(playlists.map((playlist) => playlist.id)),
+                      )
+                    }
+                  >
+                    {deviceSyncPlaylistIds.size === playlists.length ? "Clear" : "Select all"}
+                  </button>
+                </div>
+                <div className="grid max-h-48 gap-1 overflow-auto pr-1">
+                  {playlists.map((playlist) => (
+                    <label key={playlist.id} className="flex items-center justify-between gap-3 rounded bg-panel px-2 py-2">
+                      <span className="min-w-0">
+                        <span className="block truncate text-neutral-200">{playlist.name}</span>
+                        <span className="block truncate text-xs text-muted">{playlist.track_count.toLocaleString()} tracks</span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 accent-moss"
+                        checked={deviceSyncPlaylistIds.has(playlist.id)}
+                        onChange={() => toggleDeviceSyncPlaylist(playlist.id)}
+                      />
+                    </label>
+                  ))}
+                  {playlists.length === 0 && <div className="py-4 text-center text-xs text-muted">No playlists yet.</div>}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button className="secondary-button" type="button" onClick={() => void onDeviceSync(deviceSyncTarget, deviceSyncOptions(false))}>
+                  <Eye size={15} />
+                  Preview Sync
+                </button>
+                <button className="primary-button" type="button" onClick={() => void onDeviceSync(deviceSyncTarget, deviceSyncOptions(true))}>
+                  <FolderOpen size={15} />
+                  Sync Folder
+                </button>
+              </div>
+              {deviceSyncPreview && (
+                <div className="rounded border border-line bg-ink p-3 text-xs">
+                  <div className="mb-2 text-neutral-200">
+                    {deviceSyncPreview.changed_files.toLocaleString()} files need copy,{" "}
+                    {deviceSyncPreview.copied_files.toLocaleString()} copied,{" "}
+                    {deviceSyncPreview.playlists_written.toLocaleString()} playlists written
+                  </div>
+                  {deviceSyncPreview.playlist_exports.length > 0 && (
+                    <div className="mb-3 grid gap-1">
+                      {deviceSyncPreview.playlist_exports.map((playlist) => (
+                        <div key={playlist.playlist_id} className="rounded bg-panel px-2 py-1.5">
+                          <div className={playlist.error ? "truncate text-ember" : "truncate text-neutral-200"}>
+                            {playlist.name} - {playlist.track_count.toLocaleString()} tracks
+                          </div>
+                          <div className="truncate text-muted">{playlist.error ?? playlist.playlist_path}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="grid max-h-80 gap-1 overflow-auto pr-1">
+                    {deviceSyncPreview.changes.slice(0, 60).map((change) => (
+                      <div key={change.track_id} className="grid gap-1 rounded bg-panel px-2 py-1.5">
+                        <div className="truncate text-neutral-200">{change.title ?? change.source_path}</div>
+                        <div className={change.error ? "truncate text-ember" : "truncate text-muted"}>
+                          {change.error ?? change.target_path}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
@@ -1136,163 +1756,26 @@ export function FileManagementPage({
             </div>
           </DisclosureSection>
 
-          <DisclosureSection title="Report Viewer" description="Open JSON reports from CSV imports, file organization, duplicate review, or AutoDJ profile comparison">
-            <div className="grid gap-4 text-sm text-neutral-200">
-              <label className="grid gap-2">
-                <span className="text-xs uppercase text-muted">Report Path</span>
-                <input
-                  className="h-9 rounded border border-line bg-ink px-3 text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
-                  value={reportPath}
-                  placeholder="Paste a FLAC Cafe JSON report path"
-                  onChange={(event) => setReportPath(event.target.value)}
-                />
-              </label>
-              <div className="flex flex-wrap gap-2">
-                <button className="secondary-button" type="button" onClick={() => void onReadReportFile(reportPath)}>
-                  <Eye size={15} />
-                  View Report
-                </button>
-                {fileOrganizationReport?.report_path && (
-                  <button className="secondary-button" type="button" onClick={() => {
-                    setReportPath(fileOrganizationReport.report_path);
-                    void onReadReportFile(fileOrganizationReport.report_path);
-                  }}>
-                    File Moves
-                  </button>
-                )}
-                {metadataCsvImportReport?.report_path && (
-                  <button className="secondary-button" type="button" onClick={() => {
-                    setReportPath(metadataCsvImportReport.report_path);
-                    void onReadReportFile(metadataCsvImportReport.report_path);
-                  }}>
-                    CSV Dry Run
-                  </button>
-                )}
-                {duplicateActionResult?.report_path && (
-                  <button className="secondary-button" type="button" onClick={() => {
-                    setReportPath(duplicateActionResult.report_path ?? "");
-                    if (duplicateActionResult.report_path) {
-                      void onReadReportFile(duplicateActionResult.report_path);
-                    }
-                  }}>
-                    Duplicates
-                  </button>
-                )}
-              </div>
-              {reportFile && (
-                <div className="rounded border border-line bg-ink p-3 text-xs">
-                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="truncate text-neutral-200">{reportFile.report_path}</div>
-                      <div className="text-muted">
-                        {reportFile.exists
-                          ? `${reportFile.size_bytes.toLocaleString()} bytes${reportFile.modified_at ? `, ${new Date(reportFile.modified_at).toLocaleString()}` : ""}`
-                          : reportFile.error ?? "Report not found"}
-                      </div>
-                    </div>
-                    {reportFile.truncated && <span className="rounded border border-ember/40 px-2 py-1 text-ember">truncated</span>}
-                  </div>
-                  {reportFile.parsed_json !== null && (
-                    <div className="mb-2 rounded bg-panel px-2 py-1.5 text-muted">{reportSummary(reportFile.parsed_json)}</div>
-                  )}
-                  {reportFile.error && <div className="mb-2 text-ember">{reportFile.error}</div>}
-                  <pre className="max-h-96 overflow-auto rounded bg-panel p-3 font-mono text-[11px] leading-5 text-muted">
-                    {reportFile.parsed_json !== null ? formatJson(reportFile.parsed_json) : reportFile.raw_text ?? ""}
-                  </pre>
-                </div>
-              )}
-            </div>
-          </DisclosureSection>
+          <ReportViewerSection
+            reportPath={reportPath}
+            setReportPath={setReportPath}
+            fileOrganizationReport={fileOrganizationReport}
+            metadataCsvImportReport={metadataCsvImportReport}
+            duplicateActionResult={duplicateActionResult}
+            reportFile={reportFile}
+            onReadReportFile={onReadReportFile}
+          />
 
-          <DisclosureSection title="Cache And Undo Log" description="Clear derived cache data and inspect recent bulk actions">
-            <div className="grid gap-4 text-sm text-neutral-200">
-              <div className="flex flex-wrap gap-2">
-                <button className="secondary-button" type="button" onClick={() => void onClearLibraryCaches(["artwork"])}>
-                  <RefreshCw size={15} />
-                  Artwork
-                </button>
-                <button className="secondary-button" type="button" onClick={() => void onClearLibraryCaches(["metadata"])}>
-                  <RefreshCw size={15} />
-                  Metadata
-                </button>
-                <button className="secondary-button" type="button" onClick={() => void onClearLibraryCaches(["recommendation_history"])}>
-                  <RefreshCw size={15} />
-                  AutoDJ History
-                </button>
-                <button className="secondary-button" type="button" onClick={() => void onClearArtistCache()}>
-                  <RefreshCw size={15} />
-                  Artist Info
-                </button>
-                <button className="secondary-button" type="button" onClick={() => void onClearLibraryCaches(["artist", "artwork", "metadata", "recommendation_history", "scan_errors"])}>
-                  <RefreshCw size={15} />
-                  All Caches
-                </button>
-              </div>
-              <div className="rounded border border-line bg-ink p-3 text-xs">
-                <div className="mb-3">
-                  <div className="mb-2 font-medium text-neutral-200">Recent Batches</div>
-                  <div className="grid max-h-56 gap-1 overflow-auto pr-1">
-                    {bulkUndoBatches.length ? (
-                      bulkUndoBatches.map((batch) => (
-                        <div key={batch.batch_id} className="grid gap-1 rounded bg-panel px-2 py-1.5">
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="truncate text-neutral-200">{batch.batch_id}</span>
-                            <button className="secondary-button h-7 px-2 text-[11px]" type="button" onClick={() => void onRestoreUndoBatch(batch.batch_id)}>
-                              Restore Batch
-                            </button>
-                          </div>
-                          <div className="truncate text-muted">
-                            {batch.entries.toLocaleString()} {batch.action_type} entr{batch.entries === 1 ? "y" : "ies"} - {new Date(batch.last_created_at).toLocaleString()}
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="rounded bg-panel px-2 py-2 text-muted">No grouped bulk actions recorded yet.</div>
-                    )}
-                  </div>
-                </div>
-                <div className="mb-2 flex items-center justify-between gap-3">
-                  <div className="font-medium text-neutral-200">Recent Bulk Actions</div>
-                  <button className="secondary-button h-8" type="button" onClick={() => void onRefreshUndoLog()}>
-                    <RotateCcw size={14} />
-                    Refresh
-                  </button>
-                </div>
-                <div className="grid max-h-80 gap-1 overflow-auto pr-1">
-                  {bulkUndoLog.length ? (
-                    bulkUndoLog.map((entry) => (
-                      <div key={entry.id} className="grid gap-1 rounded bg-panel px-2 py-1.5">
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="truncate text-neutral-200">{entry.summary}</span>
-                          <div className="flex shrink-0 items-center gap-2">
-                            <span className="text-muted">{new Date(entry.created_at).toLocaleString()}</span>
-                            <button
-                              className="secondary-button h-7 px-2 text-[11px]"
-                              type="button"
-                              disabled={!canRestoreUndo(entry.action_type)}
-                              onClick={() => void onRestoreUndoEntry(entry.id)}
-                            >
-                              Restore
-                            </button>
-                          </div>
-                        </div>
-                        <div className="truncate text-muted">{entry.action_type}</div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="rounded bg-panel px-2 py-2 text-muted">No bulk actions recorded yet.</div>
-                  )}
-                </div>
-                {bulkUndoRestoreResult && (
-                  <div className={bulkUndoRestoreResult.restored ? "mt-2 text-moss" : "mt-2 text-ember"}>
-                    {bulkUndoRestoreResult.restored
-                      ? `Restored ${bulkUndoRestoreResult.affected_track_ids.length.toLocaleString()} track${bulkUndoRestoreResult.affected_track_ids.length === 1 ? "" : "s"}`
-                      : bulkUndoRestoreResult.errors.join("; ")}
-                  </div>
-                )}
-              </div>
-            </div>
-          </DisclosureSection>
+          <CacheUndoLogSection
+            bulkUndoLog={bulkUndoLog}
+            bulkUndoBatches={bulkUndoBatches}
+            bulkUndoRestoreResult={bulkUndoRestoreResult}
+            onRefreshUndoLog={onRefreshUndoLog}
+            onRestoreUndoEntry={onRestoreUndoEntry}
+            onRestoreUndoBatch={onRestoreUndoBatch}
+            onClearArtistCache={onClearArtistCache}
+            onClearLibraryCaches={onClearLibraryCaches}
+          />
         </div>
       </section>
     </main>

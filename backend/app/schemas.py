@@ -53,10 +53,41 @@ class AlbumSummary(BaseModel):
     album: str | None = None
     album_artist: str | None = None
     year: int | None = None
+    artwork_path: str | None = None
     track_count: int = 0
     duration_seconds: float | None = None
     average_rating: float | None = None
     artwork_track_id: int | None = None
+
+
+class AlbumArtworkCandidate(BaseModel):
+    source: Literal["selected", "sidecar", "embedded"]
+    label: str
+    path: str | None = None
+    track_id: int | None = None
+    media_type: str | None = None
+    size_bytes: int | None = None
+    modified_at: str | None = None
+    selected: bool = False
+
+
+class AlbumArtworkCandidatesResponse(BaseModel):
+    album_id: int
+    candidates: list[AlbumArtworkCandidate] = Field(default_factory=list)
+
+
+class AlbumArtworkUpdateRequest(BaseModel):
+    artwork_path: str | None = None
+    embedded_track_id: int | None = None
+    save_embedded_as_sidecar: bool = False
+    sidecar_filename: str = Field(default="cover", max_length=80)
+    clear: bool = False
+
+
+class AlbumArtworkUpdateResponse(BaseModel):
+    album_id: int
+    artwork_path: str | None = None
+    candidates: list[AlbumArtworkCandidate] = Field(default_factory=list)
 
 
 class PlaylistSummary(BaseModel):
@@ -187,6 +218,25 @@ class LibraryStatsResponse(BaseModel):
     skipped_events: int = 0
 
 
+class InboxResponse(BaseModel):
+    tracks: list[Track] = Field(default_factory=list)
+    total_new: int = 0
+    total_reviewed: int = 0
+    limit: int = 200
+    offset: int = 0
+
+
+class InboxReviewRequest(BaseModel):
+    track_ids: list[int] = Field(default_factory=list, max_length=10000)
+    all_new: bool = False
+
+
+class InboxReviewResponse(BaseModel):
+    updated: int = 0
+    total_new: int = 0
+    total_reviewed: int = 0
+
+
 class CacheClearRequest(BaseModel):
     targets: list[Literal["artist", "artwork", "metadata", "recommendation_history", "scan_errors"]] = Field(
         default_factory=lambda: ["artist", "artwork", "metadata", "recommendation_history", "scan_errors"],
@@ -269,6 +319,48 @@ class FileOrganizationReportResponse(BaseModel):
     collisions: int = 0
 
 
+class DeviceSyncRequest(BaseModel):
+    target_folder: str
+    playlist_ids: list[int] = Field(default_factory=list, max_length=200)
+    track_ids: list[int] | None = Field(default=None, max_length=10000)
+    copy_files: bool = True
+    export_playlists: bool = True
+    preserve_structure: bool = True
+    apply: bool = False
+    limit: int = Field(default=10000, ge=1, le=200000)
+
+
+class DeviceSyncChange(BaseModel):
+    track_id: int
+    title: str | None = None
+    artist: str | None = None
+    source_path: str
+    target_path: str
+    changed: bool = False
+    applied: bool = False
+    error: str | None = None
+
+
+class DeviceSyncPlaylistExport(BaseModel):
+    playlist_id: int
+    name: str
+    playlist_path: str
+    track_count: int = 0
+    applied: bool = False
+    error: str | None = None
+
+
+class DeviceSyncResponse(BaseModel):
+    target_folder: str
+    total_tracks: int = 0
+    changed_files: int = 0
+    copied_files: int = 0
+    skipped_files: int = 0
+    playlists_written: int = 0
+    changes: list[DeviceSyncChange] = Field(default_factory=list)
+    playlist_exports: list[DeviceSyncPlaylistExport] = Field(default_factory=list)
+
+
 class CsvMetadataExportRequest(BaseModel):
     csv_path: str | None = None
     track_ids: list[int] | None = Field(default=None, max_length=10000)
@@ -325,6 +417,76 @@ class CsvMetadataImportReportResponse(BaseModel):
     matched: int = 0
     changed: int = 0
     errors: int = 0
+
+
+class TagRegexReplaceRequest(BaseModel):
+    field: Literal["title", "artist", "album", "album_artist", "genre"]
+    pattern: str = Field(min_length=1, max_length=500)
+    replacement: str = Field(default="", max_length=500)
+    case_sensitive: bool = False
+    track_ids: list[int] | None = Field(default=None, max_length=10000)
+    apply: bool = False
+    limit: int = Field(default=10000, ge=1, le=100000)
+
+
+class TagRegexReplacePreview(BaseModel):
+    track_id: int
+    path: str
+    field: str
+    current: str | None = None
+    replacement: str | None = None
+    changed: bool = False
+    applied: bool = False
+    error: str | None = None
+
+
+class TagRegexReplaceResponse(BaseModel):
+    total: int = 0
+    changed: int = 0
+    applied: int = 0
+    previews: list[TagRegexReplacePreview] = Field(default_factory=list)
+
+
+class AutoTagRequest(BaseModel):
+    mode: Literal["album", "track"] = "album"
+    album_id: int | None = None
+    track_ids: list[int] | None = Field(default=None, max_length=1000)
+    missing_only: bool = True
+    include_artwork: bool = True
+    save_artwork: bool = False
+    apply: bool = False
+    limit: int = Field(default=50, ge=1, le=1000)
+    candidate_limit: int = Field(default=3, ge=1, le=10)
+
+
+class AutoTagPreview(BaseModel):
+    track_id: int
+    path: str
+    current: dict[str, Any] = Field(default_factory=dict)
+    proposed: dict[str, Any] = Field(default_factory=dict)
+    changed_fields: list[str] = Field(default_factory=list)
+    confidence: float = 0.0
+    match_type: Literal["album", "track"] = "track"
+    source: str = "MusicBrainz"
+    release_id: str | None = None
+    release_title: str | None = None
+    recording_id: str | None = None
+    artwork_url: str | None = None
+    artwork_thumbnail_url: str | None = None
+    applied: bool = False
+    artwork_saved: bool = False
+    error: str | None = None
+
+
+class AutoTagResponse(BaseModel):
+    total: int = 0
+    matched: int = 0
+    changed: int = 0
+    applied: int = 0
+    artwork_matches: int = 0
+    artwork_saved: int = 0
+    errors: list[str] = Field(default_factory=list)
+    previews: list[AutoTagPreview] = Field(default_factory=list)
 
 
 class DuplicateActionRequest(BaseModel):
@@ -478,6 +640,63 @@ class ScanProgress(BaseModel):
     eta_seconds: float | None = None
     percent: float
     error: str | None = None
+
+
+class FolderWatchChange(BaseModel):
+    id: str
+    change_type: Literal["added", "modified", "removed", "moved"]
+    track_id: int | None = None
+    title: str | None = None
+    artist: str | None = None
+    album: str | None = None
+    old_path: str | None = None
+    new_path: str | None = None
+    previous_modified_at: str | None = None
+    file_modified_at: str | None = None
+    file_size: int | None = None
+    detected_at: str
+    summary: str
+
+
+class FolderWatchStatus(BaseModel):
+    enabled: bool = False
+    folder_path: str | None = None
+    status: Literal["stopped", "idle", "scanning", "error"] = "stopped"
+    interval_seconds: int = 45
+    last_checked_at: str | None = None
+    next_check_at: str | None = None
+    pending_count: int = 0
+    counts: dict[str, int] = Field(default_factory=dict)
+    changes: list[FolderWatchChange] = Field(default_factory=list)
+    error: str | None = None
+
+
+class FolderWatchStartRequest(BaseModel):
+    folder_path: str | None = None
+    interval_seconds: int = Field(default=45, ge=10, le=3600)
+    limit: int = Field(default=300, ge=1, le=5000)
+
+
+class FolderWatchRefreshRequest(BaseModel):
+    folder_path: str | None = None
+    limit: int = Field(default=300, ge=1, le=5000)
+
+
+class FolderWatchApplyRequest(BaseModel):
+    change_ids: list[str] = Field(default_factory=list, max_length=5000)
+    apply_all: bool = False
+    limit: int = Field(default=300, ge=1, le=5000)
+
+
+class FolderWatchApplyResponse(BaseModel):
+    applied: int = 0
+    inserted: int = 0
+    updated: int = 0
+    removed: int = 0
+    moved: int = 0
+    skipped: int = 0
+    errors: list[str] = Field(default_factory=list)
+    status: FolderWatchStatus
 
 
 class ClapConfigRequest(BaseModel):
@@ -648,6 +867,9 @@ class AutoDjRequest(BaseModel):
     artist_cooldown: int = Field(default=6, ge=0, le=50)
     album_cooldown: int = Field(default=10, ge=0, le=100)
     unrated_exploration_percent: float = Field(default=12.0, ge=0.0, le=80.0)
+    target_unrated_percent: float | None = Field(default=None, ge=0.0, le=80.0)
+    target_exploration_percent: float | None = Field(default=None, ge=0.0, le=100.0)
+    max_repeat_artist_percent: float | None = Field(default=None, ge=0.0, le=95.0)
     recently_played_cooldown_days: int = Field(default=14, ge=0, le=3650)
     seed_track_id: int | None = None
     similarity_weight: float = Field(default=0.0, ge=0.0, le=5.0)
@@ -756,6 +978,52 @@ class RecommendationProfileComparison(BaseModel):
 class RecommendationProfileComparisonExportResponse(BaseModel):
     export_path: str
     profile_count: int
+
+
+class RecommendationProfileComparisonImportRequest(BaseModel):
+    report_path: str
+
+
+class RecommendationProfileComparisonImportResponse(BaseModel):
+    report_path: str
+    generated_at: str | None = None
+    seed: int | None = None
+    seed_track_id: int | None = None
+    comparisons: list[RecommendationProfileComparison] = Field(default_factory=list)
+
+
+class RecommendationAbQueue(BaseModel):
+    label: Literal["A", "B"]
+    settings: AutoDjRequest
+    drift: RecommendationDrift
+    tracks: list[QueueTrack]
+
+
+class RecommendationAbTestRequest(BaseModel):
+    base_settings: AutoDjRequest = Field(default_factory=AutoDjRequest)
+    challenger_settings: AutoDjRequest | None = None
+    seed_track_id: int | None = None
+    seed: int | None = None
+
+
+class RecommendationAbTestResponse(BaseModel):
+    test_id: str
+    generated_at: str
+    queues: list[RecommendationAbQueue]
+
+
+class RecommendationAbChoiceRequest(BaseModel):
+    test_id: str | None = None
+    chosen_label: Literal["A", "B"]
+    chosen_track_ids: list[int] = Field(default_factory=list, max_length=500)
+    rejected_track_ids: list[int] = Field(default_factory=list, max_length=500)
+    feedback_weight: float = Field(default=0.35, ge=0.0, le=5.0)
+
+
+class RecommendationAbChoiceResponse(BaseModel):
+    status: str
+    chosen_label: Literal["A", "B"]
+    inserted_feedback: int = 0
 
 
 class ExportRequest(BaseModel):

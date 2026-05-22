@@ -14,6 +14,7 @@ types/      shared TypeScript data shapes returned by the backend
 
 - `app/App.tsx` owns orchestration: global state, loading flows, and page composition.
 - `app/pages/` contains page-sized surfaces such as Library, AutoDJ, Settings, and Now Playing.
+- `app/pages/settings/` and `app/pages/file-management/` contain section components and helpers extracted from those larger pages.
 - `app/player/` contains the bottom player and detached mini-player window.
 - `app/components/` contains reusable app-specific pieces and modals.
 - `app/shared.ts` contains app-level types, constants, formatting helpers, persisted UI preferences, and drag/skip helpers.

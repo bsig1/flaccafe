@@ -1,6 +1,6 @@
 # Testing
 
-FLAC Cafe currently has four practical check layers: TypeScript checks, frontend interaction tests, browser smoke tests, and backend tests.
+FLAC Cafe currently has six practical check layers: TypeScript checks, frontend interaction tests, browser smoke tests, backend tests, route docs checks, and package smoke checks.
 
 ## Common Commands
 
@@ -12,6 +12,7 @@ npm run test:browser
 npm run test:backend
 npm run test
 npm run build
+powershell -ExecutionPolicy Bypass -File scripts\installer_smoke.ps1
 ```
 
 Run the Tauri Rust check separately:
@@ -19,6 +20,13 @@ Run the Tauri Rust check separately:
 ```powershell
 Set-Location src-tauri
 cargo check
+```
+
+For disposable Windows profiles or CI runners, run the full MSI round-trip after building an installer:
+
+```powershell
+npm run package:msi
+powershell -ExecutionPolicy Bypass -File scripts\ci_installer_roundtrip.ps1 -AllowAppDataCleanup
 ```
 
 ## What The Tests Cover
@@ -30,6 +38,9 @@ cargo check
 - `npm run test:backend` runs the Python backend tests through the Windows helper script.
 - `npm run build` verifies the production Vite bundle.
 - `cargo check` verifies the Tauri shell and native command bridge.
+- `scripts/installer_smoke.ps1` checks installer config, resources, and WiX cleanup wiring without installing.
+- `scripts/ci_installer_roundtrip.ps1` installs the MSI, checks the packaged backend `/health` route, uninstalls, and verifies app data cleanup. It is destructive to `%LOCALAPPDATA%\FLAC Cafe`, so keep it to CI or disposable profiles.
+- `frontend/e2e/packaged-tauri.playwright.ts` can launch a packaged Tauri executable when `FLAC_CAFE_TAURI_EXE` points at one; otherwise it skips.
 
 ## Useful Manual Smoke Test
 
@@ -44,6 +55,5 @@ After UI or playback work:
 
 ## Current Gaps
 
-- The browser smoke suite validates the React shell, but it does not launch a packaged Tauri desktop process yet.
-- No automated MSI install/uninstall test yet.
-- Playback codec coverage is still mostly manual because it depends on WebView2 support.
+- Packaged Tauri Playwright coverage is opt-in because WebView2 availability on CI images can still be noisy.
+- Playback codec coverage is still mostly manual because it depends on WebView2 and machine-level codec behavior.

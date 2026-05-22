@@ -29,6 +29,8 @@ import {
 } from "../config/theme";
 import {
   addTracksToPlaylist,
+  applyFolderWatchChanges,
+  autoTagMusicBrainz,
   backupDatabase,
   cancelClapAudioAnalysis,
   clearArtistCache,
@@ -57,8 +59,10 @@ import {
   fetchClapCoverage,
   fetchClapInstall,
   fetchClapStatus,
+  fetchFolderWatchStatus,
   fetchHistory,
   fetchLibraryHealth,
+  fetchLibraryInbox,
   fetchLibraryStats,
   fetchLyrics,
   fetchLyricsOnline,
@@ -85,14 +89,21 @@ import {
   pauseClapAudioAnalysis,
   previewSmartPlaylist,
   recordRecommendationFeedback,
+  refreshFolderWatch,
   removeTrackFromPlaylist,
+  replaceTagsWithRegex,
+  reviewAllInboxTracks,
+  reviewInboxTracks,
   restoreTrack,
   resumeClapAudioAnalysis,
   saveRecommendationProfile,
   setDefaultRecommendationProfile,
   startClapAudioAnalysis,
   startClapInstall,
+  startFolderWatch,
   startScanLibrary,
+  stopFolderWatch,
+  syncDeviceFolder,
   updateClapConfig,
   updateLyrics,
   updateSettings,
@@ -122,6 +133,7 @@ import type {
   AudioAnalysisProgress,
   AutoDjAvoidRule,
   AutoDjSettings,
+  AutoTagResponse,
   BulkUndoLogEntry,
   BulkUndoBatchEntry,
   BulkUndoRestoreResponse,
@@ -136,10 +148,14 @@ import type {
   CsvMetadataImportResponse,
   DuplicateActionRequest,
   DuplicateActionResponse,
+  DeviceSyncResponse,
   DuplicateReviewResponse,
   FileOrganizationReportResponse,
   FileOrganizationResponse,
+  FolderWatchApplyResponse,
+  FolderWatchStatus,
   FilenameTagInferenceResponse,
+  InboxResponse,
   LibraryHealthResponse,
   LibraryStatsResponse,
   LogTailResponse,
@@ -158,6 +174,7 @@ import type {
   SmartPlaylistRule,
   SmartPlaylistSummary,
   StartupDiagnosticsResponse,
+  TagRegexReplaceResponse,
   Track,
   TrackMetadataUpdate,
 } from "../types/api";
@@ -286,12 +303,17 @@ export default function App() {
   const [smartPlaylistName, setSmartPlaylistName] = useState("");
   const [libraryStats, setLibraryStats] = useState<LibraryStatsResponse | null>(null);
   const [libraryHealth, setLibraryHealth] = useState<LibraryHealthResponse | null>(null);
+  const [inbox, setInbox] = useState<InboxResponse | null>(null);
   const [filenameTagPreview, setFilenameTagPreview] = useState<FilenameTagInferenceResponse | null>(null);
+  const [tagRegexPreview, setTagRegexPreview] = useState<TagRegexReplaceResponse | null>(null);
+  const [autoTagPreview, setAutoTagPreview] = useState<AutoTagResponse | null>(null);
   const [fileOrganizationPreview, setFileOrganizationPreview] = useState<FileOrganizationResponse | null>(null);
   const [fileOrganizationReport, setFileOrganizationReport] = useState<FileOrganizationReportResponse | null>(null);
+  const [folderWatchStatus, setFolderWatchStatus] = useState<FolderWatchStatus | null>(null);
   const [metadataCsvExport, setMetadataCsvExport] = useState<CsvMetadataExportResponse | null>(null);
   const [metadataCsvImportPreview, setMetadataCsvImportPreview] = useState<CsvMetadataImportResponse | null>(null);
   const [metadataCsvImportReport, setMetadataCsvImportReport] = useState<CsvMetadataImportReportResponse | null>(null);
+  const [deviceSyncPreview, setDeviceSyncPreview] = useState<DeviceSyncResponse | null>(null);
   const [duplicateActionResult, setDuplicateActionResult] = useState<DuplicateActionResponse | null>(null);
   const [duplicateReview, setDuplicateReview] = useState<DuplicateReviewResponse | null>(null);
   const [chromaprintSetup, setChromaprintSetup] = useState<ChromaprintStatusResponse | null>(null);
@@ -532,6 +554,24 @@ export default function App() {
       setLibraryHealth(health);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not load library stats");
+    }
+  }
+
+  async function loadInbox() {
+    try {
+      setInbox(await fetchLibraryInbox());
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not load Inbox");
+    }
+  }
+
+  async function loadFolderWatchStatus(showError = false) {
+    try {
+      setFolderWatchStatus(await fetchFolderWatchStatus());
+    } catch (error) {
+      if (showError) {
+        setStatus(error instanceof Error ? error.message : "Could not load folder watch status");
+      }
     }
   }
 
@@ -974,12 +1014,95 @@ export default function App() {
       await loadPlaylists();
       await loadSmartPlaylists();
       await loadLibraryStats();
+      await loadInbox();
       await loadClapCoverage();
       await loadSettings();
+      try {
+        setFolderWatchStatus(await startFolderWatch(result.folder_path, folderWatchStatus?.interval_seconds ?? 45));
+      } catch {
+        await loadFolderWatchStatus();
+      }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Scan failed");
     } finally {
       setIsScanning(false);
+    }
+  }
+
+  async function handleStartFolderWatch(intervalSeconds: number) {
+    const targetPath = folderPath.trim() || settings?.library_path || "";
+    if (!targetPath) {
+      setStatus("Choose a music folder before starting folder watch");
+      return;
+    }
+    try {
+      const response = await startFolderWatch(targetPath, intervalSeconds);
+      setFolderWatchStatus(response);
+      setStatus("Folder watch is running. Pending changes will wait for your review.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not start folder watch");
+    }
+  }
+
+  async function handleStopFolderWatch() {
+    try {
+      const response = await stopFolderWatch();
+      setFolderWatchStatus(response);
+      setStatus("Folder watch stopped");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not stop folder watch");
+    }
+  }
+
+  async function handleRefreshFolderWatch() {
+    try {
+      const response = await refreshFolderWatch(folderPath.trim() || settings?.library_path || null);
+      setFolderWatchStatus(response);
+      setStatus(
+        response.pending_count
+          ? `Found ${response.pending_count.toLocaleString()} pending library change${response.pending_count === 1 ? "" : "s"}`
+          : "No pending library changes",
+      );
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not check watched folder");
+    }
+  }
+
+  async function applyFolderWatchResponse(response: FolderWatchApplyResponse) {
+    setFolderWatchStatus(response.status);
+    await Promise.all([
+      refreshTracks(),
+      loadAlbums(),
+      loadPlaylists(),
+      loadSmartPlaylists(),
+      loadLibraryStats(),
+      loadInbox(),
+      loadClapCoverage(),
+    ]);
+    const pieces = [
+      response.inserted ? `${response.inserted.toLocaleString()} added` : "",
+      response.updated ? `${response.updated.toLocaleString()} updated` : "",
+      response.moved ? `${response.moved.toLocaleString()} moved` : "",
+      response.removed ? `${response.removed.toLocaleString()} removed` : "",
+    ].filter(Boolean);
+    const summary = pieces.length ? pieces.join(", ") : "No changes applied";
+    const suffix = response.errors.length ? ` (${response.errors.length.toLocaleString()} error${response.errors.length === 1 ? "" : "s"})` : "";
+    setStatus(`Folder watch applied: ${summary}${suffix}`);
+  }
+
+  async function handleApplyFolderWatch(changeIds: string[], applyAll = false) {
+    const pendingCount = folderWatchStatus?.pending_count ?? 0;
+    if (!applyAll && changeIds.length === 0) {
+      setStatus("Select at least one pending change to apply");
+      return;
+    }
+    if (pendingCount > 0 && !window.confirm("Apply the selected folder changes to the library database? Removed files will leave the library, but FLAC Cafe will not delete audio files.")) {
+      return;
+    }
+    try {
+      await applyFolderWatchResponse(await applyFolderWatchChanges(changeIds, applyAll));
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not apply folder watch changes");
     }
   }
 
@@ -1077,6 +1200,8 @@ export default function App() {
     setTracks((current) => current.map(replace));
     setSelectedAlbumTracks((current) => current.map(replace));
     setSelectedPlaylistTracks((current) => current.map(replace));
+    setSmartTracks((current) => current.map(replace));
+    setInbox((current) => current ? { ...current, tracks: current.tracks.map(replace) } : current);
     setPlaybackQueue((current) => current.map(replace));
     setQueue((current) => current.map((track) => (track.id === updated.id ? { ...track, ...updated } : track)));
     setCurrentTrack((current) => (current?.id === updated.id ? updated : current));
@@ -1090,6 +1215,7 @@ export default function App() {
     setSelectedAlbumTracks((current) => current.filter(remove));
     setSelectedPlaylistTracks((current) => current.filter(remove));
     setSmartTracks((current) => current.filter(remove));
+    setInbox((current) => current ? { ...current, tracks: current.tracks.filter(remove) } : current);
     setPlaybackQueue((current) => current.filter(remove));
     setQueue((current) => current.filter((track) => track.id !== trackId));
     setLibraryTotal((current) => Math.max(0, current - 1));
@@ -1103,7 +1229,7 @@ export default function App() {
     try {
       const response = await deleteTrack(trackId, deleteFile);
       removeTrackEverywhere(trackId);
-      await Promise.all([loadAlbums(), loadPlaylists(), loadLibraryStats(), loadClapCoverage()]);
+      await Promise.all([loadAlbums(), loadPlaylists(), loadLibraryStats(), loadInbox(), loadClapCoverage()]);
       if (response.deleted_file) {
         setStatus("Deleted file and removed track from library");
       } else if (response.file_missing) {
@@ -1142,7 +1268,7 @@ export default function App() {
         }
         removeTrackEverywhere(trackId);
       }
-      await Promise.all([loadAlbums(), loadPlaylists(), loadLibraryStats(), loadClapCoverage()]);
+      await Promise.all([loadAlbums(), loadPlaylists(), loadLibraryStats(), loadInbox(), loadClapCoverage()]);
       if (!deleteFile && snapshot.length > 0 && missingFiles === 0) {
         showUndoAction({
           type: "library-remove",
@@ -1380,7 +1506,7 @@ export default function App() {
 
   async function handleImportPlaylist() {
     if (!importPlaylistPath.trim()) {
-      setStatus("Enter an .m3u playlist path");
+      setStatus("Enter a playlist path");
       return;
     }
     try {
@@ -1439,6 +1565,20 @@ export default function App() {
       setSmartTracks(await fetchSmartPlaylistTracks(smartPlaylistId));
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not load smart playlist");
+    }
+  }
+
+  async function handleReviewInboxTracks(trackIds: number[], allNew = false) {
+    const uniqueIds = Array.from(new Set(trackIds));
+    if (!allNew && uniqueIds.length === 0) {
+      return;
+    }
+    try {
+      const response = allNew ? await reviewAllInboxTracks() : await reviewInboxTracks(uniqueIds);
+      await loadInbox();
+      setStatus(`Reviewed ${response.updated.toLocaleString()} Inbox track${response.updated === 1 ? "" : "s"}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not update Inbox");
     }
   }
 
@@ -1846,6 +1986,124 @@ export default function App() {
     }
   }
 
+  async function handlePreviewTagRegex(
+    field: "title" | "artist" | "album" | "album_artist" | "genre",
+    pattern: string,
+    replacement: string,
+    caseSensitive: boolean,
+    trackIds?: number[] | null,
+  ) {
+    if (!pattern.trim()) {
+      setStatus("Enter a regular expression first");
+      return;
+    }
+    try {
+      const response = await replaceTagsWithRegex({
+        field,
+        pattern,
+        replacement,
+        case_sensitive: caseSensitive,
+        track_ids: trackIds?.length ? trackIds : null,
+        apply: false,
+        limit: 10000,
+      });
+      setTagRegexPreview(response);
+      setStatus(`${response.changed.toLocaleString()} of ${response.total.toLocaleString()} previewed tags would change`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not preview regex tag replacement");
+    }
+  }
+
+  async function handleApplyTagRegex(
+    field: "title" | "artist" | "album" | "album_artist" | "genre",
+    pattern: string,
+    replacement: string,
+    caseSensitive: boolean,
+    trackIds?: number[] | null,
+  ) {
+    if (!pattern.trim()) {
+      setStatus("Enter a regular expression first");
+      return;
+    }
+    if (!window.confirm("Apply this regular expression replacement to tags? File writing follows the current write-tags setting.")) {
+      return;
+    }
+    try {
+      const response = await replaceTagsWithRegex({
+        field,
+        pattern,
+        replacement,
+        case_sensitive: caseSensitive,
+        track_ids: trackIds?.length ? trackIds : null,
+        apply: true,
+        limit: 10000,
+      });
+      setTagRegexPreview(response);
+      await Promise.all([refreshTracks(), loadAlbums(), loadLibraryStats(), loadBulkUndoLog()]);
+      setStatus(`Applied regex tag replacement to ${response.applied.toLocaleString()} track${response.applied === 1 ? "" : "s"}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not apply regex tag replacement");
+    }
+  }
+
+  async function handlePreviewAutoTag(
+    mode: "album" | "track",
+    missingOnly: boolean,
+    includeArtwork: boolean,
+    trackIds?: number[] | null,
+  ) {
+    try {
+      const response = await autoTagMusicBrainz({
+        mode,
+        track_ids: trackIds?.length ? trackIds : null,
+        missing_only: missingOnly,
+        include_artwork: includeArtwork,
+        apply: false,
+        limit: 50,
+        candidate_limit: 3,
+      });
+      setAutoTagPreview(response);
+      setStatus(
+        `MusicBrainz matched ${response.matched.toLocaleString()} of ${response.total.toLocaleString()} previewed tracks`,
+      );
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not preview MusicBrainz auto-tags");
+    }
+  }
+
+  async function handleApplyAutoTag(
+    mode: "album" | "track",
+    missingOnly: boolean,
+    includeArtwork: boolean,
+    saveArtwork: boolean,
+    trackIds?: number[] | null,
+  ) {
+    if (!window.confirm("Apply MusicBrainz metadata to the selected tracks? File writing follows the current write-tags setting.")) {
+      return;
+    }
+    try {
+      const response = await autoTagMusicBrainz({
+        mode,
+        track_ids: trackIds?.length ? trackIds : null,
+        missing_only: missingOnly,
+        include_artwork: includeArtwork,
+        save_artwork: saveArtwork,
+        apply: true,
+        limit: 200,
+        candidate_limit: 3,
+      });
+      setAutoTagPreview(response);
+      await Promise.all([refreshTracks(), loadAlbums(), loadLibraryStats(), loadBulkUndoLog()]);
+      setStatus(
+        `Applied MusicBrainz tags to ${response.applied.toLocaleString()} track${response.applied === 1 ? "" : "s"}${
+          response.artwork_saved ? ` and saved ${response.artwork_saved.toLocaleString()} cover${response.artwork_saved === 1 ? "" : "s"}` : ""
+        }`,
+      );
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not apply MusicBrainz auto-tags");
+    }
+  }
+
   async function handlePreviewFileOrganization(
     template: string,
     baseFolder?: string | null,
@@ -1916,6 +2174,47 @@ export default function App() {
       setStatus(`Exported file organization report to ${response.report_path}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not export file organization report");
+    }
+  }
+
+  async function handleDeviceSync(
+    targetFolder: string,
+    options: {
+      playlistIds?: number[];
+      trackIds?: number[] | null;
+      copyFiles?: boolean;
+      exportPlaylists?: boolean;
+      preserveStructure?: boolean;
+      apply?: boolean;
+    },
+  ) {
+    const trimmedTarget = targetFolder.trim();
+    if (!trimmedTarget) {
+      setStatus("Choose a device sync folder first");
+      return;
+    }
+    if (options.apply && !window.confirm("Copy files and write playlists into the target folder? Existing older files may be replaced.")) {
+      return;
+    }
+    try {
+      const response = await syncDeviceFolder({
+        target_folder: trimmedTarget,
+        playlist_ids: options.playlistIds ?? [],
+        track_ids: options.trackIds?.length ? options.trackIds : null,
+        copy_files: options.copyFiles ?? true,
+        export_playlists: options.exportPlaylists ?? true,
+        preserve_structure: options.preserveStructure ?? true,
+        apply: options.apply ?? false,
+        limit: 10000,
+      });
+      setDeviceSyncPreview(response);
+      setStatus(
+        options.apply
+          ? `Synced ${response.copied_files.toLocaleString()} file${response.copied_files === 1 ? "" : "s"} and wrote ${response.playlists_written.toLocaleString()} playlist${response.playlists_written === 1 ? "" : "s"}`
+          : `${response.changed_files.toLocaleString()} of ${response.total_tracks.toLocaleString()} files would copy`,
+      );
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not run device sync");
     }
   }
 
@@ -2410,17 +2709,22 @@ export default function App() {
   useEffect(() => {
     void loadSmartPlaylists();
     void loadLibraryStats();
+    void loadInbox();
     void loadHistory();
     void loadAutoDjAvoidRules();
     void loadRecommendationProfiles();
     void loadRecommendationHistory();
     void loadBulkUndoLog();
     void loadChromaprintSetup();
+    void loadFolderWatchStatus();
   }, []);
 
   useEffect(() => {
     if (libraryView === "health") {
       void loadLibraryStats();
+    }
+    if (libraryView === "inbox") {
+      void loadInbox();
     }
   }, [libraryView]);
 
@@ -2431,8 +2735,19 @@ export default function App() {
     if (activePage === "fileManagement") {
       void loadBulkUndoLog();
       void loadChromaprintSetup();
+      void loadFolderWatchStatus();
     }
   }, [activePage]);
+
+  useEffect(() => {
+    if (backendStatus === "down") {
+      return;
+    }
+    const handle = window.setInterval(() => {
+      void loadFolderWatchStatus();
+    }, 7000);
+    return () => window.clearInterval(handle);
+  }, [backendStatus]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -2641,6 +2956,7 @@ export default function App() {
               smartPlaylistName={smartPlaylistName}
               libraryStats={libraryStats}
               libraryHealth={libraryHealth}
+              inbox={inbox}
               targetPlaylistId={targetPlaylistId}
               newPlaylistName={newPlaylistName}
               importPlaylistPath={importPlaylistPath}
@@ -2680,6 +2996,7 @@ export default function App() {
               onCreateSmartPlaylist={handleCreateSmartPlaylist}
               onDeleteSmartPlaylist={handleDeleteSmartPlaylist}
               onSelectSmartPlaylist={handleSelectSmartPlaylist}
+              onReviewInboxTracks={handleReviewInboxTracks}
               onShuffleTracks={handleShuffleTracks}
               onQuickAutoDj={handleQuickAutoDj}
               onAvoidAutoDj={handleAvoidAutoDj}
@@ -2802,16 +3119,30 @@ export default function App() {
           ) : activePage === "fileManagement" ? (
             <FileManagementPage
               folderPath={folderPath}
+              playlists={playlists}
               onClearArtistCache={handleClearArtistCache}
               onClearLibraryCaches={handleClearLibraryCaches}
               filenameTagPreview={filenameTagPreview}
               onPreviewFilenameTags={handlePreviewFilenameTags}
               onApplyFilenameTags={handleApplyFilenameTags}
+              tagRegexPreview={tagRegexPreview}
+              onPreviewTagRegex={handlePreviewTagRegex}
+              onApplyTagRegex={handleApplyTagRegex}
+              autoTagPreview={autoTagPreview}
+              onPreviewAutoTag={handlePreviewAutoTag}
+              onApplyAutoTag={handleApplyAutoTag}
               fileOrganizationPreview={fileOrganizationPreview}
               fileOrganizationReport={fileOrganizationReport}
+              folderWatchStatus={folderWatchStatus}
               onPreviewFileOrganization={handlePreviewFileOrganization}
               onApplyFileOrganization={handleApplyFileOrganization}
               onExportFileOrganizationReport={handleExportFileOrganizationReport}
+              onStartFolderWatch={handleStartFolderWatch}
+              onStopFolderWatch={handleStopFolderWatch}
+              onRefreshFolderWatch={handleRefreshFolderWatch}
+              onApplyFolderWatch={handleApplyFolderWatch}
+              deviceSyncPreview={deviceSyncPreview}
+              onDeviceSync={handleDeviceSync}
               metadataCsvExport={metadataCsvExport}
               metadataCsvImportPreview={metadataCsvImportPreview}
               metadataCsvImportReport={metadataCsvImportReport}
