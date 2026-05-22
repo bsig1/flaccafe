@@ -5,7 +5,6 @@
 - Run `scripts\validate_clap_runtime.ps1 -RequireInstalled` on a clean Windows VM after installing the optional ML runtime.
 
 ## MusicBee-Inspired Feature Gaps
-- Add album artwork web search, embedded-artwork writes, and folder-level artwork collision repair.
 - Add CD playback and secure CD ripping to FLAC/MP3 with metadata lookup, CD-Text support, and AccurateRip-style verification.
 - Add saved device sync profiles, USB/MTP detection, Android-player presets, and per-playlist sync rules.
 - Add audiobook handling with separate library views, resume position, bookmarks, chapter support, and sync-friendly metadata.

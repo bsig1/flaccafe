@@ -1,6 +1,8 @@
 import type {
   AlbumSummary,
   AlbumArtworkCandidatesResponse,
+  AlbumArtworkCollisionResponse,
+  AlbumArtworkSearchResponse,
   AlbumArtworkUpdateResponse,
   ArtistInfoResponse,
   AudioAnalysisCoverage,
@@ -643,10 +645,21 @@ export function fetchAlbumArtworkCandidates(albumId: number): Promise<AlbumArtwo
   return request<AlbumArtworkCandidatesResponse>(`/albums/${albumId}/artwork-candidates`);
 }
 
+export function searchAlbumArtworkWeb(albumId: number): Promise<AlbumArtworkSearchResponse> {
+  return request<AlbumArtworkSearchResponse>(`/albums/${albumId}/artwork-search`);
+}
+
 export function chooseAlbumArtwork(albumId: number, artworkPath: string): Promise<AlbumArtworkUpdateResponse> {
   return request<AlbumArtworkUpdateResponse>(`/albums/${albumId}/artwork`, {
     method: "PATCH",
     body: JSON.stringify({ artwork_path: artworkPath }),
+  });
+}
+
+export function embedAlbumArtworkFromPath(albumId: number, artworkPath: string): Promise<AlbumArtworkUpdateResponse> {
+  return request<AlbumArtworkUpdateResponse>(`/albums/${albumId}/artwork`, {
+    method: "PATCH",
+    body: JSON.stringify({ artwork_path: artworkPath, embed_to_files: true }),
   });
 }
 
@@ -661,6 +674,28 @@ export function saveEmbeddedAlbumArtwork(albumId: number, embeddedTrackId: numbe
   });
 }
 
+export function embedEmbeddedAlbumArtwork(albumId: number, embeddedTrackId: number): Promise<AlbumArtworkUpdateResponse> {
+  return request<AlbumArtworkUpdateResponse>(`/albums/${albumId}/artwork`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      embedded_track_id: embeddedTrackId,
+      embed_to_files: true,
+    }),
+  });
+}
+
+export function saveWebAlbumArtwork(albumId: number, artworkUrl: string, embedToFiles = false, sidecarFilename = "cover-web"): Promise<AlbumArtworkUpdateResponse> {
+  return request<AlbumArtworkUpdateResponse>(`/albums/${albumId}/artwork`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      artwork_url: artworkUrl,
+      save_web_as_sidecar: true,
+      embed_to_files: embedToFiles,
+      sidecar_filename: sidecarFilename,
+    }),
+  });
+}
+
 export function clearAlbumArtwork(albumId: number): Promise<AlbumArtworkUpdateResponse> {
   return request<AlbumArtworkUpdateResponse>(`/albums/${albumId}/artwork`, {
     method: "PATCH",
@@ -670,6 +705,20 @@ export function clearAlbumArtwork(albumId: number): Promise<AlbumArtworkUpdateRe
 
 export function albumCoverUrl(albumId: number): string {
   return `${API_BASE}/albums/${albumId}/artwork`;
+}
+
+export function previewArtworkCollisions(limit = 200): Promise<AlbumArtworkCollisionResponse> {
+  return request<AlbumArtworkCollisionResponse>("/library/tools/artwork-collisions", {
+    method: "POST",
+    body: JSON.stringify({ apply: false, limit }),
+  });
+}
+
+export function applyArtworkCollisionRepair(limit = 200): Promise<AlbumArtworkCollisionResponse> {
+  return request<AlbumArtworkCollisionResponse>("/library/tools/artwork-collisions", {
+    method: "POST",
+    body: JSON.stringify({ apply: true, limit }),
+  });
 }
 
 export function fetchSmartPlaylistPresets(): Promise<Record<string, SmartPlaylistRule>> {

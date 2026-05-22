@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
 from mutagen import File as MutagenFile
 from mutagen.flac import FLAC
-from mutagen.id3 import ID3NoHeaderError, POPM, TXXX, USLT
+from mutagen.flac import Picture
+from mutagen.id3 import APIC, ID3NoHeaderError, POPM, TXXX, USLT
 from mutagen.mp3 import MP3
-from mutagen.mp4 import MP4, MP4FreeForm
+from mutagen.mp4 import MP4, MP4Cover, MP4FreeForm
 from mutagen.oggopus import OggOpus
 from mutagen.oggvorbis import OggVorbis
 
@@ -268,6 +270,91 @@ def write_custom_tags(path: Path, tags: dict[str, object | None]) -> None:
         return
 
     raise ValueError(f"Writing custom tags is not supported for {path.suffix or 'this file type'} yet")
+
+
+def _picture_block(data: bytes, media_type: str) -> Picture:
+    picture = Picture()
+    picture.type = 3
+    picture.mime = media_type if media_type in {"image/jpeg", "image/png"} else "image/jpeg"
+    picture.desc = "Cover"
+    picture.data = data
+    return picture
+
+
+def _write_flac_artwork(audio: FLAC, data: bytes, media_type: str) -> None:
+    preserved = [picture for picture in (audio.pictures or []) if getattr(picture, "type", None) != 3]
+    audio.clear_pictures()
+    for picture in preserved:
+        audio.add_picture(picture)
+    audio.add_picture(_picture_block(data, media_type))
+    audio.save()
+
+
+def _write_mp3_artwork(audio: MP3, data: bytes, media_type: str) -> None:
+    try:
+        tags = audio.tags
+        if tags is None:
+            audio.add_tags()
+            tags = audio.tags
+    except ID3NoHeaderError:
+        audio.add_tags()
+        tags = audio.tags
+
+    if tags is None:
+        raise ValueError("Could not create ID3 tags")
+
+    tags.delall("APIC")
+    tags.add(APIC(encoding=3, mime=media_type, type=3, desc="Cover", data=data))
+    audio.save()
+
+
+def _write_mp4_artwork(audio: MP4, data: bytes, media_type: str) -> None:
+    if audio.tags is None:
+        audio.add_tags()
+    if audio.tags is None:
+        raise ValueError("Could not create MP4 tags")
+
+    image_format = MP4Cover.FORMAT_PNG if media_type == "image/png" else MP4Cover.FORMAT_JPEG
+    audio.tags["covr"] = [MP4Cover(data, imageformat=image_format)]
+    audio.save()
+
+
+def _write_vorbis_artwork(audio: OggVorbis | OggOpus, data: bytes, media_type: str) -> None:
+    if audio.tags is None:
+        audio.add_tags()
+    if audio.tags is None:
+        raise ValueError("Could not create Vorbis-style tags")
+
+    _remove_text_keys(audio.tags, ["metadata_block_picture", "coverart", "coverartmime"])
+    encoded = base64.b64encode(_picture_block(data, media_type).write()).decode("ascii")
+    audio.tags["metadata_block_picture"] = [encoded]
+    audio.save()
+
+
+def write_track_artwork(path: Path, data: bytes, media_type: str) -> None:
+    if not path.exists() or not path.is_file():
+        raise ValueError("Audio file is missing on disk")
+    if media_type not in {"image/jpeg", "image/png"}:
+        raise ValueError("Embedded artwork writes support JPEG and PNG")
+
+    audio = MutagenFile(path)
+    if audio is None:
+        raise ValueError("Could not read audio tags")
+
+    if isinstance(audio, FLAC):
+        _write_flac_artwork(audio, data, media_type)
+        return
+    if isinstance(audio, MP3):
+        _write_mp3_artwork(audio, data, media_type)
+        return
+    if isinstance(audio, MP4):
+        _write_mp4_artwork(audio, data, media_type)
+        return
+    if isinstance(audio, (OggVorbis, OggOpus)):
+        _write_vorbis_artwork(audio, data, media_type)
+        return
+
+    raise ValueError(f"Writing artwork is not supported for {path.suffix or 'this file type'} yet")
 
 
 def _write_vorbis_lyrics(audio: FLAC | OggVorbis | OggOpus, lyrics: str, is_synced: bool) -> None:

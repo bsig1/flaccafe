@@ -32,7 +32,7 @@ from mutagen.mp4 import MP4Cover
 
 from .config import APP_STORAGE_ROOT, EXPORT_DIR, MODEL_DIR, database_path
 from .database import connect, get_setting, init_db, rows_to_dicts, set_setting
-from .file_tags import write_custom_tags, write_track_lyrics, write_track_metadata, write_track_rating
+from .file_tags import write_custom_tags, write_track_artwork, write_track_lyrics, write_track_metadata, write_track_rating
 from . import inbox as inbox_service
 from .library_tools import (
     changed_metadata,
@@ -49,7 +49,7 @@ from .library_watcher import (
     start_folder_watcher_from_settings,
     stop_folder_watcher,
 )
-from .musicbrainz_autotag import metadata_changes, preview_auto_tags
+from .musicbrainz_autotag import cover_art_for_release, metadata_changes, parse_year, preview_auto_tags, search_releases, text_similarity
 from .analysis_jobs import (
     cancel_audio_analysis_job,
     get_audio_analysis_job,
@@ -109,6 +109,10 @@ from .schemas import (
     AcousticFingerprintResponse,
     AlbumArtworkCandidate,
     AlbumArtworkCandidatesResponse,
+    AlbumArtworkCollisionIssue,
+    AlbumArtworkCollisionRequest,
+    AlbumArtworkCollisionResponse,
+    AlbumArtworkSearchResponse,
     AlbumArtworkUpdateRequest,
     AlbumArtworkUpdateResponse,
     BulkUndoBatchEntry,
@@ -1406,6 +1410,70 @@ def album_artwork_candidates(conn, album_id: int) -> list[AlbumArtworkCandidate]
     return candidates
 
 
+def album_primary_folder_and_tracks(conn, album_id: int) -> tuple[Path, list[dict]]:
+    tracks = album_track_rows(conn, album_id)
+    if not tracks:
+        raise HTTPException(status_code=404, detail="Album has no tracks")
+    folders: list[Path] = []
+    for track in tracks:
+        folder = Path(track["path"]).expanduser().parent
+        if folder not in folders:
+            folders.append(folder)
+    return folders[0], tracks
+
+
+def album_artwork_web_candidates(conn, album_id: int, limit: int = 8) -> tuple[list[AlbumArtworkCandidate], list[str]]:
+    album = album_record(conn, album_id)
+    album_title = str(album["album"] or "").strip()
+    artist = str(album["album_artist"] or "").strip() or None
+    if not album_title:
+        return [], ["Album title is missing"]
+
+    errors: list[str] = []
+    candidates: list[AlbumArtworkCandidate] = []
+    seen_urls: set[str] = set()
+    releases = search_releases(album_title, artist, limit)
+    if not releases:
+        return [], ["No MusicBrainz releases found for this album"]
+
+    for release in releases:
+        release_id = str(release.get("id") or "").strip()
+        if not release_id:
+            continue
+        artwork = cover_art_for_release(release_id)
+        if not artwork or not artwork.get("image_url"):
+            continue
+        image_url = str(artwork["image_url"])
+        if image_url in seen_urls:
+            continue
+        seen_urls.add(image_url)
+        release_title = str(release.get("title") or album_title)
+        release_artist = release.get("artist-credit-phrase") or artist or ""
+        score = text_similarity(album_title, release_title)
+        if artist:
+            score = (score + text_similarity(artist, release_artist)) / 2
+        year = parse_year(release.get("date"))
+        label_parts = [release_title]
+        if release_artist:
+            label_parts.append(str(release_artist))
+        if year:
+            label_parts.append(str(year))
+        label_parts.append(f"{round(score * 100)}%")
+        candidates.append(
+            AlbumArtworkCandidate(
+                source="web",
+                label=" - ".join(label_parts),
+                artwork_url=image_url,
+                thumbnail_url=artwork.get("thumbnail_url") or image_url,
+                release_id=release_id,
+                media_type=None,
+            )
+        )
+    if not candidates and not errors:
+        errors.append("MusicBrainz matches had no Cover Art Archive front images")
+    return candidates, errors
+
+
 def unique_sidecar_artwork_path(folder: Path, filename: str, media_type: str) -> Path:
     suffix = ".png" if media_type == "image/png" else ".webp" if media_type == "image/webp" else ".jpg"
     base_name = sanitize_path_component(Path(filename).stem or "cover")
@@ -1417,6 +1485,186 @@ def unique_sidecar_artwork_path(folder: Path, filename: str, media_type: str) ->
         if not candidate.exists():
             return candidate
     raise OSError("Could not find an available sidecar artwork filename")
+
+
+def sidecar_filename_for_album(album: sqlite3.Row | dict, media_type: str) -> str:
+    artist = sanitize_path_component(str(album["album_artist"] or "album artist"))
+    title = sanitize_path_component(str(album["album"] or "album"))
+    return f"cover-{artist}-{title}"
+
+
+def read_local_artwork(path: Path) -> tuple[bytes, str]:
+    media_type = image_media_type(path)
+    if media_type not in {"image/jpeg", "image/png", "image/webp"}:
+        raise ValueError("Artwork path must be a local jpg, png, or webp file")
+    return path.read_bytes(), media_type
+
+
+def normalize_embeddable_artwork(data: bytes, media_type: str) -> tuple[bytes, str]:
+    if media_type == "image/webp":
+        raise ValueError("WebP can be saved as a sidecar, but embedded writes require JPEG or PNG")
+    if media_type not in {"image/jpeg", "image/png"}:
+        raise ValueError("Embedded artwork writes require JPEG or PNG")
+    return data, media_type
+
+
+def embed_artwork_for_album(
+    conn,
+    album_id: int,
+    data: bytes,
+    media_type: str,
+    target_track_ids: list[int] | None = None,
+) -> tuple[int, list[str]]:
+    data, media_type = normalize_embeddable_artwork(data, media_type)
+    tracks = album_track_rows(conn, album_id)
+    allowed_ids = {int(track["id"]) for track in tracks}
+    wanted_ids = allowed_ids if target_track_ids is None else {int(track_id) for track_id in target_track_ids} & allowed_ids
+    updated = 0
+    errors: list[str] = []
+    for track in tracks:
+        track_id = int(track["id"])
+        if track_id not in wanted_ids:
+            continue
+        path = Path(track["path"]).expanduser()
+        try:
+            write_track_artwork(path, data, media_type)
+            modified_at, _file_size = file_state(path)
+            conn.execute(
+                "UPDATE tracks SET file_modified_at = ?, updated_at = datetime('now') WHERE id = ?",
+                (modified_at, track_id),
+            )
+            updated += 1
+        except Exception as exc:
+            errors.append(f"{path.name}: {exc}")
+    if updated:
+        conn.execute("DELETE FROM artwork_cache")
+    return updated, errors
+
+
+def common_sidecar_image(folder: Path) -> Path | None:
+    preferred = {"cover", "folder", "front", "album", "albumart", "albumartsmall"}
+    try:
+        images = [path for path in folder.iterdir() if path.is_file() and image_media_type(path)]
+    except OSError:
+        return None
+    images.sort(
+        key=lambda path: (
+            0 if path.stem.replace(" ", "").casefold() in preferred else 1,
+            path.name.casefold(),
+        )
+    )
+    return images[0] if images else None
+
+
+def album_folder_collision_issues(conn, limit: int = 200) -> list[AlbumArtworkCollisionIssue]:
+    rows = rows_to_dicts(
+        conn.execute(
+            """
+            SELECT albums.id AS album_id,
+                   albums.album,
+                   albums.album_artist,
+                   albums.artwork_path,
+                   tracks.id AS track_id,
+                   tracks.path
+            FROM albums
+            JOIN tracks ON tracks.album_id = albums.id
+            ORDER BY lower(coalesce(albums.album_artist, '')),
+                     lower(coalesce(albums.album, '')),
+                     albums.id,
+                     tracks.id
+            """
+        )
+    )
+    albums: dict[int, dict[str, object]] = {}
+    for row in rows:
+        album_id = int(row["album_id"])
+        album = albums.setdefault(
+            album_id,
+            {
+                "album_id": album_id,
+                "album": row["album"],
+                "album_artist": row["album_artist"],
+                "artwork_path": row["artwork_path"],
+                "tracks": [],
+                "folders": set(),
+            },
+        )
+        album["tracks"].append(row)  # type: ignore[index, union-attr]
+        album["folders"].add(str(Path(row["path"]).expanduser().parent.resolve()))  # type: ignore[union-attr]
+
+    by_folder: dict[str, list[dict[str, object]]] = {}
+    for album in albums.values():
+        folders = sorted(album["folders"])  # type: ignore[arg-type]
+        if len(folders) != 1:
+            continue
+        by_folder.setdefault(folders[0], []).append(album)
+
+    issues: list[AlbumArtworkCollisionIssue] = []
+    for folder_text, folder_albums in sorted(by_folder.items()):
+        if len(folder_albums) < 2:
+            continue
+        folder = Path(folder_text)
+        shared_image = common_sidecar_image(folder)
+        if shared_image is None:
+            continue
+        shared_key = path_key(shared_image)
+        for album in folder_albums:
+            album_id = int(album["album_id"])
+            artwork_path = str(album.get("artwork_path") or "")
+            if artwork_path and path_key(Path(artwork_path)) != shared_key:
+                continue
+            tracks = album["tracks"]  # type: ignore[assignment]
+            first_embedded = next(
+                (track for track in tracks if embedded_artwork(Path(track["path"])) is not None),  # type: ignore[index]
+                None,
+            )
+            source = "embedded" if first_embedded else "sidecar"
+            media_type = image_media_type(shared_image) or "image/jpeg"
+            proposed = unique_sidecar_artwork_path(folder, sidecar_filename_for_album(album, media_type), media_type)
+            issues.append(
+                AlbumArtworkCollisionIssue(
+                    album_id=album_id,
+                    album=album.get("album"),  # type: ignore[arg-type]
+                    album_artist=album.get("album_artist"),  # type: ignore[arg-type]
+                    folder=str(folder),
+                    shared_artwork_path=str(shared_image.resolve()),
+                    proposed_path=str(proposed.resolve()),
+                    source=source,  # type: ignore[arg-type]
+                    track_count=len(tracks),  # type: ignore[arg-type]
+                    reason="Multiple albums share one folder-level artwork file",
+                )
+            )
+            if len(issues) >= limit:
+                return issues
+    return issues
+
+
+def repair_album_artwork_collision(conn, issue: AlbumArtworkCollisionIssue) -> AlbumArtworkCollisionIssue:
+    tracks = album_track_rows(conn, issue.album_id)
+    data: bytes | None = None
+    media_type: str | None = None
+    if issue.source == "embedded":
+        for track in tracks:
+            artwork = embedded_artwork(Path(track["path"]))
+            if artwork is not None:
+                data, media_type = artwork
+                break
+    if data is None and issue.shared_artwork_path:
+        data, media_type = read_local_artwork(Path(issue.shared_artwork_path))
+    if data is None or media_type is None:
+        issue.error = "No readable source artwork"
+        return issue
+    target = Path(issue.proposed_path)
+    if target.exists():
+        target = unique_sidecar_artwork_path(target.parent, target.stem, media_type)
+    try:
+        target.write_bytes(data)
+        conn.execute("UPDATE albums SET artwork_path = ? WHERE id = ?", (str(target.resolve()), issue.album_id))
+        issue.proposed_path = str(target.resolve())
+        issue.repaired = True
+    except Exception as exc:
+        issue.error = str(exc)
+    return issue
 
 
 def download_cover_art(url: str) -> tuple[bytes, str]:
@@ -5312,20 +5560,35 @@ def list_album_artwork_candidates(album_id: int) -> AlbumArtworkCandidatesRespon
     return AlbumArtworkCandidatesResponse(album_id=album_id, candidates=candidates)
 
 
+@app.get("/albums/{album_id}/artwork-search", response_model=AlbumArtworkSearchResponse)
+def search_album_artwork(album_id: int, limit: int = Query(default=8, ge=1, le=20)) -> AlbumArtworkSearchResponse:
+    with connect() as conn:
+        candidates, errors = album_artwork_web_candidates(conn, album_id, limit)
+    return AlbumArtworkSearchResponse(album_id=album_id, candidates=candidates, errors=errors)
+
+
 @app.patch("/albums/{album_id}/artwork", response_model=AlbumArtworkUpdateResponse)
 def update_album_artwork(album_id: int, request: AlbumArtworkUpdateRequest) -> AlbumArtworkUpdateResponse:
     with connect() as conn:
         album_record(conn, album_id)
         artwork_path: str | None = None
+        artwork_data: bytes | None = None
+        artwork_media_type: str | None = None
+        embedded_updated = 0
+        errors: list[str] = []
         if request.clear:
             conn.execute("UPDATE albums SET artwork_path = NULL WHERE id = ?", (album_id,))
         elif request.artwork_path:
             candidate = Path(request.artwork_path).expanduser().resolve()
-            if not candidate.exists() or not candidate.is_file() or image_media_type(candidate) is None:
+            if not candidate.exists() or not candidate.is_file():
                 raise HTTPException(status_code=400, detail="Artwork path must be a local jpg, png, or webp file")
+            try:
+                artwork_data, artwork_media_type = read_local_artwork(candidate)
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             artwork_path = str(candidate)
             conn.execute("UPDATE albums SET artwork_path = ? WHERE id = ?", (artwork_path, album_id))
-        elif request.embedded_track_id and request.save_embedded_as_sidecar:
+        elif request.embedded_track_id:
             tracks = album_track_rows(conn, album_id)
             track = next((item for item in tracks if int(item["id"]) == request.embedded_track_id), None)
             if track is None:
@@ -5333,23 +5596,85 @@ def update_album_artwork(album_id: int, request: AlbumArtworkUpdateRequest) -> A
             artwork = cached_artwork(Path(track["path"]))
             if artwork is None:
                 raise HTTPException(status_code=404, detail="Selected track has no readable embedded artwork")
-            data, media_type = artwork
-            folder = Path(track["path"]).expanduser().parent
-            target = unique_sidecar_artwork_path(folder, request.sidecar_filename, media_type)
+            artwork_data, artwork_media_type = artwork
+            if request.save_embedded_as_sidecar:
+                folder = Path(track["path"]).expanduser().parent
+                target = unique_sidecar_artwork_path(folder, request.sidecar_filename, artwork_media_type)
+                try:
+                    target.write_bytes(artwork_data)
+                except OSError as exc:
+                    raise HTTPException(status_code=400, detail=f"Could not save sidecar artwork: {exc}") from exc
+                artwork_path = str(target.resolve())
+                conn.execute("UPDATE albums SET artwork_path = ? WHERE id = ?", (artwork_path, album_id))
+            elif not request.embed_to_files:
+                raise HTTPException(status_code=400, detail="Embedded artwork must be saved as a sidecar or embedded into album files")
+        elif request.artwork_url:
             try:
-                target.write_bytes(data)
-            except OSError as exc:
-                raise HTTPException(status_code=400, detail=f"Could not save sidecar artwork: {exc}") from exc
-            artwork_path = str(target.resolve())
-            conn.execute("UPDATE albums SET artwork_path = ? WHERE id = ?", (artwork_path, album_id))
+                artwork_data, artwork_media_type = download_cover_art(request.artwork_url)
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if request.save_web_as_sidecar:
+                folder, _tracks = album_primary_folder_and_tracks(conn, album_id)
+                target = unique_sidecar_artwork_path(folder, request.sidecar_filename, artwork_media_type)
+                try:
+                    target.write_bytes(artwork_data)
+                except OSError as exc:
+                    raise HTTPException(status_code=400, detail=f"Could not save web artwork: {exc}") from exc
+                artwork_path = str(target.resolve())
+                conn.execute("UPDATE albums SET artwork_path = ? WHERE id = ?", (artwork_path, album_id))
+            elif not request.embed_to_files:
+                raise HTTPException(status_code=400, detail="Web artwork must be saved as a sidecar or embedded into album files")
         else:
-            raise HTTPException(status_code=400, detail="Choose artwork, save embedded artwork as a sidecar, or clear the selection")
+            raise HTTPException(status_code=400, detail="Choose artwork, save artwork as a sidecar, embed artwork, or clear the selection")
+
+        if request.embed_to_files:
+            if artwork_data is None or artwork_media_type is None:
+                raise HTTPException(status_code=400, detail="No readable artwork was selected for embedding")
+            try:
+                embedded_updated, errors = embed_artwork_for_album(
+                    conn,
+                    album_id,
+                    artwork_data,
+                    artwork_media_type,
+                    request.target_track_ids,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         conn.execute("DELETE FROM artwork_cache")
         conn.commit()
         row = album_record(conn, album_id)
         candidates = album_artwork_candidates(conn, album_id)
-    return AlbumArtworkUpdateResponse(album_id=album_id, artwork_path=row["artwork_path"], candidates=candidates)
+    return AlbumArtworkUpdateResponse(
+        album_id=album_id,
+        artwork_path=row["artwork_path"],
+        candidates=candidates,
+        embedded_updated=embedded_updated,
+        errors=errors,
+    )
+
+
+@app.post("/library/tools/artwork-collisions", response_model=AlbumArtworkCollisionResponse)
+def artwork_collision_repair(request: AlbumArtworkCollisionRequest) -> AlbumArtworkCollisionResponse:
+    errors: list[str] = []
+    with connect() as conn:
+        issues = album_folder_collision_issues(conn, request.limit)
+        if not request.apply:
+            return AlbumArtworkCollisionResponse(total=len(issues), issues=issues)
+
+        repaired: list[AlbumArtworkCollisionIssue] = []
+        for issue in issues:
+            try:
+                repaired.append(repair_album_artwork_collision(conn, issue))
+            except Exception as exc:
+                issue.error = str(exc)
+                repaired.append(issue)
+                errors.append(f"{issue.album or issue.album_id}: {exc}")
+        conn.execute("DELETE FROM artwork_cache")
+        conn.commit()
+
+    repaired_count = sum(1 for issue in repaired if issue.repaired)
+    return AlbumArtworkCollisionResponse(total=len(repaired), repaired=repaired_count, issues=repaired, errors=errors)
 
 
 @app.get("/playlists", response_model=list[PlaylistSummary])

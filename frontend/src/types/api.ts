@@ -71,10 +71,13 @@ export interface AlbumSummary {
 }
 
 export interface AlbumArtworkCandidate {
-  source: "selected" | "sidecar" | "embedded";
+  source: "selected" | "sidecar" | "embedded" | "web";
   label: string;
   path: string | null;
   track_id: number | null;
+  artwork_url?: string | null;
+  thumbnail_url?: string | null;
+  release_id?: string | null;
   media_type: string | null;
   size_bytes: number | null;
   modified_at: string | null;
@@ -86,10 +89,39 @@ export interface AlbumArtworkCandidatesResponse {
   candidates: AlbumArtworkCandidate[];
 }
 
+export interface AlbumArtworkSearchResponse {
+  album_id: number;
+  candidates: AlbumArtworkCandidate[];
+  errors: string[];
+}
+
 export interface AlbumArtworkUpdateResponse {
   album_id: number;
   artwork_path: string | null;
   candidates: AlbumArtworkCandidate[];
+  embedded_updated: number;
+  errors: string[];
+}
+
+export interface AlbumArtworkCollisionIssue {
+  album_id: number;
+  album: string | null;
+  album_artist: string | null;
+  folder: string;
+  shared_artwork_path: string | null;
+  proposed_path: string;
+  source: "embedded" | "selected" | "sidecar";
+  track_count: number;
+  reason: string;
+  repaired: boolean;
+  error: string | null;
+}
+
+export interface AlbumArtworkCollisionResponse {
+  total: number;
+  repaired: number;
+  issues: AlbumArtworkCollisionIssue[];
+  errors: string[];
 }
 
 export interface PlaylistSummary {

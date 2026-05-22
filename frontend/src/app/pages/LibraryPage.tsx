@@ -41,8 +41,12 @@ import {
   albumCoverUrl,
   chooseAlbumArtwork,
   clearAlbumArtwork,
+  embedAlbumArtworkFromPath,
+  embedEmbeddedAlbumArtwork,
   fetchAlbumArtworkCandidates,
   saveEmbeddedAlbumArtwork,
+  saveWebAlbumArtwork,
+  searchAlbumArtworkWeb,
 } from "../../lib/api";
 import {
   placeFloatingMenu,
@@ -287,6 +291,7 @@ export function LibraryPage({
   const [dragOverColumn, setDragOverColumn] = useState<MetadataColumnKey | null>(null);
   const [albumArtworkCandidates, setAlbumArtworkCandidates] = useState<AlbumArtworkCandidate[]>([]);
   const [isAlbumArtworkOpen, setIsAlbumArtworkOpen] = useState(false);
+  const [isSearchingAlbumArtwork, setIsSearchingAlbumArtwork] = useState(false);
   const [albumArtworkStatus, setAlbumArtworkStatus] = useState("");
   const [inboxNoteDraft, setInboxNoteDraft] = useState("");
   const [editingInboxRuleId, setEditingInboxRuleId] = useState<number | null>(null);
@@ -548,6 +553,19 @@ export function LibraryPage({
     await loadAlbumArtworkCandidates(albumId);
   }
 
+  function albumArtworkActionStatus(prefix: string, response: { embedded_updated?: number; errors?: string[] }) {
+    const embedded = response.embedded_updated ?? 0;
+    const errors = response.errors ?? [];
+    const parts = [prefix];
+    if (embedded) {
+      parts.push(`embedded into ${embedded.toLocaleString()} file${embedded === 1 ? "" : "s"}`);
+    }
+    if (errors.length) {
+      parts.push(`${errors.length.toLocaleString()} warning${errors.length === 1 ? "" : "s"}`);
+    }
+    return parts.join(" - ");
+  }
+
   async function chooseSidecarArtwork(albumId: number, path: string) {
     try {
       const response = await chooseAlbumArtwork(albumId, path);
@@ -559,6 +577,17 @@ export function LibraryPage({
     }
   }
 
+  async function embedSidecarArtwork(albumId: number, path: string) {
+    try {
+      const response = await embedAlbumArtworkFromPath(albumId, path);
+      setAlbumArtworkCandidates(response.candidates);
+      setAlbumArtworkStatus(albumArtworkActionStatus("Album artwork embedded", response));
+      void refreshTracks();
+    } catch (error) {
+      setAlbumArtworkStatus(error instanceof Error ? error.message : "Could not embed album artwork");
+    }
+  }
+
   async function saveEmbeddedArtwork(albumId: number, trackId: number) {
     try {
       const response = await saveEmbeddedAlbumArtwork(albumId, trackId);
@@ -567,6 +596,49 @@ export function LibraryPage({
       void refreshTracks();
     } catch (error) {
       setAlbumArtworkStatus(error instanceof Error ? error.message : "Could not save embedded artwork");
+    }
+  }
+
+  async function embedEmbeddedArtwork(albumId: number, trackId: number) {
+    try {
+      const response = await embedEmbeddedAlbumArtwork(albumId, trackId);
+      setAlbumArtworkCandidates(response.candidates);
+      setAlbumArtworkStatus(albumArtworkActionStatus("Embedded artwork copied", response));
+      void refreshTracks();
+    } catch (error) {
+      setAlbumArtworkStatus(error instanceof Error ? error.message : "Could not embed artwork into files");
+    }
+  }
+
+  async function searchWebArtwork(albumId: number) {
+    setIsSearchingAlbumArtwork(true);
+    setAlbumArtworkStatus("Searching MusicBrainz and Cover Art Archive...");
+    try {
+      const response = await searchAlbumArtworkWeb(albumId);
+      setAlbumArtworkCandidates((current) => [
+        ...current.filter((candidate) => candidate.source !== "web"),
+        ...response.candidates,
+      ]);
+      setAlbumArtworkStatus(
+        response.candidates.length
+          ? `${response.candidates.length.toLocaleString()} web artwork candidate${response.candidates.length === 1 ? "" : "s"}`
+          : response.errors[0] ?? "No web artwork found",
+      );
+    } catch (error) {
+      setAlbumArtworkStatus(error instanceof Error ? error.message : "Could not search for artwork");
+    } finally {
+      setIsSearchingAlbumArtwork(false);
+    }
+  }
+
+  async function saveWebArtwork(albumId: number, artworkUrl: string, embedToFiles = false) {
+    try {
+      const response = await saveWebAlbumArtwork(albumId, artworkUrl, embedToFiles);
+      setAlbumArtworkCandidates(response.candidates);
+      setAlbumArtworkStatus(albumArtworkActionStatus(embedToFiles ? "Web artwork saved and embedded" : "Web artwork saved", response));
+      void refreshTracks();
+    } catch (error) {
+      setAlbumArtworkStatus(error instanceof Error ? error.message : "Could not save web artwork");
     }
   }
 
@@ -1178,6 +1250,10 @@ export function LibraryPage({
                         <RefreshCw size={14} />
                         Rescan
                       </button>
+                      <button className="secondary-button h-8" type="button" disabled={isSearchingAlbumArtwork} onClick={() => void searchWebArtwork(activeAlbum.id)}>
+                        <Search size={14} />
+                        {isSearchingAlbumArtwork ? "Searching" : "Search Web"}
+                      </button>
                       <button className="secondary-button h-8" type="button" onClick={() => void clearSelectedAlbumArtwork(activeAlbum.id)}>
                         <X size={14} />
                         Clear
@@ -1189,8 +1265,19 @@ export function LibraryPage({
                   </div>
                   <div className="grid max-h-56 gap-2 overflow-auto pr-1 md:grid-cols-2">
                     {albumArtworkCandidates.map((candidate, index) => (
-                      <div key={candidate.path ?? `${candidate.source}-${candidate.track_id}-${index}`} className="grid gap-2 rounded border border-line/70 bg-ink p-2">
-                        <div className="flex items-start justify-between gap-3">
+                      <div key={candidate.path ?? candidate.artwork_url ?? `${candidate.source}-${candidate.track_id}-${index}`} className="grid gap-2 rounded border border-line/70 bg-ink p-2">
+                        <div className="grid grid-cols-[48px_minmax(0,1fr)_auto] items-start gap-3">
+                          <div className="h-12 w-12 overflow-hidden rounded border border-line bg-panel">
+                            {candidate.thumbnail_url ? (
+                              <img className="h-full w-full object-cover" src={candidate.thumbnail_url} alt="" />
+                            ) : candidate.source === "embedded" && candidate.track_id ? (
+                              <img className="h-full w-full object-cover" src={albumArtworkUrl(candidate.track_id)} alt="" />
+                            ) : candidate.source === "selected" && activeAlbum ? (
+                              <img className="h-full w-full object-cover" src={albumCoverUrl(activeAlbum.id)} alt="" />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center text-[10px] uppercase text-muted">Art</div>
+                            )}
+                          </div>
                           <div className="min-w-0">
                             <div className="truncate text-sm text-neutral-200">
                               {candidate.selected ? "Selected - " : ""}{candidate.label}
@@ -1198,20 +1285,43 @@ export function LibraryPage({
                             <div className="truncate text-xs text-muted">
                               {candidate.source}
                               {candidate.size_bytes ? ` - ${Math.round(candidate.size_bytes / 1024).toLocaleString()} KB` : ""}
+                              {candidate.release_id ? ` - ${candidate.release_id}` : ""}
                             </div>
                           </div>
                           {candidate.selected && <CheckCircle2 className="shrink-0 text-moss" size={16} />}
                         </div>
-                        {candidate.path && <div className="truncate text-xs text-muted">{candidate.path}</div>}
+                        {(candidate.path || candidate.artwork_url) && (
+                          <div className="truncate text-xs text-muted">{candidate.path ?? candidate.artwork_url}</div>
+                        )}
                         <div className="flex flex-wrap gap-2">
                           {candidate.path && (
                             <button className="secondary-button h-8" type="button" onClick={() => void chooseSidecarArtwork(activeAlbum.id, candidate.path ?? "")}>
                               Use
                             </button>
                           )}
+                          {candidate.path && candidate.source !== "embedded" && (
+                            <button className="secondary-button h-8" type="button" onClick={() => void embedSidecarArtwork(activeAlbum.id, candidate.path ?? "")}>
+                              Embed Files
+                            </button>
+                          )}
                           {candidate.source === "embedded" && candidate.track_id && (
                             <button className="secondary-button h-8" type="button" onClick={() => void saveEmbeddedArtwork(activeAlbum.id, candidate.track_id ?? 0)}>
                               Save Sidecar
+                            </button>
+                          )}
+                          {candidate.source === "embedded" && candidate.track_id && (
+                            <button className="secondary-button h-8" type="button" onClick={() => void embedEmbeddedArtwork(activeAlbum.id, candidate.track_id ?? 0)}>
+                              Embed Files
+                            </button>
+                          )}
+                          {candidate.source === "web" && candidate.artwork_url && (
+                            <button className="secondary-button h-8" type="button" onClick={() => void saveWebArtwork(activeAlbum.id, candidate.artwork_url ?? "", false)}>
+                              Save Sidecar
+                            </button>
+                          )}
+                          {candidate.source === "web" && candidate.artwork_url && (
+                            <button className="primary-button h-8" type="button" onClick={() => void saveWebArtwork(activeAlbum.id, candidate.artwork_url ?? "", true)}>
+                              Save + Embed
                             </button>
                           )}
                         </div>

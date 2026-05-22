@@ -61,10 +61,13 @@ class AlbumSummary(BaseModel):
 
 
 class AlbumArtworkCandidate(BaseModel):
-    source: Literal["selected", "sidecar", "embedded"]
+    source: Literal["selected", "sidecar", "embedded", "web"]
     label: str
     path: str | None = None
     track_id: int | None = None
+    artwork_url: str | None = None
+    thumbnail_url: str | None = None
+    release_id: str | None = None
     media_type: str | None = None
     size_bytes: int | None = None
     modified_at: str | None = None
@@ -76,10 +79,20 @@ class AlbumArtworkCandidatesResponse(BaseModel):
     candidates: list[AlbumArtworkCandidate] = Field(default_factory=list)
 
 
+class AlbumArtworkSearchResponse(BaseModel):
+    album_id: int
+    candidates: list[AlbumArtworkCandidate] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
 class AlbumArtworkUpdateRequest(BaseModel):
     artwork_path: str | None = None
     embedded_track_id: int | None = None
+    artwork_url: str | None = None
     save_embedded_as_sidecar: bool = False
+    save_web_as_sidecar: bool = False
+    embed_to_files: bool = False
+    target_track_ids: list[int] | None = Field(default=None, max_length=1000)
     sidecar_filename: str = Field(default="cover", max_length=80)
     clear: bool = False
 
@@ -88,6 +101,34 @@ class AlbumArtworkUpdateResponse(BaseModel):
     album_id: int
     artwork_path: str | None = None
     candidates: list[AlbumArtworkCandidate] = Field(default_factory=list)
+    embedded_updated: int = 0
+    errors: list[str] = Field(default_factory=list)
+
+
+class AlbumArtworkCollisionIssue(BaseModel):
+    album_id: int
+    album: str | None = None
+    album_artist: str | None = None
+    folder: str
+    shared_artwork_path: str | None = None
+    proposed_path: str
+    source: Literal["embedded", "selected", "sidecar"]
+    track_count: int = 0
+    reason: str
+    repaired: bool = False
+    error: str | None = None
+
+
+class AlbumArtworkCollisionRequest(BaseModel):
+    apply: bool = False
+    limit: int = Field(default=200, ge=1, le=2000)
+
+
+class AlbumArtworkCollisionResponse(BaseModel):
+    total: int = 0
+    repaired: int = 0
+    issues: list[AlbumArtworkCollisionIssue] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
 
 
 class PlaylistSummary(BaseModel):

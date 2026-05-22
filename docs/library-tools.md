@@ -55,7 +55,7 @@ The MusicBrainz Auto-Tag tool searches MusicBrainz in either album/release mode 
 
 "Missing only" keeps existing non-empty fields intact. Turning it off allows MusicBrainz data to replace current SQLite metadata. Applying uses the same metadata writer as manual edits, so the Settings file-writing toggle controls whether supported audio files are updated too.
 
-Artwork matching uses the Cover Art Archive front image for the matched MusicBrainz release. When "Save cover" is enabled during apply, FLAC Cafe downloads the image as a local sidecar file in the album folder and selects it for the album. It does not embed artwork into audio files yet.
+Artwork matching uses the Cover Art Archive front image for the matched MusicBrainz release. When "Save cover" is enabled during apply, FLAC Cafe downloads the image as a local sidecar file in the album folder and selects it for the album. Album artwork can also be embedded into supported audio files from the Albums view after review.
 
 ## File Organization
 
@@ -101,9 +101,11 @@ Manual playlist import accepts M3U/M3U8, PLS, XSPF, WPL, and iTunes XML files. L
 
 ## Album Artwork
 
-The Albums view can now open an artwork manager for the selected album. FLAC Cafe lists sidecar images found near album files and embedded artwork found in album tracks. A sidecar image can be selected as the album cover, or embedded artwork can be saved as a `cover.jpg`/`cover.png` sidecar and selected.
+The Albums view can open an artwork manager for the selected album. FLAC Cafe lists sidecar images found near album files, embedded artwork found in album tracks, and optional web results from MusicBrainz/Cover Art Archive. A sidecar image can be selected as the album cover, embedded artwork can be saved as a `cover.jpg`/`cover.png` sidecar, and web artwork can be saved beside the album after review.
 
-This does not embed artwork into audio files yet. It stores the selected album artwork path in SQLite and uses embedded or nearby sidecar artwork as a fallback.
+The artwork manager can embed reviewed JPEG/PNG artwork into supported audio tags for FLAC, MP3, M4A/MP4, Ogg Vorbis, and Opus. WebP covers are allowed as sidecar images, but embedded writes require JPEG or PNG because most audio tag formats do not support WebP artwork reliably.
+
+File Management includes an Artwork Collision Repair tool for folders that contain multiple albums and a single shared `cover`, `folder`, or `front` image. Preview shows the affected albums first. Repair writes album-specific sidecar filenames, selects them in SQLite, and leaves the original shared image in place.
 
 ## Cache Cleanup
 

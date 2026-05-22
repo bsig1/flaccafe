@@ -1502,6 +1502,100 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(image.status_code, 200)
         self.assertEqual(image.content, b"cover-bytes")
 
+    def test_album_artwork_web_search_saves_sidecar_and_embeds_files(self) -> None:
+        album_dir = self.root / "Music" / "Web Album"
+        album_dir.mkdir(parents=True)
+        first_file = album_dir / "one.mp3"
+        second_file = album_dir / "two.mp3"
+        first_file.write_bytes(b"one")
+        second_file.write_bytes(b"two")
+        with connect() as conn:
+            conn.execute("INSERT INTO albums(album, album_artist, year) VALUES('Web Album', 'Web Artist', 2026)")
+            album_id = int(conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
+            conn.commit()
+        insert_track(first_file, album="Web Album", album_artist="Web Artist", album_id=album_id)
+        insert_track(second_file, album="Web Album", album_artist="Web Artist", album_id=album_id)
+
+        with patch(
+            "backend.app.main.search_releases",
+            return_value=[
+                {
+                    "id": "release-web",
+                    "title": "Web Album",
+                    "artist-credit-phrase": "Web Artist",
+                    "date": "2026-01-01",
+                }
+            ],
+        ), patch(
+            "backend.app.main.cover_art_for_release",
+            return_value={"image_url": "https://cover.example/front.jpg", "thumbnail_url": "https://cover.example/thumb.jpg"},
+        ):
+            search = self.client.get(f"/albums/{album_id}/artwork-search")
+
+        self.assertEqual(search.status_code, 200)
+        self.assertEqual(search.json()["candidates"][0]["source"], "web")
+        self.assertEqual(search.json()["candidates"][0]["release_id"], "release-web")
+
+        with patch("backend.app.main.download_cover_art", return_value=(b"web-cover", "image/jpeg")), patch(
+            "backend.app.main.write_track_artwork"
+        ) as write_artwork:
+            saved = self.client.patch(
+                f"/albums/{album_id}/artwork",
+                json={
+                    "artwork_url": "https://cover.example/front.jpg",
+                    "save_web_as_sidecar": True,
+                    "embed_to_files": True,
+                    "sidecar_filename": "cover-web",
+                },
+            )
+
+        self.assertEqual(saved.status_code, 200)
+        body = saved.json()
+        self.assertEqual(body["embedded_updated"], 2)
+        self.assertEqual(write_artwork.call_count, 2)
+        artwork_path = Path(body["artwork_path"])
+        self.assertTrue(artwork_path.exists())
+        self.assertEqual(artwork_path.read_bytes(), b"web-cover")
+
+    def test_artwork_collision_preview_and_apply_creates_album_specific_sidecars(self) -> None:
+        album_dir = self.root / "Music" / "Split Folder"
+        album_dir.mkdir(parents=True)
+        shared_cover = album_dir / "cover.jpg"
+        shared_cover.write_bytes(b"shared-cover")
+        first_file = album_dir / "album-a.mp3"
+        second_file = album_dir / "album-b.mp3"
+        first_file.write_bytes(b"one")
+        second_file.write_bytes(b"two")
+        with connect() as conn:
+            conn.execute("INSERT INTO albums(album, album_artist, year) VALUES('Album A', 'Artist A', 2026)")
+            first_album_id = int(conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
+            conn.execute("INSERT INTO albums(album, album_artist, year) VALUES('Album B', 'Artist B', 2026)")
+            second_album_id = int(conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
+            conn.commit()
+        insert_track(first_file, album="Album A", album_artist="Artist A", album_id=first_album_id)
+        insert_track(second_file, album="Album B", album_artist="Artist B", album_id=second_album_id)
+
+        with patch("backend.app.main.embedded_artwork", return_value=None):
+            preview = self.client.post("/library/tools/artwork-collisions", json={"limit": 10})
+
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(preview.json()["total"], 2)
+
+        with patch("backend.app.main.embedded_artwork", return_value=None):
+            applied = self.client.post("/library/tools/artwork-collisions", json={"limit": 10, "apply": True})
+
+        self.assertEqual(applied.status_code, 200)
+        self.assertEqual(applied.json()["repaired"], 2)
+        with connect() as conn:
+            paths = [
+                Path(row["artwork_path"])
+                for row in conn.execute("SELECT artwork_path FROM albums ORDER BY album").fetchall()
+            ]
+        self.assertEqual(len(paths), 2)
+        self.assertTrue(all(path.exists() for path in paths))
+        self.assertTrue(all(path != shared_cover for path in paths))
+        self.assertEqual({path.read_bytes() for path in paths}, {b"shared-cover"})
+
     def test_lyrics_endpoint_prefers_database_edits(self) -> None:
         audio_file = self.root / "lyrics.mp3"
         audio_file.write_bytes(b"audio")

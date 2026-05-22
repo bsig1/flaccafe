@@ -7,6 +7,7 @@ import {
   FileText,
   Fingerprint,
   FolderOpen,
+  Image,
   ListChecks,
   RefreshCw,
   RotateCcw,
@@ -23,6 +24,7 @@ import {
 
 import type {
   AcousticFingerprintResponse,
+  AlbumArtworkCollisionResponse,
   AudioConversionPreviewResponse,
   AudioConversionProgress,
   AudioConversionSetupResponse,
@@ -49,6 +51,10 @@ import type {
   ReportFileResponse,
   TagRegexReplaceResponse,
 } from "../../types/api";
+import {
+  applyArtworkCollisionRepair,
+  previewArtworkCollisions,
+} from "../../lib/api";
 import {
   DisclosureSection,
   NumberField,
@@ -282,6 +288,9 @@ export function FileManagementPage({
   const [acousticOverwrite, setAcousticOverwrite] = useState(false);
   const [acousticLimit, setAcousticLimit] = useState(200);
   const [reportPath, setReportPath] = useState("");
+  const [artworkCollisionLimit, setArtworkCollisionLimit] = useState(200);
+  const [artworkCollisionPreview, setArtworkCollisionPreview] = useState<AlbumArtworkCollisionResponse | null>(null);
+  const [artworkCollisionBusy, setArtworkCollisionBusy] = useState(false);
 
   const scopedTrackIds = useMemo(() => parseTrackIds(trackScopeText), [trackScopeText]);
   const duplicateTrackIds = useMemo(
@@ -348,6 +357,43 @@ export function FileManagementPage({
     }
     setAcceptedAutoTagTrackIds(next);
   }, [autoTagPreview]);
+
+  async function previewArtworkCollisionRepair() {
+    setArtworkCollisionBusy(true);
+    setStatus("Checking album artwork folders...");
+    try {
+      const response = await previewArtworkCollisions(artworkCollisionLimit);
+      setArtworkCollisionPreview(response);
+      setStatus(
+        response.total
+          ? `Found ${response.total.toLocaleString()} album artwork collision${response.total === 1 ? "" : "s"}`
+          : "No album artwork collisions found",
+      );
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not check artwork collisions");
+    } finally {
+      setArtworkCollisionBusy(false);
+    }
+  }
+
+  async function applyArtworkCollisionRepairs() {
+    setArtworkCollisionBusy(true);
+    setStatus("Repairing album artwork collisions...");
+    try {
+      const response = await applyArtworkCollisionRepair(artworkCollisionLimit);
+      setArtworkCollisionPreview(response);
+      setStatus(
+        `Repaired ${response.repaired.toLocaleString()} of ${response.total.toLocaleString()} album artwork collision${
+          response.total === 1 ? "" : "s"
+        }`,
+      );
+      await onAdvancedTagLibraryChanged();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not repair artwork collisions");
+    } finally {
+      setArtworkCollisionBusy(false);
+    }
+  }
 
   function saveCurrentFilenameTagPreset() {
     const trimmed = filenameTagPattern.trim();
@@ -801,6 +847,90 @@ export function FileManagementPage({
               ) : (
                 <div className="rounded border border-line/70 bg-ink px-3 py-6 text-center text-xs text-muted">
                   No pending folder changes. The watcher will keep checking in the background while it is enabled.
+                </div>
+              )}
+            </div>
+          </DisclosureSection>
+
+          <DisclosureSection title="Artwork Collision Repair" description="Find shared folder covers that make multiple albums show the same artwork">
+            <div className="grid gap-4 text-sm text-neutral-200">
+              <div className="grid gap-3 md:grid-cols-[140px_1fr] md:items-end">
+                <NumberField
+                  label="Album Limit"
+                  min={1}
+                  max={2000}
+                  value={artworkCollisionLimit}
+                  onChange={setArtworkCollisionLimit}
+                />
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="text-xs text-muted">
+                    Preview creates no files. Repair writes album-specific sidecar images and selects them in the album database row.
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button className="secondary-button" type="button" disabled={artworkCollisionBusy} onClick={() => void previewArtworkCollisionRepair()}>
+                      <Eye size={15} />
+                      Preview
+                    </button>
+                    <button
+                      className="primary-button"
+                      type="button"
+                      disabled={artworkCollisionBusy || (artworkCollisionPreview?.total ?? 0) === 0}
+                      onClick={() => void applyArtworkCollisionRepairs()}
+                    >
+                      <Image size={15} />
+                      Repair
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {artworkCollisionPreview && (
+                <div className="rounded border border-line bg-ink p-3 text-xs">
+                  <div className="mb-3 grid gap-2 sm:grid-cols-3">
+                    <div>
+                      <div className="font-semibold text-white">{artworkCollisionPreview.total.toLocaleString()}</div>
+                      <div className="text-muted">Collisions</div>
+                    </div>
+                    <div>
+                      <div className="font-semibold text-moss">{artworkCollisionPreview.repaired.toLocaleString()}</div>
+                      <div className="text-muted">Repaired</div>
+                    </div>
+                    <div>
+                      <div className="font-semibold text-ember">{artworkCollisionPreview.errors.length.toLocaleString()}</div>
+                      <div className="text-muted">Errors</div>
+                    </div>
+                  </div>
+                  <div className="grid max-h-80 gap-1 overflow-auto pr-1">
+                    {artworkCollisionPreview.issues.slice(0, 80).map((issue) => (
+                      <div key={`${issue.album_id}-${issue.proposed_path}`} className="grid gap-1 rounded bg-panel px-2 py-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="truncate font-medium text-neutral-200">
+                            {issue.album_artist ? `${issue.album_artist} - ` : ""}{issue.album ?? `Album ${issue.album_id}`}
+                          </span>
+                          <span className="rounded border border-line px-1.5 py-0.5 text-[10px] uppercase text-muted">
+                            {issue.source}
+                          </span>
+                          {issue.repaired && (
+                            <span className="rounded border border-moss/40 bg-moss/10 px-1.5 py-0.5 text-[10px] uppercase text-moss">
+                              repaired
+                            </span>
+                          )}
+                        </div>
+                        <div className="truncate text-muted" title={issue.folder}>{issue.folder}</div>
+                        <div className="truncate text-muted" title={issue.shared_artwork_path ?? undefined}>
+                          Shared: {issue.shared_artwork_path ?? "embedded"}
+                        </div>
+                        <div className={issue.error ? "truncate text-ember" : "truncate text-moss"} title={issue.proposed_path}>
+                          {issue.error ? `Error: ${issue.error}` : `Album cover: ${issue.proposed_path}`}
+                        </div>
+                      </div>
+                    ))}
+                    {artworkCollisionPreview.issues.length === 0 && (
+                      <div className="rounded border border-line/70 bg-panel px-3 py-6 text-center text-muted">
+                        No folder-level artwork collisions found.
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

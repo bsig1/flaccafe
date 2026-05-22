@@ -39,10 +39,29 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `POST /library/maintenance/clear` clears derived caches.
 - `POST /library/tools/infer-tags` previews or applies filename-based tag inference.
 - `POST /library/tools/regex-tags` previews or applies regex search/replace for common text tags.
+- `GET /library/tools/regex-presets` lists saved regex tag cleanup presets.
+- `POST /library/tools/regex-presets` creates a saved regex tag cleanup preset.
+- `DELETE /library/tools/regex-presets/{preset_id}` deletes a saved regex tag cleanup preset.
+- `POST /library/tools/custom-tags` previews or applies custom tag edits.
+- `GET /library/tools/virtual-tags` lists saved virtual/computed tag definitions.
+- `POST /library/tools/virtual-tags` creates a virtual/computed tag definition.
+- `DELETE /library/tools/virtual-tags/{definition_id}` deletes a virtual/computed tag definition.
+- `POST /library/tools/virtual-tags/preview` previews virtual/computed tag values.
+- `POST /library/tools/copy-swap-tags` previews or applies multi-field copy/swap operations.
+- `POST /library/tools/tag-backups` creates a tag backup export.
+- `GET /library/tools/tag-backups` lists tag backup exports.
+- `POST /library/tools/tag-backups/restore` restores tags from a backup export.
 - `POST /library/tools/autotag` previews or applies MusicBrainz album/track metadata and optional Cover Art Archive sidecar artwork.
+- `POST /library/tools/artwork-collisions` previews or repairs folders where multiple albums share one folder-level cover.
 - `POST /library/tools/organize-files` previews or applies tag-based file moves.
 - `POST /library/tools/organize-files/report` writes a JSON file-organization preview report.
 - `POST /library/tools/device-sync` previews or applies folder/device copy jobs and playlist exports.
+- `GET /library/tools/audio-conversion/setup` checks configured, bundled, and PATH-based FFmpeg locations.
+- `PATCH /library/tools/audio-conversion/setup` saves or clears a custom FFmpeg path.
+- `POST /library/tools/audio-conversion/preview` previews audio conversion targets.
+- `POST /library/tools/audio-conversion/jobs` starts an audio conversion job.
+- `GET /library/tools/audio-conversion/jobs/{job_id}` returns audio conversion job progress.
+- `POST /library/tools/audio-conversion/jobs/{job_id}/cancel` cancels an audio conversion job.
 - `POST /library/tools/export-metadata-csv` exports track metadata for spreadsheet cleanup.
 - `POST /library/tools/import-metadata-csv` previews or applies spreadsheet metadata changes.
 - `POST /library/tools/import-metadata-csv/report` writes a JSON dry-run import report.
@@ -81,7 +100,8 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `GET /albums/{album_id}/tracks` lists an album's tracks.
 - `GET /albums/{album_id}/artwork` serves selected, sidecar, or embedded album artwork.
 - `GET /albums/{album_id}/artwork-candidates` lists local sidecar and embedded artwork candidates.
-- `PATCH /albums/{album_id}/artwork` chooses sidecar artwork, saves embedded artwork as a sidecar, or clears a selection.
+- `GET /albums/{album_id}/artwork-search` searches MusicBrainz/Cover Art Archive for web artwork candidates.
+- `PATCH /albums/{album_id}/artwork` chooses sidecar artwork, saves web or embedded artwork as a sidecar, embeds JPEG/PNG artwork into album files, or clears a selection.
 - `GET /playlists` lists manual playlists.
 - `POST /playlists` creates a playlist.
 - `DELETE /playlists/{playlist_id}` deletes a playlist.
