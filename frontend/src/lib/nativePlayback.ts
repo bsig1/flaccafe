@@ -27,6 +27,14 @@ export interface NativeAudioDevice {
   supported_configs: number;
 }
 
+export interface NativeDspSettings {
+  equalizerEnabled: boolean;
+  equalizerBandMode: "10" | "15";
+  equalizerPreampDb: number;
+  equalizerGains: number[];
+  limiterEnabled: boolean;
+}
+
 async function invokeNative<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<T>(command, args);
@@ -38,12 +46,14 @@ export function nativePlayFile({
   startSeconds,
   deviceId,
   bufferFrames,
+  dspSettings,
 }: {
   path: string;
   volume: number;
   startSeconds?: number | null;
   deviceId?: string | null;
   bufferFrames?: number | null;
+  dspSettings?: NativeDspSettings | null;
 }): Promise<NativePlaybackStatus> {
   return invokeNative<NativePlaybackStatus>("native_play_file", {
     path,
@@ -51,6 +61,7 @@ export function nativePlayFile({
     startSeconds: startSeconds ?? null,
     deviceId: deviceId ?? null,
     bufferFrames: bufferFrames || null,
+    dspSettings: dspSettings ?? null,
   });
 }
 
@@ -61,6 +72,7 @@ export function nativeCrossfadeToFile({
   startSeconds,
   deviceId,
   bufferFrames,
+  dspSettings,
 }: {
   path: string;
   volume: number;
@@ -68,6 +80,7 @@ export function nativeCrossfadeToFile({
   startSeconds?: number | null;
   deviceId?: string | null;
   bufferFrames?: number | null;
+  dspSettings?: NativeDspSettings | null;
 }): Promise<NativePlaybackStatus> {
   return invokeNative<NativePlaybackStatus>("native_crossfade_to_file", {
     path,
@@ -76,6 +89,7 @@ export function nativeCrossfadeToFile({
     startSeconds: startSeconds ?? null,
     deviceId: deviceId ?? null,
     bufferFrames: bufferFrames || null,
+    dspSettings: dspSettings ?? null,
   });
 }
 
@@ -97,6 +111,10 @@ export function nativeSeek(seconds: number): Promise<NativePlaybackStatus> {
 
 export function nativeSetVolume(volume: number): Promise<NativePlaybackStatus> {
   return invokeNative<NativePlaybackStatus>("native_set_volume", { volume });
+}
+
+export function nativeSetDsp(dspSettings: NativeDspSettings): Promise<NativePlaybackStatus> {
+  return invokeNative<NativePlaybackStatus>("native_set_dsp", { dspSettings });
 }
 
 export function nativeStatus(): Promise<NativePlaybackStatus> {

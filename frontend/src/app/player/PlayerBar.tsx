@@ -31,10 +31,12 @@ import {
   nativePlayFile,
   nativeResume,
   nativeSeek,
+  nativeSetDsp,
   nativeSetVolume,
   nativeStatus,
   nativeStop,
 } from "../../lib/nativePlayback";
+import type { NativeDspSettings } from "../../lib/nativePlayback";
 import type { SmtcButtonPayload } from "../../lib/tauriMedia";
 import {
   clearSmtcState,
@@ -62,6 +64,7 @@ import {
   formatPlaybackTime,
   miniPlayerChannelName,
   miniPlayerTrackSnapshot,
+  normalizeEqualizerGains,
   publishMiniPlayerSnapshot,
   readStoredMuted,
   readStoredVolume,
@@ -172,6 +175,16 @@ export function PlayerBar({
   const replayGain = replayGainMultiplier(currentTrack, replayGainMode, replayGainPreampDb, replayGainPreventClipping);
   const outputVolume = muted ? 0 : clampNumber(volume * replayGain, 0, 1);
   const useNativePlayback = playbackEngine === "native";
+
+  function currentNativeDspSettings(): NativeDspSettings {
+    return {
+      equalizerEnabled,
+      equalizerBandMode,
+      equalizerPreampDb,
+      equalizerGains: normalizeEqualizerGains(equalizerGains, equalizerBandMode),
+      limiterEnabled: dspLimiterEnabled,
+    };
+  }
 
   function disconnectAudioNode(node: AudioNode | null) {
     try {
@@ -401,6 +414,22 @@ export function PlayerBar({
     dspLimiterEnabled,
   ]);
 
+  useEffect(() => {
+    if (!useNativePlayback) {
+      return;
+    }
+    void nativeSetDsp(currentNativeDspSettings()).catch(() => {
+      // Browser preview and older installed builds may not expose the native DSP command.
+    });
+  }, [
+    useNativePlayback,
+    equalizerEnabled,
+    equalizerBandMode,
+    equalizerPreampDb,
+    equalizerGains,
+    dspLimiterEnabled,
+  ]);
+
   function cancelFade() {
     if (fadeTimerRef.current !== null) {
       window.clearInterval(fadeTimerRef.current);
@@ -482,6 +511,7 @@ export function PlayerBar({
         startSeconds,
         deviceId: nativeOutputDeviceId,
         bufferFrames: nativeBufferFrames,
+        dspSettings: currentNativeDspSettings(),
       });
       nativeLoadedTrackIdRef.current = track.id;
       nativeEndedTrackIdRef.current = null;
@@ -513,6 +543,7 @@ export function PlayerBar({
         durationMs: Math.max(0, fadeMs),
         deviceId: nativeOutputDeviceId,
         bufferFrames: nativeBufferFrames,
+        dspSettings: currentNativeDspSettings(),
       });
       nativeLoadedTrackIdRef.current = nextTrack.id;
       nativeEndedTrackIdRef.current = null;

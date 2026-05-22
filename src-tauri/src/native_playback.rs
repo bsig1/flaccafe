@@ -9,9 +9,10 @@ use rodio::{
         self,
         traits::{DeviceTrait, HostTrait},
     },
-    Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source,
+    source::SeekError,
+    ChannelCount, Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, SampleRate, Source,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 #[derive(Default)]
@@ -19,7 +20,6 @@ pub struct NativePlaybackState {
     inner: Mutex<NativePlaybackInner>,
 }
 
-#[derive(Default)]
 struct NativePlaybackInner {
     sink: Option<MixerDeviceSink>,
     player: Option<Arc<Player>>,
@@ -34,6 +34,28 @@ struct NativePlaybackInner {
     channel_count: Option<u16>,
     sample_format: Option<String>,
     stream_errors: Arc<Mutex<Vec<String>>>,
+    dsp_settings: Arc<Mutex<NativeDspSettings>>,
+}
+
+impl Default for NativePlaybackInner {
+    fn default() -> Self {
+        Self {
+            sink: None,
+            player: None,
+            fading_player: None,
+            current_path: None,
+            duration_seconds: None,
+            volume: 1.0,
+            device_id: None,
+            device_name: None,
+            buffer_frames: None,
+            sample_rate: None,
+            channel_count: None,
+            sample_format: None,
+            stream_errors: Arc::new(Mutex::new(Vec::new())),
+            dsp_settings: Arc::new(Mutex::new(NativeDspSettings::default())),
+        }
+    }
 }
 
 fn clamp_volume(volume: f32) -> f32 {
@@ -42,6 +64,104 @@ fn clamp_volume(volume: f32) -> f32 {
     } else {
         1.0
     }
+}
+
+const EQ_FREQUENCIES_10: [f32; 10] = [
+    31.0, 62.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0,
+];
+const EQ_FREQUENCIES_15: [f32; 15] = [
+    25.0, 40.0, 63.0, 100.0, 160.0, 250.0, 400.0, 630.0, 1000.0, 1600.0, 2500.0, 4000.0, 6300.0,
+    10000.0, 16000.0,
+];
+const EQ_GAIN_MIN_DB: f32 = -12.0;
+const EQ_GAIN_MAX_DB: f32 = 12.0;
+const EQ_PREAMP_MIN_DB: f32 = -12.0;
+const EQ_PREAMP_MAX_DB: f32 = 6.0;
+const DSP_SETTINGS_CHECK_SAMPLES: usize = 2048;
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeDspSettings {
+    #[serde(default)]
+    equalizer_enabled: bool,
+    #[serde(default = "default_equalizer_band_mode")]
+    equalizer_band_mode: String,
+    #[serde(default)]
+    equalizer_preamp_db: f32,
+    #[serde(default)]
+    equalizer_gains: Vec<f32>,
+    #[serde(default = "default_limiter_enabled")]
+    limiter_enabled: bool,
+}
+
+impl Default for NativeDspSettings {
+    fn default() -> Self {
+        Self {
+            equalizer_enabled: false,
+            equalizer_band_mode: default_equalizer_band_mode(),
+            equalizer_preamp_db: 0.0,
+            equalizer_gains: Vec::new(),
+            limiter_enabled: true,
+        }
+    }
+}
+
+fn default_equalizer_band_mode() -> String {
+    "10".to_string()
+}
+
+fn default_limiter_enabled() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct NormalizedDspSettings {
+    equalizer_enabled: bool,
+    frequencies: Vec<f32>,
+    equalizer_preamp_db: f32,
+    equalizer_gains: Vec<f32>,
+    limiter_enabled: bool,
+}
+
+impl NativeDspSettings {
+    fn normalized(&self) -> NormalizedDspSettings {
+        let frequencies = if self.equalizer_band_mode == "15" {
+            EQ_FREQUENCIES_15.to_vec()
+        } else {
+            EQ_FREQUENCIES_10.to_vec()
+        };
+        let mut gains = Vec::with_capacity(frequencies.len());
+        for index in 0..frequencies.len() {
+            gains.push(clamp_db(
+                self.equalizer_gains.get(index).copied().unwrap_or(0.0),
+                EQ_GAIN_MIN_DB,
+                EQ_GAIN_MAX_DB,
+            ));
+        }
+        NormalizedDspSettings {
+            equalizer_enabled: self.equalizer_enabled,
+            frequencies,
+            equalizer_preamp_db: clamp_db(
+                self.equalizer_preamp_db,
+                EQ_PREAMP_MIN_DB,
+                EQ_PREAMP_MAX_DB,
+            ),
+            equalizer_gains: gains,
+            limiter_enabled: self.limiter_enabled,
+        }
+    }
+}
+
+fn clamp_db(value: f32, min: f32, max: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(min, max)
+    } else {
+        0.0
+    }
+}
+
+fn db_to_gain(db: f32) -> f32 {
+    10.0_f32.powf(db / 20.0)
 }
 
 #[derive(Serialize)]
@@ -147,6 +267,14 @@ impl NativePlaybackInner {
                 .map(|errors| errors.clone())
                 .unwrap_or_default(),
             message,
+        }
+    }
+
+    fn update_dsp_settings(&self, settings: Option<NativeDspSettings>) {
+        if let Some(settings) = settings {
+            if let Ok(mut current) = self.dsp_settings.lock() {
+                *current = settings;
+            }
         }
     }
 
@@ -296,6 +424,299 @@ fn build_decoder(
     Ok((decoder, duration_seconds))
 }
 
+#[derive(Clone, Copy)]
+enum NativeEqBandKind {
+    LowShelf,
+    Peaking,
+    HighShelf,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct BiquadCoefficients {
+    b0: f32,
+    b1: f32,
+    b2: f32,
+    a1: f32,
+    a2: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct BiquadState {
+    x1: f32,
+    x2: f32,
+    y1: f32,
+    y2: f32,
+}
+
+impl BiquadState {
+    fn process(&mut self, sample: f32, coefficients: BiquadCoefficients) -> f32 {
+        let output =
+            coefficients.b0 * sample + coefficients.b1 * self.x1 + coefficients.b2 * self.x2
+                - coefficients.a1 * self.y1
+                - coefficients.a2 * self.y2;
+        self.x2 = self.x1;
+        self.x1 = sample;
+        self.y2 = self.y1;
+        self.y1 = output;
+        if output.is_finite() {
+            output
+        } else {
+            0.0
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
+fn biquad_coefficients(
+    kind: NativeEqBandKind,
+    frequency: f32,
+    gain_db: f32,
+    sample_rate: u32,
+) -> BiquadCoefficients {
+    let nyquist = sample_rate as f32 / 2.0;
+    let bounded_frequency = frequency.clamp(10.0, nyquist * 0.92);
+    let w0 = 2.0 * std::f32::consts::PI * bounded_frequency / sample_rate as f32;
+    let cos_w0 = w0.cos();
+    let sin_w0 = w0.sin();
+    let a = 10.0_f32.powf(gain_db / 40.0);
+    let q = 1.0_f32;
+
+    let (b0, b1, b2, a0, a1, a2) = match kind {
+        NativeEqBandKind::LowShelf => {
+            let sqrt_a = a.sqrt();
+            let alpha = sin_w0 / 2.0 * 2.0_f32.sqrt();
+            (
+                a * ((a + 1.0) - (a - 1.0) * cos_w0 + 2.0 * sqrt_a * alpha),
+                2.0 * a * ((a - 1.0) - (a + 1.0) * cos_w0),
+                a * ((a + 1.0) - (a - 1.0) * cos_w0 - 2.0 * sqrt_a * alpha),
+                (a + 1.0) + (a - 1.0) * cos_w0 + 2.0 * sqrt_a * alpha,
+                -2.0 * ((a - 1.0) + (a + 1.0) * cos_w0),
+                (a + 1.0) + (a - 1.0) * cos_w0 - 2.0 * sqrt_a * alpha,
+            )
+        }
+        NativeEqBandKind::HighShelf => {
+            let sqrt_a = a.sqrt();
+            let alpha = sin_w0 / 2.0 * 2.0_f32.sqrt();
+            (
+                a * ((a + 1.0) + (a - 1.0) * cos_w0 + 2.0 * sqrt_a * alpha),
+                -2.0 * a * ((a - 1.0) + (a + 1.0) * cos_w0),
+                a * ((a + 1.0) + (a - 1.0) * cos_w0 - 2.0 * sqrt_a * alpha),
+                (a + 1.0) - (a - 1.0) * cos_w0 + 2.0 * sqrt_a * alpha,
+                2.0 * ((a - 1.0) - (a + 1.0) * cos_w0),
+                (a + 1.0) - (a - 1.0) * cos_w0 - 2.0 * sqrt_a * alpha,
+            )
+        }
+        NativeEqBandKind::Peaking => {
+            let alpha = sin_w0 / (2.0 * q);
+            (
+                1.0 + alpha * a,
+                -2.0 * cos_w0,
+                1.0 - alpha * a,
+                1.0 + alpha / a,
+                -2.0 * cos_w0,
+                1.0 - alpha / a,
+            )
+        }
+    };
+
+    if !a0.is_finite() || a0.abs() < f32::EPSILON {
+        return BiquadCoefficients {
+            b0: 1.0,
+            b1: 0.0,
+            b2: 0.0,
+            a1: 0.0,
+            a2: 0.0,
+        };
+    }
+    BiquadCoefficients {
+        b0: b0 / a0,
+        b1: b1 / a0,
+        b2: b2 / a0,
+        a1: a1 / a0,
+        a2: a2 / a0,
+    }
+}
+
+struct NativeDspSource<S>
+where
+    S: Source<Item = f32>,
+{
+    input: S,
+    settings: Arc<Mutex<NativeDspSettings>>,
+    active_settings: NormalizedDspSettings,
+    coefficients: Vec<BiquadCoefficients>,
+    state_by_channel: Vec<Vec<BiquadState>>,
+    channel_index: usize,
+    check_countdown: usize,
+}
+
+impl<S> NativeDspSource<S>
+where
+    S: Source<Item = f32>,
+{
+    // Rodio pulls interleaved samples from Source, so the EQ keeps one biquad state
+    // chain per output channel. That preserves stereo imaging while avoiding a heavier
+    // custom mixer or external DSP dependency.
+    fn new(input: S, settings: Arc<Mutex<NativeDspSettings>>) -> Self {
+        let active_settings = settings
+            .lock()
+            .map(|settings| settings.normalized())
+            .unwrap_or_else(|_| NativeDspSettings::default().normalized());
+        let mut source = Self {
+            input,
+            settings,
+            active_settings,
+            coefficients: Vec::new(),
+            state_by_channel: Vec::new(),
+            channel_index: 0,
+            check_countdown: 0,
+        };
+        source.rebuild_filters(true);
+        source
+    }
+
+    fn channel_count(&self) -> usize {
+        usize::from(self.input.channels().get()).max(1)
+    }
+
+    fn rebuild_filters(&mut self, reset_state: bool) {
+        let sample_rate = self.input.sample_rate().get();
+        let band_count = self.active_settings.frequencies.len();
+        self.coefficients.clear();
+        self.coefficients.reserve(band_count);
+        for (index, frequency) in self.active_settings.frequencies.iter().enumerate() {
+            let kind = if index == 0 {
+                NativeEqBandKind::LowShelf
+            } else if index + 1 == band_count {
+                NativeEqBandKind::HighShelf
+            } else {
+                NativeEqBandKind::Peaking
+            };
+            self.coefficients.push(biquad_coefficients(
+                kind,
+                *frequency,
+                self.active_settings.equalizer_gains[index],
+                sample_rate,
+            ));
+        }
+
+        let channels = self.channel_count();
+        if reset_state || self.state_by_channel.len() != channels {
+            self.state_by_channel = vec![vec![BiquadState::default(); band_count]; channels];
+            self.channel_index = 0;
+            return;
+        }
+
+        for channel_state in &mut self.state_by_channel {
+            channel_state.resize(band_count, BiquadState::default());
+            if reset_state {
+                for state in channel_state {
+                    state.reset();
+                }
+            }
+        }
+    }
+
+    fn refresh_settings_if_needed(&mut self) {
+        if self.check_countdown > 0 {
+            self.check_countdown -= 1;
+            return;
+        }
+        self.check_countdown = DSP_SETTINGS_CHECK_SAMPLES;
+        let Ok(settings) = self.settings.lock() else {
+            return;
+        };
+        let normalized = settings.normalized();
+        drop(settings);
+        if normalized != self.active_settings {
+            let reset_state =
+                normalized.frequencies.len() != self.active_settings.frequencies.len();
+            self.active_settings = normalized;
+            self.rebuild_filters(reset_state);
+        }
+    }
+
+    fn process_sample(&mut self, mut sample: f32) -> f32 {
+        self.refresh_settings_if_needed();
+        if self.active_settings.equalizer_enabled {
+            sample *= db_to_gain(self.active_settings.equalizer_preamp_db);
+            if let Some(channel_state) = self.state_by_channel.get_mut(self.channel_index) {
+                for (state, coefficients) in channel_state.iter_mut().zip(self.coefficients.iter())
+                {
+                    sample = state.process(sample, *coefficients);
+                }
+            }
+        }
+        if self.active_settings.limiter_enabled {
+            sample = soft_limit(sample);
+        }
+        let channels = self.channel_count();
+        self.channel_index = (self.channel_index + 1) % channels;
+        sample
+    }
+}
+
+impl<S> Iterator for NativeDspSource<S>
+where
+    S: Source<Item = f32>,
+{
+    type Item = f32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.input.next().map(|sample| self.process_sample(sample))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.input.size_hint()
+    }
+}
+
+impl<S> Source for NativeDspSource<S>
+where
+    S: Source<Item = f32>,
+{
+    fn current_span_len(&self) -> Option<usize> {
+        self.input.current_span_len()
+    }
+
+    fn channels(&self) -> ChannelCount {
+        self.input.channels()
+    }
+
+    fn sample_rate(&self) -> SampleRate {
+        self.input.sample_rate()
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        self.input.total_duration()
+    }
+
+    fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
+        self.input.try_seek(pos)?;
+        self.rebuild_filters(true);
+        Ok(())
+    }
+}
+
+fn soft_limit(sample: f32) -> f32 {
+    if !sample.is_finite() {
+        return 0.0;
+    }
+    // A zero-lookahead soft limiter is enough for playback safety here: it catches
+    // EQ/preamp overs without adding latency or turning the native engine into a DAW.
+    let threshold = 0.96_f32;
+    let magnitude = sample.abs();
+    if magnitude <= threshold {
+        return sample;
+    }
+    let excess = (magnitude - threshold) / (1.0 - threshold);
+    let limited = threshold + (1.0 - threshold) * excess.tanh();
+    sample.signum() * limited.min(1.0)
+}
+
 fn seek_player(player: &Player, seconds: Option<f64>) -> Result<(), String> {
     if let Some(seconds) = seconds {
         if seconds.is_finite() && seconds > 0.0 {
@@ -341,6 +762,7 @@ pub fn native_play_file(
     start_seconds: Option<f64>,
     device_id: Option<String>,
     buffer_frames: Option<u32>,
+    dsp_settings: Option<NativeDspSettings>,
 ) -> Result<NativePlaybackStatus, String> {
     let path_buf = PathBuf::from(&path);
     if !path_buf.exists() || !path_buf.is_file() {
@@ -355,6 +777,7 @@ pub fn native_play_file(
     if let Ok(mut errors) = inner.stream_errors.lock() {
         errors.clear();
     }
+    inner.update_dsp_settings(dsp_settings);
     inner.stop();
 
     let (decoder, duration_seconds) = build_decoder(&path_buf)?;
@@ -367,7 +790,7 @@ pub fn native_play_file(
     let player = Arc::new(Player::connect_new(&mixer));
     let bounded_volume = clamp_volume(volume);
     player.set_volume(bounded_volume);
-    player.append(decoder);
+    player.append(NativeDspSource::new(decoder, inner.dsp_settings.clone()));
     seek_player(&player, start_seconds)?;
     player.play();
 
@@ -387,6 +810,7 @@ pub fn native_crossfade_to_file(
     start_seconds: Option<f64>,
     device_id: Option<String>,
     buffer_frames: Option<u32>,
+    dsp_settings: Option<NativeDspSettings>,
 ) -> Result<NativePlaybackStatus, String> {
     let path_buf = PathBuf::from(&path);
     if !path_buf.exists() || !path_buf.is_file() {
@@ -401,6 +825,7 @@ pub fn native_crossfade_to_file(
     if let Ok(mut errors) = inner.stream_errors.lock() {
         errors.clear();
     }
+    inner.update_dsp_settings(dsp_settings);
 
     let (decoder, duration_seconds) = build_decoder(&path_buf)?;
     let mixer = inner
@@ -412,7 +837,7 @@ pub fn native_crossfade_to_file(
     let new_player = Arc::new(Player::connect_new(&mixer));
     let target_volume = clamp_volume(volume);
     new_player.set_volume(0.0);
-    new_player.append(decoder);
+    new_player.append(NativeDspSource::new(decoder, inner.dsp_settings.clone()));
     seek_player(&new_player, start_seconds)?;
     new_player.play();
 
@@ -514,6 +939,21 @@ pub fn native_set_volume(
 }
 
 #[tauri::command]
+pub fn native_set_dsp(
+    state: State<'_, NativePlaybackState>,
+    dsp_settings: NativeDspSettings,
+) -> Result<NativePlaybackStatus, String> {
+    let inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Native playback lock poisoned".to_string())?;
+    if let Ok(mut current) = inner.dsp_settings.lock() {
+        *current = dsp_settings;
+    }
+    Ok(inner.status(None))
+}
+
+#[tauri::command]
 pub fn native_status(
     state: State<'_, NativePlaybackState>,
 ) -> Result<NativePlaybackStatus, String> {
@@ -552,4 +992,53 @@ pub fn native_list_output_devices() -> Result<Vec<NativeAudioDevice>, String> {
         });
     }
     Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_dsp_settings_normalize_band_count_and_gain_limits() {
+        let settings = NativeDspSettings {
+            equalizer_enabled: true,
+            equalizer_band_mode: "15".to_string(),
+            equalizer_preamp_db: 30.0,
+            equalizer_gains: vec![18.0, -18.0, 3.5],
+            limiter_enabled: true,
+        };
+
+        let normalized = settings.normalized();
+
+        assert_eq!(normalized.frequencies.len(), 15);
+        assert_eq!(normalized.equalizer_gains.len(), 15);
+        assert_eq!(normalized.equalizer_gains[0], EQ_GAIN_MAX_DB);
+        assert_eq!(normalized.equalizer_gains[1], EQ_GAIN_MIN_DB);
+        assert_eq!(normalized.equalizer_gains[2], 3.5);
+        assert_eq!(normalized.equalizer_preamp_db, EQ_PREAMP_MAX_DB);
+    }
+
+    #[test]
+    fn native_biquad_coefficients_are_finite() {
+        for kind in [
+            NativeEqBandKind::LowShelf,
+            NativeEqBandKind::Peaking,
+            NativeEqBandKind::HighShelf,
+        ] {
+            let coefficients = biquad_coefficients(kind, 1000.0, 6.0, 48_000);
+            assert!(coefficients.b0.is_finite());
+            assert!(coefficients.b1.is_finite());
+            assert!(coefficients.b2.is_finite());
+            assert!(coefficients.a1.is_finite());
+            assert!(coefficients.a2.is_finite());
+        }
+    }
+
+    #[test]
+    fn native_soft_limiter_caps_extreme_samples() {
+        assert_eq!(soft_limit(f32::NAN), 0.0);
+        assert!(soft_limit(8.0) <= 1.0);
+        assert!(soft_limit(-8.0) >= -1.0);
+        assert_eq!(soft_limit(0.5), 0.5);
+    }
 }

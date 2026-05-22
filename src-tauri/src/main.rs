@@ -320,6 +320,7 @@ fn main() {
             native_playback::native_pause,
             native_playback::native_stop,
             native_playback::native_seek,
+            native_playback::native_set_dsp,
             native_playback::native_set_volume,
             native_playback::native_status,
             native_playback::native_list_output_devices,

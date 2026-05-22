@@ -296,7 +296,7 @@ export function PlayerSettingsSection({
                 Equalizer / DSP
               </div>
               <div className="text-xs text-muted">
-                Applied in WebView playback. Native Rust playback currently bypasses this DSP chain.
+                Applied in WebView and Native Rust playback; exact filter shape can differ slightly by engine.
               </div>
             </div>
             <label className="flex items-center gap-2 text-sm text-neutral-200">
@@ -311,11 +311,6 @@ export function PlayerSettingsSection({
               />
             </label>
           </div>
-          {uiPreferences.playbackEngine === "native" && uiPreferences.equalizerEnabled && (
-            <div className="rounded border border-ember/40 bg-panel px-3 py-2 text-xs text-ember">
-              Switch Playback Engine to WebView audio to hear EQ/DSP while the Rust output path remains clean.
-            </div>
-          )}
           <div className="grid gap-2 md:grid-cols-[1fr_1fr_auto]">
             <label className="grid gap-2">
               <span className="text-xs uppercase text-muted">Bands</span>
