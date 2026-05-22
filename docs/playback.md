@@ -14,6 +14,8 @@ The native Rust engine uses `rodio` for playback, `cpal` for output, and Symphon
 
 Settings > Player can list native output devices in the desktop app. The selected device and buffer size are passed into the Rust engine when playback starts. On Windows this is currently cpal's WASAPI shared-mode path; exclusive mode needs a dedicated WASAPI backend rather than the generic rodio bridge.
 
+Settings > Player also includes a compact Native diagnostics panel. It shows the current native output configuration plus the most recent rodio, cpal, Symphonia, file-open, stream-callback, and seek failures. The panel can refresh or clear the in-memory diagnostics without affecting normal playback.
+
 ## Player Behavior
 
 - The queue lives in React state and can be reordered from the queue handle.
@@ -25,6 +27,7 @@ Settings > Player can list native output devices in the desktop app. The selecte
 - The compact bottom player is a single setting; older saved `playerLayout: "compact"` preferences are still treated as compact mode.
 - The detached mini player communicates with the main app through `BroadcastChannel`, and its always-on-top state plus snap size are persisted.
 - If a file cannot be decoded by WebView2, the player bar can open it in the user's default Windows audio app.
+- Native playback diagnostics are kept in memory for the current app session and capped to the most recent failures.
 
 ## Now Playing And Visualizers
 

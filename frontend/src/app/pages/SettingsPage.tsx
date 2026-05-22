@@ -22,10 +22,13 @@ import {
   themeOrder,
 } from "../../config/theme";
 import {
+  nativeClearDiagnostics,
+  nativeDiagnostics,
   nativeListOutputDevices,
 } from "../../lib/nativePlayback";
 import type {
   NativeAudioDevice,
+  NativePlaybackDiagnosticsResponse,
 } from "../../lib/nativePlayback";
 import type {
   AudioAnalysisProgress,
@@ -158,6 +161,8 @@ export function SettingsPage({
   const [codecSupport, setCodecSupport] = useState(detectCodecSupport);
   const [nativeDevices, setNativeDevices] = useState<NativeAudioDevice[]>([]);
   const [nativeDeviceMessage, setNativeDeviceMessage] = useState<string | null>(null);
+  const [nativePlaybackDiagnostics, setNativePlaybackDiagnostics] = useState<NativePlaybackDiagnosticsResponse | null>(null);
+  const [nativeDiagnosticsMessage, setNativeDiagnosticsMessage] = useState<string | null>(null);
   const progressPercent = Math.max(0, Math.min(100, scanProgress?.percent ?? 0));
   const hasCount = Boolean(scanProgress && scanProgress.total_files > 0);
   const audioProgressPercent = Math.max(0, Math.min(100, audioAnalysisProgress?.percent ?? 0));
@@ -171,6 +176,7 @@ export function SettingsPage({
 
   useEffect(() => {
     void refreshNativeDevices();
+    void refreshNativePlaybackDiagnostics();
   }, []);
 
   async function refreshNativeDevices() {
@@ -181,6 +187,27 @@ export function SettingsPage({
     } catch {
       setNativeDevices([]);
       setNativeDeviceMessage("Native output devices are only available in the desktop app.");
+    }
+  }
+
+  async function refreshNativePlaybackDiagnostics() {
+    try {
+      const response = await nativeDiagnostics();
+      setNativePlaybackDiagnostics(response);
+      setNativeDiagnosticsMessage(null);
+    } catch {
+      setNativePlaybackDiagnostics(null);
+      setNativeDiagnosticsMessage("Native playback diagnostics are only available in the desktop app.");
+    }
+  }
+
+  async function clearNativePlaybackDiagnostics() {
+    try {
+      const response = await nativeClearDiagnostics();
+      setNativePlaybackDiagnostics(response);
+      setNativeDiagnosticsMessage("Native playback diagnostics cleared.");
+    } catch {
+      setNativeDiagnosticsMessage("Could not clear native playback diagnostics in this environment.");
     }
   }
 
@@ -586,9 +613,13 @@ export function SettingsPage({
             uiPreferences={uiPreferences}
             setUiPreferences={setUiPreferences}
             nativeDevices={nativeDevices}
-            nativeDeviceMessage={nativeDeviceMessage}
-            onRefreshNativeDevices={refreshNativeDevices}
-            codecSupport={codecSupport}
+              nativeDeviceMessage={nativeDeviceMessage}
+              onRefreshNativeDevices={refreshNativeDevices}
+              nativeDiagnostics={nativePlaybackDiagnostics}
+              nativeDiagnosticsMessage={nativeDiagnosticsMessage}
+              onRefreshNativeDiagnostics={refreshNativePlaybackDiagnostics}
+              onClearNativeDiagnostics={clearNativePlaybackDiagnostics}
+              codecSupport={codecSupport}
             onRefreshCodecSupport={() => setCodecSupport(detectCodecSupport())}
           />
 

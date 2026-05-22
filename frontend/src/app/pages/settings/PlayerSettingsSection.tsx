@@ -6,6 +6,11 @@ import {
 
 import type {
   NativeAudioDevice,
+  NativePlaybackDiagnostic,
+  NativePlaybackDiagnosticsResponse,
+} from "../../../lib/nativePlayback";
+import {
+  summarizeNativeDiagnostics,
 } from "../../../lib/nativePlayback";
 import {
   DisclosureSection,
@@ -61,12 +66,36 @@ export function detectCodecSupport(): CodecSupportRow[] {
   }));
 }
 
+function formatNativeDiagnosticTime(timestampMs: number): string {
+  if (!timestampMs) {
+    return "unknown time";
+  }
+  return new Date(timestampMs).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+}
+
+function nativeDiagnosticContext(entry: NativePlaybackDiagnostic): string {
+  return [
+    entry.device_name,
+    entry.sample_rate ? `${entry.sample_rate} Hz` : null,
+    entry.channel_count ? `${entry.channel_count} ch` : null,
+    entry.sample_format,
+    entry.buffer_frames ? `${entry.buffer_frames} frames` : null,
+    entry.path,
+  ]
+    .filter(Boolean)
+    .join(" - ");
+}
+
 export function PlayerSettingsSection({
   uiPreferences,
   setUiPreferences,
   nativeDevices,
   nativeDeviceMessage,
   onRefreshNativeDevices,
+  nativeDiagnostics,
+  nativeDiagnosticsMessage,
+  onRefreshNativeDiagnostics,
+  onClearNativeDiagnostics,
   codecSupport,
   onRefreshCodecSupport,
 }: {
@@ -75,11 +104,16 @@ export function PlayerSettingsSection({
   nativeDevices: NativeAudioDevice[];
   nativeDeviceMessage: string | null;
   onRefreshNativeDevices: () => void | Promise<void>;
+  nativeDiagnostics: NativePlaybackDiagnosticsResponse | null;
+  nativeDiagnosticsMessage: string | null;
+  onRefreshNativeDiagnostics: () => void | Promise<void>;
+  onClearNativeDiagnostics: () => void | Promise<void>;
   codecSupport: CodecSupportRow[];
   onRefreshCodecSupport: () => void;
 }) {
   const equalizerFrequencies = equalizerFrequenciesForMode(uiPreferences.equalizerBandMode);
   const equalizerGains = normalizeEqualizerGains(uiPreferences.equalizerGains, uiPreferences.equalizerBandMode);
+  const recentNativeDiagnostics = nativeDiagnostics?.entries.slice(-5).reverse() ?? [];
 
   function updateEqualizerGain(index: number, value: number) {
     setUiPreferences((current) => {
@@ -190,6 +224,78 @@ export function PlayerSettingsSection({
           {nativeDeviceMessage && <div className="text-xs text-muted">{nativeDeviceMessage}</div>}
           <div className="rounded border border-line/70 bg-panel px-3 py-2 text-xs text-muted">
             WASAPI shared output is handled by cpal on Windows. Exclusive mode needs a dedicated WASAPI backend, so it stays out of the current rodio bridge.
+          </div>
+        </div>
+        <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="font-medium text-white">Native diagnostics</div>
+              <div className="text-xs text-muted">{summarizeNativeDiagnostics(nativeDiagnostics)}</div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button className="secondary-button h-8" type="button" onClick={() => void onRefreshNativeDiagnostics()}>
+                <RefreshCw size={14} />
+                Refresh
+              </button>
+              <button
+                className="secondary-button h-8"
+                type="button"
+                disabled={!nativeDiagnostics || (nativeDiagnostics.entries.length === 0 && nativeDiagnostics.stream_errors.length === 0)}
+                onClick={() => void onClearNativeDiagnostics()}
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+          <div className="grid gap-2 text-xs">
+            <div className="grid gap-1 rounded border border-line/70 bg-panel px-3 py-2">
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-muted">
+                <span>Device: {nativeDiagnostics?.device_name ?? "not opened"}</span>
+                <span>Config: {nativeDiagnostics?.sample_rate ? `${nativeDiagnostics.sample_rate} Hz` : "unknown"}</span>
+                <span>{nativeDiagnostics?.channel_count ? `${nativeDiagnostics.channel_count} channels` : "channels unknown"}</span>
+                <span>{nativeDiagnostics?.sample_format ?? "format unknown"}</span>
+              </div>
+              {nativeDiagnostics?.current_path && (
+                <div className="truncate text-muted" title={nativeDiagnostics.current_path}>
+                  Current: {nativeDiagnostics.current_path}
+                </div>
+              )}
+            </div>
+            {nativeDiagnosticsMessage && <div className="text-muted">{nativeDiagnosticsMessage}</div>}
+            {recentNativeDiagnostics.length > 0 ? (
+              <div className="grid max-h-56 gap-1 overflow-auto pr-1">
+                {recentNativeDiagnostics.map((entry) => (
+                  <div key={entry.id} className="grid gap-1 rounded border border-line/60 bg-panel px-3 py-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`rounded border px-1.5 py-0.5 text-[10px] uppercase ${
+                          entry.severity === "error"
+                            ? "border-ember/50 bg-ember/10 text-ember"
+                            : "border-moss/40 bg-moss/10 text-moss"
+                        }`}
+                      >
+                        {entry.severity}
+                      </span>
+                      <span className="rounded border border-line px-1.5 py-0.5 text-[10px] uppercase text-muted">
+                        {entry.category}
+                      </span>
+                      <span className="text-muted">{formatNativeDiagnosticTime(entry.timestamp_ms)}</span>
+                      <span className="font-medium text-neutral-200">{entry.operation}</span>
+                    </div>
+                    <div className="text-neutral-200">{entry.message}</div>
+                    {nativeDiagnosticContext(entry) && (
+                      <div className="truncate text-muted" title={nativeDiagnosticContext(entry)}>
+                        {nativeDiagnosticContext(entry)}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded border border-line/70 bg-panel px-3 py-2 text-muted">
+                No recent rodio/cpal/Symphonia failures have been recorded.
+              </div>
+            )}
           </div>
         </div>
         <label className="flex items-center justify-between gap-4">

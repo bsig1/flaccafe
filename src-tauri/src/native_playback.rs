@@ -1,8 +1,11 @@
 use std::fs::File;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex,
+};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rodio::{
     cpal::{
@@ -34,6 +37,7 @@ struct NativePlaybackInner {
     channel_count: Option<u16>,
     sample_format: Option<String>,
     stream_errors: Arc<Mutex<Vec<String>>>,
+    diagnostics: Arc<Mutex<Vec<NativePlaybackDiagnostic>>>,
     dsp_settings: Arc<Mutex<NativeDspSettings>>,
 }
 
@@ -53,6 +57,7 @@ impl Default for NativePlaybackInner {
             channel_count: None,
             sample_format: None,
             stream_errors: Arc::new(Mutex::new(Vec::new())),
+            diagnostics: Arc::new(Mutex::new(Vec::new())),
             dsp_settings: Arc::new(Mutex::new(NativeDspSettings::default())),
         }
     }
@@ -78,6 +83,9 @@ const EQ_GAIN_MAX_DB: f32 = 12.0;
 const EQ_PREAMP_MIN_DB: f32 = -12.0;
 const EQ_PREAMP_MAX_DB: f32 = 6.0;
 const DSP_SETTINGS_CHECK_SAMPLES: usize = 2048;
+const DIAGNOSTIC_LIMIT: usize = 50;
+
+static NEXT_DIAGNOSTIC_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -184,6 +192,47 @@ pub struct NativePlaybackStatus {
     message: Option<String>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct NativeDiagnosticContext {
+    path: Option<String>,
+    device_id: Option<String>,
+    device_name: Option<String>,
+    buffer_frames: Option<u32>,
+    sample_rate: Option<u32>,
+    channel_count: Option<u16>,
+    sample_format: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct NativePlaybackDiagnostic {
+    id: u64,
+    timestamp_ms: u64,
+    severity: String,
+    category: String,
+    operation: String,
+    message: String,
+    path: Option<String>,
+    device_id: Option<String>,
+    device_name: Option<String>,
+    buffer_frames: Option<u32>,
+    sample_rate: Option<u32>,
+    channel_count: Option<u16>,
+    sample_format: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct NativePlaybackDiagnosticsResponse {
+    entries: Vec<NativePlaybackDiagnostic>,
+    stream_errors: Vec<String>,
+    current_path: Option<String>,
+    device_id: Option<String>,
+    device_name: Option<String>,
+    buffer_frames: Option<u32>,
+    sample_rate: Option<u32>,
+    channel_count: Option<u16>,
+    sample_format: Option<String>,
+}
+
 #[derive(Serialize)]
 pub struct NativeAudioDevice {
     id: String,
@@ -218,6 +267,7 @@ impl NativePlaybackInner {
             requested_device_id.as_deref(),
             requested_buffer_frames,
             self.stream_errors.clone(),
+            self.diagnostics.clone(),
         )?;
         sink.log_on_drop(false);
         self.sink = Some(sink);
@@ -270,6 +320,28 @@ impl NativePlaybackInner {
         }
     }
 
+    fn diagnostics_response(&self) -> NativePlaybackDiagnosticsResponse {
+        NativePlaybackDiagnosticsResponse {
+            entries: self
+                .diagnostics
+                .lock()
+                .map(|entries| entries.clone())
+                .unwrap_or_default(),
+            stream_errors: self
+                .stream_errors
+                .lock()
+                .map(|errors| errors.clone())
+                .unwrap_or_default(),
+            current_path: self.current_path.clone(),
+            device_id: self.device_id.clone(),
+            device_name: self.device_name.clone(),
+            buffer_frames: self.buffer_frames,
+            sample_rate: self.sample_rate,
+            channel_count: self.channel_count,
+            sample_format: self.sample_format.clone(),
+        }
+    }
+
     fn update_dsp_settings(&self, settings: Option<NativeDspSettings>) {
         if let Some(settings) = settings {
             if let Ok(mut current) = self.dsp_settings.lock() {
@@ -308,14 +380,83 @@ fn normalize_buffer_frames(buffer_frames: Option<u32>) -> Option<u32> {
     buffer_frames.filter(|value| *value >= 128 && *value <= 16_384)
 }
 
-fn remember_stream_error(stream_errors: &Arc<Mutex<Vec<String>>>, message: String) {
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
+}
+
+fn remember_diagnostic(
+    diagnostics: &Arc<Mutex<Vec<NativePlaybackDiagnostic>>>,
+    severity: &str,
+    category: &str,
+    operation: &str,
+    message: String,
+    context: NativeDiagnosticContext,
+) {
+    if let Ok(mut entries) = diagnostics.lock() {
+        entries.push(NativePlaybackDiagnostic {
+            id: NEXT_DIAGNOSTIC_ID.fetch_add(1, Ordering::Relaxed),
+            timestamp_ms: now_millis(),
+            severity: severity.to_string(),
+            category: category.to_string(),
+            operation: operation.to_string(),
+            message,
+            path: context.path,
+            device_id: context.device_id,
+            device_name: context.device_name,
+            buffer_frames: context.buffer_frames,
+            sample_rate: context.sample_rate,
+            channel_count: context.channel_count,
+            sample_format: context.sample_format,
+        });
+        if entries.len() > DIAGNOSTIC_LIMIT {
+            let overflow = entries.len() - DIAGNOSTIC_LIMIT;
+            entries.drain(0..overflow);
+        }
+    }
+}
+
+fn diagnostic_error(
+    diagnostics: &Arc<Mutex<Vec<NativePlaybackDiagnostic>>>,
+    category: &str,
+    operation: &str,
+    message: String,
+    context: NativeDiagnosticContext,
+) -> String {
+    remember_diagnostic(
+        diagnostics,
+        "error",
+        category,
+        operation,
+        message.clone(),
+        context,
+    );
+    message
+}
+
+fn remember_stream_error(
+    stream_errors: &Arc<Mutex<Vec<String>>>,
+    diagnostics: &Arc<Mutex<Vec<NativePlaybackDiagnostic>>>,
+    message: String,
+    context: NativeDiagnosticContext,
+) {
     if let Ok(mut errors) = stream_errors.lock() {
-        errors.push(message);
+        errors.push(message.clone());
         if errors.len() > 20 {
             let overflow = errors.len() - 20;
             errors.drain(0..overflow);
         }
     }
+    remember_diagnostic(
+        diagnostics,
+        "error",
+        "cpal",
+        "output_stream_callback",
+        message,
+        context,
+    );
 }
 
 fn device_id(index: usize, name: &str) -> String {
@@ -337,19 +478,37 @@ fn default_output_device_name() -> Option<String> {
 
 fn find_output_device(
     requested_id: Option<&str>,
+    diagnostics: &Arc<Mutex<Vec<NativePlaybackDiagnostic>>>,
 ) -> Result<(cpal::Device, Option<String>), String> {
     let host = cpal::default_host();
     if requested_id.is_none() {
-        let device = host
-            .default_output_device()
-            .ok_or_else(|| "No default output device is available".to_string())?;
+        let device = host.default_output_device().ok_or_else(|| {
+            diagnostic_error(
+                diagnostics,
+                "cpal",
+                "select_default_output_device",
+                "No default output device is available".to_string(),
+                NativeDiagnosticContext::default(),
+            )
+        })?;
         return Ok((device, None));
     }
 
     let requested_id = requested_id.unwrap_or_default();
     let devices: Vec<cpal::Device> = host
         .output_devices()
-        .map_err(|error| format!("Could not list output devices: {error}"))?
+        .map_err(|error| {
+            diagnostic_error(
+                diagnostics,
+                "cpal",
+                "list_output_devices",
+                format!("Could not list output devices: {error}"),
+                NativeDiagnosticContext {
+                    device_id: Some(requested_id.to_string()),
+                    ..NativeDiagnosticContext::default()
+                },
+            )
+        })?
         .collect();
 
     if let Some((index_text, expected_name)) = requested_id.split_once('|') {
@@ -374,8 +533,15 @@ fn find_output_device(
         }
     }
 
-    Err(format!(
-        "Output device is no longer available: {requested_id}"
+    Err(diagnostic_error(
+        diagnostics,
+        "cpal",
+        "select_output_device",
+        format!("Output device is no longer available: {requested_id}"),
+        NativeDiagnosticContext {
+            device_id: Some(requested_id.to_string()),
+            ..NativeDiagnosticContext::default()
+        },
     ))
 }
 
@@ -383,24 +549,63 @@ fn open_output_sink(
     requested_id: Option<&str>,
     buffer_frames: Option<u32>,
     stream_errors: Arc<Mutex<Vec<String>>>,
+    diagnostics: Arc<Mutex<Vec<NativePlaybackDiagnostic>>>,
 ) -> Result<(MixerDeviceSink, ResolvedOutput), String> {
-    let (device, resolved_id) = find_output_device(requested_id)?;
+    let (device, resolved_id) = find_output_device(requested_id, &diagnostics)?;
     let name = device_name(&device);
-    let mut builder = DeviceSinkBuilder::from_device(device)
-        .map_err(|error| format!("Could not configure output device: {error}"))?;
+    let mut builder = DeviceSinkBuilder::from_device(device).map_err(|error| {
+        diagnostic_error(
+            &diagnostics,
+            "cpal",
+            "configure_output_device",
+            format!("Could not configure output device: {error}"),
+            NativeDiagnosticContext {
+                device_id: resolved_id
+                    .clone()
+                    .or_else(|| requested_id.map(str::to_string)),
+                device_name: Some(name.clone()),
+                buffer_frames,
+                ..NativeDiagnosticContext::default()
+            },
+        )
+    })?;
     if let Some(frames) = buffer_frames {
         builder = builder.with_buffer_size(cpal::BufferSize::Fixed(frames));
     }
     let callback_errors = stream_errors.clone();
+    let callback_diagnostics = diagnostics.clone();
+    let callback_context = NativeDiagnosticContext {
+        device_id: resolved_id
+            .clone()
+            .or_else(|| requested_id.map(str::to_string)),
+        device_name: Some(name.clone()),
+        buffer_frames,
+        ..NativeDiagnosticContext::default()
+    };
     let builder = builder.with_error_callback(move |error| {
         remember_stream_error(
             &callback_errors,
+            &callback_diagnostics,
             format!("Native output stream error: {error}"),
+            callback_context.clone(),
         );
     });
-    let sink = builder
-        .open_sink_or_fallback()
-        .map_err(|error| format!("Could not open native audio output: {error}"))?;
+    let sink = builder.open_sink_or_fallback().map_err(|error| {
+        diagnostic_error(
+            &diagnostics,
+            "cpal",
+            "open_output_sink",
+            format!("Could not open native audio output: {error}"),
+            NativeDiagnosticContext {
+                device_id: resolved_id
+                    .clone()
+                    .or_else(|| requested_id.map(str::to_string)),
+                device_name: Some(name.clone()),
+                buffer_frames,
+                ..NativeDiagnosticContext::default()
+            },
+        )
+    })?;
     let config = sink.config();
     let resolved = ResolvedOutput {
         device_id: resolved_id,
@@ -414,10 +619,33 @@ fn open_output_sink(
 
 fn build_decoder(
     path: &PathBuf,
+    diagnostics: &Arc<Mutex<Vec<NativePlaybackDiagnostic>>>,
 ) -> Result<(Decoder<std::io::BufReader<File>>, Option<f64>), String> {
-    let file = File::open(path).map_err(|error| format!("Could not open audio file: {error}"))?;
-    let decoder = Decoder::try_from(file)
-        .map_err(|error| format!("Could not decode audio file with native engine: {error}"))?;
+    let path_text = path.display().to_string();
+    let file = File::open(path).map_err(|error| {
+        diagnostic_error(
+            diagnostics,
+            "file",
+            "open_audio_file",
+            format!("Could not open audio file: {error}"),
+            NativeDiagnosticContext {
+                path: Some(path_text.clone()),
+                ..NativeDiagnosticContext::default()
+            },
+        )
+    })?;
+    let decoder = Decoder::try_from(file).map_err(|error| {
+        diagnostic_error(
+            diagnostics,
+            "symphonia",
+            "decode_audio_file",
+            format!("Could not decode audio file with native engine: {error}"),
+            NativeDiagnosticContext {
+                path: Some(path_text),
+                ..NativeDiagnosticContext::default()
+            },
+        )
+    })?;
     let duration_seconds = decoder
         .total_duration()
         .map(|duration| duration.as_secs_f64());
@@ -717,12 +945,28 @@ fn soft_limit(sample: f32) -> f32 {
     sample.signum() * limited.min(1.0)
 }
 
-fn seek_player(player: &Player, seconds: Option<f64>) -> Result<(), String> {
+fn seek_player(
+    player: &Player,
+    seconds: Option<f64>,
+    diagnostics: &Arc<Mutex<Vec<NativePlaybackDiagnostic>>>,
+    path: Option<String>,
+) -> Result<(), String> {
     if let Some(seconds) = seconds {
         if seconds.is_finite() && seconds > 0.0 {
             player
                 .try_seek(Duration::from_secs_f64(seconds))
-                .map_err(|error| format!("Native seek failed: {error}"))?;
+                .map_err(|error| {
+                    diagnostic_error(
+                        diagnostics,
+                        "rodio",
+                        "seek",
+                        format!("Native seek failed: {error}"),
+                        NativeDiagnosticContext {
+                            path,
+                            ..NativeDiagnosticContext::default()
+                        },
+                    )
+                })?;
         }
     }
     Ok(())
@@ -765,14 +1009,25 @@ pub fn native_play_file(
     dsp_settings: Option<NativeDspSettings>,
 ) -> Result<NativePlaybackStatus, String> {
     let path_buf = PathBuf::from(&path);
-    if !path_buf.exists() || !path_buf.is_file() {
-        return Err("Audio file does not exist".to_string());
-    }
-
     let mut inner = state
         .inner
         .lock()
         .map_err(|_| "Native playback lock poisoned".to_string())?;
+    if !path_buf.exists() || !path_buf.is_file() {
+        let message = "Audio file does not exist".to_string();
+        remember_diagnostic(
+            &inner.diagnostics,
+            "error",
+            "file",
+            "validate_audio_file",
+            message.clone(),
+            NativeDiagnosticContext {
+                path: Some(path.clone()),
+                ..NativeDiagnosticContext::default()
+            },
+        );
+        return Err(message);
+    }
     inner.ensure_sink(device_id, buffer_frames)?;
     if let Ok(mut errors) = inner.stream_errors.lock() {
         errors.clear();
@@ -780,7 +1035,7 @@ pub fn native_play_file(
     inner.update_dsp_settings(dsp_settings);
     inner.stop();
 
-    let (decoder, duration_seconds) = build_decoder(&path_buf)?;
+    let (decoder, duration_seconds) = build_decoder(&path_buf, &inner.diagnostics)?;
     let mixer = inner
         .sink
         .as_ref()
@@ -791,7 +1046,12 @@ pub fn native_play_file(
     let bounded_volume = clamp_volume(volume);
     player.set_volume(bounded_volume);
     player.append(NativeDspSource::new(decoder, inner.dsp_settings.clone()));
-    seek_player(&player, start_seconds)?;
+    seek_player(
+        &player,
+        start_seconds,
+        &inner.diagnostics,
+        Some(path.clone()),
+    )?;
     player.play();
 
     inner.player = Some(player);
@@ -813,21 +1073,32 @@ pub fn native_crossfade_to_file(
     dsp_settings: Option<NativeDspSettings>,
 ) -> Result<NativePlaybackStatus, String> {
     let path_buf = PathBuf::from(&path);
-    if !path_buf.exists() || !path_buf.is_file() {
-        return Err("Audio file does not exist".to_string());
-    }
-
     let mut inner = state
         .inner
         .lock()
         .map_err(|_| "Native playback lock poisoned".to_string())?;
+    if !path_buf.exists() || !path_buf.is_file() {
+        let message = "Audio file does not exist".to_string();
+        remember_diagnostic(
+            &inner.diagnostics,
+            "error",
+            "file",
+            "validate_crossfade_audio_file",
+            message.clone(),
+            NativeDiagnosticContext {
+                path: Some(path.clone()),
+                ..NativeDiagnosticContext::default()
+            },
+        );
+        return Err(message);
+    }
     inner.ensure_sink(device_id, buffer_frames)?;
     if let Ok(mut errors) = inner.stream_errors.lock() {
         errors.clear();
     }
     inner.update_dsp_settings(dsp_settings);
 
-    let (decoder, duration_seconds) = build_decoder(&path_buf)?;
+    let (decoder, duration_seconds) = build_decoder(&path_buf, &inner.diagnostics)?;
     let mixer = inner
         .sink
         .as_ref()
@@ -838,7 +1109,12 @@ pub fn native_crossfade_to_file(
     let target_volume = clamp_volume(volume);
     new_player.set_volume(0.0);
     new_player.append(NativeDspSource::new(decoder, inner.dsp_settings.clone()));
-    seek_player(&new_player, start_seconds)?;
+    seek_player(
+        &new_player,
+        start_seconds,
+        &inner.diagnostics,
+        Some(path.clone()),
+    )?;
     new_player.play();
 
     let old_player = inner.player.replace(new_player.clone());
@@ -917,7 +1193,18 @@ pub fn native_seek(
     };
     player
         .try_seek(Duration::from_secs_f64(bounded_seconds))
-        .map_err(|error| format!("Native seek failed: {error}"))?;
+        .map_err(|error| {
+            diagnostic_error(
+                &inner.diagnostics,
+                "rodio",
+                "seek",
+                format!("Native seek failed: {error}"),
+                NativeDiagnosticContext {
+                    path: inner.current_path.clone(),
+                    ..NativeDiagnosticContext::default()
+                },
+            )
+        })?;
     Ok(inner.status(None))
 }
 
@@ -965,20 +1252,76 @@ pub fn native_status(
 }
 
 #[tauri::command]
-pub fn native_list_output_devices() -> Result<Vec<NativeAudioDevice>, String> {
+pub fn native_diagnostics(
+    state: State<'_, NativePlaybackState>,
+) -> Result<NativePlaybackDiagnosticsResponse, String> {
+    let inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Native playback lock poisoned".to_string())?;
+    Ok(inner.diagnostics_response())
+}
+
+#[tauri::command]
+pub fn native_clear_diagnostics(
+    state: State<'_, NativePlaybackState>,
+) -> Result<NativePlaybackDiagnosticsResponse, String> {
+    let inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Native playback lock poisoned".to_string())?;
+    if let Ok(mut entries) = inner.diagnostics.lock() {
+        entries.clear();
+    }
+    if let Ok(mut errors) = inner.stream_errors.lock() {
+        errors.clear();
+    }
+    Ok(inner.diagnostics_response())
+}
+
+#[tauri::command]
+pub fn native_list_output_devices(
+    state: State<'_, NativePlaybackState>,
+) -> Result<Vec<NativeAudioDevice>, String> {
+    let diagnostics = state
+        .inner
+        .lock()
+        .map_err(|_| "Native playback lock poisoned".to_string())?
+        .diagnostics
+        .clone();
     let host = cpal::default_host();
     let default_name = default_output_device_name();
-    let devices = host
-        .output_devices()
-        .map_err(|error| format!("Could not list output devices: {error}"))?;
+    let devices = host.output_devices().map_err(|error| {
+        diagnostic_error(
+            &diagnostics,
+            "cpal",
+            "list_output_devices",
+            format!("Could not list output devices: {error}"),
+            NativeDiagnosticContext::default(),
+        )
+    })?;
     let mut response = Vec::new();
     for (index, device) in devices.enumerate() {
         let name = device_name(&device);
         let default_config = device.default_output_config().ok();
-        let supported_configs = device
-            .supported_output_configs()
-            .map(|configs| configs.count())
-            .unwrap_or(0);
+        let supported_configs = match device.supported_output_configs() {
+            Ok(configs) => configs.count(),
+            Err(error) => {
+                remember_diagnostic(
+                    &diagnostics,
+                    "warning",
+                    "cpal",
+                    "list_supported_output_configs",
+                    format!("Could not inspect supported output configs: {error}"),
+                    NativeDiagnosticContext {
+                        device_id: Some(device_id(index, &name)),
+                        device_name: Some(name.clone()),
+                        ..NativeDiagnosticContext::default()
+                    },
+                );
+                0
+            }
+        };
         response.push(NativeAudioDevice {
             id: device_id(index, &name),
             is_default: default_name.as_deref() == Some(name.as_str()),
@@ -1040,5 +1383,28 @@ mod tests {
         assert!(soft_limit(8.0) <= 1.0);
         assert!(soft_limit(-8.0) >= -1.0);
         assert_eq!(soft_limit(0.5), 0.5);
+    }
+
+    #[test]
+    fn native_diagnostics_keep_recent_entries() {
+        let diagnostics = Arc::new(Mutex::new(Vec::new()));
+        for index in 0..(DIAGNOSTIC_LIMIT + 5) {
+            remember_diagnostic(
+                &diagnostics,
+                "error",
+                "cpal",
+                "test_operation",
+                format!("failure {index}"),
+                NativeDiagnosticContext::default(),
+            );
+        }
+
+        let entries = diagnostics.lock().unwrap();
+        assert_eq!(entries.len(), DIAGNOSTIC_LIMIT);
+        assert_eq!(entries.first().unwrap().message, "failure 5");
+        assert_eq!(
+            entries.last().unwrap().message,
+            format!("failure {}", DIAGNOSTIC_LIMIT + 4)
+        );
     }
 }

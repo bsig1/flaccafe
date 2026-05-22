@@ -323,6 +323,8 @@ fn main() {
             native_playback::native_set_dsp,
             native_playback::native_set_volume,
             native_playback::native_status,
+            native_playback::native_diagnostics,
+            native_playback::native_clear_diagnostics,
             native_playback::native_list_output_devices,
             smtc::smtc_update_state,
             smtc::smtc_clear

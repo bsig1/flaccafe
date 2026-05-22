@@ -17,6 +17,34 @@ export interface NativePlaybackStatus {
   message: string | null;
 }
 
+export interface NativePlaybackDiagnostic {
+  id: number;
+  timestamp_ms: number;
+  severity: "error" | "warning" | string;
+  category: "rodio" | "cpal" | "symphonia" | "file" | string;
+  operation: string;
+  message: string;
+  path: string | null;
+  device_id: string | null;
+  device_name: string | null;
+  buffer_frames: number | null;
+  sample_rate: number | null;
+  channel_count: number | null;
+  sample_format: string | null;
+}
+
+export interface NativePlaybackDiagnosticsResponse {
+  entries: NativePlaybackDiagnostic[];
+  stream_errors: string[];
+  current_path: string | null;
+  device_id: string | null;
+  device_name: string | null;
+  buffer_frames: number | null;
+  sample_rate: number | null;
+  channel_count: number | null;
+  sample_format: string | null;
+}
+
 export interface NativeAudioDevice {
   id: string;
   name: string;
@@ -121,6 +149,35 @@ export function nativeStatus(): Promise<NativePlaybackStatus> {
   return invokeNative<NativePlaybackStatus>("native_status");
 }
 
+export function nativeDiagnostics(): Promise<NativePlaybackDiagnosticsResponse> {
+  return invokeNative<NativePlaybackDiagnosticsResponse>("native_diagnostics");
+}
+
+export function nativeClearDiagnostics(): Promise<NativePlaybackDiagnosticsResponse> {
+  return invokeNative<NativePlaybackDiagnosticsResponse>("native_clear_diagnostics");
+}
+
 export function nativeListOutputDevices(): Promise<NativeAudioDevice[]> {
   return invokeNative<NativeAudioDevice[]>("native_list_output_devices");
+}
+
+export function summarizeNativeDiagnostics(diagnostics: NativePlaybackDiagnosticsResponse | null): string {
+  if (!diagnostics) {
+    return "Diagnostics not loaded";
+  }
+  const total = diagnostics.entries.length;
+  const errors = diagnostics.entries.filter((entry) => entry.severity === "error").length;
+  const warnings = diagnostics.entries.filter((entry) => entry.severity === "warning").length;
+  if (total === 0 && diagnostics.stream_errors.length === 0) {
+    return "No recent native playback failures";
+  }
+  const categories = Array.from(new Set(diagnostics.entries.slice(-8).map((entry) => entry.category))).join(", ");
+  const parts = [
+    `${errors} error${errors === 1 ? "" : "s"}`,
+    `${warnings} warning${warnings === 1 ? "" : "s"}`,
+  ];
+  if (diagnostics.stream_errors.length) {
+    parts.push(`${diagnostics.stream_errors.length} stream callback${diagnostics.stream_errors.length === 1 ? "" : "s"}`);
+  }
+  return `${parts.join(", ")}${categories ? ` across ${categories}` : ""}`;
 }
