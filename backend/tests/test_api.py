@@ -4,6 +4,7 @@ import csv
 import os
 import json
 import tempfile
+import time
 import unittest
 import zipfile
 from pathlib import Path
@@ -724,6 +725,80 @@ class ApiTests(unittest.TestCase):
         playlist_path = target / "Playlists" / "Road Player.m3u8"
         self.assertTrue(playlist_path.exists())
         self.assertIn("sync-a.mp3", playlist_path.read_text(encoding="utf-8"))
+
+    def test_audio_conversion_preview_and_job_builds_ffmpeg_command(self) -> None:
+        music_dir = self.root / "Music"
+        album_dir = music_dir / "Artist" / "Album"
+        album_dir.mkdir(parents=True)
+        source = album_dir / "song.flac"
+        source.write_bytes(b"flac")
+        track_id = insert_track(
+            source,
+            title="Song",
+            artist="Artist",
+            album="Album",
+            album_artist="Artist",
+            track_number=1,
+        )
+        target = self.root / "Converted"
+        ffmpeg = self.root / "ffmpeg.exe"
+        ffmpeg.write_bytes(b"fake")
+        with connect() as conn:
+            set_setting(conn, "library_path", str(music_dir))
+            conn.commit()
+
+        setup = self.client.patch("/library/tools/audio-conversion/setup", json={"ffmpeg_path": str(ffmpeg)})
+        self.assertEqual(setup.status_code, 200)
+        self.assertTrue(setup.json()["available"])
+
+        request = {
+            "target_folder": str(target),
+            "output_format": "mp3",
+            "track_ids": [track_id],
+            "preserve_structure": True,
+            "copy_tags": True,
+            "copy_artwork": True,
+            "normalize_volume": True,
+            "sample_rate_hz": 48000,
+            "bitrate_kbps": 192,
+            "overwrite": True,
+        }
+        preview = self.client.post("/library/tools/audio-conversion/preview", json=request)
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(preview.json()["changed_count"], 1)
+        self.assertTrue(preview.json()["changes"][0]["target_path"].endswith(r"Artist\Album\song.mp3"))
+
+        commands: list[list[str]] = []
+
+        def fake_ffmpeg(command: list[str]) -> None:
+            commands.append(command)
+            Path(command[-1]).parent.mkdir(parents=True, exist_ok=True)
+            Path(command[-1]).write_bytes(b"mp3")
+
+        with patch("backend.app.audio_conversion_jobs.run_ffmpeg_command", side_effect=fake_ffmpeg):
+            started = self.client.post("/library/tools/audio-conversion/jobs", json=request)
+            self.assertEqual(started.status_code, 200)
+            job_id = started.json()["job_id"]
+            latest = None
+            for _ in range(30):
+                latest = self.client.get(f"/library/tools/audio-conversion/jobs/{job_id}")
+                self.assertEqual(latest.status_code, 200)
+                if latest.json()["status"] in {"completed", "failed", "canceled"}:
+                    break
+                time.sleep(0.05)
+
+        self.assertIsNotNone(latest)
+        self.assertEqual(latest.json()["status"], "completed")
+        self.assertEqual(latest.json()["converted"], 1)
+        self.assertTrue((target / "Artist" / "Album" / "song.mp3").exists())
+        self.assertEqual(len(commands), 1)
+        command_text = " ".join(commands[0])
+        self.assertIn("-map_metadata 0", command_text)
+        self.assertIn("loudnorm=I=-16:TP=-1.5:LRA=11", command_text)
+        self.assertIn("-ar 48000", command_text)
+        self.assertIn("libmp3lame", command_text)
+        self.assertIn("-b:a 192k", command_text)
+        self.assertIn("0:v?", command_text)
 
     def test_duplicate_actions_can_remove_selected_and_export_reports(self) -> None:
         first = self.root / "dup-action-a.mp3"

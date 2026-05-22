@@ -55,6 +55,14 @@ from .analysis_jobs import (
     resume_audio_analysis_job,
     start_audio_analysis_job,
 )
+from .audio_conversion_jobs import (
+    cancel_audio_conversion_job,
+    conversion_preview,
+    ffmpeg_status,
+    get_audio_conversion_job,
+    resolve_ffmpeg_path,
+    start_audio_conversion_job,
+)
 from .clap_analysis import save_config as save_clap_config
 from .clap_analysis import status as clap_status
 from .clap_install_jobs import get_clap_install_job, start_clap_install_job
@@ -79,6 +87,12 @@ from .schemas import (
     AudioAnalysisProgress,
     AudioAnalysisStartRequest,
     AudioAnalysisStartResponse,
+    AudioConversionPreviewResponse,
+    AudioConversionProgress,
+    AudioConversionRequest,
+    AudioConversionSetupRequest,
+    AudioConversionSetupResponse,
+    AudioConversionStartResponse,
     AutoDjRequest,
     AutoDjAvoidRequest,
     AutoDjAvoidRule,
@@ -2466,6 +2480,66 @@ def apply_folder_watch(request: FolderWatchApplyRequest) -> dict:
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/library/tools/audio-conversion/setup", response_model=AudioConversionSetupResponse)
+def get_audio_conversion_setup() -> AudioConversionSetupResponse:
+    with connect() as conn:
+        return AudioConversionSetupResponse(**ffmpeg_status(conn))
+
+
+@app.patch("/library/tools/audio-conversion/setup", response_model=AudioConversionSetupResponse)
+def update_audio_conversion_setup(request: AudioConversionSetupRequest) -> AudioConversionSetupResponse:
+    with connect() as conn:
+        text = request.ffmpeg_path.strip() if request.ffmpeg_path else ""
+        if not text:
+            set_setting(conn, "ffmpeg_path", None)
+            conn.commit()
+            return AudioConversionSetupResponse(**ffmpeg_status(conn))
+        candidate = Path(text).expanduser()
+        executable = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+        if candidate.is_dir():
+            candidate = candidate / executable
+        if not candidate.exists() or not candidate.is_file():
+            status = ffmpeg_status(conn)
+            status["configured_path"] = text
+            status["errors"].append(f"ffmpeg was not found at {candidate}")
+            status["message"] = "The saved path was not valid. Choose ffmpeg.exe or put it in the FLAC Cafe tool folder."
+            return AudioConversionSetupResponse(**status)
+        set_setting(conn, "ffmpeg_path", str(candidate.resolve()))
+        conn.commit()
+        return AudioConversionSetupResponse(**ffmpeg_status(conn))
+
+
+@app.post("/library/tools/audio-conversion/preview", response_model=AudioConversionPreviewResponse)
+def preview_audio_conversion(request: AudioConversionRequest) -> AudioConversionPreviewResponse:
+    return AudioConversionPreviewResponse(**conversion_preview(request))
+
+
+@app.post("/library/tools/audio-conversion/jobs", response_model=AudioConversionStartResponse)
+def start_audio_conversion(request: AudioConversionRequest) -> AudioConversionStartResponse:
+    with connect() as conn:
+        ffmpeg_path, _configured, _candidates = resolve_ffmpeg_path(conn)
+    if ffmpeg_path is None:
+        raise HTTPException(status_code=400, detail="FFmpeg was not found. Save an ffmpeg.exe path before starting conversion.")
+    job = start_audio_conversion_job(request)
+    return AudioConversionStartResponse(job_id=job["job_id"], status=job["status"])
+
+
+@app.get("/library/tools/audio-conversion/jobs/{job_id}", response_model=AudioConversionProgress)
+def get_audio_conversion_progress(job_id: str) -> dict:
+    job = get_audio_conversion_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Audio conversion job not found")
+    return job
+
+
+@app.post("/library/tools/audio-conversion/jobs/{job_id}/cancel", response_model=AudioConversionProgress)
+def cancel_audio_conversion(job_id: str) -> dict:
+    job = cancel_audio_conversion_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Audio conversion job not found")
+    return job
 
 
 @app.get("/library/health", response_model=LibraryHealthResponse)

@@ -22,6 +22,9 @@ import {
 
 import type {
   AcousticFingerprintResponse,
+  AudioConversionPreviewResponse,
+  AudioConversionProgress,
+  AudioConversionSetupResponse,
   AutoTagResponse,
   BulkUndoBatchEntry,
   BulkUndoLogEntry,
@@ -50,6 +53,10 @@ import {
   NumberField,
 } from "../components/common";
 import { AdvancedTagToolsSection } from "./file-management/AdvancedTagToolsSection";
+import {
+  AudioConversionSection,
+  type AudioConversionOptions,
+} from "./file-management/AudioConversionSection";
 import { CacheUndoLogSection } from "./file-management/CacheUndoLogSection";
 import { ReportViewerSection } from "./file-management/ReportViewerSection";
 import {
@@ -97,6 +104,14 @@ export function FileManagementPage({
   onApplyFolderWatch,
   deviceSyncPreview,
   onDeviceSync,
+  audioConversionSetup,
+  audioConversionPreview,
+  audioConversionProgress,
+  onRefreshAudioConversionSetup,
+  onSaveAudioConversionSetup,
+  onPreviewAudioConversion,
+  onStartAudioConversion,
+  onCancelAudioConversion,
   metadataCsvExport,
   metadataCsvImportPreview,
   metadataCsvImportReport,
@@ -185,6 +200,14 @@ export function FileManagementPage({
       apply?: boolean;
     },
   ) => void | Promise<void>;
+  audioConversionSetup: AudioConversionSetupResponse | null;
+  audioConversionPreview: AudioConversionPreviewResponse | null;
+  audioConversionProgress: AudioConversionProgress | null;
+  onRefreshAudioConversionSetup: () => void | Promise<void>;
+  onSaveAudioConversionSetup: (ffmpegPath: string | null) => void | Promise<void>;
+  onPreviewAudioConversion: (targetFolder: string, options: AudioConversionOptions) => void | Promise<void>;
+  onStartAudioConversion: (targetFolder: string, options: AudioConversionOptions) => void | Promise<void>;
+  onCancelAudioConversion: () => void | Promise<void>;
   metadataCsvExport: CsvMetadataExportResponse | null;
   metadataCsvImportPreview: CsvMetadataImportResponse | null;
   metadataCsvImportReport: CsvMetadataImportReportResponse | null;
@@ -1420,6 +1443,18 @@ export function FileManagementPage({
               )}
             </div>
           </DisclosureSection>
+
+          <AudioConversionSection
+            scopedTrackIds={scopedTrackIds}
+            setup={audioConversionSetup}
+            preview={audioConversionPreview}
+            progress={audioConversionProgress}
+            onRefreshSetup={onRefreshAudioConversionSetup}
+            onSaveSetup={onSaveAudioConversionSetup}
+            onPreview={onPreviewAudioConversion}
+            onStart={onStartAudioConversion}
+            onCancel={onCancelAudioConversion}
+          />
 
           <DisclosureSection title="CSV Metadata Import" description="Spreadsheet cleanup with saved mappings, conflict review, and blank-field control">
             <div className="grid gap-4 text-sm text-neutral-200">

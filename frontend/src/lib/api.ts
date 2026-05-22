@@ -7,6 +7,12 @@ import type {
   AudioAnalysisProgress,
   AudioAnalysisStartRequest,
   AudioAnalysisStartResponse,
+  AudioConversionPreviewResponse,
+  AudioConversionProgress,
+  AudioConversionRequest,
+  AudioConversionSetupRequest,
+  AudioConversionSetupResponse,
+  AudioConversionStartResponse,
   AutoDjAvoidRule,
   AutoDjResponse,
   AutoDjSettings,
@@ -432,6 +438,39 @@ export function applyFolderWatchChanges(changeIds: string[], applyAll = false, l
       limit,
     }),
   });
+}
+
+export function fetchAudioConversionSetup(): Promise<AudioConversionSetupResponse> {
+  return request<AudioConversionSetupResponse>("/library/tools/audio-conversion/setup");
+}
+
+export function saveAudioConversionSetup(requestBody: AudioConversionSetupRequest): Promise<AudioConversionSetupResponse> {
+  return request<AudioConversionSetupResponse>("/library/tools/audio-conversion/setup", {
+    method: "PATCH",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function previewAudioConversion(requestBody: AudioConversionRequest): Promise<AudioConversionPreviewResponse> {
+  return request<AudioConversionPreviewResponse>("/library/tools/audio-conversion/preview", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function startAudioConversion(requestBody: AudioConversionRequest): Promise<AudioConversionStartResponse> {
+  return request<AudioConversionStartResponse>("/library/tools/audio-conversion/jobs", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function fetchAudioConversionProgress(jobId: string): Promise<AudioConversionProgress> {
+  return request<AudioConversionProgress>(`/library/tools/audio-conversion/jobs/${jobId}`);
+}
+
+export function cancelAudioConversion(jobId: string): Promise<AudioConversionProgress> {
+  return request<AudioConversionProgress>(`/library/tools/audio-conversion/jobs/${jobId}/cancel`, { method: "POST" });
 }
 
 export function fetchClapStatus(): Promise<ClapStatusResponse> {

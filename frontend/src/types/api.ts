@@ -826,6 +826,82 @@ export interface FolderWatchApplyResponse {
   status: FolderWatchStatus;
 }
 
+export interface AudioConversionSetupResponse {
+  available: boolean;
+  configured_path: string | null;
+  resolved_path: string | null;
+  version: string | null;
+  tool_directory: string;
+  checked_paths: string[];
+  message: string;
+  errors: string[];
+}
+
+export interface AudioConversionSetupRequest {
+  ffmpeg_path?: string | null;
+}
+
+export type AudioConversionFormat = "flac" | "mp3" | "m4a" | "opus" | "wav";
+
+export interface AudioConversionRequest {
+  target_folder: string;
+  output_format?: AudioConversionFormat;
+  track_ids?: number[] | null;
+  preserve_structure?: boolean;
+  copy_tags?: boolean;
+  copy_artwork?: boolean;
+  normalize_volume?: boolean;
+  sample_rate_hz?: number | null;
+  bitrate_kbps?: number | null;
+  overwrite?: boolean;
+  limit?: number;
+}
+
+export interface AudioConversionChange {
+  track_id: number;
+  title: string | null;
+  artist: string | null;
+  source_path: string;
+  target_path: string;
+  changed: boolean;
+  collision: boolean;
+  error: string | null;
+}
+
+export interface AudioConversionPreviewResponse {
+  target_folder: string;
+  total: number;
+  changed_count: number;
+  collisions: number;
+  changes: AudioConversionChange[];
+}
+
+export interface AudioConversionStartResponse {
+  job_id: string;
+  status: string;
+}
+
+export interface AudioConversionProgress {
+  job_id: string;
+  target_folder: string;
+  output_format: AudioConversionFormat | string;
+  status: "pending" | "running" | "canceling" | "canceled" | "completed" | "failed" | string;
+  phase: string | null;
+  message: string | null;
+  total_tracks: number;
+  processed_tracks: number;
+  converted: number;
+  skipped: number;
+  errors: string[];
+  current_track: string | null;
+  started_at: string;
+  finished_at: string | null;
+  elapsed_seconds: number;
+  eta_seconds: number | null;
+  percent: number;
+  error: string | null;
+}
+
 export interface ClapStatusResponse {
   installed: boolean;
   dependencies: Record<string, boolean>;

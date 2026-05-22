@@ -32,6 +32,7 @@ import {
   applyFolderWatchChanges,
   autoTagMusicBrainz,
   backupDatabase,
+  cancelAudioConversion,
   cancelClapAudioAnalysis,
   clearArtistCache,
   clearLibraryCaches,
@@ -48,6 +49,8 @@ import {
   exportMetadataCsvImportReport,
   exportPlaylist,
   exportQueue,
+  fetchAudioConversionProgress,
+  fetchAudioConversionSetup,
   fetchAlbumTracks,
   fetchAlbums,
   fetchArtistInfo,
@@ -96,8 +99,10 @@ import {
   reviewInboxTracks,
   restoreTrack,
   resumeClapAudioAnalysis,
+  saveAudioConversionSetup,
   saveRecommendationProfile,
   setDefaultRecommendationProfile,
+  startAudioConversion,
   startClapAudioAnalysis,
   startClapInstall,
   startFolderWatch,
@@ -121,6 +126,7 @@ import {
   runAcousticFingerprintPass,
   saveChromaprintSetup,
   installChromaprintTool,
+  previewAudioConversion,
 } from "../lib/api";
 import {
   placeFloatingMenu,
@@ -131,6 +137,10 @@ import type {
   ArtistInfoResponse,
   AudioAnalysisCoverage,
   AudioAnalysisProgress,
+  AudioConversionPreviewResponse,
+  AudioConversionProgress,
+  AudioConversionSetupResponse,
+  AudioConversionFormat,
   AutoDjAvoidRule,
   AutoDjSettings,
   AutoTagResponse,
@@ -314,6 +324,10 @@ export default function App() {
   const [metadataCsvImportPreview, setMetadataCsvImportPreview] = useState<CsvMetadataImportResponse | null>(null);
   const [metadataCsvImportReport, setMetadataCsvImportReport] = useState<CsvMetadataImportReportResponse | null>(null);
   const [deviceSyncPreview, setDeviceSyncPreview] = useState<DeviceSyncResponse | null>(null);
+  const [audioConversionSetup, setAudioConversionSetup] = useState<AudioConversionSetupResponse | null>(null);
+  const [audioConversionPreview, setAudioConversionPreview] = useState<AudioConversionPreviewResponse | null>(null);
+  const [audioConversionProgress, setAudioConversionProgress] = useState<AudioConversionProgress | null>(null);
+  const [audioConversionJobId, setAudioConversionJobId] = useState<string | null>(null);
   const [duplicateActionResult, setDuplicateActionResult] = useState<DuplicateActionResponse | null>(null);
   const [duplicateReview, setDuplicateReview] = useState<DuplicateReviewResponse | null>(null);
   const [chromaprintSetup, setChromaprintSetup] = useState<ChromaprintStatusResponse | null>(null);
@@ -2218,6 +2232,144 @@ export default function App() {
     }
   }
 
+  async function loadAudioConversionSetup() {
+    try {
+      setAudioConversionSetup(await fetchAudioConversionSetup());
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not check FFmpeg setup");
+    }
+  }
+
+  async function handleSaveAudioConversionSetup(ffmpegPath: string | null) {
+    try {
+      const response = await saveAudioConversionSetup({ ffmpeg_path: ffmpegPath });
+      setAudioConversionSetup(response);
+      setStatus(response.message);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not save FFmpeg setup");
+    }
+  }
+
+  function audioConversionRequest(
+    targetFolder: string,
+    options: {
+      outputFormat: AudioConversionFormat;
+      preserveStructure: boolean;
+      copyTags: boolean;
+      copyArtwork: boolean;
+      normalizeVolume: boolean;
+      sampleRateHz: number | null;
+      bitrateKbps: number | null;
+      overwrite: boolean;
+      trackIds: number[] | null;
+    },
+    limit: number,
+  ) {
+    return {
+      target_folder: targetFolder.trim(),
+      output_format: options.outputFormat,
+      track_ids: options.trackIds?.length ? options.trackIds : null,
+      preserve_structure: options.preserveStructure,
+      copy_tags: options.copyTags,
+      copy_artwork: options.copyArtwork,
+      normalize_volume: options.normalizeVolume,
+      sample_rate_hz: options.sampleRateHz,
+      bitrate_kbps: options.bitrateKbps,
+      overwrite: options.overwrite,
+      limit,
+    };
+  }
+
+  async function handlePreviewAudioConversion(
+    targetFolder: string,
+    options: {
+      outputFormat: AudioConversionFormat;
+      preserveStructure: boolean;
+      copyTags: boolean;
+      copyArtwork: boolean;
+      normalizeVolume: boolean;
+      sampleRateHz: number | null;
+      bitrateKbps: number | null;
+      overwrite: boolean;
+      trackIds: number[] | null;
+    },
+  ) {
+    if (!targetFolder.trim()) {
+      setStatus("Choose a conversion target folder first");
+      return;
+    }
+    try {
+      const response = await previewAudioConversion(audioConversionRequest(targetFolder, options, 200));
+      setAudioConversionPreview(response);
+      setStatus(`${response.changed_count.toLocaleString()} of ${response.total.toLocaleString()} tracks would convert`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not preview audio conversion");
+    }
+  }
+
+  async function handleStartAudioConversion(
+    targetFolder: string,
+    options: {
+      outputFormat: AudioConversionFormat;
+      preserveStructure: boolean;
+      copyTags: boolean;
+      copyArtwork: boolean;
+      normalizeVolume: boolean;
+      sampleRateHz: number | null;
+      bitrateKbps: number | null;
+      overwrite: boolean;
+      trackIds: number[] | null;
+    },
+  ) {
+    if (!targetFolder.trim()) {
+      setStatus("Choose a conversion target folder first");
+      return;
+    }
+    if (!window.confirm("Start audio conversion? This writes new audio files into the target folder.")) {
+      return;
+    }
+    try {
+      setAudioConversionProgress(null);
+      const started = await startAudioConversion(audioConversionRequest(targetFolder, options, 10000));
+      setAudioConversionJobId(started.job_id);
+      let latest: AudioConversionProgress | null = null;
+      while (true) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        latest = await fetchAudioConversionProgress(started.job_id);
+        setAudioConversionProgress(latest);
+        setStatus(
+          latest.message ??
+            `Converting ${latest.processed_tracks}/${latest.total_tracks} tracks - ETA ${formatTime(latest.eta_seconds)}`,
+        );
+        if (["completed", "failed", "canceled"].includes(latest.status)) {
+          break;
+        }
+      }
+      if (latest.status === "failed") {
+        setStatus(latest.error ?? "Audio conversion failed");
+      } else if (latest.status === "canceled") {
+        setStatus("Audio conversion canceled");
+      } else {
+        setStatus(`Converted ${latest.converted.toLocaleString()} track${latest.converted === 1 ? "" : "s"}`);
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not start audio conversion");
+    }
+  }
+
+  async function handleCancelAudioConversion() {
+    if (!audioConversionJobId) {
+      return;
+    }
+    try {
+      const latest = await cancelAudioConversion(audioConversionJobId);
+      setAudioConversionProgress(latest);
+      setStatus(latest.message ?? "Canceling audio conversion");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not cancel audio conversion");
+    }
+  }
+
   async function handleExportMetadataCsv(trackIds?: number[] | null) {
     try {
       const response = await exportMetadataCsv({ track_ids: trackIds?.length ? trackIds : null, limit: 200000 });
@@ -2720,6 +2872,7 @@ export default function App() {
     void loadRecommendationHistory();
     void loadBulkUndoLog();
     void loadChromaprintSetup();
+    void loadAudioConversionSetup();
     void loadFolderWatchStatus();
   }, []);
 
@@ -2739,6 +2892,7 @@ export default function App() {
     if (activePage === "fileManagement") {
       void loadBulkUndoLog();
       void loadChromaprintSetup();
+      void loadAudioConversionSetup();
       void loadFolderWatchStatus();
     }
   }, [activePage]);
@@ -3147,6 +3301,14 @@ export default function App() {
               onApplyFolderWatch={handleApplyFolderWatch}
               deviceSyncPreview={deviceSyncPreview}
               onDeviceSync={handleDeviceSync}
+              audioConversionSetup={audioConversionSetup}
+              audioConversionPreview={audioConversionPreview}
+              audioConversionProgress={audioConversionProgress}
+              onRefreshAudioConversionSetup={loadAudioConversionSetup}
+              onSaveAudioConversionSetup={handleSaveAudioConversionSetup}
+              onPreviewAudioConversion={handlePreviewAudioConversion}
+              onStartAudioConversion={handleStartAudioConversion}
+              onCancelAudioConversion={handleCancelAudioConversion}
               metadataCsvExport={metadataCsvExport}
               metadataCsvImportPreview={metadataCsvImportPreview}
               metadataCsvImportReport={metadataCsvImportReport}

@@ -886,6 +886,88 @@ class FolderWatchApplyResponse(BaseModel):
     status: FolderWatchStatus
 
 
+class AudioConversionSetupRequest(BaseModel):
+    ffmpeg_path: str | None = None
+
+
+class AudioConversionSetupResponse(BaseModel):
+    available: bool = False
+    configured_path: str | None = None
+    resolved_path: str | None = None
+    version: str | None = None
+    tool_directory: str
+    checked_paths: list[str] = Field(default_factory=list)
+    message: str
+    errors: list[str] = Field(default_factory=list)
+
+
+class AudioConversionRequest(BaseModel):
+    target_folder: str
+    output_format: Literal["flac", "mp3", "m4a", "opus", "wav"] = "flac"
+    track_ids: list[int] | None = Field(default=None, max_length=10000)
+    preserve_structure: bool = True
+    copy_tags: bool = True
+    copy_artwork: bool = True
+    normalize_volume: bool = False
+    sample_rate_hz: int | None = Field(default=None, ge=8000, le=384000)
+    bitrate_kbps: int | None = Field(default=None, ge=32, le=1411)
+    overwrite: bool = False
+    limit: int = Field(default=200, ge=1, le=100000)
+
+    @field_validator("target_folder")
+    @classmethod
+    def target_folder_required(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("target_folder is required")
+        return cleaned
+
+
+class AudioConversionChange(BaseModel):
+    track_id: int
+    title: str | None = None
+    artist: str | None = None
+    source_path: str
+    target_path: str
+    changed: bool = False
+    collision: bool = False
+    error: str | None = None
+
+
+class AudioConversionPreviewResponse(BaseModel):
+    target_folder: str
+    total: int = 0
+    changed_count: int = 0
+    collisions: int = 0
+    changes: list[AudioConversionChange] = Field(default_factory=list)
+
+
+class AudioConversionStartResponse(BaseModel):
+    job_id: str
+    status: str
+
+
+class AudioConversionProgress(BaseModel):
+    job_id: str
+    target_folder: str
+    output_format: str
+    status: str
+    phase: str | None = None
+    message: str | None = None
+    total_tracks: int = 0
+    processed_tracks: int = 0
+    converted: int = 0
+    skipped: int = 0
+    errors: list[str] = Field(default_factory=list)
+    current_track: str | None = None
+    started_at: str
+    finished_at: str | None = None
+    elapsed_seconds: float
+    eta_seconds: float | None = None
+    percent: float
+    error: str | None = None
+
+
 class ClapConfigRequest(BaseModel):
     model_id: str | None = Field(default=None, max_length=200)
     cache_dir: str | None = None
