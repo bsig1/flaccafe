@@ -27,6 +27,7 @@ export type UiDensity = "comfortable" | "compact";
 export type FontScale = "small" | "default" | "large";
 export type AutoDjExperience = "simple" | "advanced";
 export type ReplayGainMode = "off" | "track" | "album";
+export type EqualizerBandMode = "10" | "15";
 export type KeyboardShortcutAction =
   | "page.library"
   | "page.analysis"
@@ -208,6 +209,11 @@ export interface UiPreferences {
   replayGainMode: ReplayGainMode;
   replayGainPreampDb: number;
   replayGainPreventClipping: boolean;
+  equalizerEnabled: boolean;
+  equalizerBandMode: EqualizerBandMode;
+  equalizerPreampDb: number;
+  equalizerGains: number[];
+  dspLimiterEnabled: boolean;
   themeAccent: ThemeAccent;
   density: UiDensity;
   fontScale: FontScale;
@@ -250,6 +256,44 @@ export const fontScaleValues: Record<FontScale, string> = {
   small: "15px",
   default: "16px",
   large: "17px",
+};
+
+export const EQ_FREQUENCIES_10 = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
+export const EQ_FREQUENCIES_15 = [25, 40, 63, 100, 160, 250, 400, 630, 1000, 1600, 2500, 4000, 6300, 10000, 16000];
+export const EQUALIZER_GAIN_MIN_DB = -12;
+export const EQUALIZER_GAIN_MAX_DB = 12;
+export const EQUALIZER_PREAMP_MIN_DB = -12;
+export const EQUALIZER_PREAMP_MAX_DB = 6;
+
+export const equalizerPresets: Record<string, { label: string; gains10: number[]; gains15?: number[]; preampDb?: number }> = {
+  flat: {
+    label: "Flat",
+    gains10: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  },
+  bass: {
+    label: "Bass lift",
+    gains10: [5, 4, 3, 1.5, 0, 0, 0, 0, 0.5, 1],
+    gains15: [5, 5, 4.5, 3.5, 2.5, 1, 0, 0, 0, 0, 0, 0.5, 1, 1, 1],
+    preampDb: -3,
+  },
+  vocal: {
+    label: "Vocal",
+    gains10: [-1, -1, 0, 1, 2, 3, 2.5, 1.5, 0, -1],
+    gains15: [-1, -1, -1, -0.5, 0, 1, 1.5, 2, 3, 3, 2, 1, 0, -0.5, -1],
+    preampDb: -2,
+  },
+  sparkle: {
+    label: "Sparkle",
+    gains10: [-1, -1, -0.5, 0, 0, 0.5, 1.5, 3, 4, 4],
+    gains15: [-1, -1, -1, -0.5, -0.5, 0, 0, 0.5, 0.5, 1, 2, 3, 4, 4, 4],
+    preampDb: -3,
+  },
+  vShape: {
+    label: "V shape",
+    gains10: [4, 3.5, 2, 0, -2, -1.5, 0, 2, 3.5, 4],
+    gains15: [4, 4, 3.5, 3, 1.5, 0, -1, -2, -2, -1, 0, 1.5, 3, 4, 4],
+    preampDb: -4,
+  },
 };
 
 export const storageKeys = {
@@ -913,6 +957,27 @@ export function clampNumber(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+export function equalizerFrequenciesForMode(mode: EqualizerBandMode): number[] {
+  return mode === "15" ? EQ_FREQUENCIES_15 : EQ_FREQUENCIES_10;
+}
+
+export function normalizeEqualizerGains(value: unknown, mode: EqualizerBandMode): number[] {
+  const frequencies = equalizerFrequenciesForMode(mode);
+  const source = Array.isArray(value) ? value : [];
+  return frequencies.map((_, index) => {
+    const gain = Number(source[index] ?? 0);
+    return Number.isFinite(gain) ? clampNumber(gain, EQUALIZER_GAIN_MIN_DB, EQUALIZER_GAIN_MAX_DB) : 0;
+  });
+}
+
+export function formatEqFrequency(frequency: number): string {
+  return frequency >= 1000 ? `${Number(frequency / 1000).toLocaleString(undefined, { maximumFractionDigits: 1 })}k` : String(frequency);
+}
+
+export function dbToGain(db: number): number {
+  return 10 ** (db / 20);
+}
+
 export function getListenedPercent(listenedSeconds: number, durationSeconds: number): number {
   if (durationSeconds <= 0) {
     return 0;
@@ -1098,6 +1163,11 @@ export function readUiPreferences(): UiPreferences {
     replayGainMode: "off",
     replayGainPreampDb: 0,
     replayGainPreventClipping: true,
+    equalizerEnabled: false,
+    equalizerBandMode: "10",
+    equalizerPreampDb: 0,
+    equalizerGains: normalizeEqualizerGains([], "10"),
+    dspLimiterEnabled: true,
     themeAccent: "cafe",
     density: "comfortable",
     fontScale: "default",
@@ -1141,6 +1211,23 @@ export function readUiPreferences(): UiPreferences {
           typeof parsed.replayGainPreventClipping === "boolean"
             ? parsed.replayGainPreventClipping
             : defaults.replayGainPreventClipping,
+        equalizerEnabled:
+          typeof parsed.equalizerEnabled === "boolean" ? parsed.equalizerEnabled : defaults.equalizerEnabled,
+        equalizerBandMode: ["10", "15"].includes(parsed.equalizerBandMode as EqualizerBandMode)
+          ? (parsed.equalizerBandMode as EqualizerBandMode)
+          : defaults.equalizerBandMode,
+        equalizerPreampDb:
+          typeof parsed.equalizerPreampDb === "number"
+            ? clampNumber(parsed.equalizerPreampDb, EQUALIZER_PREAMP_MIN_DB, EQUALIZER_PREAMP_MAX_DB)
+            : defaults.equalizerPreampDb,
+        equalizerGains: normalizeEqualizerGains(
+          parsed.equalizerGains,
+          ["10", "15"].includes(parsed.equalizerBandMode as EqualizerBandMode)
+            ? (parsed.equalizerBandMode as EqualizerBandMode)
+            : defaults.equalizerBandMode,
+        ),
+        dspLimiterEnabled:
+          typeof parsed.dspLimiterEnabled === "boolean" ? parsed.dspLimiterEnabled : defaults.dspLimiterEnabled,
         startupPage: validPages.includes(parsed.startupPage as Page) ? (parsed.startupPage as Page) : defaults.startupPage,
         themeAccent: ["cafe", "mint", "rose", "blue"].includes(parsed.themeAccent as ThemeAccent)
           ? (parsed.themeAccent as ThemeAccent)

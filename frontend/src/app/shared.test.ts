@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   defaultKeyboardShortcuts,
   formatShortcut,
+  normalizeEqualizerGains,
   normalizeKeyboardShortcuts,
   replayGainMultiplier,
   shortcutConflictGroups,
@@ -67,5 +68,12 @@ describe("ReplayGain", () => {
 
     expect(replayGainMultiplier(loudTrack, "track", 0, true)).toBeCloseTo(0.8, 3);
     expect(replayGainMultiplier(loudTrack, "track", 0, false)).toBeGreaterThan(1);
+  });
+});
+
+describe("equalizer settings", () => {
+  it("normalizes equalizer gains to the selected band count and range", () => {
+    expect(normalizeEqualizerGains([20, -20, 3], "10")).toEqual([12, -12, 3, 0, 0, 0, 0, 0, 0, 0]);
+    expect(normalizeEqualizerGains([1, 2, 3], "15")).toHaveLength(15);
   });
 });

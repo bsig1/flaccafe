@@ -13,6 +13,7 @@ import {
 import type {
   CSSProperties,
   ChangeEvent,
+  MutableRefObject,
 } from "react";
 import {
   useEffect,
@@ -48,13 +49,16 @@ import {
 } from "../components/common";
 import {
   END_FADE_SECONDS,
+  EqualizerBandMode,
   KeyboardShortcutAction,
   KeyboardShortcut,
   MiniPlayerCommand,
   PlaybackEngine,
   PlaybackMode,
   clampNumber,
+  dbToGain,
   display,
+  equalizerFrequenciesForMode,
   formatPlaybackTime,
   miniPlayerChannelName,
   miniPlayerTrackSnapshot,
@@ -86,6 +90,11 @@ export function PlayerBar({
   replayGainMode,
   replayGainPreampDb,
   replayGainPreventClipping,
+  equalizerEnabled,
+  equalizerBandMode,
+  equalizerPreampDb,
+  equalizerGains,
+  dspLimiterEnabled,
   keyboardShortcuts,
   playbackMode,
   setPlaybackMode,
@@ -109,6 +118,11 @@ export function PlayerBar({
   replayGainMode: "off" | "track" | "album";
   replayGainPreampDb: number;
   replayGainPreventClipping: boolean;
+  equalizerEnabled: boolean;
+  equalizerBandMode: EqualizerBandMode;
+  equalizerPreampDb: number;
+  equalizerGains: number[];
+  dspLimiterEnabled: boolean;
   keyboardShortcuts: Record<KeyboardShortcutAction, KeyboardShortcut>;
   playbackMode: PlaybackMode;
   setPlaybackMode: (mode: PlaybackMode) => void;
@@ -117,6 +131,17 @@ export function PlayerBar({
 }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const nextAudioRef = useRef<HTMLAudioElement | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const currentSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const currentSourceElementRef = useRef<HTMLAudioElement | null>(null);
+  const nextSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const nextSourceElementRef = useRef<HTMLAudioElement | null>(null);
+  const dspInputRef = useRef<GainNode | null>(null);
+  const dspPreampRef = useRef<GainNode | null>(null);
+  const dspFiltersRef = useRef<BiquadFilterNode[]>([]);
+  const dspCompressorRef = useRef<DynamicsCompressorNode | null>(null);
+  const dspModeRef = useRef<EqualizerBandMode | null>(null);
+  const dspLimiterRef = useRef<boolean | null>(null);
   const fadeTimerRef = useRef<number | null>(null);
   const nativeFadeTimerRef = useRef<number | null>(null);
   const crossfadeTimerRef = useRef<number | null>(null);
@@ -148,12 +173,153 @@ export function PlayerBar({
   const outputVolume = muted ? 0 : clampNumber(volume * replayGain, 0, 1);
   const useNativePlayback = playbackEngine === "native";
 
+  function disconnectAudioNode(node: AudioNode | null) {
+    try {
+      node?.disconnect();
+    } catch {
+      // Web Audio nodes may already be disconnected when tracks swap quickly.
+    }
+  }
+
+  function ensureAudioContext(): AudioContext | null {
+    const AudioContextCtor =
+      window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextCtor) {
+      return null;
+    }
+    if (!audioContextRef.current) {
+      audioContextRef.current = new AudioContextCtor();
+    }
+    return audioContextRef.current;
+  }
+
+  function connectMediaElementSource(
+    element: HTMLAudioElement | null,
+    sourceRef: MutableRefObject<MediaElementAudioSourceNode | null>,
+    elementRef: MutableRefObject<HTMLAudioElement | null>,
+    input: GainNode,
+  ) {
+    if (!element) {
+      disconnectAudioNode(sourceRef.current);
+      sourceRef.current = null;
+      elementRef.current = null;
+      return;
+    }
+    if (elementRef.current === element && sourceRef.current) {
+      return;
+    }
+    disconnectAudioNode(sourceRef.current);
+    try {
+      const context = input.context as AudioContext;
+      const source = context.createMediaElementSource(element);
+      source.connect(input);
+      sourceRef.current = source;
+      elementRef.current = element;
+    } catch {
+      // A browser can reject media-element source creation in preview mode.
+      // Direct audio playback still works; it just bypasses the EQ chain.
+      sourceRef.current = null;
+      elementRef.current = element;
+    }
+  }
+
+  function rebuildDspTail(context: AudioContext, input: GainNode) {
+    disconnectAudioNode(input);
+    disconnectAudioNode(dspPreampRef.current);
+    for (const filter of dspFiltersRef.current) {
+      disconnectAudioNode(filter);
+    }
+    disconnectAudioNode(dspCompressorRef.current);
+
+    const preamp = context.createGain();
+    const frequencies = equalizerFrequenciesForMode(equalizerBandMode);
+    const filters = frequencies.map((frequency, index) => {
+      const filter = context.createBiquadFilter();
+      filter.frequency.value = frequency;
+      filter.Q.value = index === 0 || index === frequencies.length - 1 ? 0.7 : 1.1;
+      filter.type = index === 0 ? "lowshelf" : index === frequencies.length - 1 ? "highshelf" : "peaking";
+      return filter;
+    });
+    const compressor = context.createDynamicsCompressor();
+    compressor.threshold.value = -1.5;
+    compressor.knee.value = 0;
+    compressor.ratio.value = 16;
+    compressor.attack.value = 0.003;
+    compressor.release.value = 0.18;
+
+    input.connect(preamp);
+    let previous: AudioNode = preamp;
+    for (const filter of filters) {
+      previous.connect(filter);
+      previous = filter;
+    }
+    if (dspLimiterEnabled) {
+      previous.connect(compressor);
+      compressor.connect(context.destination);
+    } else {
+      previous.connect(context.destination);
+    }
+
+    dspPreampRef.current = preamp;
+    dspFiltersRef.current = filters;
+    dspCompressorRef.current = compressor;
+    dspModeRef.current = equalizerBandMode;
+    dspLimiterRef.current = dspLimiterEnabled;
+  }
+
+  function ensureWebAudioGraph() {
+    if (useNativePlayback) {
+      return null;
+    }
+    const context = ensureAudioContext();
+    if (!context) {
+      return null;
+    }
+    if (!dspInputRef.current || dspInputRef.current.context !== context) {
+      dspInputRef.current = context.createGain();
+      dspModeRef.current = null;
+      dspLimiterRef.current = null;
+    }
+    const input = dspInputRef.current;
+    connectMediaElementSource(audioRef.current, currentSourceRef, currentSourceElementRef, input);
+    connectMediaElementSource(nextAudioRef.current, nextSourceRef, nextSourceElementRef, input);
+    if (dspModeRef.current !== equalizerBandMode || dspLimiterRef.current !== dspLimiterEnabled || !dspPreampRef.current) {
+      rebuildDspTail(context, input);
+    }
+    updateDspSettings();
+    return context;
+  }
+
+  function updateDspSettings() {
+    const context = audioContextRef.current;
+    if (!context || !dspPreampRef.current || dspFiltersRef.current.length === 0) {
+      return;
+    }
+    const now = context.currentTime;
+    const preampGain = equalizerEnabled ? dbToGain(equalizerPreampDb) : 1;
+    dspPreampRef.current.gain.setTargetAtTime(preampGain, now, 0.01);
+    for (const [index, filter] of dspFiltersRef.current.entries()) {
+      const gain = equalizerEnabled ? clampNumber(equalizerGains[index] ?? 0, -12, 12) : 0;
+      filter.gain.setTargetAtTime(gain, now, 0.01);
+    }
+  }
+
+  async function resumeWebAudioGraph() {
+    const context = ensureWebAudioGraph();
+    if (context?.state === "suspended") {
+      await context.resume();
+    }
+  }
+
   useEffect(() => {
     return () => {
       cancelFade();
       cancelNativeFade();
       cancelCrossfade();
       miniPlayerChannelRef.current?.close();
+      void audioContextRef.current?.close().catch(() => {
+        // Closing the graph is best-effort during app teardown.
+      });
       void nativeStop().catch(() => {
         // Native playback is best-effort during shutdown.
       });
@@ -218,6 +384,22 @@ export function PlayerBar({
       audio.load();
     }
   }, [preloadedNextTrack?.id]);
+
+  useEffect(() => {
+    if (useNativePlayback) {
+      return;
+    }
+    ensureWebAudioGraph();
+  }, [
+    useNativePlayback,
+    currentTrack?.id,
+    preloadedNextTrack?.id,
+    equalizerEnabled,
+    equalizerBandMode,
+    equalizerPreampDb,
+    equalizerGains,
+    dspLimiterEnabled,
+  ]);
 
   function cancelFade() {
     if (fadeTimerRef.current !== null) {
@@ -384,6 +566,7 @@ export function PlayerBar({
     try {
       nextAudio.currentTime = 0;
       nextAudio.volume = 0;
+      await resumeWebAudioGraph();
       await nextAudio.play();
     } catch {
       crossfadeTrackRef.current = null;
@@ -421,6 +604,7 @@ export function PlayerBar({
     cancelFade();
     audio.volume = 0;
     try {
+      await resumeWebAudioGraph();
       await audio.play();
       setIsPlaying(true);
       fadeVolume(outputVolume, fadeMs);
@@ -502,9 +686,12 @@ export function PlayerBar({
       handoffRef.current = null;
       audio.currentTime = handoff.currentTime;
       audio.volume = outputVolume;
-      void audio.play().then(() => setIsPlaying(true)).catch(() => {
-        setStatus("Playback could not continue after crossfade.");
-      });
+      void resumeWebAudioGraph()
+        .then(() => audio.play())
+        .then(() => setIsPlaying(true))
+        .catch(() => {
+          setStatus("Playback could not continue after crossfade.");
+        });
       return;
     }
     if (autoPlay) {
@@ -1029,6 +1216,7 @@ export function PlayerBar({
             key={currentTrack.id}
             ref={audioRef}
             className="hidden"
+            crossOrigin="anonymous"
             preload="auto"
             src={audioUrl(currentTrack.id)}
             onLoadedMetadata={syncDuration}
@@ -1049,13 +1237,14 @@ export function PlayerBar({
             }}
           />
         ) : !useNativePlayback ? (
-          <audio ref={audioRef} className="hidden" />
+          <audio ref={audioRef} className="hidden" crossOrigin="anonymous" />
         ) : null}
         {!useNativePlayback && preloadedNextTrack && (
           <audio
             key={`next-${preloadedNextTrack.id}`}
             ref={nextAudioRef}
             className="hidden"
+            crossOrigin="anonymous"
             preload="auto"
             src={audioUrl(preloadedNextTrack.id)}
           />

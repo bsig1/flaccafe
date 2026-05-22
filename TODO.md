@@ -13,7 +13,6 @@
 - Add podcast subscriptions and episode download management as an optional non-core module.
 - Add web radio bookmarks and stream playback as an optional non-core module.
 - Add Last.fm/ListenBrainz scrobbling, loved-track sync, and optional import of historical play counts/ratings.
-- Add a 10/15-band equalizer and basic DSP chain once the playback engine is mature enough.
 - Add a dedicated WASAPI exclusive-mode or ASIO backend if cpal shared-mode output is not enough for advanced users.
 - Add native queue preloading and sample-accurate gapless transition validation for adjacent album tracks.
 - Add richer native playback diagnostics, including a compact Settings panel for recent rodio/cpal/Symphonia failures.

@@ -3410,6 +3410,11 @@ export default function App() {
           replayGainMode={uiPreferences.replayGainMode}
           replayGainPreampDb={uiPreferences.replayGainPreampDb}
           replayGainPreventClipping={uiPreferences.replayGainPreventClipping}
+          equalizerEnabled={uiPreferences.equalizerEnabled}
+          equalizerBandMode={uiPreferences.equalizerBandMode}
+          equalizerPreampDb={uiPreferences.equalizerPreampDb}
+          equalizerGains={uiPreferences.equalizerGains}
+          dspLimiterEnabled={uiPreferences.dspLimiterEnabled}
           keyboardShortcuts={uiPreferences.keyboardShortcuts}
           playbackMode={playbackMode}
           setPlaybackMode={setPlaybackMode}

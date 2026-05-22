@@ -1,5 +1,7 @@
 import {
   RefreshCw,
+  RotateCcw,
+  SlidersHorizontal,
 } from "lucide-react";
 
 import type {
@@ -10,7 +12,16 @@ import {
   NumberField,
 } from "../../components/common";
 import {
+  EQUALIZER_GAIN_MAX_DB,
+  EQUALIZER_GAIN_MIN_DB,
+  EQUALIZER_PREAMP_MAX_DB,
+  EQUALIZER_PREAMP_MIN_DB,
+  EqualizerBandMode,
   UiPreferences,
+  equalizerFrequenciesForMode,
+  equalizerPresets,
+  formatEqFrequency,
+  normalizeEqualizerGains,
   writeMiniPlayerAlwaysOnTop,
   writeMiniPlayerSize,
 } from "../../shared";
@@ -67,6 +78,49 @@ export function PlayerSettingsSection({
   codecSupport: CodecSupportRow[];
   onRefreshCodecSupport: () => void;
 }) {
+  const equalizerFrequencies = equalizerFrequenciesForMode(uiPreferences.equalizerBandMode);
+  const equalizerGains = normalizeEqualizerGains(uiPreferences.equalizerGains, uiPreferences.equalizerBandMode);
+
+  function updateEqualizerGain(index: number, value: number) {
+    setUiPreferences((current) => {
+      const gains = normalizeEqualizerGains(current.equalizerGains, current.equalizerBandMode);
+      gains[index] = value;
+      return { ...current, equalizerGains: gains };
+    });
+  }
+
+  function setEqualizerBandMode(mode: EqualizerBandMode) {
+    setUiPreferences((current) => ({
+      ...current,
+      equalizerBandMode: mode,
+      equalizerGains: normalizeEqualizerGains(current.equalizerGains, mode),
+    }));
+  }
+
+  function applyEqualizerPreset(presetKey: string) {
+    const preset = equalizerPresets[presetKey];
+    if (!preset) {
+      return;
+    }
+    setUiPreferences((current) => ({
+      ...current,
+      equalizerEnabled: true,
+      equalizerGains: normalizeEqualizerGains(
+        current.equalizerBandMode === "15" ? preset.gains15 ?? preset.gains10 : preset.gains10,
+        current.equalizerBandMode,
+      ),
+      equalizerPreampDb: preset.preampDb ?? 0,
+    }));
+  }
+
+  function resetEqualizer() {
+    setUiPreferences((current) => ({
+      ...current,
+      equalizerGains: normalizeEqualizerGains([], current.equalizerBandMode),
+      equalizerPreampDb: 0,
+    }));
+  }
+
   return (
     <DisclosureSection title="Player" description="Fade, skip tracking, and playback presentation">
       <div className="grid gap-3 text-sm text-neutral-200">
@@ -233,6 +287,111 @@ export function PlayerSettingsSection({
           <div className="text-xs text-muted">
             FLAC Cafe reads embedded ReplayGain gain and peak tags during scans and applies gain during playback. Tracks without tags play at normal volume.
           </div>
+        </div>
+        <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2 font-medium text-white">
+                <SlidersHorizontal size={16} />
+                Equalizer / DSP
+              </div>
+              <div className="text-xs text-muted">
+                Applied in WebView playback. Native Rust playback currently bypasses this DSP chain.
+              </div>
+            </div>
+            <label className="flex items-center gap-2 text-sm text-neutral-200">
+              <span>Enabled</span>
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-moss"
+                checked={uiPreferences.equalizerEnabled}
+                onChange={(event) =>
+                  setUiPreferences((current) => ({ ...current, equalizerEnabled: event.target.checked }))
+                }
+              />
+            </label>
+          </div>
+          {uiPreferences.playbackEngine === "native" && uiPreferences.equalizerEnabled && (
+            <div className="rounded border border-ember/40 bg-panel px-3 py-2 text-xs text-ember">
+              Switch Playback Engine to WebView audio to hear EQ/DSP while the Rust output path remains clean.
+            </div>
+          )}
+          <div className="grid gap-2 md:grid-cols-[1fr_1fr_auto]">
+            <label className="grid gap-2">
+              <span className="text-xs uppercase text-muted">Bands</span>
+              <select
+                className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                value={uiPreferences.equalizerBandMode}
+                onChange={(event) => setEqualizerBandMode(event.target.value as EqualizerBandMode)}
+              >
+                <option value="10">10-band classic</option>
+                <option value="15">15-band fine</option>
+              </select>
+            </label>
+            <label className="grid gap-2">
+              <span className="text-xs uppercase text-muted">Preset</span>
+              <select
+                className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                value=""
+                onChange={(event) => {
+                  applyEqualizerPreset(event.target.value);
+                }}
+              >
+                <option value="">Choose preset</option>
+                {Object.entries(equalizerPresets).map(([key, preset]) => (
+                  <option key={key} value={key}>
+                    {preset.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button className="secondary-button mt-6 h-9" type="button" onClick={resetEqualizer}>
+              <RotateCcw size={15} />
+              Reset
+            </button>
+          </div>
+          <label className="grid gap-2">
+            <span className="text-xs uppercase text-muted">Preamp {uiPreferences.equalizerPreampDb.toFixed(1)} dB</span>
+            <input
+              type="range"
+              min={EQUALIZER_PREAMP_MIN_DB}
+              max={EQUALIZER_PREAMP_MAX_DB}
+              step={0.5}
+              value={uiPreferences.equalizerPreampDb}
+              onChange={(event) =>
+                setUiPreferences((current) => ({ ...current, equalizerPreampDb: Number(event.target.value) }))
+              }
+              className="accent-moss"
+            />
+          </label>
+          <div className="grid gap-2">
+            {equalizerFrequencies.map((frequency, index) => (
+              <label key={frequency} className="grid grid-cols-[52px_1fr_52px] items-center gap-3 text-xs">
+                <span className="text-right text-muted">{formatEqFrequency(frequency)}</span>
+                <input
+                  type="range"
+                  min={EQUALIZER_GAIN_MIN_DB}
+                  max={EQUALIZER_GAIN_MAX_DB}
+                  step={0.5}
+                  value={equalizerGains[index] ?? 0}
+                  onChange={(event) => updateEqualizerGain(index, Number(event.target.value))}
+                  className="accent-moss"
+                />
+                <span className="tabular-nums text-neutral-200">{(equalizerGains[index] ?? 0).toFixed(1)}</span>
+              </label>
+            ))}
+          </div>
+          <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-panel px-3 py-2">
+            <span className="text-muted">Limiter after EQ</span>
+            <input
+              type="checkbox"
+              className="h-4 w-4 accent-moss"
+              checked={uiPreferences.dspLimiterEnabled}
+              onChange={(event) =>
+                setUiPreferences((current) => ({ ...current, dspLimiterEnabled: event.target.checked }))
+              }
+            />
+          </label>
         </div>
         <label className="grid gap-2">
           <span className="text-xs uppercase text-muted">Fade Length {uiPreferences.playerFadeMs}ms</span>
