@@ -179,14 +179,77 @@ export interface LibraryStatsResponse {
 
 export interface InboxResponse {
   tracks: Track[];
+  notes: InboxTrackNote[];
+  auto_review_rules: InboxAutoReviewRule[];
   total_new: number;
   total_reviewed: number;
   limit: number;
   offset: number;
 }
 
+export interface InboxTrackNote {
+  track_id: number;
+  note: string;
+  updated_at: string;
+}
+
 export interface InboxReviewResponse {
   updated: number;
+  total_new: number;
+  total_reviewed: number;
+}
+
+export type InboxAutoReviewField =
+  | "title"
+  | "artist"
+  | "album"
+  | "album_artist"
+  | "genre"
+  | "path"
+  | "year"
+  | "rating"
+  | "duration_seconds";
+
+export type InboxAutoReviewMatchType =
+  | "contains"
+  | "equals"
+  | "starts_with"
+  | "ends_with"
+  | "regex"
+  | "is_empty"
+  | "is_not_empty";
+
+export interface InboxAutoReviewRule {
+  id: number;
+  name: string;
+  enabled: boolean;
+  field: InboxAutoReviewField;
+  match_type: InboxAutoReviewMatchType;
+  value: string;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InboxAutoReviewRuleRequest {
+  name: string;
+  enabled: boolean;
+  field: InboxAutoReviewField;
+  match_type: InboxAutoReviewMatchType;
+  value: string;
+  note?: string | null;
+  apply_existing?: boolean;
+}
+
+export interface InboxAutoReviewRuleApplyResponse {
+  rule: InboxAutoReviewRule;
+  applied: number;
+  total_new: number;
+  total_reviewed: number;
+}
+
+export interface InboxAutoReviewRuleDeleteResponse {
+  deleted: boolean;
   total_new: number;
   total_reviewed: number;
 }
@@ -802,6 +865,16 @@ export interface FolderWatchChange {
   summary: string;
 }
 
+export interface FolderWatchNotification {
+  id: string;
+  created_at: string;
+  title: string;
+  message: string;
+  pending_count: number;
+  counts: Record<FolderWatchChangeType, number>;
+  acknowledged: boolean;
+}
+
 export interface FolderWatchStatus {
   enabled: boolean;
   folder_path: string | null;
@@ -812,6 +885,7 @@ export interface FolderWatchStatus {
   pending_count: number;
   counts: Record<FolderWatchChangeType, number>;
   changes: FolderWatchChange[];
+  notifications: FolderWatchNotification[];
   error: string | null;
 }
 

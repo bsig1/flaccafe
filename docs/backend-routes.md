@@ -24,12 +24,18 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `GET /library/stats` returns dashboard counts.
 - `GET /library/health` returns missing files, duplicate groups, missing metadata, and unrated tracks.
 - `GET /library/inbox` returns newly scanned tracks waiting for review.
+- `PATCH /library/inbox/notes/{track_id}` saves or clears a per-track Inbox note.
 - `POST /library/inbox/review` marks selected or all Inbox tracks as reviewed.
+- `GET /library/inbox/auto-review-rules` lists saved Inbox auto-review rules.
+- `POST /library/inbox/auto-review-rules` creates an optional auto-review rule and can apply it to existing Inbox tracks.
+- `PATCH /library/inbox/auto-review-rules/{rule_id}` updates a saved auto-review rule.
+- `DELETE /library/inbox/auto-review-rules/{rule_id}` removes a saved auto-review rule.
 - `GET /library/watch` returns background folder-watch status and pending changes.
 - `POST /library/watch/start` starts polling the library folder for add, move, remove, and tag/file timestamp changes.
 - `POST /library/watch/stop` stops the background folder watcher.
 - `POST /library/watch/refresh` immediately checks the watched folder without applying changes.
 - `POST /library/watch/apply` applies selected or all pending folder-watch changes to SQLite.
+- `POST /library/watch/notifications/ack` dismisses folder-watcher notifications after review.
 - `POST /library/maintenance/clear` clears derived caches.
 - `POST /library/tools/infer-tags` previews or applies filename-based tag inference.
 - `POST /library/tools/regex-tags` previews or applies regex search/replace for common text tags.

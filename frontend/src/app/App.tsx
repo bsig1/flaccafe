@@ -30,6 +30,7 @@ import {
 import {
   addTracksToPlaylist,
   applyFolderWatchChanges,
+  acknowledgeFolderWatchNotifications,
   autoTagMusicBrainz,
   backupDatabase,
   cancelAudioConversion,
@@ -37,10 +38,12 @@ import {
   clearArtistCache,
   clearLibraryCaches,
   createAutoDjAvoidRule,
+  createInboxAutoReviewRule,
   createPlaylist,
   createSmartPlaylist,
   createSupportBundle,
   deleteAutoDjAvoidRule,
+  deleteInboxAutoReviewRule,
   deletePlaylist,
   deleteRecommendationProfile,
   deleteSmartPlaylist,
@@ -110,6 +113,8 @@ import {
   stopFolderWatch,
   syncDeviceFolder,
   updateClapConfig,
+  updateInboxAutoReviewRule,
+  updateInboxNote,
   updateLyrics,
   updateSettings,
   updateTrackMetadata,
@@ -165,6 +170,8 @@ import type {
   FolderWatchApplyResponse,
   FolderWatchStatus,
   FilenameTagInferenceResponse,
+  InboxAutoReviewRule,
+  InboxAutoReviewRuleRequest,
   InboxResponse,
   LibraryHealthResponse,
   LibraryStatsResponse,
@@ -355,6 +362,7 @@ export default function App() {
   const [libraryScrollTop, setLibraryScrollTop] = useState(0);
   const libraryRequestId = useRef(0);
   const undoTimerRef = useRef<number | null>(null);
+  const lastFolderWatchNotificationIdRef = useRef<string | null>(null);
   const hideFilePaths = uiPreferences.hideFilePaths;
   const libraryVisibleColumns = normalizeLibraryColumns(uiPreferences.libraryVisibleColumns);
   const setHideFilePaths = (value: boolean) =>
@@ -579,9 +587,21 @@ export default function App() {
     }
   }
 
+  function applyFolderWatchStatus(statusResponse: FolderWatchStatus, notify = true) {
+    setFolderWatchStatus(statusResponse);
+    const latestNotification = [...(statusResponse.notifications ?? [])]
+      .reverse()
+      .find((notification) => !notification.acknowledged);
+    if (!notify || !latestNotification || latestNotification.id === lastFolderWatchNotificationIdRef.current) {
+      return;
+    }
+    lastFolderWatchNotificationIdRef.current = latestNotification.id;
+    setStatus(`${latestNotification.title}: ${latestNotification.message}`);
+  }
+
   async function loadFolderWatchStatus(showError = false) {
     try {
-      setFolderWatchStatus(await fetchFolderWatchStatus());
+      applyFolderWatchStatus(await fetchFolderWatchStatus(), !showError);
     } catch (error) {
       if (showError) {
         setStatus(error instanceof Error ? error.message : "Could not load folder watch status");
@@ -1032,7 +1052,7 @@ export default function App() {
       await loadClapCoverage();
       await loadSettings();
       try {
-        setFolderWatchStatus(await startFolderWatch(result.folder_path, folderWatchStatus?.interval_seconds ?? 45));
+        applyFolderWatchStatus(await startFolderWatch(result.folder_path, folderWatchStatus?.interval_seconds ?? 45), false);
       } catch {
         await loadFolderWatchStatus();
       }
@@ -1051,7 +1071,7 @@ export default function App() {
     }
     try {
       const response = await startFolderWatch(targetPath, intervalSeconds);
-      setFolderWatchStatus(response);
+      applyFolderWatchStatus(response, false);
       setStatus("Folder watch is running. Pending changes will wait for your review.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not start folder watch");
@@ -1061,7 +1081,7 @@ export default function App() {
   async function handleStopFolderWatch() {
     try {
       const response = await stopFolderWatch();
-      setFolderWatchStatus(response);
+      applyFolderWatchStatus(response, false);
       setStatus("Folder watch stopped");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not stop folder watch");
@@ -1071,7 +1091,7 @@ export default function App() {
   async function handleRefreshFolderWatch() {
     try {
       const response = await refreshFolderWatch(folderPath.trim() || settings?.library_path || null);
-      setFolderWatchStatus(response);
+      applyFolderWatchStatus(response, false);
       setStatus(
         response.pending_count
           ? `Found ${response.pending_count.toLocaleString()} pending library change${response.pending_count === 1 ? "" : "s"}`
@@ -1083,7 +1103,7 @@ export default function App() {
   }
 
   async function applyFolderWatchResponse(response: FolderWatchApplyResponse) {
-    setFolderWatchStatus(response.status);
+    applyFolderWatchStatus(response.status, false);
     await Promise.all([
       refreshTracks(),
       loadAlbums(),
@@ -1117,6 +1137,14 @@ export default function App() {
       await applyFolderWatchResponse(await applyFolderWatchChanges(changeIds, applyAll));
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not apply folder watch changes");
+    }
+  }
+
+  async function handleAcknowledgeFolderWatchNotifications(notificationIds: string[], allNotifications = false) {
+    try {
+      applyFolderWatchStatus(await acknowledgeFolderWatchNotifications(notificationIds, allNotifications), false);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not dismiss folder watch notification");
     }
   }
 
@@ -1593,6 +1621,45 @@ export default function App() {
       setStatus(`Reviewed ${response.updated.toLocaleString()} Inbox track${response.updated === 1 ? "" : "s"}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not update Inbox");
+    }
+  }
+
+  async function handleUpdateInboxNote(trackId: number, note: string) {
+    try {
+      await updateInboxNote(trackId, note);
+      await loadInbox();
+      setStatus(note.trim() ? "Inbox note saved" : "Inbox note cleared");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not save Inbox note");
+    }
+  }
+
+  async function handleSaveInboxAutoReviewRule(rule: InboxAutoReviewRuleRequest, ruleId?: number) {
+    try {
+      const response = ruleId
+        ? await updateInboxAutoReviewRule(ruleId, rule)
+        : await createInboxAutoReviewRule(rule);
+      await loadInbox();
+      setStatus(
+        response.applied
+          ? `Auto-review rule saved; reviewed ${response.applied.toLocaleString()} matching track${response.applied === 1 ? "" : "s"}`
+          : `Auto-review rule saved: ${response.rule.name}`,
+      );
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not save auto-review rule");
+    }
+  }
+
+  async function handleDeleteInboxAutoReviewRule(rule: InboxAutoReviewRule) {
+    if (!window.confirm(`Delete auto-review rule "${rule.name}"?`)) {
+      return;
+    }
+    try {
+      await deleteInboxAutoReviewRule(rule.id);
+      await loadInbox();
+      setStatus("Auto-review rule deleted");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not delete auto-review rule");
     }
   }
 
@@ -3155,6 +3222,9 @@ export default function App() {
               onDeleteSmartPlaylist={handleDeleteSmartPlaylist}
               onSelectSmartPlaylist={handleSelectSmartPlaylist}
               onReviewInboxTracks={handleReviewInboxTracks}
+              onUpdateInboxNote={handleUpdateInboxNote}
+              onSaveInboxAutoReviewRule={handleSaveInboxAutoReviewRule}
+              onDeleteInboxAutoReviewRule={handleDeleteInboxAutoReviewRule}
               onShuffleTracks={handleShuffleTracks}
               onQuickAutoDj={handleQuickAutoDj}
               onAvoidAutoDj={handleAvoidAutoDj}
@@ -3299,6 +3369,7 @@ export default function App() {
               onStopFolderWatch={handleStopFolderWatch}
               onRefreshFolderWatch={handleRefreshFolderWatch}
               onApplyFolderWatch={handleApplyFolderWatch}
+              onAcknowledgeFolderWatchNotifications={handleAcknowledgeFolderWatchNotifications}
               deviceSyncPreview={deviceSyncPreview}
               onDeviceSync={handleDeviceSync}
               audioConversionSetup={audioConversionSetup}

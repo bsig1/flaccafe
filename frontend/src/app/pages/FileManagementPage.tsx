@@ -1,4 +1,5 @@
 import {
+  Bell,
   CheckCircle2,
   Download,
   Eye,
@@ -102,6 +103,7 @@ export function FileManagementPage({
   onStopFolderWatch,
   onRefreshFolderWatch,
   onApplyFolderWatch,
+  onAcknowledgeFolderWatchNotifications,
   deviceSyncPreview,
   onDeviceSync,
   audioConversionSetup,
@@ -188,6 +190,7 @@ export function FileManagementPage({
   onStopFolderWatch: () => void | Promise<void>;
   onRefreshFolderWatch: () => void | Promise<void>;
   onApplyFolderWatch: (changeIds: string[], applyAll?: boolean) => void | Promise<void>;
+  onAcknowledgeFolderWatchNotifications: (notificationIds: string[], allNotifications?: boolean) => void | Promise<void>;
   deviceSyncPreview: DeviceSyncResponse | null;
   onDeviceSync: (
     targetFolder: string,
@@ -289,6 +292,7 @@ export function FileManagementPage({
   const allFilenameTagPresets = Array.from(new Set([...DEFAULT_FILENAME_TAG_PATTERNS, ...filenameTagPresets]));
   const isCustomFilenameTagPreset = filenameTagPresets.includes(filenameTagPattern);
   const folderWatchChanges = folderWatchStatus?.changes ?? [];
+  const activeFolderWatchNotifications = (folderWatchStatus?.notifications ?? []).filter((notification) => !notification.acknowledged);
   const folderWatchChangeKey = folderWatchChanges.map((change) => change.id).join("|");
   const selectedWatchCount = folderWatchChanges.filter((change) => acceptedFolderWatchIds.has(change.id)).length;
   const autoTagChangedIds = useMemo(
@@ -659,6 +663,29 @@ export function FileManagementPage({
                   </div>
                 </div>
               </div>
+
+              {activeFolderWatchNotifications.length > 0 && (
+                <div className="grid gap-2 rounded border border-moss/30 bg-moss/10 px-3 py-2">
+                  {activeFolderWatchNotifications.slice(-3).map((notification) => (
+                    <div key={notification.id} className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 text-sm font-medium text-white">
+                          <Bell size={15} className="text-moss" />
+                          {notification.title}
+                        </div>
+                        <div className="truncate text-xs text-muted">{notification.message}</div>
+                      </div>
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={() => void onAcknowledgeFolderWatchNotifications([notification.id])}
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               <div className="grid gap-2 sm:grid-cols-4">
                 {(["added", "modified", "moved", "removed"] as const).map((kind) => (

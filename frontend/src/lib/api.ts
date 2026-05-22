@@ -59,8 +59,12 @@ import type {
   FilenameTagInferenceRequest,
   FilenameTagInferenceResponse,
   LibraryHealthResponse,
+  InboxAutoReviewRuleApplyResponse,
+  InboxAutoReviewRuleDeleteResponse,
+  InboxAutoReviewRuleRequest,
   InboxResponse,
   InboxReviewResponse,
+  InboxTrackNote,
   LibraryStatsResponse,
   LogTailResponse,
   LyricsResponse,
@@ -179,6 +183,13 @@ export function fetchLibraryInbox(limit = 200, offset = 0): Promise<InboxRespons
   return request<InboxResponse>(`/library/inbox?limit=${limit}&offset=${offset}`);
 }
 
+export function updateInboxNote(trackId: number, note: string | null): Promise<InboxTrackNote | null> {
+  return request<InboxTrackNote | null>(`/library/inbox/notes/${trackId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ note }),
+  });
+}
+
 export function reviewInboxTracks(trackIds: number[]): Promise<InboxReviewResponse> {
   return request<InboxReviewResponse>("/library/inbox/review", {
     method: "POST",
@@ -191,6 +202,27 @@ export function reviewAllInboxTracks(): Promise<InboxReviewResponse> {
     method: "POST",
     body: JSON.stringify({ all_new: true }),
   });
+}
+
+export function createInboxAutoReviewRule(requestBody: InboxAutoReviewRuleRequest): Promise<InboxAutoReviewRuleApplyResponse> {
+  return request<InboxAutoReviewRuleApplyResponse>("/library/inbox/auto-review-rules", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function updateInboxAutoReviewRule(
+  ruleId: number,
+  requestBody: InboxAutoReviewRuleRequest,
+): Promise<InboxAutoReviewRuleApplyResponse> {
+  return request<InboxAutoReviewRuleApplyResponse>(`/library/inbox/auto-review-rules/${ruleId}`, {
+    method: "PATCH",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function deleteInboxAutoReviewRule(ruleId: number): Promise<InboxAutoReviewRuleDeleteResponse> {
+  return request<InboxAutoReviewRuleDeleteResponse>(`/library/inbox/auto-review-rules/${ruleId}`, { method: "DELETE" });
 }
 
 export function clearLibraryCaches(targets: CacheClearTarget[]): Promise<CacheClearResponse> {
@@ -436,6 +468,16 @@ export function applyFolderWatchChanges(changeIds: string[], applyAll = false, l
       change_ids: changeIds,
       apply_all: applyAll,
       limit,
+    }),
+  });
+}
+
+export function acknowledgeFolderWatchNotifications(notificationIds: string[] = [], allNotifications = false): Promise<FolderWatchStatus> {
+  return request<FolderWatchStatus>("/library/watch/notifications/ack", {
+    method: "POST",
+    body: JSON.stringify({
+      notification_ids: notificationIds,
+      all_notifications: allNotifications,
     }),
   });
 }

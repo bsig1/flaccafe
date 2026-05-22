@@ -33,6 +33,7 @@ from mutagen.mp4 import MP4Cover
 from .config import APP_STORAGE_ROOT, EXPORT_DIR, MODEL_DIR, database_path
 from .database import connect, get_setting, init_db, rows_to_dicts, set_setting
 from .file_tags import write_custom_tags, write_track_lyrics, write_track_metadata, write_track_rating
+from . import inbox as inbox_service
 from .library_tools import (
     changed_metadata,
     infer_metadata_from_filename,
@@ -40,6 +41,7 @@ from .library_tools import (
     sanitize_path_component,
 )
 from .library_watcher import (
+    acknowledge_folder_watch_notifications,
     apply_folder_watch_changes,
     get_folder_watch_status,
     refresh_folder_watch_now,
@@ -148,6 +150,7 @@ from .schemas import (
     FileOrganizationResponse,
     FolderWatchApplyRequest,
     FolderWatchApplyResponse,
+    FolderWatchNotificationAckRequest,
     FolderWatchRefreshRequest,
     FolderWatchStartRequest,
     FolderWatchStatus,
@@ -159,6 +162,12 @@ from .schemas import (
     ClapStatusResponse,
     LibraryHealthResponse,
     InboxResponse,
+    InboxAutoReviewRule,
+    InboxAutoReviewRuleApplyResponse,
+    InboxAutoReviewRuleDeleteResponse,
+    InboxAutoReviewRuleRequest,
+    InboxNoteUpdateRequest,
+    InboxTrackNote,
     InboxReviewRequest,
     InboxReviewResponse,
     LibraryStatsResponse,
@@ -2331,16 +2340,7 @@ def library_stats() -> LibraryStatsResponse:
 
 
 def inbox_counts(conn) -> tuple[int, int]:
-    row = conn.execute(
-        """
-        SELECT
-            sum(CASE WHEN coalesce(track_inbox_state.status, 'new') = 'new' THEN 1 ELSE 0 END) AS total_new,
-            sum(CASE WHEN track_inbox_state.status = 'reviewed' THEN 1 ELSE 0 END) AS total_reviewed
-        FROM tracks
-        LEFT JOIN track_inbox_state ON track_inbox_state.track_id = tracks.id
-        """
-    ).fetchone()
-    return int(row["total_new"] or 0), int(row["total_reviewed"] or 0)
+    return inbox_service.inbox_counts(conn)
 
 
 @app.get("/library/inbox", response_model=InboxResponse)
@@ -2364,8 +2364,13 @@ def library_inbox(
                 (limit, offset),
             )
         )
+        track_ids = [int(track["id"]) for track in tracks]
+        notes = inbox_service.list_inbox_notes(conn, track_ids)
+        auto_review_rules = inbox_service.list_auto_review_rules(conn)
     return InboxResponse(
         tracks=tracks,
+        notes=notes,
+        auto_review_rules=auto_review_rules,
         total_new=total_new,
         total_reviewed=total_reviewed,
         limit=limit,
@@ -2430,6 +2435,60 @@ def review_inbox_tracks(request: InboxReviewRequest) -> InboxReviewResponse:
     return InboxReviewResponse(updated=updated, total_new=total_new, total_reviewed=total_reviewed)
 
 
+@app.patch("/library/inbox/notes/{track_id}", response_model=InboxTrackNote | None)
+def update_inbox_note(track_id: int, request: InboxNoteUpdateRequest) -> dict | None:
+    with connect() as conn:
+        try:
+            note = inbox_service.save_inbox_note(conn, track_id, request.note)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        conn.commit()
+        return note
+
+
+@app.get("/library/inbox/auto-review-rules", response_model=list[InboxAutoReviewRule])
+def list_inbox_auto_review_rules() -> list[dict]:
+    with connect() as conn:
+        return inbox_service.list_auto_review_rules(conn)
+
+
+@app.post("/library/inbox/auto-review-rules", response_model=InboxAutoReviewRuleApplyResponse)
+def create_inbox_auto_review_rule(request: InboxAutoReviewRuleRequest) -> InboxAutoReviewRuleApplyResponse:
+    with connect() as conn:
+        try:
+            rule = inbox_service.create_auto_review_rule(conn, request)
+            applied = inbox_service.apply_auto_review_rules_to_new_tracks(conn, rule["id"]) if request.apply_existing else 0
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        conn.commit()
+        total_new, total_reviewed = inbox_counts(conn)
+    return InboxAutoReviewRuleApplyResponse(rule=rule, applied=applied, total_new=total_new, total_reviewed=total_reviewed)
+
+
+@app.patch("/library/inbox/auto-review-rules/{rule_id}", response_model=InboxAutoReviewRuleApplyResponse)
+def update_inbox_auto_review_rule(rule_id: int, request: InboxAutoReviewRuleRequest) -> InboxAutoReviewRuleApplyResponse:
+    with connect() as conn:
+        try:
+            rule = inbox_service.update_auto_review_rule(conn, rule_id, request)
+            applied = inbox_service.apply_auto_review_rules_to_new_tracks(conn, rule["id"]) if request.apply_existing else 0
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        conn.commit()
+        total_new, total_reviewed = inbox_counts(conn)
+    return InboxAutoReviewRuleApplyResponse(rule=rule, applied=applied, total_new=total_new, total_reviewed=total_reviewed)
+
+
+@app.delete("/library/inbox/auto-review-rules/{rule_id}", response_model=InboxAutoReviewRuleDeleteResponse)
+def delete_inbox_auto_review_rule(rule_id: int) -> InboxAutoReviewRuleDeleteResponse:
+    with connect() as conn:
+        deleted = inbox_service.delete_auto_review_rule(conn, rule_id)
+        conn.commit()
+        total_new, total_reviewed = inbox_counts(conn)
+    return InboxAutoReviewRuleDeleteResponse(deleted=deleted, total_new=total_new, total_reviewed=total_reviewed)
+
+
 @app.get("/library/watch", response_model=FolderWatchStatus)
 def get_folder_watch(limit: int = Query(default=300, ge=1, le=5000)) -> dict:
     return get_folder_watch_status(limit)
@@ -2480,6 +2539,14 @@ def apply_folder_watch(request: FolderWatchApplyRequest) -> dict:
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/library/watch/notifications/ack", response_model=FolderWatchStatus)
+def acknowledge_folder_watch_notifications_route(request: FolderWatchNotificationAckRequest) -> dict:
+    return acknowledge_folder_watch_notifications(
+        notification_ids=request.notification_ids,
+        all_notifications=request.all_notifications,
+    )
 
 
 @app.get("/library/tools/audio-conversion/setup", response_model=AudioConversionSetupResponse)

@@ -200,6 +200,24 @@ CREATE TABLE IF NOT EXISTS track_inbox_state (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS track_inbox_notes (
+  track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+  note TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS inbox_auto_review_rules (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  field TEXT NOT NULL,
+  match_type TEXT NOT NULL,
+  value TEXT NOT NULL DEFAULT '',
+  note TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS artwork_cache (
   path_key TEXT PRIMARY KEY,
   path TEXT NOT NULL,
@@ -238,6 +256,8 @@ CREATE INDEX IF NOT EXISTS idx_track_custom_tags_key ON track_custom_tags(tag_ke
 CREATE INDEX IF NOT EXISTS idx_virtual_tag_definitions_name ON virtual_tag_definitions(name);
 CREATE INDEX IF NOT EXISTS idx_regex_tag_presets_name ON regex_tag_presets(name);
 CREATE INDEX IF NOT EXISTS idx_track_inbox_state_status ON track_inbox_state(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_track_inbox_notes_updated_at ON track_inbox_notes(updated_at);
+CREATE INDEX IF NOT EXISTS idx_inbox_auto_review_rules_enabled ON inbox_auto_review_rules(enabled, updated_at);
 CREATE INDEX IF NOT EXISTS idx_bulk_action_undo_log_batch ON bulk_action_undo_log(batch_id);
 """
 

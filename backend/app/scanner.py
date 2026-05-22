@@ -13,6 +13,7 @@ from mutagen import File as MutagenFile
 
 from .config import SUPPORTED_EXTENSIONS
 from .database import connect, set_setting
+from .inbox import mark_track_for_inbox
 
 
 FINGERPRINT_CHUNK_SIZE = 64 * 1024
@@ -316,13 +317,7 @@ def upsert_track(conn, metadata: dict[str, Any]) -> str:
             {**values, "album_id": album_id, "now": now},
         )
         track_id = int(cursor.lastrowid)
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO track_inbox_state(track_id, status, reviewed_at, updated_at)
-            VALUES(?, 'new', NULL, ?)
-            """,
-            (track_id, now),
-        )
+        mark_track_for_inbox(conn, track_id, metadata)
         return "inserted"
 
     # Keep user-edited SQLite ratings authoritative after the first scan.

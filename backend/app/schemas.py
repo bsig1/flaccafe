@@ -220,10 +220,22 @@ class LibraryStatsResponse(BaseModel):
 
 class InboxResponse(BaseModel):
     tracks: list[Track] = Field(default_factory=list)
+    notes: list["InboxTrackNote"] = Field(default_factory=list)
+    auto_review_rules: list["InboxAutoReviewRule"] = Field(default_factory=list)
     total_new: int = 0
     total_reviewed: int = 0
     limit: int = 200
     offset: int = 0
+
+
+class InboxTrackNote(BaseModel):
+    track_id: int
+    note: str
+    updated_at: str
+
+
+class InboxNoteUpdateRequest(BaseModel):
+    note: str | None = Field(default=None, max_length=4000)
 
 
 class InboxReviewRequest(BaseModel):
@@ -233,6 +245,66 @@ class InboxReviewRequest(BaseModel):
 
 class InboxReviewResponse(BaseModel):
     updated: int = 0
+    total_new: int = 0
+    total_reviewed: int = 0
+
+
+class InboxAutoReviewRuleRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    enabled: bool = True
+    field: Literal[
+        "title",
+        "artist",
+        "album",
+        "album_artist",
+        "genre",
+        "path",
+        "year",
+        "rating",
+        "duration_seconds",
+    ] = "genre"
+    match_type: Literal[
+        "contains",
+        "equals",
+        "starts_with",
+        "ends_with",
+        "regex",
+        "is_empty",
+        "is_not_empty",
+    ] = "contains"
+    value: str = Field(default="", max_length=500)
+    note: str | None = Field(default=None, max_length=1000)
+    apply_existing: bool = False
+
+    @field_validator("name", "value", "note")
+    @classmethod
+    def clean_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip()
+
+
+class InboxAutoReviewRule(BaseModel):
+    id: int
+    name: str
+    enabled: bool
+    field: str
+    match_type: str
+    value: str
+    note: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class InboxAutoReviewRuleApplyResponse(BaseModel):
+    rule: InboxAutoReviewRule
+    applied: int = 0
+    total_new: int = 0
+    total_reviewed: int = 0
+
+
+class InboxAutoReviewRuleDeleteResponse(BaseModel):
+    deleted: bool = False
     total_new: int = 0
     total_reviewed: int = 0
 
@@ -845,6 +917,16 @@ class FolderWatchChange(BaseModel):
     summary: str
 
 
+class FolderWatchNotification(BaseModel):
+    id: str
+    created_at: str
+    title: str
+    message: str
+    pending_count: int = 0
+    counts: dict[str, int] = Field(default_factory=dict)
+    acknowledged: bool = False
+
+
 class FolderWatchStatus(BaseModel):
     enabled: bool = False
     folder_path: str | None = None
@@ -855,6 +937,7 @@ class FolderWatchStatus(BaseModel):
     pending_count: int = 0
     counts: dict[str, int] = Field(default_factory=dict)
     changes: list[FolderWatchChange] = Field(default_factory=list)
+    notifications: list[FolderWatchNotification] = Field(default_factory=list)
     error: str | None = None
 
 
@@ -884,6 +967,11 @@ class FolderWatchApplyResponse(BaseModel):
     skipped: int = 0
     errors: list[str] = Field(default_factory=list)
     status: FolderWatchStatus
+
+
+class FolderWatchNotificationAckRequest(BaseModel):
+    notification_ids: list[str] = Field(default_factory=list, max_length=100)
+    all_notifications: bool = False
 
 
 class AudioConversionSetupRequest(BaseModel):

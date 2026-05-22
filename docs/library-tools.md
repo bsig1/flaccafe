@@ -31,6 +31,8 @@ The Library > Tools > Inbox view tracks newly scanned files until they are marke
 
 Scans mark inserted files as new. Existing libraries are treated as already reviewed when the Inbox table is first initialized, so the Inbox starts useful instead of filling with the entire old collection.
 
+Inbox notes let you leave a small per-track reminder while triaging new files, such as "needs cover art" or "check duplicate import." Auto-review rules can mark predictable matches reviewed on insert, for example a podcast genre, a known folder path, or an empty-field cleanup bucket. Rules are optional, saved in SQLite, and can be applied to the current Inbox when created or edited.
+
 ## Folder Watch
 
 The File Management page can watch the configured music folder in the background. It does not change the library automatically; it builds a pending-changes list for newly added files, modified files, missing files, and likely moves or renames.
@@ -38,6 +40,8 @@ The File Management page can watch the configured music folder in the background
 Move detection uses FLAC Cafe's fast file fingerprint to match a new path with a missing tracked path. Applying that change updates the path while preserving ratings, play history, playlist membership, and analysis data.
 
 Use Check Now for an immediate pass, then apply selected changes after reviewing the table. Added and modified files are rescanned through the normal metadata parser. Removed files are removed from SQLite only after you apply them; the watcher never deletes audio files from disk.
+
+When the watcher detects a new pending-change set, it records a notification summary and the app can surface it as a toast or File Management banner. Dismissing the notification does not apply changes; it only marks the notice reviewed.
 
 ## Regex Tag Cleanup
 

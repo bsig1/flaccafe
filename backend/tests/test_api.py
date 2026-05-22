@@ -643,6 +643,50 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(review.json()["updated"], 1)
         self.assertEqual(review.json()["total_new"], 0)
 
+    def test_inbox_notes_and_auto_review_rules(self) -> None:
+        audio_file = self.root / "podcast.mp3"
+        audio_file.write_bytes(b"audio")
+        track_id = insert_track(audio_file, title="Talk", genre="Podcast")
+        with connect() as conn:
+            conn.execute(
+                "INSERT INTO track_inbox_state(track_id, status, updated_at) VALUES(?, 'new', datetime('now'))",
+                (track_id,),
+            )
+            conn.commit()
+
+        note = self.client.patch(
+            f"/library/inbox/notes/{track_id}",
+            json={"note": "Check spoken-word import before it joins AutoDJ."},
+        )
+        self.assertEqual(note.status_code, 200)
+        self.assertEqual(note.json()["note"], "Check spoken-word import before it joins AutoDJ.")
+
+        rule = self.client.post(
+            "/library/inbox/auto-review-rules",
+            json={
+                "name": "Auto-review podcasts",
+                "enabled": True,
+                "field": "genre",
+                "match_type": "equals",
+                "value": "Podcast",
+                "note": "Auto-reviewed by podcast rule",
+                "apply_existing": True,
+            },
+        )
+        self.assertEqual(rule.status_code, 200)
+        self.assertEqual(rule.json()["applied"], 1)
+        self.assertEqual(rule.json()["total_new"], 0)
+
+        inbox = self.client.get("/library/inbox")
+        self.assertEqual(inbox.status_code, 200)
+        self.assertEqual(inbox.json()["total_new"], 0)
+        self.assertEqual(inbox.json()["auto_review_rules"][0]["name"], "Auto-review podcasts")
+        with connect() as conn:
+            state = conn.execute("SELECT status FROM track_inbox_state WHERE track_id = ?", (track_id,)).fetchone()
+            stored_note = conn.execute("SELECT note FROM track_inbox_notes WHERE track_id = ?", (track_id,)).fetchone()
+        self.assertEqual(state["status"], "reviewed")
+        self.assertEqual(stored_note["note"], "Check spoken-word import before it joins AutoDJ.")
+
     def test_playlist_import_supports_pls_xspf_wpl_and_itunes_xml(self) -> None:
         first = self.root / "playlist-a.mp3"
         second = self.root / "playlist-b.mp3"
@@ -1011,6 +1055,17 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(body["counts"]["removed"], 1)
         self.assertEqual(body["counts"]["added"], 1)
         self.assertEqual(body["pending_count"], 3)
+        latest_notification = body["notifications"][-1]
+        self.assertEqual(latest_notification["pending_count"], 3)
+        self.assertIn("added", latest_notification["message"])
+
+        ack = self.client.post(
+            "/library/watch/notifications/ack",
+            json={"notification_ids": [latest_notification["id"]]},
+        )
+        self.assertEqual(ack.status_code, 200)
+        acknowledged = {notification["id"]: notification["acknowledged"] for notification in ack.json()["notifications"]}
+        self.assertTrue(acknowledged[latest_notification["id"]])
 
     def test_folder_watch_apply_removes_missing_track(self) -> None:
         audio_file = self.root / "gone.mp3"

@@ -11,6 +11,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  Save,
   Search,
   ShieldCheck,
   Shuffle,
@@ -49,6 +50,10 @@ import {
 import type {
   AlbumSummary,
   AlbumArtworkCandidate,
+  InboxAutoReviewField,
+  InboxAutoReviewMatchType,
+  InboxAutoReviewRule,
+  InboxAutoReviewRuleRequest,
   LibraryHealthResponse,
   LibraryStatsResponse,
   InboxResponse,
@@ -154,6 +159,9 @@ export function LibraryPage({
   onDeleteSmartPlaylist,
   onSelectSmartPlaylist,
   onReviewInboxTracks,
+  onUpdateInboxNote,
+  onSaveInboxAutoReviewRule,
+  onDeleteInboxAutoReviewRule,
   onShuffleTracks,
   onQuickAutoDj,
   onAvoidAutoDj,
@@ -238,6 +246,9 @@ export function LibraryPage({
   onDeleteSmartPlaylist: (smartPlaylistId: number) => void;
   onSelectSmartPlaylist: (smartPlaylistId: number) => void;
   onReviewInboxTracks: (trackIds: number[], allNew?: boolean) => void | Promise<void>;
+  onUpdateInboxNote: (trackId: number, note: string) => void | Promise<void>;
+  onSaveInboxAutoReviewRule: (rule: InboxAutoReviewRuleRequest, ruleId?: number) => void | Promise<void>;
+  onDeleteInboxAutoReviewRule: (rule: InboxAutoReviewRule) => void | Promise<void>;
   onShuffleTracks: (tracks: Track[]) => void;
   onQuickAutoDj: (seedTrack?: Track | null) => void;
   onAvoidAutoDj: (scope: "track" | "artist" | "album" | "genre", track?: Track | null) => void | Promise<void>;
@@ -277,6 +288,15 @@ export function LibraryPage({
   const [albumArtworkCandidates, setAlbumArtworkCandidates] = useState<AlbumArtworkCandidate[]>([]);
   const [isAlbumArtworkOpen, setIsAlbumArtworkOpen] = useState(false);
   const [albumArtworkStatus, setAlbumArtworkStatus] = useState("");
+  const [inboxNoteDraft, setInboxNoteDraft] = useState("");
+  const [editingInboxRuleId, setEditingInboxRuleId] = useState<number | null>(null);
+  const [inboxRuleName, setInboxRuleName] = useState("");
+  const [inboxRuleEnabled, setInboxRuleEnabled] = useState(true);
+  const [inboxRuleField, setInboxRuleField] = useState<InboxAutoReviewField>("genre");
+  const [inboxRuleMatchType, setInboxRuleMatchType] = useState<InboxAutoReviewMatchType>("contains");
+  const [inboxRuleValue, setInboxRuleValue] = useState("");
+  const [inboxRuleNote, setInboxRuleNote] = useState("");
+  const [inboxRuleApplyExisting, setInboxRuleApplyExisting] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const selectionAnchorId = useRef<number | null>(null);
 
@@ -301,6 +321,9 @@ export function LibraryPage({
   const selectedTracks = viewTracks.filter((track) => selectedTrackIds.has(track.id));
   const selectedIds = selectedTracks.map((track) => track.id);
   const allViewSelected = viewTracks.length > 0 && viewTracks.every((track) => selectedTrackIds.has(track.id));
+  const inboxNotesByTrackId = new Map((inbox?.notes ?? []).map((note) => [note.track_id, note]));
+  const selectedInboxTrack = libraryView === "inbox" && selectedTracks.length === 1 ? selectedTracks[0] : null;
+  const selectedInboxNote = selectedInboxTrack ? inboxNotesByTrackId.get(selectedInboxTrack.id) ?? null : null;
 
   useEffect(() => {
     const visibleIds = new Set(viewTracks.map((track) => track.id));
@@ -309,6 +332,10 @@ export function LibraryPage({
       return next.size === current.size ? current : next;
     });
   }, [libraryView, viewTracks]);
+
+  useEffect(() => {
+    setInboxNoteDraft(selectedInboxNote?.note ?? "");
+  }, [selectedInboxTrack?.id, selectedInboxNote?.updated_at]);
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -348,6 +375,42 @@ export function LibraryPage({
       void loadAlbumArtworkCandidates(activeAlbum.id);
     }
   }, [activeAlbum?.id, isAlbumArtworkOpen]);
+
+  function resetInboxRuleForm() {
+    setEditingInboxRuleId(null);
+    setInboxRuleName("");
+    setInboxRuleEnabled(true);
+    setInboxRuleField("genre");
+    setInboxRuleMatchType("contains");
+    setInboxRuleValue("");
+    setInboxRuleNote("");
+    setInboxRuleApplyExisting(false);
+  }
+
+  function editInboxRule(rule: InboxAutoReviewRule) {
+    setEditingInboxRuleId(rule.id);
+    setInboxRuleName(rule.name);
+    setInboxRuleEnabled(rule.enabled);
+    setInboxRuleField(rule.field);
+    setInboxRuleMatchType(rule.match_type);
+    setInboxRuleValue(rule.value);
+    setInboxRuleNote(rule.note ?? "");
+    setInboxRuleApplyExisting(false);
+  }
+
+  async function saveInboxRule() {
+    const request: InboxAutoReviewRuleRequest = {
+      name: inboxRuleName,
+      enabled: inboxRuleEnabled,
+      field: inboxRuleField,
+      match_type: inboxRuleMatchType,
+      value: inboxRuleMatchType === "is_empty" || inboxRuleMatchType === "is_not_empty" ? "" : inboxRuleValue,
+      note: inboxRuleNote.trim() || null,
+      apply_existing: inboxRuleApplyExisting,
+    };
+    await onSaveInboxAutoReviewRule(request, editingInboxRuleId ?? undefined);
+    resetInboxRuleForm();
+  }
 
   useEffect(() => {
     function handleLibraryShortcut(event: KeyboardEvent) {
@@ -1311,6 +1374,139 @@ export function LibraryPage({
                   <Plus size={15} />
                   Add Visible
                 </button>
+                <div className="rounded border border-line bg-panel p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-xs uppercase text-muted">Track Note</div>
+                      <div className="mt-0.5 truncate text-sm text-neutral-200">
+                        {selectedInboxTrack ? display(selectedInboxTrack.title, "track") : "Select one Inbox track"}
+                      </div>
+                    </div>
+                    <Pencil size={15} className="text-muted" />
+                  </div>
+                  <textarea
+                    className="mt-3 min-h-24 w-full resize-y rounded border border-line bg-ink px-3 py-2 text-sm text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2 disabled:opacity-60"
+                    disabled={!selectedInboxTrack}
+                    value={inboxNoteDraft}
+                    placeholder="Why is this here? Needs tag cleanup, duplicate check, low-quality source..."
+                    onChange={(event) => setInboxNoteDraft(event.target.value)}
+                  />
+                  <button
+                    className="secondary-button mt-2 w-full justify-center"
+                    type="button"
+                    disabled={!selectedInboxTrack}
+                    onClick={() => selectedInboxTrack && void onUpdateInboxNote(selectedInboxTrack.id, inboxNoteDraft)}
+                  >
+                    <Save size={15} />
+                    Save Note
+                  </button>
+                </div>
+                <div className="rounded border border-line bg-panel p-3">
+                  <div className="text-xs uppercase text-muted">Auto-Review Rules</div>
+                  <div className="mt-1 text-xs text-muted">
+                    Matching new tracks are marked reviewed automatically; notes are only filled when the track has no note.
+                  </div>
+                  <div className="mt-3 grid gap-2">
+                    <input
+                      className="h-9 rounded border border-line bg-ink px-3 text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
+                      value={inboxRuleName}
+                      placeholder="Rule name"
+                      onChange={(event) => setInboxRuleName(event.target.value)}
+                    />
+                    <div className="grid grid-cols-2 gap-2">
+                      <select
+                        className="h-9 rounded border border-line bg-ink px-2 text-white outline-none ring-moss/40 focus:ring-2"
+                        value={inboxRuleField}
+                        onChange={(event) => setInboxRuleField(event.target.value as InboxAutoReviewField)}
+                      >
+                        {(["genre", "artist", "album", "album_artist", "title", "path", "year", "rating", "duration_seconds"] as const).map((field) => (
+                          <option key={field} value={field}>
+                            {field.replace("_", " ")}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        className="h-9 rounded border border-line bg-ink px-2 text-white outline-none ring-moss/40 focus:ring-2"
+                        value={inboxRuleMatchType}
+                        onChange={(event) => setInboxRuleMatchType(event.target.value as InboxAutoReviewMatchType)}
+                      >
+                        <option value="contains">contains</option>
+                        <option value="equals">equals</option>
+                        <option value="starts_with">starts with</option>
+                        <option value="ends_with">ends with</option>
+                        <option value="regex">regex</option>
+                        <option value="is_empty">is empty</option>
+                        <option value="is_not_empty">is not empty</option>
+                      </select>
+                    </div>
+                    <input
+                      className="h-9 rounded border border-line bg-ink px-3 text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2 disabled:opacity-60"
+                      value={inboxRuleValue}
+                      disabled={inboxRuleMatchType === "is_empty" || inboxRuleMatchType === "is_not_empty"}
+                      placeholder="Match value"
+                      onChange={(event) => setInboxRuleValue(event.target.value)}
+                    />
+                    <textarea
+                      className="min-h-16 resize-y rounded border border-line bg-ink px-3 py-2 text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
+                      value={inboxRuleNote}
+                      placeholder="Optional note for matched tracks"
+                      onChange={(event) => setInboxRuleNote(event.target.value)}
+                    />
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-muted">
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 accent-moss"
+                          checked={inboxRuleEnabled}
+                          onChange={(event) => setInboxRuleEnabled(event.target.checked)}
+                        />
+                        Enabled
+                      </label>
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 accent-moss"
+                          checked={inboxRuleApplyExisting}
+                          onChange={(event) => setInboxRuleApplyExisting(event.target.checked)}
+                        />
+                        Apply now
+                      </label>
+                    </div>
+                    <div className="flex gap-2">
+                      <button className="primary-button min-w-0 flex-1 justify-center" type="button" onClick={() => void saveInboxRule()}>
+                        <ShieldCheck size={15} />
+                        {editingInboxRuleId ? "Update" : "Save"}
+                      </button>
+                      <button className="secondary-button" type="button" onClick={resetInboxRuleForm}>
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+                  {(inbox?.auto_review_rules.length ?? 0) > 0 && (
+                    <div className="mt-3 grid gap-2">
+                      {inbox?.auto_review_rules.map((rule) => (
+                        <div key={rule.id} className="rounded border border-line/70 bg-ink px-2 py-2 text-xs">
+                          <div className="flex items-start justify-between gap-2">
+                            <button
+                              className="min-w-0 text-left font-semibold text-neutral-200 hover:text-white"
+                              type="button"
+                              onClick={() => editInboxRule(rule)}
+                            >
+                              <span className="block truncate">{rule.name}</span>
+                              <span className="block truncate text-muted">
+                                {rule.field.replace("_", " ")} {rule.match_type.replace("_", " ")}
+                                {rule.value ? ` "${rule.value}"` : ""}
+                              </span>
+                            </button>
+                            <button className="text-muted hover:text-ember" type="button" onClick={() => void onDeleteInboxAutoReviewRule(rule)}>
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             </section>
             <section className="min-w-0">

@@ -39,6 +39,13 @@ def clamp_interval(value: int | None) -> int:
     return max(WATCHER_MIN_INTERVAL_SECONDS, min(WATCHER_MAX_INTERVAL_SECONDS, int(value)))
 
 
+def folder_watch_counts(changes: list["FolderWatchChange"]) -> dict[str, int]:
+    counts = {"added": 0, "modified": 0, "removed": 0, "moved": 0}
+    for change in changes:
+        counts[change.change_type] += 1
+    return counts
+
+
 def stable_change_id(
     change_type: ChangeType,
     track_id: int | None,
@@ -53,6 +60,50 @@ def stable_change_id(
     digest.update((new_path or "").encode("utf-8", errors="ignore"))
     digest.update((file_modified_at or "").encode("utf-8", errors="ignore"))
     return digest.hexdigest()[:16]
+
+
+def notification_signature(changes: list["FolderWatchChange"]) -> str | None:
+    if not changes:
+        return None
+    digest = hashlib.sha1()
+    for change_id in sorted(change.id for change in changes):
+        digest.update(change_id.encode("utf-8"))
+    return digest.hexdigest()[:16]
+
+
+def notification_message(counts: dict[str, int]) -> str:
+    labels = {
+        "added": "added",
+        "modified": "modified",
+        "moved": "moved",
+        "removed": "removed",
+    }
+    parts = [f"{count} {labels[key]}" for key, count in counts.items() if count]
+    return ", ".join(parts) if parts else "No pending folder changes"
+
+
+def maybe_add_notification(state: FolderWatchState, changes: list["FolderWatchChange"]) -> None:
+    signature = notification_signature(changes)
+    if signature is None:
+        state.last_notification_signature = None
+        return
+    if signature == state.last_notification_signature:
+        return
+    counts = folder_watch_counts(changes)
+    created_at = utc_now()
+    pending_count = len(changes)
+    state.notifications.append(
+        FolderWatchNotification(
+            id=f"watch-{signature}",
+            created_at=created_at,
+            title=f"{pending_count} pending folder change{'' if pending_count == 1 else 's'}",
+            message=notification_message(counts),
+            pending_count=pending_count,
+            counts=counts,
+        )
+    )
+    state.notifications = state.notifications[-50:]
+    state.last_notification_signature = signature
 
 
 @dataclass(frozen=True)
@@ -90,6 +141,28 @@ class FolderWatchChange:
 
 
 @dataclass
+class FolderWatchNotification:
+    id: str
+    created_at: str
+    title: str
+    message: str
+    pending_count: int
+    counts: dict[str, int]
+    acknowledged: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "created_at": self.created_at,
+            "title": self.title,
+            "message": self.message,
+            "pending_count": self.pending_count,
+            "counts": dict(self.counts),
+            "acknowledged": self.acknowledged,
+        }
+
+
+@dataclass
 class FolderWatchState:
     enabled: bool = False
     folder_path: str | None = None
@@ -99,13 +172,13 @@ class FolderWatchState:
     next_check_at: str | None = None
     pending: list[FolderWatchChange] = field(default_factory=list)
     total_pending: int = 0
+    notifications: list[FolderWatchNotification] = field(default_factory=list)
+    last_notification_signature: str | None = None
     error: str | None = None
 
     def snapshot(self, limit: int = WATCHER_DEFAULT_LIMIT) -> dict[str, Any]:
         changes = self.pending[: max(0, limit)]
-        counts = {"added": 0, "modified": 0, "removed": 0, "moved": 0}
-        for change in self.pending:
-            counts[change.change_type] += 1
+        counts = folder_watch_counts(self.pending)
         return {
             "enabled": self.enabled,
             "folder_path": self.folder_path,
@@ -116,6 +189,7 @@ class FolderWatchState:
             "pending_count": self.total_pending,
             "counts": counts,
             "changes": [change.to_dict() for change in changes],
+            "notifications": [notification.to_dict() for notification in self.notifications[-20:]],
             "error": self.error,
         }
 
@@ -405,6 +479,19 @@ def get_folder_watch_status(limit: int = WATCHER_DEFAULT_LIMIT) -> dict[str, Any
         return _state.snapshot(limit)
 
 
+def acknowledge_folder_watch_notifications(
+    notification_ids: list[str] | None = None,
+    all_notifications: bool = False,
+    limit: int = WATCHER_DEFAULT_LIMIT,
+) -> dict[str, Any]:
+    wanted = set(notification_ids or [])
+    with _lock:
+        for notification in _state.notifications:
+            if all_notifications or notification.id in wanted:
+                notification.acknowledged = True
+        return _state.snapshot(limit)
+
+
 def refresh_folder_watch_now(folder_path: str | None = None, limit: int = WATCHER_DEFAULT_LIMIT) -> dict[str, Any]:
     with _lock:
         folder = folder_path or _state.folder_path
@@ -434,6 +521,7 @@ def refresh_folder_watch_now(folder_path: str | None = None, limit: int = WATCHE
             _state.folder_path = str(Path(folder).expanduser().resolve())
             _state.pending = changes
             _state.total_pending = len(changes)
+            maybe_add_notification(_state, changes)
             _state.status = "idle" if _state.enabled else "stopped"
             _state.last_checked_at = checked_at
             _state.next_check_at = next_check if _state.enabled else None
