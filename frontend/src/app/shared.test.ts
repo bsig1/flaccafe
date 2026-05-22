@@ -5,6 +5,7 @@ import {
   formatShortcut,
   normalizeEqualizerGains,
   normalizeKeyboardShortcuts,
+  readUiPreferences,
   replayGainMultiplier,
   shortcutConflictGroups,
   shortcutFromEvent,
@@ -39,6 +40,48 @@ describe("keyboard shortcuts", () => {
     });
 
     expect(shortcutConflictGroups(shortcuts)).toContainEqual(["page.library", "page.autodj"]);
+  });
+});
+
+describe("UI preferences", () => {
+  it("keeps valid Now Playing customization and repairs invalid values", () => {
+    localStorage.setItem(
+      "flac-cafe-ui-preferences",
+      JSON.stringify({
+        nowPlayingLayout: "party",
+        nowPlayingVisualizerStyle: "radial",
+        nowPlayingBackground: "soft",
+        nowPlayingShowLyrics: false,
+        nowPlayingShowQueue: false,
+        nowPlayingLyricSize: "large",
+      }),
+    );
+
+    expect(readUiPreferences()).toMatchObject({
+      nowPlayingLayout: "party",
+      nowPlayingVisualizerStyle: "radial",
+      nowPlayingBackground: "soft",
+      nowPlayingShowLyrics: false,
+      nowPlayingShowQueue: false,
+      nowPlayingLyricSize: "large",
+    });
+
+    localStorage.setItem(
+      "flac-cafe-ui-preferences",
+      JSON.stringify({
+        nowPlayingLayout: "floaty",
+        nowPlayingVisualizerStyle: "lasers",
+        nowPlayingBackground: "storm",
+        nowPlayingLyricSize: "massive",
+      }),
+    );
+
+    expect(readUiPreferences()).toMatchObject({
+      nowPlayingLayout: "studio",
+      nowPlayingVisualizerStyle: "bars",
+      nowPlayingBackground: "artwork",
+      nowPlayingLyricSize: "medium",
+    });
   });
 });
 

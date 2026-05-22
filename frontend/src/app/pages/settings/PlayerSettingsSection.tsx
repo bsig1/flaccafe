@@ -242,6 +242,107 @@ export function PlayerSettingsSection({
           />
         </div>
         <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
+          <div>
+            <div className="font-medium text-white">Now Playing screen</div>
+            <div className="text-xs text-muted">Choose the default layout, visualizer, lyrics, and queue presentation.</div>
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            <label className="grid gap-2">
+              <span className="text-xs uppercase text-muted">Layout</span>
+              <select
+                className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                value={uiPreferences.nowPlayingLayout}
+                onChange={(event) =>
+                  setUiPreferences((current) => ({
+                    ...current,
+                    nowPlayingLayout: event.target.value as UiPreferences["nowPlayingLayout"],
+                  }))
+                }
+              >
+                <option value="studio">Studio</option>
+                <option value="theater">Theater</option>
+                <option value="party">Party</option>
+              </select>
+            </label>
+            <label className="grid gap-2">
+              <span className="text-xs uppercase text-muted">Visualizer</span>
+              <select
+                className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                value={uiPreferences.nowPlayingVisualizerStyle}
+                onChange={(event) =>
+                  setUiPreferences((current) => ({
+                    ...current,
+                    nowPlayingVisualizerStyle: event.target.value as UiPreferences["nowPlayingVisualizerStyle"],
+                  }))
+                }
+              >
+                <option value="bars">Bars</option>
+                <option value="wave">Wave</option>
+                <option value="radial">Radial</option>
+                <option value="off">Off</option>
+              </select>
+            </label>
+            <label className="grid gap-2">
+              <span className="text-xs uppercase text-muted">Background</span>
+              <select
+                className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                value={uiPreferences.nowPlayingBackground}
+                onChange={(event) =>
+                  setUiPreferences((current) => ({
+                    ...current,
+                    nowPlayingBackground: event.target.value as UiPreferences["nowPlayingBackground"],
+                  }))
+                }
+              >
+                <option value="artwork">Album art glow</option>
+                <option value="soft">Cafe glow</option>
+                <option value="none">Plain</option>
+              </select>
+            </label>
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            <label className="grid gap-2">
+              <span className="text-xs uppercase text-muted">Lyric Size</span>
+              <select
+                className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                value={uiPreferences.nowPlayingLyricSize}
+                onChange={(event) =>
+                  setUiPreferences((current) => ({
+                    ...current,
+                    nowPlayingLyricSize: event.target.value as UiPreferences["nowPlayingLyricSize"],
+                  }))
+                }
+              >
+                <option value="small">Small</option>
+                <option value="medium">Medium</option>
+                <option value="large">Large</option>
+              </select>
+            </label>
+            <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-panel px-3 py-2">
+              <span className="text-muted">Show lyrics panel</span>
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-moss"
+                checked={uiPreferences.nowPlayingShowLyrics}
+                onChange={(event) =>
+                  setUiPreferences((current) => ({ ...current, nowPlayingShowLyrics: event.target.checked }))
+                }
+              />
+            </label>
+            <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-panel px-3 py-2">
+              <span className="text-muted">Show queue panel</span>
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-moss"
+                checked={uiPreferences.nowPlayingShowQueue}
+                onChange={(event) =>
+                  setUiPreferences((current) => ({ ...current, nowPlayingShowQueue: event.target.checked }))
+                }
+              />
+            </label>
+          </div>
+        </div>
+        <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
           <label className="grid gap-2">
             <span className="text-xs uppercase text-muted">ReplayGain / Loudness</span>
             <select

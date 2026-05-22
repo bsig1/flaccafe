@@ -14,7 +14,6 @@
 - Add a dedicated WASAPI exclusive-mode or ASIO backend if cpal shared-mode output is not enough for advanced users.
 - Add native queue preloading and sample-accurate gapless transition validation for adjacent album tracks.
 - Add richer native playback diagnostics, including a compact Settings panel for recent rodio/cpal/Symphonia failures.
-- Add visualizers, theater/party mode, and a more customizable Now Playing screen.
 - Add a skin/plugin extension story for advanced users without making the core app harder to maintain.
 - Add deeper library importers for MusicBee, iTunes, and Windows Media Player ratings/play counts.
 

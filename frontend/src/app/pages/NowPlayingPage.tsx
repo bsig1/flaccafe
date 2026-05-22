@@ -3,10 +3,13 @@ import {
   ArrowUp,
   Download,
   GripVertical,
+  Maximize2,
+  Minimize2,
   Pencil,
   Play,
   Plus,
   RefreshCw,
+  SlidersHorizontal,
   Trash2,
   Volume2,
   X,
@@ -32,6 +35,9 @@ import type {
   Track,
 } from "../../types/api";
 import {
+  AudioVisualizer,
+} from "../components/AudioVisualizer";
+import {
   DragGhostPreview,
 } from "../components/common";
 import {
@@ -43,6 +49,9 @@ import {
   parseLyricTimestamp,
   stripLyricTimestamp,
   trackGenre,
+  UiPreferences,
+  VISUALIZER_FRAME_EVENT,
+  VisualizerFrame,
 } from "../shared";
 
 export function NowPlayingPage({
@@ -51,6 +60,8 @@ export function NowPlayingPage({
   isLyricsLoading,
   playbackTime,
   queue,
+  uiPreferences,
+  setUiPreferences,
   writeRatingsToFiles,
   onWriteRatingsToFilesChange,
   onFetchLyrics,
@@ -69,6 +80,8 @@ export function NowPlayingPage({
   isLyricsLoading: boolean;
   playbackTime: number;
   queue: Track[];
+  uiPreferences: UiPreferences;
+  setUiPreferences: (updater: (current: UiPreferences) => UiPreferences) => void;
   writeRatingsToFiles: boolean;
   onWriteRatingsToFilesChange: (value: boolean) => void;
   onFetchLyrics: (trackId: number) => Promise<LyricsResponse>;
@@ -92,6 +105,8 @@ export function NowPlayingPage({
   const [lyricsTarget, setLyricsTarget] = useState<"database" | "file">("database");
   const [lyricsSynced, setLyricsSynced] = useState(false);
   const [lyricsBusy, setLyricsBusy] = useState(false);
+  const [visualizerFrame, setVisualizerFrame] = useState<VisualizerFrame | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   useEffect(() => {
     setArtworkFailed(false);
@@ -104,6 +119,28 @@ export function NowPlayingPage({
     setLyricsTarget("database");
   }, [currentTrack?.id, lyrics?.lyrics, lyrics?.is_synced]);
 
+  useEffect(() => {
+    function handleVisualizerFrame(event: Event) {
+      const frame = (event as CustomEvent<VisualizerFrame>).detail;
+      if (!frame || (currentTrack && frame.trackId !== null && frame.trackId !== currentTrack.id)) {
+        return;
+      }
+      setVisualizerFrame(frame);
+    }
+
+    window.addEventListener(VISUALIZER_FRAME_EVENT, handleVisualizerFrame);
+    return () => window.removeEventListener(VISUALIZER_FRAME_EVENT, handleVisualizerFrame);
+  }, [currentTrack?.id]);
+
+  useEffect(() => {
+    function syncFullscreen() {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+    }
+
+    document.addEventListener("fullscreenchange", syncFullscreen);
+    return () => document.removeEventListener("fullscreenchange", syncFullscreen);
+  }, []);
+
   const artworkSrc = currentTrack && !artworkFailed ? albumArtworkUrl(currentTrack.id) : null;
   const lyricLines = lyrics?.lyrics?.split("\n") ?? [];
   const hasLyrics = lyricLines.some((line) => line.trim().length > 0);
@@ -114,6 +151,22 @@ export function NowPlayingPage({
     }
     return active;
   }, -1);
+  const layout = uiPreferences.nowPlayingLayout;
+  const showLyrics = uiPreferences.nowPlayingShowLyrics;
+  const showQueue = uiPreferences.nowPlayingShowQueue && layout !== "party";
+  const visualizerStyle = uiPreferences.nowPlayingVisualizerStyle;
+  const visualizerActive = Boolean(currentTrack && visualizerFrame?.isPlaying);
+  const activeLyricLine =
+    activeLyricIndex >= 0
+      ? stripLyricTimestamp(lyricLines[activeLyricIndex] ?? "")
+      : stripLyricTimestamp(lyricLines.find((line) => line.trim()) ?? "");
+  const lyricSizeClass =
+    uiPreferences.nowPlayingLyricSize === "large"
+      ? "text-2xl leading-10"
+      : uiPreferences.nowPlayingLyricSize === "small"
+        ? "text-base leading-7"
+        : "text-lg leading-8";
+  const titleSizeClass = layout === "party" ? "text-5xl md:text-7xl" : layout === "theater" ? "text-4xl" : "text-2xl";
 
   useEffect(() => {
     function closeQueueContextMenu() {
@@ -200,19 +253,146 @@ export function NowPlayingPage({
     }
   }
 
+  function updateNowPlayingPreference<K extends keyof UiPreferences>(key: K, value: UiPreferences[K]) {
+    setUiPreferences((current) => ({ ...current, [key]: value }));
+  }
+
+  async function toggleFullscreen() {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else {
+        await document.documentElement.requestFullscreen();
+      }
+    } catch {
+      // Fullscreen can be blocked in browser preview; the layout controls still work.
+    }
+  }
+
   return (
-    <main className="flex min-w-0 flex-1 flex-col">
+    <main className={`relative flex min-w-0 flex-1 flex-col overflow-hidden ${layout === "party" ? "bg-black" : ""}`}>
       <DragGhostPreview ghost={queueDragGhost} />
-      <header className="flex h-16 items-center justify-between border-b border-line px-6">
+      {artworkSrc && uiPreferences.nowPlayingBackground === "artwork" && (
+        <div className="pointer-events-none absolute inset-0 opacity-20">
+          <img alt="" className="h-full w-full object-cover" src={artworkSrc} />
+          <div className="absolute inset-0 bg-ink/80 backdrop-blur-2xl" />
+        </div>
+      )}
+      {uiPreferences.nowPlayingBackground === "soft" && (
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_25%_20%,rgb(var(--color-primary)/0.16),transparent_36%),radial-gradient(circle_at_80%_60%,rgb(var(--color-moss)/0.14),transparent_34%)]" />
+      )}
+      <header className="relative z-10 flex min-h-16 items-center justify-between gap-4 border-b border-line px-6 py-2">
         <div>
           <h1 className="text-lg font-semibold text-white">Now Playing</h1>
           <p className="text-xs text-muted">
             {currentTrack ? `${display(currentTrack.artist)} - ${display(currentTrack.album, "Unknown album")}` : "Idle"}
           </p>
         </div>
+        <div className="flex flex-wrap items-center justify-end gap-2 text-xs">
+          <label className="flex items-center gap-2 rounded border border-line/70 bg-ink px-2 py-1.5">
+            <span className="text-muted">Layout</span>
+            <select
+              className="bg-transparent text-white outline-none"
+              value={layout}
+              onChange={(event) => updateNowPlayingPreference("nowPlayingLayout", event.target.value as UiPreferences["nowPlayingLayout"])}
+            >
+              <option value="studio">Studio</option>
+              <option value="theater">Theater</option>
+              <option value="party">Party</option>
+            </select>
+          </label>
+          <label className="flex items-center gap-2 rounded border border-line/70 bg-ink px-2 py-1.5">
+            <span className="text-muted">Visualizer</span>
+            <select
+              className="bg-transparent text-white outline-none"
+              value={visualizerStyle}
+              onChange={(event) =>
+                updateNowPlayingPreference("nowPlayingVisualizerStyle", event.target.value as UiPreferences["nowPlayingVisualizerStyle"])
+              }
+            >
+              <option value="bars">Bars</option>
+              <option value="wave">Wave</option>
+              <option value="radial">Radial</option>
+              <option value="off">Off</option>
+            </select>
+          </label>
+          <button
+            className={`icon-button h-8 w-8 ${showLyrics ? "border-moss text-moss" : ""}`}
+            type="button"
+            title={showLyrics ? "Hide lyrics" : "Show lyrics"}
+            onClick={() => updateNowPlayingPreference("nowPlayingShowLyrics", !showLyrics)}
+          >
+            <SlidersHorizontal size={14} />
+          </button>
+          <button
+            className={`icon-button h-8 w-8 ${showQueue ? "border-moss text-moss" : ""}`}
+            type="button"
+            title={showQueue ? "Hide queue" : "Show queue"}
+            onClick={() => updateNowPlayingPreference("nowPlayingShowQueue", !uiPreferences.nowPlayingShowQueue)}
+          >
+            <GripVertical size={14} />
+          </button>
+          <button className="icon-button h-8 w-8" type="button" title="Toggle fullscreen" onClick={() => void toggleFullscreen()}>
+            {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+          </button>
+        </div>
       </header>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[320px_1fr_300px] gap-6 overflow-hidden p-6">
+      {layout === "party" ? (
+        <div className="relative z-10 grid min-h-0 flex-1 place-items-center overflow-hidden px-8 py-10 text-center">
+          <div className="grid w-full max-w-6xl gap-8">
+            <div className="mx-auto aspect-square w-[min(42vh,420px)] overflow-hidden rounded-full border border-white/20 bg-panel shadow-2xl shadow-black/50">
+              {artworkSrc ? (
+                <img
+                  key={artworkSrc}
+                  alt=""
+                  className="h-full w-full object-cover"
+                  src={artworkSrc}
+                  onError={() => setArtworkFailed(true)}
+                />
+              ) : (
+                <div className="grid h-full w-full place-items-center text-moss">
+                  <Volume2 size={72} />
+                </div>
+              )}
+            </div>
+            <div className="min-h-36">
+              <AudioVisualizer
+                active={visualizerActive}
+                frame={visualizerFrame}
+                seed={currentTrack?.id ?? 0}
+                style={visualizerStyle}
+                className="min-h-36 border border-white/10 bg-black/20"
+              />
+            </div>
+            <div className="min-w-0">
+              <h2 className={`truncate font-semibold tracking-normal text-white ${titleSizeClass}`}>
+                {currentTrack ? display(currentTrack.title, "Untitled") : "Nothing playing"}
+              </h2>
+              <div className="mt-3 truncate text-2xl text-neutral-200">
+                {currentTrack ? display(currentTrack.artist) : "Choose a track from Library or AutoDJ"}
+              </div>
+              <div className="mt-1 truncate text-base text-muted">{currentTrack ? display(currentTrack.album, "Unknown album") : ""}</div>
+            </div>
+            {showLyrics && (
+              <div className="mx-auto min-h-16 max-w-4xl text-balance text-3xl font-medium leading-tight text-moss">
+                {hasLyrics ? activeLyricLine || stripLyricTimestamp(lyricLines.find((line) => line.trim()) ?? "") : "No lyrics loaded"}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
+      <div
+        className={`relative z-10 grid min-h-0 flex-1 gap-6 overflow-hidden p-6 ${
+          layout === "theater"
+            ? showQueue
+              ? "grid-cols-[minmax(300px,420px)_minmax(0,1fr)_300px]"
+              : "grid-cols-[minmax(320px,480px)_minmax(0,1fr)]"
+            : showQueue
+              ? "grid-cols-[320px_1fr_300px]"
+              : "grid-cols-[320px_1fr]"
+        }`}
+      >
         <section className="min-w-0">
           <div className="aspect-square overflow-hidden rounded border border-line bg-panel shadow-xl">
             {artworkSrc ? (
@@ -231,7 +411,7 @@ export function NowPlayingPage({
           </div>
 
           <div className="mt-5 min-w-0">
-            <h2 className="truncate text-2xl font-semibold text-white">
+            <h2 className={`truncate font-semibold text-white ${titleSizeClass}`}>
               {currentTrack ? display(currentTrack.title, "Untitled") : "Nothing playing"}
             </h2>
             <div className="mt-2 truncate text-sm text-neutral-300">
@@ -254,8 +434,17 @@ export function NowPlayingPage({
               </div>
             </div>
           )}
+          <div className={layout === "theater" ? "mt-5 h-44" : "mt-5 h-28"}>
+            <AudioVisualizer
+              active={visualizerActive}
+              frame={visualizerFrame}
+              seed={currentTrack?.id ?? 0}
+              style={visualizerStyle}
+            />
+          </div>
         </section>
 
+        {showLyrics ? (
         <section className="min-h-0 min-w-0 rounded border border-line bg-panel">
           <div className="flex min-h-12 flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2">
             <div>
@@ -352,7 +541,7 @@ export function NowPlayingPage({
               </div>
             )}
             {!isLyricsLoading && !isEditingLyrics && hasLyrics && (
-              <div className="mx-auto max-w-3xl space-y-3 text-lg leading-8 text-neutral-100">
+              <div className={`mx-auto max-w-3xl space-y-3 text-neutral-100 ${lyricSizeClass}`}>
                 {lyricLines.map((line, index) => (
                   line.trim().length > 0 ? (
                     <p
@@ -371,7 +560,27 @@ export function NowPlayingPage({
             )}
           </div>
         </section>
+        ) : (
+          <section className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] rounded border border-line bg-panel">
+            <div className="border-b border-line px-4 py-3">
+              <div className="text-sm font-semibold text-white">Visualizer</div>
+              <div className="text-xs text-muted">
+                {visualizerFrame?.isLive ? "Live Web Audio analysis" : "Playback-reactive ambient motion"}
+              </div>
+            </div>
+            <div className="min-h-0 p-4">
+              <AudioVisualizer
+                active={visualizerActive}
+                frame={visualizerFrame}
+                seed={currentTrack?.id ?? 0}
+                style={visualizerStyle}
+                className="min-h-full"
+              />
+            </div>
+          </section>
+        )}
 
+        {showQueue && (
         <section className="min-h-0 min-w-0 rounded border border-line bg-panel">
           <div className="flex h-12 items-center justify-between border-b border-line px-4">
             <div>
@@ -515,7 +724,9 @@ export function NowPlayingPage({
             )}
           </div>
         </section>
+        )}
       </div>
+      )}
     </main>
   );
 }

@@ -28,6 +28,10 @@ export type FontScale = "small" | "default" | "large";
 export type AutoDjExperience = "simple" | "advanced";
 export type ReplayGainMode = "off" | "track" | "album";
 export type EqualizerBandMode = "10" | "15";
+export type NowPlayingLayout = "studio" | "theater" | "party";
+export type NowPlayingVisualizerStyle = "bars" | "wave" | "radial" | "off";
+export type NowPlayingBackground = "artwork" | "soft" | "none";
+export type NowPlayingLyricSize = "small" | "medium" | "large";
 export type KeyboardShortcutAction =
   | "page.library"
   | "page.analysis"
@@ -214,6 +218,12 @@ export interface UiPreferences {
   equalizerPreampDb: number;
   equalizerGains: number[];
   dspLimiterEnabled: boolean;
+  nowPlayingLayout: NowPlayingLayout;
+  nowPlayingVisualizerStyle: NowPlayingVisualizerStyle;
+  nowPlayingBackground: NowPlayingBackground;
+  nowPlayingShowLyrics: boolean;
+  nowPlayingShowQueue: boolean;
+  nowPlayingLyricSize: NowPlayingLyricSize;
   themeAccent: ThemeAccent;
   density: UiDensity;
   fontScale: FontScale;
@@ -264,6 +274,17 @@ export const EQUALIZER_GAIN_MIN_DB = -12;
 export const EQUALIZER_GAIN_MAX_DB = 12;
 export const EQUALIZER_PREAMP_MIN_DB = -12;
 export const EQUALIZER_PREAMP_MAX_DB = 6;
+export const VISUALIZER_FRAME_EVENT = "flac-cafe-visualizer-frame";
+
+export interface VisualizerFrame {
+  trackId: number | null;
+  isPlaying: boolean;
+  isLive: boolean;
+  level: number;
+  frequencyBins: number[];
+  waveform: number[];
+  timestamp: number;
+}
 
 export const equalizerPresets: Record<string, { label: string; gains10: number[]; gains15?: number[]; preampDb?: number }> = {
   flat: {
@@ -1168,6 +1189,12 @@ export function readUiPreferences(): UiPreferences {
     equalizerPreampDb: 0,
     equalizerGains: normalizeEqualizerGains([], "10"),
     dspLimiterEnabled: true,
+    nowPlayingLayout: "studio",
+    nowPlayingVisualizerStyle: "bars",
+    nowPlayingBackground: "artwork",
+    nowPlayingShowLyrics: true,
+    nowPlayingShowQueue: true,
+    nowPlayingLyricSize: "medium",
     themeAccent: "cafe",
     density: "comfortable",
     fontScale: "default",
@@ -1228,6 +1255,24 @@ export function readUiPreferences(): UiPreferences {
         ),
         dspLimiterEnabled:
           typeof parsed.dspLimiterEnabled === "boolean" ? parsed.dspLimiterEnabled : defaults.dspLimiterEnabled,
+        nowPlayingLayout: ["studio", "theater", "party"].includes(parsed.nowPlayingLayout as NowPlayingLayout)
+          ? (parsed.nowPlayingLayout as NowPlayingLayout)
+          : defaults.nowPlayingLayout,
+        nowPlayingVisualizerStyle: ["bars", "wave", "radial", "off"].includes(
+          parsed.nowPlayingVisualizerStyle as NowPlayingVisualizerStyle,
+        )
+          ? (parsed.nowPlayingVisualizerStyle as NowPlayingVisualizerStyle)
+          : defaults.nowPlayingVisualizerStyle,
+        nowPlayingBackground: ["artwork", "soft", "none"].includes(parsed.nowPlayingBackground as NowPlayingBackground)
+          ? (parsed.nowPlayingBackground as NowPlayingBackground)
+          : defaults.nowPlayingBackground,
+        nowPlayingShowLyrics:
+          typeof parsed.nowPlayingShowLyrics === "boolean" ? parsed.nowPlayingShowLyrics : defaults.nowPlayingShowLyrics,
+        nowPlayingShowQueue:
+          typeof parsed.nowPlayingShowQueue === "boolean" ? parsed.nowPlayingShowQueue : defaults.nowPlayingShowQueue,
+        nowPlayingLyricSize: ["small", "medium", "large"].includes(parsed.nowPlayingLyricSize as NowPlayingLyricSize)
+          ? (parsed.nowPlayingLyricSize as NowPlayingLyricSize)
+          : defaults.nowPlayingLyricSize,
         startupPage: validPages.includes(parsed.startupPage as Page) ? (parsed.startupPage as Page) : defaults.startupPage,
         themeAccent: ["cafe", "mint", "rose", "blue"].includes(parsed.themeAccent as ThemeAccent)
           ? (parsed.themeAccent as ThemeAccent)

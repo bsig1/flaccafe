@@ -57,6 +57,8 @@ import {
   MiniPlayerCommand,
   PlaybackEngine,
   PlaybackMode,
+  VISUALIZER_FRAME_EVENT,
+  VisualizerFrame,
   clampNumber,
   dbToGain,
   display,
@@ -143,11 +145,14 @@ export function PlayerBar({
   const dspPreampRef = useRef<GainNode | null>(null);
   const dspFiltersRef = useRef<BiquadFilterNode[]>([]);
   const dspCompressorRef = useRef<DynamicsCompressorNode | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
   const dspModeRef = useRef<EqualizerBandMode | null>(null);
   const dspLimiterRef = useRef<boolean | null>(null);
   const fadeTimerRef = useRef<number | null>(null);
   const nativeFadeTimerRef = useRef<number | null>(null);
   const crossfadeTimerRef = useRef<number | null>(null);
+  const visualizerFrameRef = useRef<number | null>(null);
+  const visualizerLastEmitRef = useRef(0);
   const endFadeTrackRef = useRef<number | null>(null);
   const crossfadeTrackRef = useRef<number | null>(null);
   const handoffRef = useRef<{ trackId: number; currentTime: number } | null>(null);
@@ -243,6 +248,7 @@ export function PlayerBar({
       disconnectAudioNode(filter);
     }
     disconnectAudioNode(dspCompressorRef.current);
+    disconnectAudioNode(analyserRef.current);
 
     const preamp = context.createGain();
     const frequencies = equalizerFrequenciesForMode(equalizerBandMode);
@@ -259,6 +265,9 @@ export function PlayerBar({
     compressor.ratio.value = 16;
     compressor.attack.value = 0.003;
     compressor.release.value = 0.18;
+    const analyser = context.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0.82;
 
     input.connect(preamp);
     let previous: AudioNode = preamp;
@@ -268,14 +277,17 @@ export function PlayerBar({
     }
     if (dspLimiterEnabled) {
       previous.connect(compressor);
-      compressor.connect(context.destination);
+      compressor.connect(analyser);
+      analyser.connect(context.destination);
     } else {
-      previous.connect(context.destination);
+      previous.connect(analyser);
+      analyser.connect(context.destination);
     }
 
     dspPreampRef.current = preamp;
     dspFiltersRef.current = filters;
     dspCompressorRef.current = compressor;
+    analyserRef.current = analyser;
     dspModeRef.current = equalizerBandMode;
     dspLimiterRef.current = dspLimiterEnabled;
   }
@@ -324,11 +336,35 @@ export function PlayerBar({
     }
   }
 
+  function emitVisualizerFrame(frame: VisualizerFrame) {
+    window.dispatchEvent(new CustomEvent<VisualizerFrame>(VISUALIZER_FRAME_EVENT, { detail: frame }));
+  }
+
+  function emitVisualizerState(isLive = false) {
+    emitVisualizerFrame({
+      trackId: currentTrack?.id ?? null,
+      isPlaying,
+      isLive,
+      level: 0,
+      frequencyBins: [],
+      waveform: [],
+      timestamp: window.performance.now(),
+    });
+  }
+
+  function cancelVisualizerLoop() {
+    if (visualizerFrameRef.current !== null) {
+      window.cancelAnimationFrame(visualizerFrameRef.current);
+      visualizerFrameRef.current = null;
+    }
+  }
+
   useEffect(() => {
     return () => {
       cancelFade();
       cancelNativeFade();
       cancelCrossfade();
+      cancelVisualizerLoop();
       miniPlayerChannelRef.current?.close();
       void audioContextRef.current?.close().catch(() => {
         // Closing the graph is best-effort during app teardown.
@@ -429,6 +465,59 @@ export function PlayerBar({
     equalizerGains,
     dspLimiterEnabled,
   ]);
+
+  useEffect(() => {
+    emitVisualizerState(false);
+    cancelVisualizerLoop();
+    if (useNativePlayback || !isPlaying || !currentTrack) {
+      return;
+    }
+    ensureWebAudioGraph();
+    const analyser = analyserRef.current;
+    if (!analyser) {
+      return;
+    }
+
+    const frequencyData = new Uint8Array(analyser.frequencyBinCount);
+    const waveformData = new Uint8Array(analyser.fftSize);
+    const binCount = 48;
+    const waveCount = 96;
+
+    const tick = (timestamp: number) => {
+      if (timestamp - visualizerLastEmitRef.current >= 33) {
+        analyser.getByteFrequencyData(frequencyData);
+        analyser.getByteTimeDomainData(waveformData);
+        const frequencyBins = Array.from({ length: binCount }, (_, index) => {
+          const start = Math.floor((index / binCount) * frequencyData.length);
+          const end = Math.max(start + 1, Math.floor(((index + 1) / binCount) * frequencyData.length));
+          let sum = 0;
+          for (let cursor = start; cursor < end; cursor += 1) {
+            sum += frequencyData[cursor] ?? 0;
+          }
+          return sum / (end - start) / 255;
+        });
+        const waveform = Array.from({ length: waveCount }, (_, index) => {
+          const sourceIndex = Math.floor((index / waveCount) * waveformData.length);
+          return ((waveformData[sourceIndex] ?? 128) - 128) / 128;
+        });
+        const level = frequencyBins.reduce((sum, value) => sum + value, 0) / Math.max(1, frequencyBins.length);
+        emitVisualizerFrame({
+          trackId: currentTrack.id,
+          isPlaying,
+          isLive: true,
+          level,
+          frequencyBins,
+          waveform,
+          timestamp,
+        });
+        visualizerLastEmitRef.current = timestamp;
+      }
+      visualizerFrameRef.current = window.requestAnimationFrame(tick);
+    };
+
+    visualizerFrameRef.current = window.requestAnimationFrame(tick);
+    return cancelVisualizerLoop;
+  }, [useNativePlayback, isPlaying, currentTrack?.id, equalizerEnabled, equalizerBandMode, dspLimiterEnabled]);
 
   function cancelFade() {
     if (fadeTimerRef.current !== null) {

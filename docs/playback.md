@@ -21,9 +21,16 @@ Settings > Player can list native output devices in the desktop app. The selecte
 - Fade and crossfade duration is controlled by the Player settings. WebView crossfade uses two audio elements; native crossfade uses overlapping rodio players on the same mixer, then stops the old player after the fade.
 - Volume and mute are stored locally in browser storage.
 - ReplayGain can be applied from embedded track or album gain tags with an optional preamp.
+- Now Playing supports Studio, Theater, and Party layouts, with optional lyrics, queue, album-art backgrounds, and bars/wave/radial visualizers.
 - The compact bottom player is a single setting; older saved `playerLayout: "compact"` preferences are still treated as compact mode.
 - The detached mini player communicates with the main app through `BroadcastChannel`, and its always-on-top state plus snap size are persisted.
 - If a file cannot be decoded by WebView2, the player bar can open it in the user's default Windows audio app.
+
+## Now Playing And Visualizers
+
+Settings > Player controls the default Now Playing layout, visualizer style, background, lyric size, and whether the lyrics or queue panels are shown. The Now Playing header also exposes quick switches for layout, visualizer style, lyrics, queue, and fullscreen.
+
+The visualizer reads live Web Audio analyzer data when the WebView engine is active. Native playback does not currently expose decoded PCM frames to the frontend, so the visualizer falls back to a playback-reactive ambient animation for that engine.
 
 ## ReplayGain
 
@@ -58,5 +65,5 @@ Keyboard shortcuts are editable in Settings > Keyboard Shortcuts. Media keys are
 - A fully custom native decoder pipeline.
 - WASAPI exclusive mode or ASIO.
 - Native queue preloading and sample-accurate gapless transition validation.
-- DSP effects beyond simple volume, fade, crossfade, and ReplayGain scheduling.
+- DSP effects beyond equalizer, limiter, volume, fade, crossfade, and ReplayGain scheduling.
 - Guaranteed gapless playback for every codec.

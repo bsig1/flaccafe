@@ -3293,6 +3293,8 @@ export default function App() {
               isLyricsLoading={isLyricsLoading}
               playbackTime={playbackTime}
               queue={playbackQueue}
+              uiPreferences={uiPreferences}
+              setUiPreferences={setUiPreferences}
               writeRatingsToFiles={writeRatingsToFiles}
               onWriteRatingsToFilesChange={(value) => void handleWriteRatingsToFiles(value)}
               onFetchLyrics={handleFetchLyrics}
