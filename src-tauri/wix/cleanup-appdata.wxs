@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="FlacCafeAppDataCleanupMarker" Guid="{77EAE00C-5A34-4DD0-8C1A-5ACC9AEB6063}" Win64="yes">
+        <RegistryValue
+          Id="FlacCafeAppDataCleanupMarkerRegistry"
+          Root="HKCU"
+          Key="Software\flaccafe\FLAC Cafe"
+          Name="AppDataCleanupPrompt"
+          Type="integer"
+          Value="1"
+          KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Property Id="FLACCAFE_REMOVE_APPDATA" Secure="yes" />
+    <Property Id="FLACCAFE_REMOVE_APPDATA_PROMPTED" Secure="yes" />
+
+    <CustomAction Id="PromptRemoveFlacCafeAppData" Script="vbscript" Execute="immediate" Return="check">
+      <![CDATA[
+        On Error Resume Next
+        Dim prompt, answer
+        prompt = "Remove FLAC Cafe app data too?" & vbCrLf & vbCrLf & _
+          "This deletes the local database, logs, model cache, and ML runtime under:" & vbCrLf & _
+          "%LOCALAPPDATA%\FLAC Cafe"
+        answer = MsgBox(prompt, vbQuestion + vbYesNo + vbDefaultButton2, "FLAC Cafe Uninstall")
+        If answer = vbYes Then
+          Session.Property("FLACCAFE_REMOVE_APPDATA") = "1"
+        Else
+          Session.Property("FLACCAFE_REMOVE_APPDATA") = "0"
+        End If
+        Session.Property("FLACCAFE_REMOVE_APPDATA_PROMPTED") = "1"
+      ]]>
+    </CustomAction>
+
+    <CustomAction
+      Id="RemoveFlacCafeAppData"
+      Directory="TARGETDIR"
+      Execute="immediate"
+      Impersonate="yes"
+      Return="ignore"
+      ExeCommand='cmd.exe /C if exist "%LOCALAPPDATA%\FLAC Cafe" rmdir /S /Q "%LOCALAPPDATA%\FLAC Cafe"' />
+
+    <InstallUISequence>
+      <Custom Action="PromptRemoveFlacCafeAppData" Before="ExecuteAction">
+        Installed AND REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND UILevel &gt;= 3 AND NOT FLACCAFE_REMOVE_APPDATA_PROMPTED
+      </Custom>
+    </InstallUISequence>
+
+    <InstallExecuteSequence>
+      <Custom Action="RemoveFlacCafeAppData" After="RemoveFiles">
+        FLACCAFE_REMOVE_APPDATA = "1" AND REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE
+      </Custom>
+    </InstallExecuteSequence>
+  </Fragment>
+</Wix>

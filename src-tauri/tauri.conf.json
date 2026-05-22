@@ -37,7 +37,13 @@
     },
     "windows": {
       "wix": {
-        "language": "en-US"
+        "language": "en-US",
+        "fragmentPaths": [
+          "wix/cleanup-appdata.wxs"
+        ],
+        "componentRefs": [
+          "FlacCafeAppDataCleanupMarker"
+        ]
       }
     }
   }

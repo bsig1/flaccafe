@@ -33,4 +33,26 @@ foreach ($Needle in @("--noconsole", "--exclude-module torch", "--exclude-module
     }
 }
 
+$CleanupFragment = Join-Path $Root "src-tauri\wix\cleanup-appdata.wxs"
+if (-not (Test-Path $CleanupFragment)) {
+    throw "Missing MSI uninstall cleanup fragment: $CleanupFragment"
+}
+
+$FragmentRefs = @($Config.bundle.windows.wix.fragmentPaths)
+if ($FragmentRefs -notcontains "wix/cleanup-appdata.wxs") {
+    throw "tauri.conf.json does not reference the MSI uninstall cleanup fragment."
+}
+
+$ComponentRefs = @($Config.bundle.windows.wix.componentRefs)
+if ($ComponentRefs -notcontains "FlacCafeAppDataCleanupMarker") {
+    throw "tauri.conf.json does not reference the MSI cleanup marker component."
+}
+
+$CleanupText = Get-Content $CleanupFragment -Raw
+foreach ($Needle in @("FlacCafeAppDataCleanupMarker", "PromptRemoveFlacCafeAppData", "RemoveFlacCafeAppData", "FLACCAFE_REMOVE_APPDATA", "%LOCALAPPDATA%\FLAC Cafe")) {
+    if (-not $CleanupText.Contains($Needle)) {
+        throw "MSI cleanup fragment is missing expected uninstall behavior: $Needle"
+    }
+}
+
 Write-Host "Installer smoke check passed for FLAC Cafe $($Config.version)."

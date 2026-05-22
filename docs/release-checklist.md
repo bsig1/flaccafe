@@ -34,4 +34,6 @@ Use this before publishing an MSI.
 
 - Uninstall from Windows Apps.
 - Confirm the app process and backend process are gone.
-- Manually check whether `%LOCALAPPDATA%\FLAC Cafe` is intentionally retained until the MSI cleanup option exists.
+- Run one uninstall and answer No to the app data cleanup prompt; confirm `%LOCALAPPDATA%\FLAC Cafe` is retained.
+- Run one uninstall and answer Yes to the app data cleanup prompt; confirm `%LOCALAPPDATA%\FLAC Cafe` is removed.
+- For silent cleanup testing, run `msiexec /x "<msi path>" /qn FLACCAFE_REMOVE_APPDATA=1` and confirm app data is removed.
