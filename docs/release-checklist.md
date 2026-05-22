@@ -32,6 +32,7 @@ Use this before publishing an MSI.
 
 ## Uninstall
 
+- Install the current MSI version before uninstall testing; Windows uses the cached MSI from the installed version.
 - Uninstall from Windows Apps.
 - Confirm the app process and backend process are gone.
 - Run one uninstall and answer No to the app data cleanup prompt; confirm `%LOCALAPPDATA%\FLAC Cafe` is retained.

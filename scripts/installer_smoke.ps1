@@ -49,7 +49,7 @@ if ($ComponentRefs -notcontains "FlacCafeAppDataCleanupMarker") {
 }
 
 $CleanupText = Get-Content $CleanupFragment -Raw
-foreach ($Needle in @("FlacCafeAppDataCleanupMarker", "PromptRemoveFlacCafeAppData", "RemoveFlacCafeAppData", "FLACCAFE_REMOVE_APPDATA", "%LOCALAPPDATA%\FLAC Cafe")) {
+foreach ($Needle in @("FlacCafeAppDataCleanupMarker", "PromptRemoveFlacCafeAppData", "Before=`"RemoveFiles`"", "RemoveFlacCafeAppData", "FLACCAFE_REMOVE_APPDATA", "%LOCALAPPDATA%\FLAC Cafe")) {
     if (-not $CleanupText.Contains($Needle)) {
         throw "MSI cleanup fragment is missing expected uninstall behavior: $Needle"
     }
