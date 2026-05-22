@@ -481,6 +481,152 @@ class ApiTests(unittest.TestCase):
             restored = conn.execute("SELECT artist FROM tracks WHERE id = ?", (track_id,)).fetchone()
         self.assertEqual(restored["artist"], "Artist feat. Guest")
 
+    def test_advanced_tag_tools_custom_virtual_copy_swap_regex_presets_and_undo(self) -> None:
+        audio_file = self.root / "advanced-tags.mp3"
+        audio_file.write_bytes(b"audio")
+        track_id = insert_track(audio_file, artist="Artist", album_artist="Album Artist", genre="Rock", year=1995)
+
+        preset = self.client.post(
+            "/library/tools/regex-presets",
+            json={
+                "name": "Drop featured artist",
+                "field": "artist",
+                "pattern": r"\s+feat\..*$",
+                "replacement": "",
+                "case_sensitive": False,
+            },
+        )
+        self.assertEqual(preset.status_code, 200)
+        self.assertEqual(preset.json()["name"], "Drop featured artist")
+        presets = self.client.get("/library/tools/regex-presets")
+        self.assertEqual(presets.status_code, 200)
+        self.assertEqual(len(presets.json()), 1)
+
+        custom = self.client.post(
+            "/library/tools/custom-tags",
+            json={"tag_key": "Mood", "value": "Focus", "track_ids": [track_id], "apply": True},
+        )
+        self.assertEqual(custom.status_code, 200)
+        self.assertEqual(custom.json()["applied"], 1)
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT tag_value FROM track_custom_tags WHERE track_id = ? AND tag_key = 'Mood'",
+                (track_id,),
+            ).fetchone()
+        self.assertEqual(row["tag_value"], "Focus")
+
+        virtual = self.client.post(
+            "/library/tools/virtual-tags",
+            json={"name": "Listening Shelf", "expression": "<Album Artist> / <Custom:Mood> / <Decade>"},
+        )
+        self.assertEqual(virtual.status_code, 200)
+        preview_virtual = self.client.post(
+            "/library/tools/virtual-tags/preview",
+            json={"expression": "<Album Artist> / <Custom:Mood> / <Decade>", "track_ids": [track_id]},
+        )
+        self.assertEqual(preview_virtual.status_code, 200)
+        self.assertEqual(preview_virtual.json()["previews"][0]["value"], "Album Artist / Focus / 1990s")
+
+        copy_preview = self.client.post(
+            "/library/tools/copy-swap-tags",
+            json={
+                "action": "copy",
+                "source_field": "custom:Mood",
+                "target_field": "genre",
+                "track_ids": [track_id],
+            },
+        )
+        self.assertEqual(copy_preview.status_code, 200)
+        self.assertEqual(copy_preview.json()["changed"], 1)
+        copy_apply = self.client.post(
+            "/library/tools/copy-swap-tags",
+            json={
+                "action": "copy",
+                "source_field": "custom:Mood",
+                "target_field": "genre",
+                "track_ids": [track_id],
+                "apply": True,
+            },
+        )
+        self.assertEqual(copy_apply.status_code, 200)
+        self.assertEqual(copy_apply.json()["applied"], 1)
+        with connect() as conn:
+            row = conn.execute("SELECT genre FROM tracks WHERE id = ?", (track_id,)).fetchone()
+        self.assertEqual(row["genre"], "Focus")
+
+        undo = self.client.get("/library/tools/undo-log")
+        self.assertEqual(undo.status_code, 200)
+        self.assertEqual(undo.json()[0]["action_type"], "advanced_tag_edit")
+        restore = self.client.post(f"/library/tools/undo-log/{undo.json()[0]['id']}/restore")
+        self.assertEqual(restore.status_code, 200)
+        self.assertTrue(restore.json()["restored"])
+        with connect() as conn:
+            restored = conn.execute("SELECT genre FROM tracks WHERE id = ?", (track_id,)).fetchone()
+        self.assertEqual(restored["genre"], "Rock")
+
+    def test_tag_backup_restore_round_trip(self) -> None:
+        audio_file = self.root / "backup-tags.mp3"
+        audio_file.write_bytes(b"audio")
+        track_id = insert_track(audio_file, title="Original Title", genre="Soul", rating=4.0)
+        with connect() as conn:
+            conn.execute(
+                "INSERT INTO track_custom_tags(track_id, tag_key, tag_value) VALUES(?, 'Mood', 'Warm')",
+                (track_id,),
+            )
+            conn.commit()
+
+        backup_path = self.root / "tags-backup.json"
+        backup = self.client.post(
+            "/library/tools/tag-backups",
+            json={"backup_path": str(backup_path), "track_ids": [track_id], "include_custom_tags": True},
+        )
+        self.assertEqual(backup.status_code, 200)
+        self.assertTrue(backup_path.exists())
+        self.assertEqual(backup.json()["track_count"], 1)
+        self.assertEqual(backup.json()["custom_tag_count"], 1)
+
+        with connect() as conn:
+            conn.execute("UPDATE tracks SET title = 'Changed Title', genre = 'Pop', rating = 2 WHERE id = ?", (track_id,))
+            conn.execute(
+                """
+                UPDATE track_custom_tags
+                SET tag_value = 'Cold'
+                WHERE track_id = ? AND tag_key = 'Mood'
+                """,
+                (track_id,),
+            )
+            conn.commit()
+
+        preview = self.client.post(
+            "/library/tools/tag-backups/restore",
+            json={"backup_path": str(backup_path), "track_ids": [track_id], "restore_custom_tags": True},
+        )
+        self.assertEqual(preview.status_code, 200)
+        self.assertIn("title", preview.json()["previews"][0]["changed_fields"])
+        self.assertIn("custom:Mood", preview.json()["previews"][0]["changed_fields"])
+
+        restore = self.client.post(
+            "/library/tools/tag-backups/restore",
+            json={
+                "backup_path": str(backup_path),
+                "track_ids": [track_id],
+                "restore_custom_tags": True,
+                "apply": True,
+            },
+        )
+        self.assertEqual(restore.status_code, 200)
+        self.assertEqual(restore.json()["applied"], 1)
+        with connect() as conn:
+            row = conn.execute("SELECT title, genre, rating FROM tracks WHERE id = ?", (track_id,)).fetchone()
+            custom = conn.execute(
+                "SELECT tag_value FROM track_custom_tags WHERE track_id = ? AND tag_key = 'Mood'",
+                (track_id,),
+            ).fetchone()
+        self.assertEqual(row["title"], "Original Title")
+        self.assertEqual(row["genre"], "Soul")
+        self.assertEqual(row["rating"], 4.0)
+        self.assertEqual(custom["tag_value"], "Warm")
+
     def test_inbox_review_tracks_marks_new_rows_reviewed(self) -> None:
         audio_file = self.root / "inbox-track.mp3"
         audio_file.write_bytes(b"audio")

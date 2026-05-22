@@ -395,6 +395,168 @@ export interface TagRegexReplaceResponse {
   previews: TagRegexReplacePreview[];
 }
 
+export interface RegexTagPreset {
+  id: number;
+  name: string;
+  field: "title" | "artist" | "album" | "album_artist" | "genre" | string;
+  pattern: string;
+  replacement: string;
+  case_sensitive: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RegexTagPresetRequest {
+  name: string;
+  field: "title" | "artist" | "album" | "album_artist" | "genre";
+  pattern: string;
+  replacement: string;
+  case_sensitive?: boolean;
+}
+
+export interface CustomTagBatchRequest {
+  action?: "set" | "delete";
+  tag_key: string;
+  value?: string | null;
+  track_ids?: number[] | null;
+  apply?: boolean;
+  limit?: number;
+}
+
+export interface CustomTagBatchPreview {
+  track_id: number;
+  path: string;
+  tag_key: string;
+  current: string | null;
+  value: string | null;
+  changed: boolean;
+  applied: boolean;
+  error: string | null;
+}
+
+export interface CustomTagBatchResponse {
+  total: number;
+  changed: number;
+  applied: number;
+  previews: CustomTagBatchPreview[];
+}
+
+export interface VirtualTagDefinition {
+  id: number;
+  name: string;
+  expression: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface VirtualTagDefinitionRequest {
+  name: string;
+  expression: string;
+}
+
+export interface VirtualTagPreviewRequest {
+  expression: string;
+  track_ids?: number[] | null;
+  limit?: number;
+}
+
+export interface VirtualTagPreview {
+  track_id: number;
+  path: string;
+  title: string | null;
+  value: string | null;
+  error: string | null;
+}
+
+export interface VirtualTagPreviewResponse {
+  expression: string;
+  total: number;
+  previews: VirtualTagPreview[];
+}
+
+export interface TagFieldCopySwapRequest {
+  action?: "copy" | "swap";
+  source_field: string;
+  target_field: string;
+  track_ids?: number[] | null;
+  missing_only?: boolean;
+  apply?: boolean;
+  limit?: number;
+}
+
+export interface TagFieldCopySwapPreview {
+  track_id: number;
+  path: string;
+  source_field: string;
+  target_field: string;
+  current_source: unknown | null;
+  current_target: unknown | null;
+  new_source: unknown | null;
+  new_target: unknown | null;
+  changed: boolean;
+  applied: boolean;
+  error: string | null;
+}
+
+export interface TagFieldCopySwapResponse {
+  total: number;
+  changed: number;
+  applied: number;
+  previews: TagFieldCopySwapPreview[];
+}
+
+export interface TagBackupRequest {
+  backup_path?: string | null;
+  track_ids?: number[] | null;
+  include_custom_tags?: boolean;
+  limit?: number;
+}
+
+export interface TagBackupResponse {
+  backup_path: string;
+  track_count: number;
+  custom_tag_count: number;
+  created_at: string;
+}
+
+export interface TagBackupSummary {
+  backup_path: string;
+  file_name: string;
+  track_count: number;
+  created_at: string | null;
+  size_bytes: number;
+}
+
+export interface TagBackupRestoreRequest {
+  backup_path: string;
+  track_ids?: number[] | null;
+  missing_only?: boolean;
+  restore_custom_tags?: boolean;
+  apply?: boolean;
+  limit?: number;
+}
+
+export interface TagBackupRestorePreview {
+  track_id: number | null;
+  path: string | null;
+  matched: boolean;
+  changed_fields: string[];
+  current: Record<string, unknown>;
+  restored: Record<string, unknown>;
+  applied: boolean;
+  error: string | null;
+}
+
+export interface TagBackupRestoreResponse {
+  backup_path: string;
+  total: number;
+  matched: number;
+  changed: number;
+  applied: number;
+  errors: string[];
+  previews: TagBackupRestorePreview[];
+}
+
 export interface AutoTagRequest {
   mode?: "album" | "track";
   album_id?: number | null;

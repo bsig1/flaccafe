@@ -447,6 +447,193 @@ class TagRegexReplaceResponse(BaseModel):
     previews: list[TagRegexReplacePreview] = Field(default_factory=list)
 
 
+class RegexTagPresetRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    field: Literal["title", "artist", "album", "album_artist", "genre"]
+    pattern: str = Field(min_length=1, max_length=500)
+    replacement: str = Field(default="", max_length=500)
+    case_sensitive: bool = False
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        return value.strip()
+
+
+class RegexTagPreset(BaseModel):
+    id: int
+    name: str
+    field: str
+    pattern: str
+    replacement: str
+    case_sensitive: bool = False
+    created_at: str
+    updated_at: str
+
+
+class CustomTagBatchRequest(BaseModel):
+    action: Literal["set", "delete"] = "set"
+    tag_key: str = Field(min_length=1, max_length=80)
+    value: str | None = Field(default=None, max_length=2000)
+    track_ids: list[int] | None = Field(default=None, max_length=10000)
+    apply: bool = False
+    limit: int = Field(default=10000, ge=1, le=100000)
+
+    @field_validator("tag_key")
+    @classmethod
+    def clean_tag_key(cls, value: str) -> str:
+        return value.strip()
+
+
+class CustomTagBatchPreview(BaseModel):
+    track_id: int
+    path: str
+    tag_key: str
+    current: str | None = None
+    value: str | None = None
+    changed: bool = False
+    applied: bool = False
+    error: str | None = None
+
+
+class CustomTagBatchResponse(BaseModel):
+    total: int = 0
+    changed: int = 0
+    applied: int = 0
+    previews: list[CustomTagBatchPreview] = Field(default_factory=list)
+
+
+class VirtualTagDefinitionRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    expression: str = Field(min_length=1, max_length=500)
+
+    @field_validator("name", "expression")
+    @classmethod
+    def clean_text(cls, value: str) -> str:
+        return value.strip()
+
+
+class VirtualTagDefinition(BaseModel):
+    id: int
+    name: str
+    expression: str
+    created_at: str
+    updated_at: str
+
+
+class VirtualTagPreviewRequest(BaseModel):
+    expression: str = Field(min_length=1, max_length=500)
+    track_ids: list[int] | None = Field(default=None, max_length=10000)
+    limit: int = Field(default=200, ge=1, le=10000)
+
+    @field_validator("expression")
+    @classmethod
+    def clean_expression(cls, value: str) -> str:
+        return value.strip()
+
+
+class VirtualTagPreview(BaseModel):
+    track_id: int
+    path: str
+    title: str | None = None
+    value: str | None = None
+    error: str | None = None
+
+
+class VirtualTagPreviewResponse(BaseModel):
+    expression: str
+    total: int = 0
+    previews: list[VirtualTagPreview] = Field(default_factory=list)
+
+
+class TagFieldCopySwapRequest(BaseModel):
+    action: Literal["copy", "swap"] = "copy"
+    source_field: str = Field(min_length=1, max_length=120)
+    target_field: str = Field(min_length=1, max_length=120)
+    track_ids: list[int] | None = Field(default=None, max_length=10000)
+    missing_only: bool = False
+    apply: bool = False
+    limit: int = Field(default=10000, ge=1, le=100000)
+
+    @field_validator("source_field", "target_field")
+    @classmethod
+    def clean_field(cls, value: str) -> str:
+        return value.strip()
+
+
+class TagFieldCopySwapPreview(BaseModel):
+    track_id: int
+    path: str
+    source_field: str
+    target_field: str
+    current_source: Any | None = None
+    current_target: Any | None = None
+    new_source: Any | None = None
+    new_target: Any | None = None
+    changed: bool = False
+    applied: bool = False
+    error: str | None = None
+
+
+class TagFieldCopySwapResponse(BaseModel):
+    total: int = 0
+    changed: int = 0
+    applied: int = 0
+    previews: list[TagFieldCopySwapPreview] = Field(default_factory=list)
+
+
+class TagBackupRequest(BaseModel):
+    backup_path: str | None = None
+    track_ids: list[int] | None = Field(default=None, max_length=10000)
+    include_custom_tags: bool = True
+    limit: int = Field(default=100000, ge=1, le=500000)
+
+
+class TagBackupResponse(BaseModel):
+    backup_path: str
+    track_count: int = 0
+    custom_tag_count: int = 0
+    created_at: str
+
+
+class TagBackupSummary(BaseModel):
+    backup_path: str
+    file_name: str
+    track_count: int = 0
+    created_at: str | None = None
+    size_bytes: int = 0
+
+
+class TagBackupRestoreRequest(BaseModel):
+    backup_path: str
+    track_ids: list[int] | None = Field(default=None, max_length=10000)
+    missing_only: bool = False
+    restore_custom_tags: bool = True
+    apply: bool = False
+    limit: int = Field(default=10000, ge=1, le=100000)
+
+
+class TagBackupRestorePreview(BaseModel):
+    track_id: int | None = None
+    path: str | None = None
+    matched: bool = False
+    changed_fields: list[str] = Field(default_factory=list)
+    current: dict[str, Any] = Field(default_factory=dict)
+    restored: dict[str, Any] = Field(default_factory=dict)
+    applied: bool = False
+    error: str | None = None
+
+
+class TagBackupRestoreResponse(BaseModel):
+    backup_path: str
+    total: int = 0
+    matched: int = 0
+    changed: int = 0
+    applied: int = 0
+    errors: list[str] = Field(default_factory=list)
+    previews: list[TagBackupRestorePreview] = Field(default_factory=list)
+
+
 class AutoTagRequest(BaseModel):
     mode: Literal["album", "track"] = "album"
     album_id: int | None = None

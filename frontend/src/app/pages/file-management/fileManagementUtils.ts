@@ -147,5 +147,5 @@ export function reportSummary(value: unknown): string {
 }
 
 export function canRestoreUndo(actionType: string): boolean {
-  return ["csv_metadata_import", "file_organization", "track_remove"].includes(actionType);
+  return ["csv_metadata_import", "file_organization", "track_remove", "advanced_tag_edit", "tag_backup_restore"].includes(actionType);
 }

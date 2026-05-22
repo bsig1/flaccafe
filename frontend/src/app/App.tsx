@@ -2499,6 +2499,10 @@ export default function App() {
     }
   }
 
+  async function handleAdvancedTagLibraryChanged() {
+    await Promise.all([refreshTracks(), loadAlbums(), loadLibraryStats(), loadBulkUndoLog()]);
+  }
+
   async function loadArtistInfo(refresh = false) {
     const artistName = primaryArtistName(currentTrack?.artist);
     if (!artistName) {
@@ -3170,6 +3174,8 @@ export default function App() {
               onRestoreUndoBatch={handleRestoreBulkUndoBatch}
               reportFile={reportFile}
               onReadReportFile={handleReadReportFile}
+              onAdvancedTagLibraryChanged={handleAdvancedTagLibraryChanged}
+              setStatus={setStatus}
             />
           ) : activePage === "settings" ? (
             <SettingsPage

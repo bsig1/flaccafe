@@ -6,7 +6,6 @@
 
 ## MusicBee-Inspired Feature Gaps
 - Add Inbox per-track notes, optional auto-review rules, and folder-watcher notifications.
-- Add advanced tag editing tools: custom tags, virtual/computed tags, saved regex presets, multi-field copy/swap, and tag backup/restore.
 - Add album artwork web search, embedded-artwork writes, and folder-level artwork collision repair.
 - Add CD playback and secure CD ripping to FLAC/MP3 with metadata lookup, CD-Text support, and AccurateRip-style verification.
 - Add audio conversion/transcoding jobs, including copy tags/artwork, preserve folder structure, optional resampling, and volume normalization.

@@ -35,6 +35,8 @@ import type {
   CsvMetadataImportReportResponse,
   CsvMetadataImportRequest,
   CsvMetadataImportResponse,
+  CustomTagBatchRequest,
+  CustomTagBatchResponse,
   ExportResponse,
   DuplicateActionRequest,
   DuplicateActionResponse,
@@ -66,6 +68,8 @@ import type {
   RecommendationProfileComparisonExportResponse,
   RecommendationProfileComparisonImportResponse,
   RecommendationRun,
+  RegexTagPreset,
+  RegexTagPresetRequest,
   ReportFileRequest,
   ReportFileResponse,
   ScanProgress,
@@ -80,11 +84,22 @@ import type {
   SupportBundleResponse,
   TagRegexReplaceRequest,
   TagRegexReplaceResponse,
+  TagBackupRequest,
+  TagBackupResponse,
+  TagBackupRestoreRequest,
+  TagBackupRestoreResponse,
+  TagBackupSummary,
+  TagFieldCopySwapRequest,
+  TagFieldCopySwapResponse,
   Track,
   TrackDeleteResponse,
   TrackMetadataUpdate,
   TrackPage,
   TrackRestoreRequest,
+  VirtualTagDefinition,
+  VirtualTagDefinitionRequest,
+  VirtualTagPreviewRequest,
+  VirtualTagPreviewResponse,
 } from "../types/api";
 
 export const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8765";
@@ -225,6 +240,75 @@ export function importMetadataCsv(requestBody: CsvMetadataImportRequest): Promis
 
 export function replaceTagsWithRegex(requestBody: TagRegexReplaceRequest): Promise<TagRegexReplaceResponse> {
   return request<TagRegexReplaceResponse>("/library/tools/regex-tags", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function fetchRegexTagPresets(): Promise<RegexTagPreset[]> {
+  return request<RegexTagPreset[]>("/library/tools/regex-presets");
+}
+
+export function saveRegexTagPreset(requestBody: RegexTagPresetRequest): Promise<RegexTagPreset> {
+  return request<RegexTagPreset>("/library/tools/regex-presets", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function deleteRegexTagPreset(presetId: number): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>(`/library/tools/regex-presets/${presetId}`, { method: "DELETE" });
+}
+
+export function batchCustomTags(requestBody: CustomTagBatchRequest): Promise<CustomTagBatchResponse> {
+  return request<CustomTagBatchResponse>("/library/tools/custom-tags", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function fetchVirtualTags(): Promise<VirtualTagDefinition[]> {
+  return request<VirtualTagDefinition[]>("/library/tools/virtual-tags");
+}
+
+export function saveVirtualTag(requestBody: VirtualTagDefinitionRequest): Promise<VirtualTagDefinition> {
+  return request<VirtualTagDefinition>("/library/tools/virtual-tags", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function deleteVirtualTag(definitionId: number): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>(`/library/tools/virtual-tags/${definitionId}`, { method: "DELETE" });
+}
+
+export function previewVirtualTag(requestBody: VirtualTagPreviewRequest): Promise<VirtualTagPreviewResponse> {
+  return request<VirtualTagPreviewResponse>("/library/tools/virtual-tags/preview", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function copyOrSwapTags(requestBody: TagFieldCopySwapRequest): Promise<TagFieldCopySwapResponse> {
+  return request<TagFieldCopySwapResponse>("/library/tools/copy-swap-tags", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function createTagBackup(requestBody: TagBackupRequest = {}): Promise<TagBackupResponse> {
+  return request<TagBackupResponse>("/library/tools/tag-backups", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function fetchTagBackups(limit = 30): Promise<TagBackupSummary[]> {
+  return request<TagBackupSummary[]>(`/library/tools/tag-backups?limit=${limit}`);
+}
+
+export function restoreTagBackup(requestBody: TagBackupRestoreRequest): Promise<TagBackupRestoreResponse> {
+  return request<TagBackupRestoreResponse>("/library/tools/tag-backups/restore", {
     method: "POST",
     body: JSON.stringify(requestBody),
   });

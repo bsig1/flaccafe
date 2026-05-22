@@ -49,6 +49,7 @@ import {
   DisclosureSection,
   NumberField,
 } from "../components/common";
+import { AdvancedTagToolsSection } from "./file-management/AdvancedTagToolsSection";
 import { CacheUndoLogSection } from "./file-management/CacheUndoLogSection";
 import { ReportViewerSection } from "./file-management/ReportViewerSection";
 import {
@@ -123,6 +124,8 @@ export function FileManagementPage({
   onRestoreUndoBatch,
   reportFile,
   onReadReportFile,
+  onAdvancedTagLibraryChanged,
+  setStatus,
 }: {
   folderPath: string;
   playlists: PlaylistSummary[];
@@ -209,6 +212,8 @@ export function FileManagementPage({
   onRestoreUndoBatch: (batchId: string) => void | Promise<void>;
   reportFile: ReportFileResponse | null;
   onReadReportFile: (reportPath: string) => void | Promise<void>;
+  onAdvancedTagLibraryChanged: () => void | Promise<void>;
+  setStatus: (message: string) => void;
 }) {
   const [trackScopeText, setTrackScopeText] = useState("");
   const [filenameTagPattern, setFilenameTagPattern] = useState(DEFAULT_FILENAME_TAG_PATTERNS[0]);
@@ -1567,6 +1572,12 @@ export function FileManagementPage({
               )}
             </div>
           </DisclosureSection>
+
+          <AdvancedTagToolsSection
+            scopedTrackIds={scopedTrackIds}
+            onLibraryChanged={onAdvancedTagLibraryChanged}
+            setStatus={setStatus}
+          />
 
           <DisclosureSection title="Duplicate Review" description="Keep the best copy, remove selected tracks, reveal files, or export a duplicate report">
             <div className="grid gap-4 text-sm text-neutral-200">

@@ -166,6 +166,33 @@ CREATE TABLE IF NOT EXISTS track_lyrics (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS track_custom_tags (
+  track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+  tag_key TEXT NOT NULL,
+  tag_value TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY(track_id, tag_key)
+);
+
+CREATE TABLE IF NOT EXISTS virtual_tag_definitions (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  expression TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS regex_tag_presets (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  field TEXT NOT NULL,
+  pattern TEXT NOT NULL,
+  replacement TEXT NOT NULL DEFAULT '',
+  case_sensitive INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS track_inbox_state (
   track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
   status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'reviewed')),
@@ -207,6 +234,9 @@ CREATE INDEX IF NOT EXISTS idx_scan_error_samples_created_at ON scan_error_sampl
 CREATE INDEX IF NOT EXISTS idx_recommendation_profiles_default ON recommendation_profiles(is_default);
 CREATE INDEX IF NOT EXISTS idx_recommendation_runs_created_at ON recommendation_runs(created_at);
 CREATE INDEX IF NOT EXISTS idx_track_lyrics_updated_at ON track_lyrics(updated_at);
+CREATE INDEX IF NOT EXISTS idx_track_custom_tags_key ON track_custom_tags(tag_key);
+CREATE INDEX IF NOT EXISTS idx_virtual_tag_definitions_name ON virtual_tag_definitions(name);
+CREATE INDEX IF NOT EXISTS idx_regex_tag_presets_name ON regex_tag_presets(name);
 CREATE INDEX IF NOT EXISTS idx_track_inbox_state_status ON track_inbox_state(status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_bulk_action_undo_log_batch ON bulk_action_undo_log(batch_id);
 """

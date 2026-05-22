@@ -182,6 +182,94 @@ def write_track_metadata(path: Path, metadata: dict[str, object]) -> None:
     audio.save()
 
 
+def _custom_text(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _custom_mp4_key(key: str) -> str:
+    return f"----:com.apple.iTunes:{key}"
+
+
+def _write_vorbis_custom_tags(audio: FLAC | OggVorbis | OggOpus, tags: dict[str, object | None]) -> None:
+    if audio.tags is None:
+        audio.add_tags()
+    if audio.tags is None:
+        raise ValueError("Could not create Vorbis-style tags")
+
+    for key, raw_value in tags.items():
+        value = _custom_text(raw_value)
+        matching_keys = [existing for existing in audio.tags.keys() if str(existing).lower() == key.lower()]
+        _remove_text_keys(audio.tags, matching_keys or [key])
+        if value is not None:
+            audio.tags[key] = [value]
+    audio.save()
+
+
+def _write_mp3_custom_tags(audio: MP3, tags: dict[str, object | None]) -> None:
+    try:
+        id3_tags = audio.tags
+        if id3_tags is None:
+            audio.add_tags()
+            id3_tags = audio.tags
+    except ID3NoHeaderError:
+        audio.add_tags()
+        id3_tags = audio.tags
+
+    if id3_tags is None:
+        raise ValueError("Could not create ID3 tags")
+
+    for key, raw_value in tags.items():
+        value = _custom_text(raw_value)
+        for frame in list(id3_tags.getall("TXXX")):
+            if str(frame.desc).lower() == key.lower():
+                id3_tags.delall(f"TXXX:{frame.desc}")
+        if value is not None:
+            id3_tags.add(TXXX(encoding=3, desc=key, text=[value]))
+    audio.save()
+
+
+def _write_mp4_custom_tags(audio: MP4, tags: dict[str, object | None]) -> None:
+    if audio.tags is None:
+        audio.add_tags()
+    if audio.tags is None:
+        raise ValueError("Could not create MP4 tags")
+
+    for key, raw_value in tags.items():
+        value = _custom_text(raw_value)
+        mp4_key = _custom_mp4_key(key)
+        matching_keys = [existing for existing in audio.tags.keys() if str(existing).lower() == mp4_key.lower()]
+        _remove_text_keys(audio.tags, matching_keys or [mp4_key])
+        if value is not None:
+            audio.tags[mp4_key] = [MP4FreeForm(value.encode("utf-8"))]
+    audio.save()
+
+
+def write_custom_tags(path: Path, tags: dict[str, object | None]) -> None:
+    if not path.exists() or not path.is_file():
+        raise ValueError("Audio file is missing on disk")
+    if not tags:
+        return
+
+    audio = MutagenFile(path)
+    if audio is None:
+        raise ValueError("Could not read audio tags")
+
+    if isinstance(audio, (FLAC, OggVorbis, OggOpus)):
+        _write_vorbis_custom_tags(audio, tags)
+        return
+    if isinstance(audio, MP3):
+        _write_mp3_custom_tags(audio, tags)
+        return
+    if isinstance(audio, MP4):
+        _write_mp4_custom_tags(audio, tags)
+        return
+
+    raise ValueError(f"Writing custom tags is not supported for {path.suffix or 'this file type'} yet")
+
+
 def _write_vorbis_lyrics(audio: FLAC | OggVorbis | OggOpus, lyrics: str, is_synced: bool) -> None:
     if audio.tags is None:
         audio.add_tags()

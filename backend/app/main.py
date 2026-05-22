@@ -32,7 +32,7 @@ from mutagen.mp4 import MP4Cover
 
 from .config import APP_STORAGE_ROOT, EXPORT_DIR, MODEL_DIR, database_path
 from .database import connect, get_setting, init_db, rows_to_dicts, set_setting
-from .file_tags import write_track_lyrics, write_track_metadata, write_track_rating
+from .file_tags import write_custom_tags, write_track_lyrics, write_track_metadata, write_track_rating
 from .library_tools import (
     changed_metadata,
     infer_metadata_from_filename,
@@ -112,6 +112,9 @@ from .schemas import (
     CsvMetadataImportReportResponse,
     CsvMetadataImportRequest,
     CsvMetadataImportResponse,
+    CustomTagBatchPreview,
+    CustomTagBatchRequest,
+    CustomTagBatchResponse,
     DuplicateGroup,
     DuplicateActionRequest,
     DuplicateActionResponse,
@@ -183,14 +186,30 @@ from .schemas import (
     SimilarTrack,
     StartupDiagnosticsResponse,
     SupportBundleResponse,
+    RegexTagPreset,
+    RegexTagPresetRequest,
     TagRegexReplacePreview,
     TagRegexReplaceRequest,
     TagRegexReplaceResponse,
+    TagBackupRequest,
+    TagBackupResponse,
+    TagBackupRestorePreview,
+    TagBackupRestoreRequest,
+    TagBackupRestoreResponse,
+    TagBackupSummary,
+    TagFieldCopySwapPreview,
+    TagFieldCopySwapRequest,
+    TagFieldCopySwapResponse,
     Track,
     TrackDeleteResponse,
     TrackRestoreRequest,
     TrackMetadataUpdateRequest,
     TrackPage,
+    VirtualTagDefinition,
+    VirtualTagDefinitionRequest,
+    VirtualTagPreview,
+    VirtualTagPreviewRequest,
+    VirtualTagPreviewResponse,
 )
 
 MEDIA_TYPES = {
@@ -224,6 +243,8 @@ EDITABLE_METADATA_FIELD_ORDER = (
 )
 EDITABLE_METADATA_FIELDS = set(EDITABLE_METADATA_FIELD_ORDER)
 CSV_IMPORT_FIELDS = (*EDITABLE_METADATA_FIELD_ORDER, "rating")
+TAG_TOOL_CORE_FIELDS = (*EDITABLE_METADATA_FIELD_ORDER, "rating")
+TAG_BACKUP_DIR = EXPORT_DIR / "tag-backups"
 METADATA_CSV_COLUMNS = [
     "id",
     "path",
@@ -3291,6 +3312,8 @@ def restore_removed_track(conn, payload: dict[str, object]) -> tuple[list[int], 
 def restore_bulk_undo_entry(conn, action_type: str, payload: dict[str, object]) -> tuple[list[int], list[str]]:
     if action_type in {"csv_metadata_import", "regex_metadata_replace", "musicbrainz_auto_tag"}:
         return restore_csv_metadata_import(conn, payload)
+    if action_type in {"advanced_tag_edit", "tag_backup_restore"}:
+        return restore_advanced_tag_edit(conn, payload)
     if action_type == "file_organization":
         return restore_file_organization(conn, payload)
     if action_type == "track_remove":
@@ -3315,6 +3338,776 @@ def clear_library_caches(request: CacheClearRequest) -> CacheClearResponse:
             cleared[target] = int(cursor.rowcount if cursor.rowcount is not None else 0)
         conn.commit()
     return CacheClearResponse(cleared=cleared)
+
+
+CUSTOM_TAG_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.\-#]{0,79}$")
+VIRTUAL_TOKEN_RE = re.compile(r"<([^<>]+)>|\{([^{}]+)\}")
+
+
+def clean_custom_tag_key(tag_key: str) -> str:
+    cleaned = tag_key.strip()
+    if not CUSTOM_TAG_KEY_RE.fullmatch(cleaned):
+        raise HTTPException(
+            status_code=400,
+            detail="Custom tag names can use letters, numbers, spaces, underscore, dash, dot, and #.",
+        )
+    return cleaned
+
+
+def tag_field_alias(field: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "_", field.strip().lower()).strip("_")
+    aliases = {
+        "albumartist": "album_artist",
+        "album_artist": "album_artist",
+        "track": "track_number",
+        "track_no": "track_number",
+        "track_number": "track_number",
+        "track_": "track_number",
+        "disc": "disc_number",
+        "disc_no": "disc_number",
+        "disc_number": "disc_number",
+        "date": "year",
+        "release_year": "year",
+        "stars": "rating",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def parse_tag_field_ref(field: str) -> tuple[str, str]:
+    text = field.strip()
+    if text.lower().startswith("custom:"):
+        return "custom", clean_custom_tag_key(text.split(":", 1)[1])
+    core = tag_field_alias(text)
+    if core in TAG_TOOL_CORE_FIELDS:
+        return "core", core
+    raise HTTPException(
+        status_code=400,
+        detail=f"Unsupported tag field '{field}'. Use a core field or custom:Name.",
+    )
+
+
+def tag_value_missing(value: object) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def coerce_tag_tool_value(field: str, value: object) -> object | None:
+    if value is None:
+        return None
+    if field in {"track_number", "disc_number", "year"}:
+        return csv_int(value, field)
+    if field == "rating":
+        return csv_rating(value)
+    text = str(value).strip()
+    return text or None
+
+
+def custom_tags_for_tracks(conn, track_ids: list[int]) -> dict[int, dict[str, str | None]]:
+    if not track_ids:
+        return {}
+    placeholders = ",".join("?" for _ in track_ids)
+    rows = conn.execute(
+        f"""
+        SELECT track_id, tag_key, tag_value
+        FROM track_custom_tags
+        WHERE track_id IN ({placeholders})
+        ORDER BY lower(tag_key)
+        """,
+        track_ids,
+    ).fetchall()
+    tags: dict[int, dict[str, str | None]] = {int(track_id): {} for track_id in track_ids}
+    for row in rows:
+        tags.setdefault(int(row["track_id"]), {})[row["tag_key"]] = row["tag_value"]
+    return tags
+
+
+def custom_tag_value(custom_tags: dict[str, str | None], tag_key: str) -> str | None:
+    for key, value in custom_tags.items():
+        if key.lower() == tag_key.lower():
+            return value
+    return None
+
+
+def tag_field_value(track: dict, custom_tags: dict[str, str | None], field_ref: str) -> object | None:
+    kind, name = parse_tag_field_ref(field_ref)
+    if kind == "custom":
+        return custom_tag_value(custom_tags, name)
+    return track.get(name)
+
+
+def apply_custom_tags_update(conn, track_id: int, updates: dict[str, object | None]) -> None:
+    cleaned_updates = {clean_custom_tag_key(key): value for key, value in updates.items()}
+    if not cleaned_updates:
+        return
+    row = conn.execute("SELECT id, path FROM tracks WHERE id = ?", (track_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Track not found")
+
+    file_modified_at = None
+    if get_write_ratings_to_files(conn):
+        try:
+            path = Path(row["path"])
+            write_custom_tags(path, cleaned_updates)
+            if path.exists():
+                file_modified_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).replace(microsecond=0).isoformat()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=f"Could not write custom tags to file: {exc}") from exc
+
+    for tag_key, value in cleaned_updates.items():
+        conn.execute(
+            """
+            DELETE FROM track_custom_tags
+            WHERE track_id = ? AND lower(tag_key) = lower(?)
+            """,
+            (track_id, tag_key),
+        )
+        text = None if value is None else str(value).strip()
+        if text:
+            conn.execute(
+                """
+                INSERT INTO track_custom_tags(track_id, tag_key, tag_value, updated_at)
+                VALUES(?, ?, ?, datetime('now'))
+                """,
+                (track_id, tag_key, text),
+            )
+    conn.execute(
+        """
+        UPDATE tracks
+        SET file_modified_at = coalesce(?, file_modified_at),
+            updated_at = datetime('now')
+        WHERE id = ?
+        """,
+        (file_modified_at, track_id),
+    )
+
+
+def apply_tag_field_updates(
+    conn,
+    track_id: int,
+    updates: dict[str, object | None],
+) -> None:
+    core_updates: dict[str, object | None] = {}
+    custom_updates: dict[str, object | None] = {}
+    rating_marker = object()
+    rating_value: object | None = rating_marker
+    for field_ref, value in updates.items():
+        kind, name = parse_tag_field_ref(field_ref)
+        if kind == "custom":
+            custom_updates[name] = None if tag_value_missing(value) else str(value).strip()
+        elif name == "rating":
+            rating_value = coerce_tag_tool_value(name, value)
+        else:
+            core_updates[name] = coerce_tag_tool_value(name, value)
+    if core_updates:
+        apply_track_metadata_update(conn, track_id, core_updates)
+    if rating_value is not rating_marker:
+        apply_track_rating_update(conn, track_id, rating_value)  # type: ignore[arg-type]
+    if custom_updates:
+        apply_custom_tags_update(conn, track_id, custom_updates)
+
+
+def advanced_tag_restore_payload(
+    track: dict,
+    custom_tags: dict[str, str | None],
+    changed_fields: list[str],
+    source: str,
+) -> dict[str, object]:
+    return {
+        "track": track,
+        "custom_tags": custom_tags,
+        "changed_fields": changed_fields,
+        "source": source,
+    }
+
+
+def restore_advanced_tag_edit(conn, payload: dict[str, object]) -> tuple[list[int], list[str]]:
+    track = payload.get("track")
+    if not isinstance(track, dict):
+        return [], ["Undo payload is missing track metadata"]
+    track_id = int(track.get("id") or 0)
+    if track_id <= 0:
+        return [], ["Undo payload is missing track id"]
+    if conn.execute("SELECT id FROM tracks WHERE id = ?", (track_id,)).fetchone() is None:
+        return [], [f"Track {track_id} is no longer in the library"]
+
+    changed_fields = payload.get("changed_fields")
+    if not isinstance(changed_fields, list):
+        changed_fields = list(TAG_TOOL_CORE_FIELDS)
+    core_restore: dict[str, object | None] = {}
+    custom_restore: dict[str, object | None] = {}
+    saved_custom_tags = payload.get("custom_tags")
+    custom_tags = saved_custom_tags if isinstance(saved_custom_tags, dict) else {}
+    rating_marker = object()
+    rating_value: object | None = rating_marker
+    errors: list[str] = []
+    for raw_field in changed_fields:
+        if not isinstance(raw_field, str):
+            continue
+        try:
+            kind, name = parse_tag_field_ref(raw_field)
+        except HTTPException as exc:
+            errors.append(str(exc.detail))
+            continue
+        if kind == "custom":
+            custom_restore[name] = custom_tag_value({str(key): None if value is None else str(value) for key, value in custom_tags.items()}, name)
+        elif name == "rating":
+            rating_value = track.get("rating")
+        else:
+            core_restore[name] = track.get(name)
+
+    if core_restore:
+        apply_track_metadata_update(conn, track_id, core_restore)
+    if rating_value is not rating_marker:
+        apply_track_rating_update(conn, track_id, rating_value)  # type: ignore[arg-type]
+    if custom_restore:
+        apply_custom_tags_update(conn, track_id, custom_restore)
+    return ([track_id] if not errors else []), errors
+
+
+def tool_track_rows_with_path_key(conn, track_ids: list[int] | None, limit: int) -> list[dict]:
+    if track_ids:
+        unique_ids = list(dict.fromkeys(track_ids))
+        placeholders = ",".join("?" for _ in unique_ids)
+        return rows_to_dicts(
+            conn.execute(
+                f"""
+                SELECT path_key, {TRACK_COLUMNS}
+                FROM tracks
+                WHERE id IN ({placeholders})
+                ORDER BY lower(coalesce(artist, '')), lower(coalesce(album, '')),
+                         coalesce(disc_number, 0), coalesce(track_number, 0),
+                         lower(coalesce(title, ''))
+                LIMIT ?
+                """,
+                [*unique_ids, limit],
+            )
+        )
+    return rows_to_dicts(
+        conn.execute(
+            f"""
+            SELECT path_key, {TRACK_COLUMNS}
+            FROM tracks
+            ORDER BY datetime(date_added) DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+    )
+
+
+@app.get("/library/tools/regex-presets", response_model=list[RegexTagPreset])
+def list_regex_tag_presets() -> list[RegexTagPreset]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, name, field, pattern, replacement, case_sensitive, created_at, updated_at
+            FROM regex_tag_presets
+            ORDER BY lower(name)
+            """
+        ).fetchall()
+    return [
+        RegexTagPreset(
+            id=int(row["id"]),
+            name=row["name"],
+            field=row["field"],
+            pattern=row["pattern"],
+            replacement=row["replacement"],
+            case_sensitive=bool(row["case_sensitive"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+        for row in rows
+    ]
+
+
+@app.post("/library/tools/regex-presets", response_model=RegexTagPreset)
+def save_regex_tag_preset(request: RegexTagPresetRequest) -> RegexTagPreset:
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO regex_tag_presets(name, field, pattern, replacement, case_sensitive, updated_at)
+            VALUES(?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(name) DO UPDATE SET
+              field = excluded.field,
+              pattern = excluded.pattern,
+              replacement = excluded.replacement,
+              case_sensitive = excluded.case_sensitive,
+              updated_at = datetime('now')
+            RETURNING id, name, field, pattern, replacement, case_sensitive, created_at, updated_at
+            """,
+            (request.name, request.field, request.pattern, request.replacement, 1 if request.case_sensitive else 0),
+        )
+        row = cursor.fetchone()
+        conn.commit()
+    if row is None:
+        raise HTTPException(status_code=400, detail="Could not save regex preset")
+    return RegexTagPreset(
+        id=int(row["id"]),
+        name=row["name"],
+        field=row["field"],
+        pattern=row["pattern"],
+        replacement=row["replacement"],
+        case_sensitive=bool(row["case_sensitive"]),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+@app.delete("/library/tools/regex-presets/{preset_id}")
+def delete_regex_tag_preset(preset_id: int) -> dict[str, bool]:
+    with connect() as conn:
+        cursor = conn.execute("DELETE FROM regex_tag_presets WHERE id = ?", (preset_id,))
+        conn.commit()
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Regex preset was not found")
+    return {"deleted": True}
+
+
+@app.post("/library/tools/custom-tags", response_model=CustomTagBatchResponse)
+def batch_custom_tags(request: CustomTagBatchRequest) -> CustomTagBatchResponse:
+    tag_key = clean_custom_tag_key(request.tag_key)
+    requested_value = None if request.action == "delete" or request.value is None else request.value.strip()
+    previews: list[CustomTagBatchPreview] = []
+    changed = 0
+    applied = 0
+    batch_id = new_undo_batch_id("custom-tags") if request.apply else None
+    with connect() as conn:
+        rows = tool_track_rows_with_path_key(conn, request.track_ids, request.limit)
+        custom_by_track = custom_tags_for_tracks(conn, [int(row["id"]) for row in rows])
+        for track in rows:
+            track_id = int(track["id"])
+            current = custom_tag_value(custom_by_track.get(track_id, {}), tag_key)
+            new_value = requested_value or None
+            changed_here = current != new_value
+            preview = CustomTagBatchPreview(
+                track_id=track_id,
+                path=track["path"],
+                tag_key=tag_key,
+                current=current,
+                value=new_value,
+                changed=changed_here,
+            )
+            if changed_here:
+                changed += 1
+            if request.apply and changed_here:
+                try:
+                    write_bulk_undo_log(
+                        conn,
+                        "advanced_tag_edit",
+                        f"Custom tag {request.action}: {tag_key}",
+                        advanced_tag_restore_payload(track, custom_by_track.get(track_id, {}), [f"custom:{tag_key}"], "custom_tags"),
+                        batch_id,
+                    )
+                    apply_custom_tags_update(conn, track_id, {tag_key: new_value})
+                    preview.applied = True
+                    applied += 1
+                except HTTPException as exc:
+                    preview.error = str(exc.detail)
+            previews.append(preview)
+        if request.apply:
+            conn.commit()
+    return CustomTagBatchResponse(total=len(previews), changed=changed, applied=applied, previews=previews)
+
+
+def virtual_tag_value(token: str, track: dict, custom_tags: dict[str, str | None]) -> str:
+    key = token.strip()
+    lowered = tag_field_alias(key)
+    if key.lower().startswith("custom:"):
+        return str(custom_tag_value(custom_tags, key.split(":", 1)[1].strip()) or "")
+    if lowered in EDITABLE_METADATA_FIELDS or lowered == "rating":
+        value = track.get(lowered)
+        return "" if value is None else str(value)
+    if lowered in {"album_artist_or_artist", "albumartistorartist"}:
+        return str(track.get("album_artist") or track.get("artist") or "")
+    if lowered == "filename":
+        return Path(track["path"]).stem
+    if lowered == "folder":
+        return Path(track["path"]).parent.name
+    if lowered == "extension":
+        return Path(track["path"]).suffix.lstrip(".").lower()
+    if lowered == "decade":
+        year = track.get("year")
+        try:
+            return f"{int(year) // 10 * 10}s" if year is not None else ""
+        except (TypeError, ValueError):
+            return ""
+    if lowered == "rating_bucket":
+        rating = track.get("rating")
+        if rating is None:
+            return "Unrated"
+        try:
+            stars = float(rating)
+        except (TypeError, ValueError):
+            return ""
+        if stars >= 4.5:
+            return "Favorite"
+        if stars >= 3.5:
+            return "Liked"
+        if stars >= 2.5:
+            return "Neutral"
+        return "Low priority"
+    raise ValueError(f"Unknown token: {token}")
+
+
+def render_virtual_tag_expression(expression: str, track: dict, custom_tags: dict[str, str | None]) -> str:
+    # Virtual tags are deliberately template-based for now: they are inspectable,
+    # reversible, and do not allow arbitrary code execution from saved formulas.
+    def replace(match: re.Match[str]) -> str:
+        token = match.group(1) or match.group(2) or ""
+        return virtual_tag_value(token, track, custom_tags)
+
+    return VIRTUAL_TOKEN_RE.sub(replace, expression)
+
+
+@app.get("/library/tools/virtual-tags", response_model=list[VirtualTagDefinition])
+def list_virtual_tag_definitions() -> list[VirtualTagDefinition]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, name, expression, created_at, updated_at
+            FROM virtual_tag_definitions
+            ORDER BY lower(name)
+            """
+        ).fetchall()
+    return [VirtualTagDefinition(**dict(row)) for row in rows]
+
+
+@app.post("/library/tools/virtual-tags", response_model=VirtualTagDefinition)
+def save_virtual_tag_definition(request: VirtualTagDefinitionRequest) -> VirtualTagDefinition:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            INSERT INTO virtual_tag_definitions(name, expression, updated_at)
+            VALUES(?, ?, datetime('now'))
+            ON CONFLICT(name) DO UPDATE SET
+              expression = excluded.expression,
+              updated_at = datetime('now')
+            RETURNING id, name, expression, created_at, updated_at
+            """,
+            (request.name, request.expression),
+        ).fetchone()
+        conn.commit()
+    if row is None:
+        raise HTTPException(status_code=400, detail="Could not save virtual tag")
+    return VirtualTagDefinition(**dict(row))
+
+
+@app.delete("/library/tools/virtual-tags/{definition_id}")
+def delete_virtual_tag_definition(definition_id: int) -> dict[str, bool]:
+    with connect() as conn:
+        cursor = conn.execute("DELETE FROM virtual_tag_definitions WHERE id = ?", (definition_id,))
+        conn.commit()
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Virtual tag was not found")
+    return {"deleted": True}
+
+
+@app.post("/library/tools/virtual-tags/preview", response_model=VirtualTagPreviewResponse)
+def preview_virtual_tag(request: VirtualTagPreviewRequest) -> VirtualTagPreviewResponse:
+    previews: list[VirtualTagPreview] = []
+    with connect() as conn:
+        rows = tool_track_rows_with_path_key(conn, request.track_ids, request.limit)
+        custom_by_track = custom_tags_for_tracks(conn, [int(row["id"]) for row in rows])
+        for track in rows:
+            try:
+                value = render_virtual_tag_expression(request.expression, track, custom_by_track.get(int(track["id"]), {}))
+                previews.append(VirtualTagPreview(track_id=int(track["id"]), path=track["path"], title=track.get("title"), value=value))
+            except ValueError as exc:
+                previews.append(
+                    VirtualTagPreview(
+                        track_id=int(track["id"]),
+                        path=track["path"],
+                        title=track.get("title"),
+                        error=str(exc),
+                    )
+                )
+    return VirtualTagPreviewResponse(expression=request.expression, total=len(previews), previews=previews)
+
+
+@app.post("/library/tools/copy-swap-tags", response_model=TagFieldCopySwapResponse)
+def copy_or_swap_tag_fields(request: TagFieldCopySwapRequest) -> TagFieldCopySwapResponse:
+    parse_tag_field_ref(request.source_field)
+    parse_tag_field_ref(request.target_field)
+    if request.source_field.strip().lower() == request.target_field.strip().lower():
+        raise HTTPException(status_code=400, detail="Choose two different fields")
+
+    previews: list[TagFieldCopySwapPreview] = []
+    changed = 0
+    applied = 0
+    batch_id = new_undo_batch_id("copy-swap-tags") if request.apply else None
+    with connect() as conn:
+        rows = tool_track_rows_with_path_key(conn, request.track_ids, request.limit)
+        custom_by_track = custom_tags_for_tracks(conn, [int(row["id"]) for row in rows])
+        for track in rows:
+            track_id = int(track["id"])
+            custom_tags = custom_by_track.get(track_id, {})
+            source_value = tag_field_value(track, custom_tags, request.source_field)
+            target_value = tag_field_value(track, custom_tags, request.target_field)
+            new_source = target_value if request.action == "swap" else source_value
+            new_target = source_value
+            if request.action == "copy" and request.missing_only and not tag_value_missing(target_value):
+                new_target = target_value
+            changed_here = new_source != source_value or new_target != target_value
+            preview = TagFieldCopySwapPreview(
+                track_id=track_id,
+                path=track["path"],
+                source_field=request.source_field,
+                target_field=request.target_field,
+                current_source=source_value,
+                current_target=target_value,
+                new_source=new_source,
+                new_target=new_target,
+                changed=changed_here,
+            )
+            if changed_here:
+                changed += 1
+            if request.apply and changed_here:
+                try:
+                    changed_fields = [request.target_field]
+                    updates = {request.target_field: new_target}
+                    if request.action == "swap":
+                        changed_fields.append(request.source_field)
+                        updates[request.source_field] = new_source
+                    write_bulk_undo_log(
+                        conn,
+                        "advanced_tag_edit",
+                        f"{request.action.title()} {request.source_field} and {request.target_field}",
+                        advanced_tag_restore_payload(track, custom_tags, changed_fields, "copy_swap_tags"),
+                        batch_id,
+                    )
+                    apply_tag_field_updates(conn, track_id, updates)
+                    preview.applied = True
+                    applied += 1
+                except HTTPException as exc:
+                    preview.error = str(exc.detail)
+            previews.append(preview)
+        if request.apply:
+            conn.commit()
+    return TagFieldCopySwapResponse(total=len(previews), changed=changed, applied=applied, previews=previews)
+
+
+def resolve_tag_backup_path(backup_path: str | None, default_name: str | None = None) -> Path:
+    text = backup_path.strip() if backup_path else ""
+    if text:
+        target = Path(text).expanduser()
+        if not target.is_absolute():
+            target = (TAG_BACKUP_DIR / target).resolve()
+    elif default_name:
+        target = TAG_BACKUP_DIR / default_name
+    else:
+        raise HTTPException(status_code=400, detail="Tag backup path is required")
+    if target.suffix.lower() != ".json":
+        target = target.with_suffix(".json")
+    return target
+
+
+def tag_backup_payload(conn, request: TagBackupRequest, created_at: str) -> tuple[dict[str, object], int]:
+    tracks = tool_track_rows_with_path_key(conn, request.track_ids, request.limit)
+    custom_by_track = custom_tags_for_tracks(conn, [int(track["id"]) for track in tracks]) if request.include_custom_tags else {}
+    entries = []
+    custom_count = 0
+    for track in tracks:
+        tags = custom_by_track.get(int(track["id"]), {})
+        custom_count += len(tags)
+        entries.append(
+            {
+                "track": {field: track.get(field) for field in ["path_key", *TRACK_FIELD_NAMES]},
+                "metadata": {field: track.get(field) for field in TAG_TOOL_CORE_FIELDS},
+                "custom_tags": tags,
+            }
+        )
+    return (
+        {
+            "format": "flac-cafe-tag-backup-v1",
+            "created_at": created_at,
+            "track_count": len(entries),
+            "include_custom_tags": request.include_custom_tags,
+            "tracks": entries,
+        },
+        custom_count,
+    )
+
+
+@app.post("/library/tools/tag-backups", response_model=TagBackupResponse)
+def create_tag_backup(request: TagBackupRequest) -> TagBackupResponse:
+    created_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    target = resolve_tag_backup_path(request.backup_path, f"flac-cafe-tags-{stamp}.json")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with connect() as conn:
+        payload, custom_count = tag_backup_payload(conn, request, created_at)
+    try:
+        target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Could not write tag backup: {exc}") from exc
+    return TagBackupResponse(
+        backup_path=str(target),
+        track_count=int(payload["track_count"]),
+        custom_tag_count=custom_count,
+        created_at=created_at,
+    )
+
+
+@app.get("/library/tools/tag-backups", response_model=list[TagBackupSummary])
+def list_tag_backups(limit: int = Query(default=30, ge=1, le=200)) -> list[TagBackupSummary]:
+    if not TAG_BACKUP_DIR.exists():
+        return []
+    summaries: list[TagBackupSummary] = []
+    for path in sorted(TAG_BACKUP_DIR.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True)[:limit]:
+        created_at = None
+        track_count = 0
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            created_at = payload.get("created_at") if isinstance(payload, dict) else None
+            if isinstance(payload, dict):
+                track_count = int(payload.get("track_count") or 0)
+        except (OSError, json.JSONDecodeError, ValueError):
+            pass
+        try:
+            size_bytes = path.stat().st_size
+        except OSError:
+            size_bytes = 0
+        summaries.append(
+            TagBackupSummary(
+                backup_path=str(path),
+                file_name=path.name,
+                track_count=track_count,
+                created_at=created_at,
+                size_bytes=size_bytes,
+            )
+        )
+    return summaries
+
+
+def load_tag_backup(path: Path) -> dict[str, object]:
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=400, detail="Tag backup file does not exist")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail=f"Could not read tag backup: {exc}") from exc
+    if not isinstance(payload, dict) or payload.get("format") != "flac-cafe-tag-backup-v1":
+        raise HTTPException(status_code=400, detail="Unsupported tag backup format")
+    return payload
+
+
+def backup_entry_track(conn, entry: dict[str, object], allowed_ids: set[int] | None) -> dict | None:
+    track = entry.get("track")
+    if not isinstance(track, dict):
+        return None
+    track_id = track.get("id")
+    path_key_value = track.get("path_key")
+    path_text = track.get("path")
+    select_columns = f"path_key, {TRACK_COLUMNS}"
+    if isinstance(track_id, int) and (allowed_ids is None or track_id in allowed_ids):
+        row = conn.execute(f"SELECT {select_columns} FROM tracks WHERE id = ?", (track_id,)).fetchone()
+        if row is not None:
+            return dict(row)
+    if isinstance(path_key_value, str):
+        row = conn.execute(f"SELECT {select_columns} FROM tracks WHERE path_key = ?", (path_key_value,)).fetchone()
+        if row is not None and (allowed_ids is None or int(row["id"]) in allowed_ids):
+            return dict(row)
+    if isinstance(path_text, str):
+        try:
+            key = path_key(Path(path_text))
+        except OSError:
+            key = None
+        if key:
+            row = conn.execute(f"SELECT {select_columns} FROM tracks WHERE path_key = ?", (key,)).fetchone()
+            if row is not None and (allowed_ids is None or int(row["id"]) in allowed_ids):
+                return dict(row)
+    return None
+
+
+@app.post("/library/tools/tag-backups/restore", response_model=TagBackupRestoreResponse)
+def restore_tag_backup(request: TagBackupRestoreRequest) -> TagBackupRestoreResponse:
+    source = resolve_tag_backup_path(request.backup_path)
+    payload = load_tag_backup(source)
+    entries = payload.get("tracks")
+    if not isinstance(entries, list):
+        raise HTTPException(status_code=400, detail="Tag backup has no tracks")
+    entries = entries[: request.limit]
+    allowed_ids = set(request.track_ids) if request.track_ids else None
+    previews: list[TagBackupRestorePreview] = []
+    errors: list[str] = []
+    matched = 0
+    changed = 0
+    applied = 0
+    batch_id = new_undo_batch_id("tag-backup-restore") if request.apply else None
+    with connect() as conn:
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            preview = TagBackupRestorePreview()
+            try:
+                track = backup_entry_track(conn, entry, allowed_ids)
+                if track is None:
+                    preview.error = "No library track matched this backup entry"
+                    errors.append(preview.error)
+                    previews.append(preview)
+                    continue
+                track_id = int(track["id"])
+                preview.track_id = track_id
+                preview.path = track["path"]
+                preview.matched = True
+                matched += 1
+                current_custom = custom_tags_for_tracks(conn, [track_id]).get(track_id, {})
+                current_values = {field: track.get(field) for field in TAG_TOOL_CORE_FIELDS}
+                if request.restore_custom_tags:
+                    current_values.update({f"custom:{key}": value for key, value in current_custom.items()})
+                preview.current = current_values
+
+                restored_values: dict[str, object | None] = {}
+                metadata = entry.get("metadata")
+                if isinstance(metadata, dict):
+                    for field in TAG_TOOL_CORE_FIELDS:
+                        if field in metadata:
+                            restored_values[field] = metadata.get(field)
+                custom_tags = entry.get("custom_tags")
+                if request.restore_custom_tags and isinstance(custom_tags, dict):
+                    for key, value in custom_tags.items():
+                        restored_values[f"custom:{clean_custom_tag_key(str(key))}"] = None if value is None else str(value)
+                preview.restored = restored_values
+
+                changes: dict[str, object | None] = {}
+                for field, value in restored_values.items():
+                    current = tag_field_value(track, current_custom, field)
+                    if request.missing_only and not tag_value_missing(current):
+                        continue
+                    if not csv_values_equal(current, value):
+                        changes[field] = value
+                preview.changed_fields = sorted(changes.keys())
+                if changes:
+                    changed += 1
+
+                if request.apply and changes:
+                    write_bulk_undo_log(
+                        conn,
+                        "tag_backup_restore",
+                        f"Restored tag backup for {track.get('title') or Path(track['path']).name}",
+                        advanced_tag_restore_payload(track, current_custom, list(changes.keys()), "tag_backup_restore"),
+                        batch_id,
+                    )
+                    apply_tag_field_updates(conn, track_id, changes)
+                    preview.applied = True
+                    applied += 1
+            except (HTTPException, ValueError) as exc:
+                message = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
+                preview.error = message
+                errors.append(message)
+            previews.append(preview)
+        if request.apply:
+            conn.commit()
+    return TagBackupRestoreResponse(
+        backup_path=str(source),
+        total=len(entries),
+        matched=matched,
+        changed=changed,
+        applied=applied,
+        errors=errors[:100],
+        previews=previews,
+    )
 
 
 @app.post("/library/tools/infer-tags", response_model=FilenameTagInferenceResponse)
@@ -4066,7 +4859,10 @@ def list_bulk_undo_batches(limit: int = Query(default=30, ge=1, le=200)) -> list
                    min(summary) AS summary
             FROM bulk_action_undo_log
             WHERE batch_id IS NOT NULL AND trim(batch_id) <> ''
-              AND action_type IN ('csv_metadata_import', 'regex_metadata_replace', 'musicbrainz_auto_tag', 'file_organization', 'track_remove')
+              AND action_type IN (
+                'csv_metadata_import', 'regex_metadata_replace', 'musicbrainz_auto_tag',
+                'file_organization', 'track_remove', 'advanced_tag_edit', 'tag_backup_restore'
+              )
             GROUP BY batch_id, action_type
             ORDER BY datetime(max(created_at)) DESC, max(id) DESC
             LIMIT ?
