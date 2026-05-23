@@ -29,6 +29,7 @@ import {
   nativeCrossfadeToFile,
   nativePause,
   nativePlayFile,
+  nativePrepareNextFile,
   nativeResume,
   nativeSeek,
   nativeSetDsp,
@@ -1100,6 +1101,15 @@ export function PlayerBar({
       window.clearInterval(timer);
     };
   }, [useNativePlayback, currentTrack?.id, playbackMode, currentIndex, queue, fadeMs, preloadedNextTrack?.id, outputVolume]);
+
+  useEffect(() => {
+    if (!useNativePlayback || !preloadedNextTrack || playbackMode === "stopAfterCurrent") {
+      return;
+    }
+    void nativePrepareNextFile(preloadedNextTrack.path).catch(() => {
+      // Preparation failures are recorded by the native diagnostics panel.
+    });
+  }, [useNativePlayback, preloadedNextTrack?.id, preloadedNextTrack?.path, playbackMode]);
 
   const artworkSrc = currentTrack && !artworkFailed ? albumArtworkUrl(currentTrack.id) : null;
 

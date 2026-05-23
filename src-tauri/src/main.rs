@@ -325,6 +325,8 @@ fn main() {
             native_playback::native_status,
             native_playback::native_diagnostics,
             native_playback::native_clear_diagnostics,
+            native_playback::native_prepare_next_file,
+            native_playback::native_output_backends,
             native_playback::native_list_output_devices,
             smtc::smtc_update_state,
             smtc::smtc_clear

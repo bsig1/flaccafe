@@ -33,6 +33,7 @@ from mutagen.mp4 import MP4Cover
 from .config import APP_STORAGE_ROOT, EXPORT_DIR, MODEL_DIR, database_path
 from .database import connect, get_setting, init_db, rows_to_dicts, set_setting
 from .file_tags import write_custom_tags, write_track_artwork, write_track_lyrics, write_track_metadata, write_track_rating
+from .gapless import gapless_validate
 from . import inbox as inbox_service
 from .library_tools import (
     changed_metadata,
@@ -231,6 +232,8 @@ from .schemas import (
     FilenameTagInferencePreview,
     FilenameTagInferenceRequest,
     FilenameTagInferenceResponse,
+    GaplessValidationRequest,
+    GaplessValidationResponse,
     LogTailResponse,
     ClapConfigRequest,
     ClapStatusResponse,
@@ -3197,6 +3200,13 @@ def import_scrobbling_history(request: ScrobbleHistoryImportRequest) -> Scrobble
         return ScrobbleHistoryImportResponse(**import_scrobble_history_csv(request.csv_path, request.apply, request.limit))
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/playback/gapless/validate", response_model=GaplessValidationResponse)
+def validate_gapless_playback(request: GaplessValidationRequest) -> GaplessValidationResponse:
+    if not request.track_ids and request.album_id is None:
+        raise HTTPException(status_code=400, detail="Provide track_ids or album_id")
+    return GaplessValidationResponse(**gapless_validate(request.track_ids, request.album_id, request.limit))
 
 
 @app.get("/library/health", response_model=LibraryHealthResponse)

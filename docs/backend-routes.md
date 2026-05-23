@@ -133,6 +133,7 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `GET /scrobbling/loved` lists locally loved tracks.
 - `PATCH /scrobbling/tracks/{track_id}/love` toggles local loved-track state and queues Last.fm love sync.
 - `POST /scrobbling/import-history` previews or applies a CSV import of historical play counts, ratings, and loved tracks.
+- `POST /playback/gapless/validate` inspects adjacent tracks for codec/output metadata compatibility before gapless playback claims.
 
 ## Albums, Playlists, And Smart Playlists
 

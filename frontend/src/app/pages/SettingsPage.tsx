@@ -25,9 +25,11 @@ import {
   nativeClearDiagnostics,
   nativeDiagnostics,
   nativeListOutputDevices,
+  nativeOutputBackends,
 } from "../../lib/nativePlayback";
 import type {
   NativeAudioDevice,
+  NativeOutputBackend,
   NativePlaybackDiagnosticsResponse,
 } from "../../lib/nativePlayback";
 import type {
@@ -160,6 +162,7 @@ export function SettingsPage({
 }) {
   const [codecSupport, setCodecSupport] = useState(detectCodecSupport);
   const [nativeDevices, setNativeDevices] = useState<NativeAudioDevice[]>([]);
+  const [nativeBackends, setNativeBackends] = useState<NativeOutputBackend[]>([]);
   const [nativeDeviceMessage, setNativeDeviceMessage] = useState<string | null>(null);
   const [nativePlaybackDiagnostics, setNativePlaybackDiagnostics] = useState<NativePlaybackDiagnosticsResponse | null>(null);
   const [nativeDiagnosticsMessage, setNativeDiagnosticsMessage] = useState<string | null>(null);
@@ -176,8 +179,25 @@ export function SettingsPage({
 
   useEffect(() => {
     void refreshNativeDevices();
+    void refreshNativeBackends();
     void refreshNativePlaybackDiagnostics();
   }, []);
+
+  async function refreshNativeBackends() {
+    try {
+      setNativeBackends(await nativeOutputBackends());
+    } catch {
+      setNativeBackends([
+        {
+          id: "cpalShared",
+          label: "CPAL / WASAPI shared",
+          available: false,
+          exclusive: false,
+          message: "Native backend information is only available in the desktop app.",
+        },
+      ]);
+    }
+  }
 
   async function refreshNativeDevices() {
     try {
@@ -612,14 +632,15 @@ export function SettingsPage({
           <PlayerSettingsSection
             uiPreferences={uiPreferences}
             setUiPreferences={setUiPreferences}
+            nativeBackends={nativeBackends}
             nativeDevices={nativeDevices}
-              nativeDeviceMessage={nativeDeviceMessage}
-              onRefreshNativeDevices={refreshNativeDevices}
-              nativeDiagnostics={nativePlaybackDiagnostics}
-              nativeDiagnosticsMessage={nativeDiagnosticsMessage}
-              onRefreshNativeDiagnostics={refreshNativePlaybackDiagnostics}
-              onClearNativeDiagnostics={clearNativePlaybackDiagnostics}
-              codecSupport={codecSupport}
+            nativeDeviceMessage={nativeDeviceMessage}
+            onRefreshNativeDevices={refreshNativeDevices}
+            nativeDiagnostics={nativePlaybackDiagnostics}
+            nativeDiagnosticsMessage={nativeDiagnosticsMessage}
+            onRefreshNativeDiagnostics={refreshNativePlaybackDiagnostics}
+            onClearNativeDiagnostics={clearNativePlaybackDiagnostics}
+            codecSupport={codecSupport}
             onRefreshCodecSupport={() => setCodecSupport(detectCodecSupport())}
           />
 

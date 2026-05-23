@@ -1264,6 +1264,28 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(row["play_count"], 7)
         self.assertEqual(row["rating"], 4.5)
 
+    def test_gapless_validation_reports_adjacent_pairs(self) -> None:
+        album_dir = self.root / "Album"
+        album_dir.mkdir()
+        first = album_dir / "01.flac"
+        second = album_dir / "02.flac"
+        first.write_bytes(b"not real audio")
+        second.write_bytes(b"not real audio")
+        first_id = insert_track(first, title="One", artist="Artist", album="Album", track_number=1)
+        second_id = insert_track(second, title="Two", artist="Artist", album="Album", track_number=2)
+
+        response = self.client.post(
+            "/playback/gapless/validate",
+            json={"track_ids": [first_id, second_id]},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["pair_count"], 1)
+        self.assertEqual(body["pairs"][0]["left_track_id"], first_id)
+        self.assertFalse(body["pairs"][0]["sample_accurate_ready"])
+        self.assertTrue(body["pairs"][0]["warnings"])
+
     def test_duplicate_actions_can_remove_selected_and_export_reports(self) -> None:
         first = self.root / "dup-action-a.mp3"
         second = self.root / "dup-action-b.mp3"

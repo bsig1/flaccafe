@@ -36,6 +36,9 @@ struct NativePlaybackInner {
     sample_rate: Option<u32>,
     channel_count: Option<u16>,
     sample_format: Option<String>,
+    prepared_next_path: Option<String>,
+    prepared_next_duration_seconds: Option<f64>,
+    prepared_next_at_ms: Option<u64>,
     stream_errors: Arc<Mutex<Vec<String>>>,
     diagnostics: Arc<Mutex<Vec<NativePlaybackDiagnostic>>>,
     dsp_settings: Arc<Mutex<NativeDspSettings>>,
@@ -56,6 +59,9 @@ impl Default for NativePlaybackInner {
             sample_rate: None,
             channel_count: None,
             sample_format: None,
+            prepared_next_path: None,
+            prepared_next_duration_seconds: None,
+            prepared_next_at_ms: None,
             stream_errors: Arc::new(Mutex::new(Vec::new())),
             diagnostics: Arc::new(Mutex::new(Vec::new())),
             dsp_settings: Arc::new(Mutex::new(NativeDspSettings::default())),
@@ -225,6 +231,9 @@ pub struct NativePlaybackDiagnosticsResponse {
     entries: Vec<NativePlaybackDiagnostic>,
     stream_errors: Vec<String>,
     current_path: Option<String>,
+    prepared_next_path: Option<String>,
+    prepared_next_duration_seconds: Option<f64>,
+    prepared_next_at_ms: Option<u64>,
     device_id: Option<String>,
     device_name: Option<String>,
     buffer_frames: Option<u32>,
@@ -242,6 +251,23 @@ pub struct NativeAudioDevice {
     default_channels: Option<u16>,
     default_sample_format: Option<String>,
     supported_configs: usize,
+}
+
+#[derive(Serialize)]
+pub struct NativePreparedTrack {
+    path: String,
+    duration_seconds: Option<f64>,
+    prepared_at_ms: u64,
+    message: String,
+}
+
+#[derive(Serialize)]
+pub struct NativeOutputBackend {
+    id: String,
+    label: String,
+    available: bool,
+    exclusive: bool,
+    message: String,
 }
 
 impl NativePlaybackInner {
@@ -333,6 +359,9 @@ impl NativePlaybackInner {
                 .map(|errors| errors.clone())
                 .unwrap_or_default(),
             current_path: self.current_path.clone(),
+            prepared_next_path: self.prepared_next_path.clone(),
+            prepared_next_duration_seconds: self.prepared_next_duration_seconds,
+            prepared_next_at_ms: self.prepared_next_at_ms,
             device_id: self.device_id.clone(),
             device_name: self.device_name.clone(),
             buffer_frames: self.buffer_frames,
@@ -1277,6 +1306,71 @@ pub fn native_clear_diagnostics(
         errors.clear();
     }
     Ok(inner.diagnostics_response())
+}
+
+#[tauri::command]
+pub fn native_prepare_next_file(
+    state: State<'_, NativePlaybackState>,
+    path: String,
+) -> Result<NativePreparedTrack, String> {
+    let path_buf = PathBuf::from(&path);
+    let mut inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Native playback lock poisoned".to_string())?;
+    if !path_buf.exists() || !path_buf.is_file() {
+        let message = "Next audio file does not exist".to_string();
+        remember_diagnostic(
+            &inner.diagnostics,
+            "warning",
+            "file",
+            "prepare_next_file",
+            message.clone(),
+            NativeDiagnosticContext {
+                path: Some(path.clone()),
+                ..NativeDiagnosticContext::default()
+            },
+        );
+        return Err(message);
+    }
+    let (_decoder, duration_seconds) = build_decoder(&path_buf, &inner.diagnostics)?;
+    let prepared_at_ms = now_millis();
+    inner.prepared_next_path = Some(path.clone());
+    inner.prepared_next_duration_seconds = duration_seconds;
+    inner.prepared_next_at_ms = Some(prepared_at_ms);
+    Ok(NativePreparedTrack {
+        path,
+        duration_seconds,
+        prepared_at_ms,
+        message: "Next native track decoded successfully.".to_string(),
+    })
+}
+
+#[tauri::command]
+pub fn native_output_backends() -> Result<Vec<NativeOutputBackend>, String> {
+    Ok(vec![
+        NativeOutputBackend {
+            id: "cpalShared".to_string(),
+            label: "CPAL / WASAPI shared".to_string(),
+            available: true,
+            exclusive: false,
+            message: "Current native backend; supports output-device selection and buffer tuning.".to_string(),
+        },
+        NativeOutputBackend {
+            id: "wasapiExclusive".to_string(),
+            label: "WASAPI exclusive".to_string(),
+            available: false,
+            exclusive: true,
+            message: "Requires a dedicated Windows WASAPI engine outside the current rodio/cpal shared-mode bridge.".to_string(),
+        },
+        NativeOutputBackend {
+            id: "asio".to_string(),
+            label: "ASIO".to_string(),
+            available: false,
+            exclusive: true,
+            message: "Requires an ASIO-specific backend and driver setup; the current app reports this as a future backend.".to_string(),
+        },
+    ])
 }
 
 #[tauri::command]

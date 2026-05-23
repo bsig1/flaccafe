@@ -38,6 +38,7 @@ backend/
 │   ├── library_watcher.py   background folder-watch detection and pending-change apply logic
 │   ├── musicbrainz_autotag.py MusicBrainz/Cover Art Archive auto-tag matching
 │   ├── recommender.py       AutoDJ scoring, cooldowns, drift, and similarity helpers
+│   ├── gapless.py           adjacent-track metadata checks for native gapless validation
 │   ├── playlist.py          M3U export/import helpers
 │   ├── podcasts.py          optional RSS subscription and episode download helpers
 │   ├── radio.py             web radio bookmark storage and last-played tracking

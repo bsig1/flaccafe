@@ -37,6 +37,9 @@ export interface NativePlaybackDiagnosticsResponse {
   entries: NativePlaybackDiagnostic[];
   stream_errors: string[];
   current_path: string | null;
+  prepared_next_path: string | null;
+  prepared_next_duration_seconds: number | null;
+  prepared_next_at_ms: number | null;
   device_id: string | null;
   device_name: string | null;
   buffer_frames: number | null;
@@ -61,6 +64,21 @@ export interface NativeDspSettings {
   equalizerPreampDb: number;
   equalizerGains: number[];
   limiterEnabled: boolean;
+}
+
+export interface NativePreparedTrack {
+  path: string;
+  duration_seconds: number | null;
+  prepared_at_ms: number;
+  message: string;
+}
+
+export interface NativeOutputBackend {
+  id: "cpalShared" | "wasapiExclusive" | "asio" | string;
+  label: string;
+  available: boolean;
+  exclusive: boolean;
+  message: string;
 }
 
 async function invokeNative<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -155,6 +173,14 @@ export function nativeDiagnostics(): Promise<NativePlaybackDiagnosticsResponse> 
 
 export function nativeClearDiagnostics(): Promise<NativePlaybackDiagnosticsResponse> {
   return invokeNative<NativePlaybackDiagnosticsResponse>("native_clear_diagnostics");
+}
+
+export function nativePrepareNextFile(path: string): Promise<NativePreparedTrack> {
+  return invokeNative<NativePreparedTrack>("native_prepare_next_file", { path });
+}
+
+export function nativeOutputBackends(): Promise<NativeOutputBackend[]> {
+  return invokeNative<NativeOutputBackend[]>("native_output_backends");
 }
 
 export function nativeListOutputDevices(): Promise<NativeAudioDevice[]> {

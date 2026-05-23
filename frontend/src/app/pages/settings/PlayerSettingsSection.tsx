@@ -6,6 +6,7 @@ import {
 
 import type {
   NativeAudioDevice,
+  NativeOutputBackend,
   NativePlaybackDiagnostic,
   NativePlaybackDiagnosticsResponse,
 } from "../../../lib/nativePlayback";
@@ -90,6 +91,7 @@ export function PlayerSettingsSection({
   uiPreferences,
   setUiPreferences,
   nativeDevices,
+  nativeBackends,
   nativeDeviceMessage,
   onRefreshNativeDevices,
   nativeDiagnostics,
@@ -102,6 +104,7 @@ export function PlayerSettingsSection({
   uiPreferences: UiPreferences;
   setUiPreferences: (updater: (current: UiPreferences) => UiPreferences) => void;
   nativeDevices: NativeAudioDevice[];
+  nativeBackends: NativeOutputBackend[];
   nativeDeviceMessage: string | null;
   onRefreshNativeDevices: () => void | Promise<void>;
   nativeDiagnostics: NativePlaybackDiagnosticsResponse | null;
@@ -189,6 +192,29 @@ export function PlayerSettingsSection({
             </button>
           </div>
           <label className="grid gap-2">
+            <span className="text-xs uppercase text-muted">Native Backend</span>
+            <select
+              className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
+              value={uiPreferences.nativeOutputBackend}
+              onChange={(event) =>
+                setUiPreferences((current) => ({
+                  ...current,
+                  nativeOutputBackend: event.target.value as UiPreferences["nativeOutputBackend"],
+                }))
+              }
+            >
+              {nativeBackends.map((backend) => (
+                <option key={backend.id} value={backend.id} disabled={!backend.available}>
+                  {backend.label}{backend.exclusive ? " (exclusive)" : ""}
+                </option>
+              ))}
+            </select>
+            <span className="text-xs text-muted">
+              {nativeBackends.find((backend) => backend.id === uiPreferences.nativeOutputBackend)?.message
+                ?? "Backend capability information is loaded from the desktop shell."}
+            </span>
+          </label>
+          <label className="grid gap-2">
             <span className="text-xs uppercase text-muted">Output Device</span>
             <select
               className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
@@ -223,7 +249,7 @@ export function PlayerSettingsSection({
           </label>
           {nativeDeviceMessage && <div className="text-xs text-muted">{nativeDeviceMessage}</div>}
           <div className="rounded border border-line/70 bg-panel px-3 py-2 text-xs text-muted">
-            WASAPI shared output is handled by cpal on Windows. Exclusive mode needs a dedicated WASAPI backend, so it stays out of the current rodio bridge.
+            The selector reports exclusive backends separately from the current shared-mode engine so future WASAPI/ASIO work can be enabled without changing the settings model.
           </div>
         </div>
         <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">

@@ -22,6 +22,7 @@ export type LibraryView = "tracks" | "albums" | "playlists" | "inbox" | "smart" 
 export type BackendStatus = "unknown" | "ok" | "down" | "restarting";
 export type PlaybackMode = "normal" | "repeatOne" | "repeatQueue" | "stopAfterCurrent";
 export type PlaybackEngine = "webview" | "native";
+export type NativeOutputBackendMode = "cpalShared" | "wasapiExclusive" | "asio";
 export type SortDirection = "asc" | "desc";
 export type UiDensity = "comfortable" | "compact";
 export type FontScale = "small" | "default" | "large";
@@ -205,6 +206,7 @@ export interface UiPreferences {
   playerFadeMs: number;
   skipThresholdPercent: number;
   playbackEngine: PlaybackEngine;
+  nativeOutputBackend: NativeOutputBackendMode;
   nativeOutputDeviceId: string;
   nativeBufferFrames: number;
   startupPage: Page;
@@ -1188,6 +1190,7 @@ export function readUiPreferences(): UiPreferences {
     playerFadeMs: DEFAULT_FADE_MS,
     skipThresholdPercent: 35,
     playbackEngine: "webview",
+    nativeOutputBackend: "cpalShared",
     nativeOutputDeviceId: "",
     nativeBufferFrames: 0,
     startupPage: "library",
@@ -1244,6 +1247,9 @@ export function readUiPreferences(): UiPreferences {
         playbackEngine: ["webview", "native"].includes(parsed.playbackEngine as PlaybackEngine)
           ? (parsed.playbackEngine as PlaybackEngine)
           : defaults.playbackEngine,
+        nativeOutputBackend: ["cpalShared", "wasapiExclusive", "asio"].includes(parsed.nativeOutputBackend as NativeOutputBackendMode)
+          ? (parsed.nativeOutputBackend as NativeOutputBackendMode)
+          : defaults.nativeOutputBackend,
         nativeOutputDeviceId:
           typeof parsed.nativeOutputDeviceId === "string" ? parsed.nativeOutputDeviceId : defaults.nativeOutputDeviceId,
         nativeBufferFrames:

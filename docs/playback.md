@@ -12,15 +12,17 @@ Settings > Player includes a WebView codec diagnostic that calls the local audio
 
 The native Rust engine uses `rodio` for playback, `cpal` for output, and Symphonia-backed decoding through rodio's codec features. It is meant to prove the lower-level path without making it the only playback option yet. Native output stream errors are captured and surfaced through the player status toast when the desktop command reports them.
 
-Settings > Player can list native output devices in the desktop app. The selected device and buffer size are passed into the Rust engine when playback starts. On Windows this is currently cpal's WASAPI shared-mode path; exclusive mode needs a dedicated WASAPI backend rather than the generic rodio bridge.
+Settings > Player can list native output devices in the desktop app. The selected device and buffer size are passed into the Rust engine when playback starts. The app now reports native backend capabilities separately: the current backend is CPAL/WASAPI shared mode, while WASAPI exclusive and ASIO are visible as unavailable future backends instead of being hidden or implied.
 
 Settings > Player also includes a compact Native diagnostics panel. It shows the current native output configuration plus the most recent rodio, cpal, Symphonia, file-open, stream-callback, and seek failures. The panel can refresh or clear the in-memory diagnostics without affecting normal playback.
+
+Native playback prepares the next queued file by opening and decoding it ahead of the transition. This does not yet make every codec sample-perfect, but it catches missing/undecodable files earlier and surfaces failures in Native diagnostics.
 
 ## Player Behavior
 
 - The queue lives in React state and can be reordered from the queue handle.
 - The WebView engine preloads the next track for smoother transitions.
-- Fade and crossfade duration is controlled by the Player settings. WebView crossfade uses two audio elements; native crossfade uses overlapping rodio players on the same mixer, then stops the old player after the fade.
+- Fade and crossfade duration is controlled by the Player settings. WebView crossfade uses two audio elements; native crossfade uses overlapping rodio players on the same mixer, then stops the old player after the fade. The backend also exposes `/playback/gapless/validate` to inspect adjacent tracks for codec, sample-rate, channel, and sample-count compatibility before treating an album transition as gapless-safe.
 - Volume and mute are stored locally in browser storage.
 - ReplayGain can be applied from embedded track or album gain tags with an optional preamp.
 - Now Playing supports Studio, Theater, and Party layouts, with optional lyrics, queue, album-art backgrounds, and bars/wave/radial visualizers.
@@ -66,7 +68,5 @@ Keyboard shortcuts are editable in Settings > Keyboard Shortcuts. Media keys are
 ## Not In Scope Yet
 
 - A fully custom native decoder pipeline.
-- WASAPI exclusive mode or ASIO.
-- Native queue preloading and sample-accurate gapless transition validation.
-- DSP effects beyond equalizer, limiter, volume, fade, crossfade, and ReplayGain scheduling.
+- Actually opening WASAPI exclusive or ASIO streams; the settings model reports those backends, but only CPAL/WASAPI shared mode is available today.
 - Guaranteed gapless playback for every codec.

@@ -74,6 +74,8 @@ import type {
   FileOrganizationReportRequest,
   FileOrganizationReportResponse,
   FileOrganizationResponse,
+  GaplessValidationRequest,
+  GaplessValidationResponse,
   FolderWatchApplyResponse,
   FolderWatchStatus,
   FilenameTagInferenceRequest,
@@ -753,6 +755,13 @@ export function importScrobbleHistory(csvPath: string, apply = false, limit = 10
   return request<ScrobbleHistoryImportResponse>("/scrobbling/import-history", {
     method: "POST",
     body: JSON.stringify({ csv_path: csvPath, apply, limit }),
+  });
+}
+
+export function validateGaplessPlayback(requestBody: GaplessValidationRequest): Promise<GaplessValidationResponse> {
+  return request<GaplessValidationResponse>("/playback/gapless/validate", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
   });
 }
 

@@ -1403,6 +1403,42 @@ export interface ScrobbleHistoryImportResponse {
   }>;
 }
 
+export interface GaplessValidationRequest {
+  track_ids?: number[] | null;
+  album_id?: number | null;
+  limit?: number;
+}
+
+export interface GaplessAudioShape {
+  codec: string | null;
+  sample_rate: number | null;
+  channels: number | null;
+  bits_per_sample: number | null;
+  duration_seconds: number | null;
+  estimated_samples: number | null;
+  error: string | null;
+}
+
+export interface GaplessPairValidation {
+  left_track_id: number;
+  right_track_id: number;
+  left_title: string | null;
+  right_title: string | null;
+  left_shape: GaplessAudioShape;
+  right_shape: GaplessAudioShape;
+  metadata_compatible: boolean;
+  sample_accurate_ready: boolean;
+  warnings: string[];
+}
+
+export interface GaplessValidationResponse {
+  track_count: number;
+  pair_count: number;
+  sample_accurate_ready_count: number;
+  pairs: GaplessPairValidation[];
+  message: string;
+}
+
 export interface ClapStatusResponse {
   installed: boolean;
   dependencies: Record<string, boolean>;

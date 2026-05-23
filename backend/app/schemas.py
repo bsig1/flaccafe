@@ -1563,6 +1563,42 @@ class ScrobbleHistoryImportResponse(BaseModel):
     previews: list[ScrobbleHistoryImportPreview] = Field(default_factory=list)
 
 
+class GaplessValidationRequest(BaseModel):
+    track_ids: list[int] | None = Field(default=None, max_length=500)
+    album_id: int | None = None
+    limit: int = Field(default=200, ge=2, le=1000)
+
+
+class GaplessAudioShape(BaseModel):
+    codec: str | None = None
+    sample_rate: int | None = None
+    channels: int | None = None
+    bits_per_sample: int | None = None
+    duration_seconds: float | None = None
+    estimated_samples: int | None = None
+    error: str | None = None
+
+
+class GaplessPairValidation(BaseModel):
+    left_track_id: int
+    right_track_id: int
+    left_title: str | None = None
+    right_title: str | None = None
+    left_shape: GaplessAudioShape
+    right_shape: GaplessAudioShape
+    metadata_compatible: bool = False
+    sample_accurate_ready: bool = False
+    warnings: list[str] = Field(default_factory=list)
+
+
+class GaplessValidationResponse(BaseModel):
+    track_count: int = 0
+    pair_count: int = 0
+    sample_accurate_ready_count: int = 0
+    pairs: list[GaplessPairValidation] = Field(default_factory=list)
+    message: str
+
+
 class ClapConfigRequest(BaseModel):
     model_id: str | None = Field(default=None, max_length=200)
     cache_dir: str | None = None
