@@ -2263,6 +2263,8 @@ export default function App() {
     options: {
       playlistIds?: number[];
       trackIds?: number[] | null;
+      musicSubfolder?: string;
+      playlistSubfolder?: string;
       copyFiles?: boolean;
       exportPlaylists?: boolean;
       preserveStructure?: boolean;
@@ -2282,6 +2284,8 @@ export default function App() {
         target_folder: trimmedTarget,
         playlist_ids: options.playlistIds ?? [],
         track_ids: options.trackIds?.length ? options.trackIds : null,
+        music_subfolder: options.musicSubfolder ?? "Music",
+        playlist_subfolder: options.playlistSubfolder ?? "Playlists",
         copy_files: options.copyFiles ?? true,
         export_playlists: options.exportPlaylists ?? true,
         preserve_structure: options.preserveStructure ?? true,

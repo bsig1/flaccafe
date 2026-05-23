@@ -55,6 +55,10 @@ import type {
   ExportResponse,
   DuplicateActionRequest,
   DuplicateActionResponse,
+  DeviceSyncDevicesResponse,
+  DeviceSyncProfile,
+  DeviceSyncProfilePayload,
+  DeviceSyncProfilesResponse,
   DeviceSyncRequest,
   DeviceSyncResponse,
   DuplicateReviewRequest,
@@ -260,6 +264,28 @@ export function syncDeviceFolder(requestBody: DeviceSyncRequest): Promise<Device
     method: "POST",
     body: JSON.stringify(requestBody),
   });
+}
+
+export function fetchDeviceSyncDevices(): Promise<DeviceSyncDevicesResponse> {
+  return request<DeviceSyncDevicesResponse>("/library/tools/device-sync/devices");
+}
+
+export function fetchDeviceSyncProfiles(): Promise<DeviceSyncProfilesResponse> {
+  return request<DeviceSyncProfilesResponse>("/library/tools/device-sync/profiles");
+}
+
+export function saveDeviceSyncProfile(requestBody: DeviceSyncProfilePayload, profileId?: number | null): Promise<DeviceSyncProfile> {
+  return request<DeviceSyncProfile>(
+    profileId ? `/library/tools/device-sync/profiles/${profileId}` : "/library/tools/device-sync/profiles",
+    {
+      method: profileId ? "PATCH" : "POST",
+      body: JSON.stringify(requestBody),
+    },
+  );
+}
+
+export function deleteDeviceSyncProfile(profileId: number): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>(`/library/tools/device-sync/profiles/${profileId}`, { method: "DELETE" });
 }
 
 export function exportFileOrganizationReport(

@@ -765,10 +765,76 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(applied.status_code, 200)
         self.assertEqual(applied.json()["copied_files"], 2)
         self.assertEqual(applied.json()["playlists_written"], 1)
-        self.assertTrue((target / "Artist" / "Album" / "sync-a.mp3").exists())
+        self.assertTrue((target / "Music" / "Artist" / "Album" / "sync-a.mp3").exists())
         playlist_path = target / "Playlists" / "Road Player.m3u8"
         self.assertTrue(playlist_path.exists())
         self.assertIn("sync-a.mp3", playlist_path.read_text(encoding="utf-8"))
+
+    def test_device_sync_profiles_and_device_detection(self) -> None:
+        with patch(
+            "backend.app.device_sync_profiles.windows_removable_devices",
+            return_value=[
+                {
+                    "id": "E:",
+                    "label": "Phone SD",
+                    "root_path": "E:\\",
+                    "device_kind": "usb",
+                    "drive_type": 2,
+                    "size_bytes": 1000,
+                    "free_bytes": 500,
+                    "writable": True,
+                    "hint": "USB/removable",
+                }
+            ],
+        ):
+            devices = self.client.get("/library/tools/device-sync/devices")
+        self.assertEqual(devices.status_code, 200)
+        self.assertEqual(devices.json()["devices"][0]["root_path"], "E:\\")
+
+        created = self.client.post(
+            "/library/tools/device-sync/profiles",
+            json={
+                "name": "Phone",
+                "target_folder": "E:\\",
+                "device_kind": "android_folder",
+                "music_subfolder": "Music",
+                "playlist_subfolder": "Playlists",
+                "playlist_ids": [1, 2],
+                "playlist_rules": {"relative_paths": True},
+                "copy_files": True,
+                "export_playlists": True,
+                "preserve_structure": False,
+            },
+        )
+        self.assertEqual(created.status_code, 200)
+        self.assertEqual(created.json()["playlist_ids"], [1, 2])
+        profile_id = created.json()["id"]
+
+        updated = self.client.patch(
+            f"/library/tools/device-sync/profiles/{profile_id}",
+            json={
+                "name": "Phone",
+                "target_folder": "F:\\Music",
+                "device_kind": "usb",
+                "music_subfolder": "Library",
+                "playlist_subfolder": "Lists",
+                "playlist_ids": [2],
+                "playlist_rules": {"relative_paths": True},
+                "copy_files": True,
+                "export_playlists": False,
+                "preserve_structure": True,
+            },
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["music_subfolder"], "Library")
+        profiles = self.client.get("/library/tools/device-sync/profiles")
+        self.assertEqual(profiles.status_code, 200)
+        self.assertEqual(profiles.json()["profiles"][0]["target_folder"], "F:\\Music")
+        self.assertGreaterEqual(len(profiles.json()["presets"]), 1)
+
+        deleted = self.client.delete(f"/library/tools/device-sync/profiles/{profile_id}")
+        self.assertEqual(deleted.status_code, 200)
+        self.assertTrue(deleted.json()["deleted"])
 
     def test_audio_conversion_preview_and_job_builds_ffmpeg_command(self) -> None:
         music_dir = self.root / "Music"

@@ -75,6 +75,8 @@ The device sync tool is a preview-first copy/export job for USB drives, phone fo
 
 Preview before applying. Apply creates the target folder when needed, copies only missing or older files, and writes playlists that point at the copied files with relative paths when file copying is enabled.
 
+Saved sync profiles store the target folder, device type, music and playlist subfolders, copy/export flags, and the playlist selection for a device. Android presets default to a `Music` folder plus portable `.m3u8` playlists, while the USB preset keeps source folder structure under a `Music` folder. Windows removable-drive detection can fill the target folder for mounted USB devices; Android MTP devices still need a folder-mounted target because they do not appear as normal filesystem paths to the Python backend.
+
 ## CD Ripper
 
 The CD Ripper panel on the File Management page detects local CD drives, checks for external extraction tools, looks up album metadata through MusicBrainz, and starts background rip jobs to FLAC, MP3, or WAV.

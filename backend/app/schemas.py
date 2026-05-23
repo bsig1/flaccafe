@@ -436,6 +436,8 @@ class DeviceSyncRequest(BaseModel):
     target_folder: str
     playlist_ids: list[int] = Field(default_factory=list, max_length=200)
     track_ids: list[int] | None = Field(default=None, max_length=10000)
+    music_subfolder: str = "Music"
+    playlist_subfolder: str = "Playlists"
     copy_files: bool = True
     export_playlists: bool = True
     preserve_structure: bool = True
@@ -472,6 +474,56 @@ class DeviceSyncResponse(BaseModel):
     playlists_written: int = 0
     changes: list[DeviceSyncChange] = Field(default_factory=list)
     playlist_exports: list[DeviceSyncPlaylistExport] = Field(default_factory=list)
+
+
+class DeviceSyncProfilePayload(BaseModel):
+    name: str
+    target_folder: str = ""
+    device_kind: Literal["folder", "usb", "android_folder", "android_mtp"] = "folder"
+    music_subfolder: str = "Music"
+    playlist_subfolder: str = "Playlists"
+    playlist_ids: list[int] = Field(default_factory=list, max_length=200)
+    playlist_rules: dict[str, Any] = Field(default_factory=dict)
+    copy_files: bool = True
+    export_playlists: bool = True
+    preserve_structure: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def sync_profile_name_required(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("name is required")
+        return cleaned[:120]
+
+
+class DeviceSyncProfile(DeviceSyncProfilePayload):
+    id: int
+    created_at: str
+    updated_at: str
+
+
+class DeviceSyncProfilesResponse(BaseModel):
+    profiles: list[DeviceSyncProfile] = Field(default_factory=list)
+    presets: list[DeviceSyncProfilePayload] = Field(default_factory=list)
+
+
+class DeviceSyncDetectedDevice(BaseModel):
+    id: str
+    label: str
+    root_path: str
+    device_kind: str
+    drive_type: int | None = None
+    size_bytes: int | None = None
+    free_bytes: int | None = None
+    writable: bool = False
+    hint: str | None = None
+
+
+class DeviceSyncDevicesResponse(BaseModel):
+    devices: list[DeviceSyncDetectedDevice] = Field(default_factory=list)
+    mtp_supported: bool = False
+    message: str
 
 
 class CsvMetadataExportRequest(BaseModel):

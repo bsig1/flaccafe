@@ -218,6 +218,22 @@ CREATE TABLE IF NOT EXISTS inbox_auto_review_rules (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS device_sync_profiles (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  target_folder TEXT NOT NULL DEFAULT '',
+  device_kind TEXT NOT NULL DEFAULT 'folder',
+  music_subfolder TEXT NOT NULL DEFAULT 'Music',
+  playlist_subfolder TEXT NOT NULL DEFAULT 'Playlists',
+  playlist_ids_json TEXT NOT NULL DEFAULT '[]',
+  playlist_rules_json TEXT NOT NULL DEFAULT '{}',
+  copy_files INTEGER NOT NULL DEFAULT 1,
+  export_playlists INTEGER NOT NULL DEFAULT 1,
+  preserve_structure INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS artwork_cache (
   path_key TEXT PRIMARY KEY,
   path TEXT NOT NULL,
@@ -258,6 +274,7 @@ CREATE INDEX IF NOT EXISTS idx_regex_tag_presets_name ON regex_tag_presets(name)
 CREATE INDEX IF NOT EXISTS idx_track_inbox_state_status ON track_inbox_state(status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_track_inbox_notes_updated_at ON track_inbox_notes(updated_at);
 CREATE INDEX IF NOT EXISTS idx_inbox_auto_review_rules_enabled ON inbox_auto_review_rules(enabled, updated_at);
+CREATE INDEX IF NOT EXISTS idx_device_sync_profiles_name ON device_sync_profiles(name);
 CREATE INDEX IF NOT EXISTS idx_bulk_action_undo_log_batch ON bulk_action_undo_log(batch_id);
 """
 

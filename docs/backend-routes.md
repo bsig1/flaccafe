@@ -56,6 +56,11 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `POST /library/tools/organize-files` previews or applies tag-based file moves.
 - `POST /library/tools/organize-files/report` writes a JSON file-organization preview report.
 - `POST /library/tools/device-sync` previews or applies folder/device copy jobs and playlist exports.
+- `GET /library/tools/device-sync/devices` lists mounted USB/removable device candidates.
+- `GET /library/tools/device-sync/profiles` lists saved device sync profiles and Android/USB presets.
+- `POST /library/tools/device-sync/profiles` creates or replaces a saved device sync profile.
+- `PATCH /library/tools/device-sync/profiles/{profile_id}` updates a saved device sync profile.
+- `DELETE /library/tools/device-sync/profiles/{profile_id}` deletes a saved device sync profile.
 - `GET /library/tools/audio-conversion/setup` checks configured, bundled, and PATH-based FFmpeg locations.
 - `PATCH /library/tools/audio-conversion/setup` saves or clears a custom FFmpeg path.
 - `POST /library/tools/audio-conversion/preview` previews audio conversion targets.

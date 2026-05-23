@@ -74,6 +74,12 @@ from .cd_ripping import (
     start_cd_rip_job,
     stop_cd_playback,
 )
+from .device_sync_profiles import (
+    delete_device_sync_profile,
+    detected_device_sync_devices,
+    list_device_sync_profiles,
+    save_device_sync_profile,
+)
 from .clap_analysis import save_config as save_clap_config
 from .clap_analysis import status as clap_status
 from .clap_install_jobs import get_clap_install_job, start_clap_install_job
@@ -159,7 +165,11 @@ from .schemas import (
     DuplicateReviewResponse,
     DiagnosticItem,
     DeviceSyncChange,
+    DeviceSyncDevicesResponse,
     DeviceSyncPlaylistExport,
+    DeviceSyncProfile,
+    DeviceSyncProfilePayload,
+    DeviceSyncProfilesResponse,
     DeviceSyncRequest,
     DeviceSyncResponse,
     ExportRequest,
@@ -3310,17 +3320,31 @@ def unique_collision_path(target_path: Path) -> Path:
     raise OSError("Could not find an available target filename")
 
 
-def track_device_sync_target(track: dict, target_root: Path, library_root: Path | None, preserve_structure: bool) -> Path:
+def safe_subfolder(value: str | None, fallback: str) -> Path:
+    text = (value or fallback).strip().strip("/\\")
+    if not text:
+        text = fallback
+    parts = [sanitize_path_component(part) for part in re.split(r"[\\/]+", text) if part.strip()]
+    return Path(*parts) if parts else Path(fallback)
+
+
+def track_device_sync_target(
+    track: dict,
+    target_root: Path,
+    library_root: Path | None,
+    preserve_structure: bool,
+    music_subfolder: str = "Music",
+) -> Path:
     source = Path(track["path"]).expanduser()
     if preserve_structure and library_root is not None:
         try:
-            return (target_root / source.resolve().relative_to(library_root)).resolve()
+            return (target_root / safe_subfolder(music_subfolder, "Music") / source.resolve().relative_to(library_root)).resolve()
         except (OSError, ValueError):
             pass
     album_artist = sanitize_path_component(str(track.get("album_artist") or track.get("artist") or "Unknown Artist"))
     album = sanitize_path_component(str(track.get("album") or "Unknown Album"))
     filename = sanitize_path_component(source.name)
-    return (target_root / "Music" / album_artist / album / filename).resolve()
+    return (target_root / safe_subfolder(music_subfolder, "Music") / album_artist / album / filename).resolve()
 
 
 def device_sync_track_rows(conn, request: DeviceSyncRequest) -> tuple[list[dict], dict[int, list[dict]]]:
@@ -4923,7 +4947,7 @@ def sync_device_folder(request: DeviceSyncRequest) -> DeviceSyncResponse:
     skipped_files = 0
     for track in tracks:
         source = Path(track["path"]).expanduser()
-        target = track_device_sync_target(track, target_root, library_root, request.preserve_structure)
+        target = track_device_sync_target(track, target_root, library_root, request.preserve_structure, request.music_subfolder)
         target_paths[int(track["id"])] = target
         change = DeviceSyncChange(
             track_id=int(track["id"]),
@@ -4955,7 +4979,7 @@ def sync_device_folder(request: DeviceSyncRequest) -> DeviceSyncResponse:
     if request.export_playlists:
         for playlist_id in dict.fromkeys(request.playlist_ids):
             name = playlists.get(playlist_id)
-            playlist_path = target_root / "Playlists" / f"{sanitize_path_component(name or f'Playlist {playlist_id}')}.m3u8"
+            playlist_path = target_root / safe_subfolder(request.playlist_subfolder, "Playlists") / f"{sanitize_path_component(name or f'Playlist {playlist_id}')}.m3u8"
             export = DeviceSyncPlaylistExport(
                 playlist_id=playlist_id,
                 name=name or f"Playlist {playlist_id}",
@@ -4988,6 +5012,39 @@ def sync_device_folder(request: DeviceSyncRequest) -> DeviceSyncResponse:
         changes=changes,
         playlist_exports=playlist_exports,
     )
+
+
+@app.get("/library/tools/device-sync/devices", response_model=DeviceSyncDevicesResponse)
+def get_device_sync_devices() -> DeviceSyncDevicesResponse:
+    return DeviceSyncDevicesResponse(**detected_device_sync_devices())
+
+
+@app.get("/library/tools/device-sync/profiles", response_model=DeviceSyncProfilesResponse)
+def get_device_sync_profiles() -> DeviceSyncProfilesResponse:
+    return DeviceSyncProfilesResponse(**list_device_sync_profiles())
+
+
+@app.post("/library/tools/device-sync/profiles", response_model=DeviceSyncProfile)
+def create_device_sync_profile(request: DeviceSyncProfilePayload) -> DeviceSyncProfile:
+    profile = save_device_sync_profile(request)
+    if profile is None:
+        raise HTTPException(status_code=400, detail="Could not save device sync profile")
+    return DeviceSyncProfile(**profile)
+
+
+@app.patch("/library/tools/device-sync/profiles/{profile_id}", response_model=DeviceSyncProfile)
+def update_device_sync_profile(profile_id: int, request: DeviceSyncProfilePayload) -> DeviceSyncProfile:
+    profile = save_device_sync_profile(request, profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Device sync profile not found")
+    return DeviceSyncProfile(**profile)
+
+
+@app.delete("/library/tools/device-sync/profiles/{profile_id}")
+def remove_device_sync_profile(profile_id: int) -> dict:
+    if not delete_device_sync_profile(profile_id):
+        raise HTTPException(status_code=404, detail="Device sync profile not found")
+    return {"deleted": True}
 
 
 @app.post("/library/tools/export-metadata-csv", response_model=CsvMetadataExportResponse)

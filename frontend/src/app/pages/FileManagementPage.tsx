@@ -38,6 +38,9 @@ import type {
   CsvMetadataExportResponse,
   CsvMetadataImportReportResponse,
   CsvMetadataImportResponse,
+  DeviceSyncDetectedDevice,
+  DeviceSyncProfile,
+  DeviceSyncProfilePayload,
   DeviceSyncResponse,
   DuplicateActionRequest,
   DuplicateActionResponse,
@@ -53,7 +56,11 @@ import type {
 } from "../../types/api";
 import {
   applyArtworkCollisionRepair,
+  deleteDeviceSyncProfile,
+  fetchDeviceSyncDevices,
+  fetchDeviceSyncProfiles,
   previewArtworkCollisions,
+  saveDeviceSyncProfile,
 } from "../../lib/api";
 import {
   DisclosureSection,
@@ -204,6 +211,8 @@ export function FileManagementPage({
     options: {
       playlistIds?: number[];
       trackIds?: number[] | null;
+      musicSubfolder?: string;
+      playlistSubfolder?: string;
       copyFiles?: boolean;
       exportPlaylists?: boolean;
       preserveStructure?: boolean;
@@ -271,6 +280,14 @@ export function FileManagementPage({
   const [watchIntervalSeconds, setWatchIntervalSeconds] = useState(folderWatchStatus?.interval_seconds ?? 45);
   const [acceptedFolderWatchIds, setAcceptedFolderWatchIds] = useState<Set<string>>(() => new Set());
   const [deviceSyncTarget, setDeviceSyncTarget] = useState("");
+  const [deviceSyncProfileId, setDeviceSyncProfileId] = useState<number | null>(null);
+  const [deviceSyncProfileName, setDeviceSyncProfileName] = useState("");
+  const [deviceSyncProfiles, setDeviceSyncProfiles] = useState<DeviceSyncProfile[]>([]);
+  const [deviceSyncPresets, setDeviceSyncPresets] = useState<DeviceSyncProfilePayload[]>([]);
+  const [deviceSyncDevices, setDeviceSyncDevices] = useState<DeviceSyncDetectedDevice[]>([]);
+  const [deviceSyncDeviceKind, setDeviceSyncDeviceKind] = useState<DeviceSyncProfilePayload["device_kind"]>("folder");
+  const [deviceSyncMusicSubfolder, setDeviceSyncMusicSubfolder] = useState("Music");
+  const [deviceSyncPlaylistSubfolder, setDeviceSyncPlaylistSubfolder] = useState("Playlists");
   const [deviceSyncPlaylistIds, setDeviceSyncPlaylistIds] = useState<Set<number>>(() => new Set());
   const [deviceSyncCopyFiles, setDeviceSyncCopyFiles] = useState(true);
   const [deviceSyncExportPlaylists, setDeviceSyncExportPlaylists] = useState(true);
@@ -358,6 +375,95 @@ export function FileManagementPage({
     }
     setAcceptedAutoTagTrackIds(next);
   }, [autoTagPreview]);
+
+  useEffect(() => {
+    void loadDeviceSyncSupport();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function loadDeviceSyncSupport() {
+    try {
+      const [profileResponse, deviceResponse] = await Promise.all([
+        fetchDeviceSyncProfiles(),
+        fetchDeviceSyncDevices(),
+      ]);
+      setDeviceSyncProfiles(profileResponse.profiles);
+      setDeviceSyncPresets(profileResponse.presets);
+      setDeviceSyncDevices(deviceResponse.devices);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not load device sync profiles");
+    }
+  }
+
+  function applyDeviceSyncProfile(profile: DeviceSyncProfilePayload | DeviceSyncProfile) {
+    setDeviceSyncProfileId("id" in profile ? profile.id : null);
+    setDeviceSyncProfileName(profile.name);
+    setDeviceSyncTarget(profile.target_folder ?? "");
+    setDeviceSyncDeviceKind(profile.device_kind ?? "folder");
+    setDeviceSyncMusicSubfolder(profile.music_subfolder ?? "Music");
+    setDeviceSyncPlaylistSubfolder(profile.playlist_subfolder ?? "Playlists");
+    setDeviceSyncPlaylistIds(new Set(profile.playlist_ids ?? []));
+    setDeviceSyncCopyFiles(profile.copy_files ?? true);
+    setDeviceSyncExportPlaylists(profile.export_playlists ?? true);
+    setDeviceSyncPreserveStructure(profile.preserve_structure ?? true);
+    setStatus(`Loaded device sync profile: ${profile.name}`);
+  }
+
+  function currentDeviceSyncProfilePayload(): DeviceSyncProfilePayload {
+    return {
+      name: deviceSyncProfileName.trim() || "Portable Player",
+      target_folder: deviceSyncTarget,
+      device_kind: deviceSyncDeviceKind ?? "folder",
+      music_subfolder: deviceSyncMusicSubfolder,
+      playlist_subfolder: deviceSyncPlaylistSubfolder,
+      playlist_ids: Array.from(deviceSyncPlaylistIds),
+      playlist_rules: {
+        relative_paths: true,
+        playlist_format: "m3u8",
+        per_playlist_selection: true,
+      },
+      copy_files: deviceSyncCopyFiles,
+      export_playlists: deviceSyncExportPlaylists,
+      preserve_structure: deviceSyncPreserveStructure,
+    };
+  }
+
+  async function saveCurrentDeviceSyncProfile() {
+    try {
+      const saved = await saveDeviceSyncProfile(currentDeviceSyncProfilePayload(), deviceSyncProfileId);
+      setDeviceSyncProfileId(saved.id);
+      setDeviceSyncProfileName(saved.name);
+      await loadDeviceSyncSupport();
+      setStatus(`Saved device sync profile: ${saved.name}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not save device sync profile");
+    }
+  }
+
+  async function deleteCurrentDeviceSyncProfile() {
+    if (!deviceSyncProfileId) {
+      setStatus("Choose a saved profile first");
+      return;
+    }
+    try {
+      await deleteDeviceSyncProfile(deviceSyncProfileId);
+      setDeviceSyncProfileId(null);
+      setDeviceSyncProfileName("");
+      await loadDeviceSyncSupport();
+      setStatus("Device sync profile deleted");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not delete device sync profile");
+    }
+  }
+
+  function useDetectedDevice(device: DeviceSyncDetectedDevice) {
+    setDeviceSyncTarget(device.root_path);
+    setDeviceSyncDeviceKind(device.device_kind as DeviceSyncProfilePayload["device_kind"]);
+    if (!deviceSyncProfileName.trim()) {
+      setDeviceSyncProfileName(device.label);
+    }
+    setStatus(`Using ${device.label} at ${device.root_path}`);
+  }
 
   async function previewArtworkCollisionRepair() {
     setArtworkCollisionBusy(true);
@@ -552,6 +658,8 @@ export function FileManagementPage({
     return {
       playlistIds: Array.from(deviceSyncPlaylistIds),
       trackIds: currentScope(scopedTrackIds),
+      musicSubfolder: deviceSyncMusicSubfolder,
+      playlistSubfolder: deviceSyncPlaylistSubfolder,
       copyFiles: deviceSyncCopyFiles,
       exportPlaylists: deviceSyncExportPlaylists,
       preserveStructure: deviceSyncPreserveStructure,
@@ -1485,6 +1593,93 @@ export function FileManagementPage({
 
           <DisclosureSection title="Device Sync Folder" description="Preview copy jobs and playlist exports for a phone, USB drive, or portable player">
             <div className="grid gap-4 text-sm text-neutral-200">
+              <div className="grid gap-3 rounded border border-line bg-ink p-3">
+                <div className="grid gap-2 lg:grid-cols-[1fr_1fr_auto_auto]">
+                  <label className="grid gap-2">
+                    <span className="text-xs uppercase text-muted">Saved Profile</span>
+                    <select
+                      className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                      value={deviceSyncProfileId ?? ""}
+                      onChange={(event) => {
+                        const profile = deviceSyncProfiles.find((item) => item.id === Number(event.target.value));
+                        if (profile) {
+                          applyDeviceSyncProfile(profile);
+                        } else {
+                          setDeviceSyncProfileId(null);
+                        }
+                      }}
+                    >
+                      <option value="">New profile</option>
+                      {deviceSyncProfiles.map((profile) => (
+                        <option key={profile.id} value={profile.id}>{profile.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="grid gap-2">
+                    <span className="text-xs uppercase text-muted">Profile Name</span>
+                    <input
+                      className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
+                      value={deviceSyncProfileName}
+                      placeholder="Phone, USB stick, car player"
+                      onChange={(event) => setDeviceSyncProfileName(event.target.value)}
+                    />
+                  </label>
+                  <button className="secondary-button self-end" type="button" onClick={() => void saveCurrentDeviceSyncProfile()}>
+                    <Save size={15} />
+                    Save
+                  </button>
+                  <button className="secondary-button self-end" type="button" disabled={!deviceSyncProfileId} onClick={() => void deleteCurrentDeviceSyncProfile()}>
+                    <Trash2 size={15} />
+                    Delete
+                  </button>
+                </div>
+                <div className="grid gap-2 md:grid-cols-[1fr_1fr_auto]">
+                  <label className="grid gap-2">
+                    <span className="text-xs uppercase text-muted">Preset</span>
+                    <select
+                      className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                      defaultValue=""
+                      onChange={(event) => {
+                        const preset = deviceSyncPresets.find((item) => item.name === event.target.value);
+                        if (preset) {
+                          applyDeviceSyncProfile(preset);
+                        }
+                        event.currentTarget.value = "";
+                      }}
+                    >
+                      <option value="">Load Android/USB preset</option>
+                      {deviceSyncPresets.map((preset) => (
+                        <option key={preset.name} value={preset.name}>{preset.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="grid gap-2">
+                    <span className="text-xs uppercase text-muted">Mounted Device</span>
+                    <select
+                      className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                      defaultValue=""
+                      onChange={(event) => {
+                        const device = deviceSyncDevices.find((item) => item.id === event.target.value);
+                        if (device) {
+                          useDetectedDevice(device);
+                        }
+                        event.currentTarget.value = "";
+                      }}
+                    >
+                      <option value="">Use detected drive</option>
+                      {deviceSyncDevices.map((device) => (
+                        <option key={device.id} value={device.id}>
+                          {device.id} - {device.label} ({device.hint ?? "drive"})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button className="secondary-button self-end" type="button" onClick={() => void loadDeviceSyncSupport()}>
+                    <RefreshCw size={15} />
+                    Refresh
+                  </button>
+                </div>
+              </div>
               <label className="grid gap-2">
                 <span className="text-xs uppercase text-muted">Target Folder</span>
                 <input
@@ -1494,6 +1689,39 @@ export function FileManagementPage({
                   onChange={(event) => setDeviceSyncTarget(event.target.value)}
                 />
               </label>
+              <div className="grid gap-2 md:grid-cols-3">
+                <label className="grid gap-2">
+                  <span className="text-xs uppercase text-muted">Device Type</span>
+                  <select
+                    className="h-9 rounded border border-line bg-ink px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                    value={deviceSyncDeviceKind}
+                    onChange={(event) => setDeviceSyncDeviceKind(event.target.value as DeviceSyncProfilePayload["device_kind"])}
+                  >
+                    <option value="folder">Folder</option>
+                    <option value="usb">USB drive</option>
+                    <option value="android_folder">Android folder</option>
+                    <option value="android_mtp">Android MTP note</option>
+                  </select>
+                </label>
+                <label className="grid gap-2">
+                  <span className="text-xs uppercase text-muted">Music Subfolder</span>
+                  <input
+                    className="h-9 rounded border border-line bg-ink px-3 text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
+                    value={deviceSyncMusicSubfolder}
+                    placeholder="Music"
+                    onChange={(event) => setDeviceSyncMusicSubfolder(event.target.value)}
+                  />
+                </label>
+                <label className="grid gap-2">
+                  <span className="text-xs uppercase text-muted">Playlist Subfolder</span>
+                  <input
+                    className="h-9 rounded border border-line bg-ink px-3 text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
+                    value={deviceSyncPlaylistSubfolder}
+                    placeholder="Playlists"
+                    onChange={(event) => setDeviceSyncPlaylistSubfolder(event.target.value)}
+                  />
+                </label>
+              </div>
               <div className="grid gap-2 md:grid-cols-3">
                 <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-ink px-3 py-2">
                   <span className="text-muted">Copy audio files</span>

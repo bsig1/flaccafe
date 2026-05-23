@@ -366,6 +366,8 @@ export interface DeviceSyncRequest {
   target_folder: string;
   playlist_ids?: number[];
   track_ids?: number[] | null;
+  music_subfolder?: string;
+  playlist_subfolder?: string;
   copy_files?: boolean;
   export_playlists?: boolean;
   preserve_structure?: boolean;
@@ -402,6 +404,51 @@ export interface DeviceSyncResponse {
   playlists_written: number;
   changes: DeviceSyncChange[];
   playlist_exports: DeviceSyncPlaylistExport[];
+}
+
+export interface DeviceSyncProfilePayload {
+  name: string;
+  target_folder?: string;
+  device_kind?: "folder" | "usb" | "android_folder" | "android_mtp";
+  music_subfolder?: string;
+  playlist_subfolder?: string;
+  playlist_ids?: number[];
+  playlist_rules?: Record<string, unknown>;
+  copy_files?: boolean;
+  export_playlists?: boolean;
+  preserve_structure?: boolean;
+}
+
+export interface DeviceSyncProfile extends Required<Omit<DeviceSyncProfilePayload, "target_folder" | "playlist_ids" | "playlist_rules">> {
+  id: number;
+  target_folder: string;
+  playlist_ids: number[];
+  playlist_rules: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DeviceSyncProfilesResponse {
+  profiles: DeviceSyncProfile[];
+  presets: DeviceSyncProfilePayload[];
+}
+
+export interface DeviceSyncDetectedDevice {
+  id: string;
+  label: string;
+  root_path: string;
+  device_kind: string;
+  drive_type: number | null;
+  size_bytes: number | null;
+  free_bytes: number | null;
+  writable: boolean;
+  hint: string | null;
+}
+
+export interface DeviceSyncDevicesResponse {
+  devices: DeviceSyncDetectedDevice[];
+  mtp_supported: boolean;
+  message: string;
 }
 
 export interface CsvMetadataExportRequest {
