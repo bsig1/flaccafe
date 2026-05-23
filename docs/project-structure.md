@@ -39,6 +39,7 @@ backend/
 │   ├── musicbrainz_autotag.py MusicBrainz/Cover Art Archive auto-tag matching
 │   ├── recommender.py       AutoDJ scoring, cooldowns, drift, and similarity helpers
 │   ├── playlist.py          M3U export/import helpers
+│   ├── podcasts.py          optional RSS subscription and episode download helpers
 │   ├── scan_jobs.py         async scan job tracking
 │   ├── analysis_jobs.py     async audio-analysis job tracking
 │   ├── cd_ripping.py        CD drive detection, MusicBrainz lookup, ripping jobs, and playback commands

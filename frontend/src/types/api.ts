@@ -1264,6 +1264,54 @@ export interface AudiobookSyncExportResponse {
   generated_at: string;
 }
 
+export interface PodcastSubscriptionPayload {
+  title?: string | null;
+  feed_url: string;
+  site_url?: string | null;
+  description?: string | null;
+  auto_download?: boolean;
+  download_folder?: string | null;
+}
+
+export interface PodcastSubscription {
+  id: number;
+  title: string;
+  feed_url: string;
+  site_url: string | null;
+  description: string | null;
+  auto_download: boolean;
+  download_folder: string | null;
+  last_checked_at: string | null;
+  episode_count: number;
+  downloaded_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PodcastEpisode {
+  id: number;
+  subscription_id: number;
+  subscription_title: string | null;
+  guid: string;
+  title: string;
+  description: string | null;
+  audio_url: string | null;
+  published_at: string | null;
+  duration_seconds: number | null;
+  local_path: string | null;
+  download_status: string;
+  downloaded_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PodcastRefreshResponse {
+  subscription: PodcastSubscription;
+  inserted: number;
+  updated: number;
+  total: number;
+}
+
 export interface ClapStatusResponse {
   installed: boolean;
   dependencies: Record<string, boolean>;

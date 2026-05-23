@@ -94,6 +94,14 @@ from .clap_analysis import save_config as save_clap_config
 from .clap_analysis import status as clap_status
 from .clap_install_jobs import get_clap_install_job, start_clap_install_job
 from .playlist import export_m3u
+from .podcasts import (
+    delete_subscription as delete_podcast_subscription,
+    download_episode,
+    list_episodes as list_podcast_episodes,
+    list_subscriptions as list_podcast_subscriptions,
+    refresh_subscription as refresh_podcast_subscription,
+    upsert_subscription as upsert_podcast_subscription,
+)
 from .recommender import (
     album_token,
     artist_tokens,
@@ -229,6 +237,11 @@ from .schemas import (
     PlaylistSummary,
     PlaylistTrackRequest,
     PlayEventEntry,
+    PodcastDownloadRequest,
+    PodcastEpisode,
+    PodcastRefreshResponse,
+    PodcastSubscription,
+    PodcastSubscriptionPayload,
     RatingRequest,
     ReportFileRequest,
     ReportFileResponse,
@@ -3010,6 +3023,63 @@ def export_audiobook_sync_metadata(request: AudiobookSyncExportRequest) -> Audio
         return AudiobookSyncExportResponse(**audiobook_sync_export(request.track_ids, request.limit))
     except OSError as exc:
         raise HTTPException(status_code=400, detail=f"Could not export audiobook sync metadata: {exc}") from exc
+
+
+@app.get("/podcasts/subscriptions", response_model=list[PodcastSubscription])
+def get_podcast_subscriptions() -> list[PodcastSubscription]:
+    return [PodcastSubscription(**subscription) for subscription in list_podcast_subscriptions()]
+
+
+@app.post("/podcasts/subscriptions", response_model=PodcastSubscription)
+def create_podcast_subscription(request: PodcastSubscriptionPayload) -> PodcastSubscription:
+    subscription = upsert_podcast_subscription(request)
+    if subscription is None:
+        raise HTTPException(status_code=400, detail="Could not save podcast subscription")
+    return PodcastSubscription(**subscription)
+
+
+@app.patch("/podcasts/subscriptions/{subscription_id}", response_model=PodcastSubscription)
+def update_podcast_subscription(subscription_id: int, request: PodcastSubscriptionPayload) -> PodcastSubscription:
+    subscription = upsert_podcast_subscription(request, subscription_id)
+    if subscription is None:
+        raise HTTPException(status_code=404, detail="Podcast subscription not found")
+    return PodcastSubscription(**subscription)
+
+
+@app.delete("/podcasts/subscriptions/{subscription_id}")
+def remove_podcast_subscription(subscription_id: int) -> dict:
+    if not delete_podcast_subscription(subscription_id):
+        raise HTTPException(status_code=404, detail="Podcast subscription not found")
+    return {"deleted": True}
+
+
+@app.post("/podcasts/subscriptions/{subscription_id}/refresh", response_model=PodcastRefreshResponse)
+def refresh_podcast_subscription_route(subscription_id: int) -> PodcastRefreshResponse:
+    try:
+        response = refresh_podcast_subscription(subscription_id)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not refresh podcast feed: {exc}") from exc
+    if response is None:
+        raise HTTPException(status_code=404, detail="Podcast subscription not found")
+    return PodcastRefreshResponse(**response)
+
+
+@app.get("/podcasts/episodes", response_model=list[PodcastEpisode])
+def get_podcast_episodes(subscription_id: int | None = None, limit: int = Query(default=200, ge=1, le=1000)) -> list[PodcastEpisode]:
+    return [PodcastEpisode(**episode) for episode in list_podcast_episodes(subscription_id, limit)]
+
+
+@app.post("/podcasts/episodes/{episode_id}/download", response_model=PodcastEpisode)
+def download_podcast_episode_route(episode_id: int, request: PodcastDownloadRequest) -> PodcastEpisode:
+    try:
+        episode = download_episode(episode_id, request.download_folder)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Could not download episode: {exc}") from exc
+    if episode is None:
+        raise HTTPException(status_code=404, detail="Podcast episode not found")
+    return PodcastEpisode(**episode)
 
 
 @app.get("/library/health", response_model=LibraryHealthResponse)

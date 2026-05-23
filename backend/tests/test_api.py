@@ -1131,6 +1131,54 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(deleted.status_code, 200)
         self.assertTrue(deleted.json()["deleted"])
 
+    def test_podcast_subscription_refresh_and_download(self) -> None:
+        media = self.root / "episode.mp3"
+        media.write_bytes(b"podcast audio")
+        feed = self.root / "feed.xml"
+        feed.write_text(
+            f"""<?xml version="1.0"?>
+            <rss version="2.0"><channel>
+              <title>Test Cast</title>
+              <description>Local feed</description>
+              <item>
+                <title>Episode One</title>
+                <guid>episode-one</guid>
+                <pubDate>Mon, 01 Jan 2024 12:00:00 GMT</pubDate>
+                <itunes:duration xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">12:34</itunes:duration>
+                <enclosure url="{media.as_uri()}" type="audio/mpeg" />
+              </item>
+            </channel></rss>""",
+            encoding="utf-8",
+        )
+        download_folder = self.root / "Podcasts"
+
+        created = self.client.post(
+            "/podcasts/subscriptions",
+            json={"title": "Pending", "feed_url": feed.as_uri(), "download_folder": str(download_folder)},
+        )
+        self.assertEqual(created.status_code, 200)
+        subscription_id = created.json()["id"]
+
+        refreshed = self.client.post(f"/podcasts/subscriptions/{subscription_id}/refresh")
+        self.assertEqual(refreshed.status_code, 200)
+        self.assertEqual(refreshed.json()["subscription"]["title"], "Test Cast")
+        self.assertEqual(refreshed.json()["total"], 1)
+
+        episodes = self.client.get(f"/podcasts/episodes?subscription_id={subscription_id}")
+        self.assertEqual(episodes.status_code, 200)
+        self.assertEqual(episodes.json()[0]["title"], "Episode One")
+        episode_id = episodes.json()[0]["id"]
+
+        downloaded = self.client.post(f"/podcasts/episodes/{episode_id}/download", json={})
+        self.assertEqual(downloaded.status_code, 200)
+        local_path = Path(downloaded.json()["local_path"])
+        self.assertTrue(local_path.exists())
+        self.assertEqual(local_path.read_bytes(), b"podcast audio")
+
+        deleted = self.client.delete(f"/podcasts/subscriptions/{subscription_id}")
+        self.assertEqual(deleted.status_code, 200)
+        self.assertTrue(deleted.json()["deleted"])
+
     def test_duplicate_actions_can_remove_selected_and_export_reports(self) -> None:
         first = self.root / "dup-action-a.mp3"
         second = self.root / "dup-action-b.mp3"

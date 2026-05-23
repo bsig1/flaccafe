@@ -51,6 +51,12 @@ Audiobook resume positions are stored in SQLite, not written back to audio files
 
 The sync export writes a JSON file with track metadata, resume position, bookmarks, and chapters. This gives phone/device workflows a stable handoff format without forcing FLAC Cafe to invent a device-specific audiobook database.
 
+## Podcasts
+
+The Podcasts page is an optional RSS feed manager. Subscriptions and episode rows are stored in SQLite, and refreshing a subscription fetches the feed and upserts remote episodes.
+
+Episode downloads are explicit. FLAC Cafe writes downloaded media into the subscription download folder, or `backend/exports/podcasts` when no folder is set. Downloaded files are not automatically added to the music library; scan the target folder when you want podcast files to appear beside local tracks.
+
 ## Regex Tag Cleanup
 
 The File Management page includes a preview-first regex search/replace tool for common text tags: title, artist, album, album artist, and genre. It is useful for cleanup patterns such as removing trailing `feat.` text, normalizing separators, or replacing repeated label suffixes.

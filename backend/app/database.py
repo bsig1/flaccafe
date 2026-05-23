@@ -262,6 +262,36 @@ CREATE TABLE IF NOT EXISTS audiobook_chapters (
   UNIQUE(track_id, chapter_index)
 );
 
+CREATE TABLE IF NOT EXISTS podcast_subscriptions (
+  id INTEGER PRIMARY KEY,
+  title TEXT NOT NULL,
+  feed_url TEXT NOT NULL UNIQUE,
+  site_url TEXT,
+  description TEXT,
+  auto_download INTEGER NOT NULL DEFAULT 0,
+  download_folder TEXT,
+  last_checked_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS podcast_episodes (
+  id INTEGER PRIMARY KEY,
+  subscription_id INTEGER NOT NULL REFERENCES podcast_subscriptions(id) ON DELETE CASCADE,
+  guid TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT,
+  audio_url TEXT,
+  published_at TEXT,
+  duration_seconds REAL,
+  local_path TEXT,
+  download_status TEXT NOT NULL DEFAULT 'remote',
+  downloaded_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(subscription_id, guid)
+);
+
 CREATE TABLE IF NOT EXISTS artwork_cache (
   path_key TEXT PRIMARY KEY,
   path TEXT NOT NULL,
@@ -305,6 +335,8 @@ CREATE INDEX IF NOT EXISTS idx_inbox_auto_review_rules_enabled ON inbox_auto_rev
 CREATE INDEX IF NOT EXISTS idx_device_sync_profiles_name ON device_sync_profiles(name);
 CREATE INDEX IF NOT EXISTS idx_audiobook_bookmarks_track ON audiobook_bookmarks(track_id, position_seconds);
 CREATE INDEX IF NOT EXISTS idx_audiobook_chapters_track ON audiobook_chapters(track_id, chapter_index);
+CREATE INDEX IF NOT EXISTS idx_podcast_episodes_subscription ON podcast_episodes(subscription_id, published_at);
+CREATE INDEX IF NOT EXISTS idx_podcast_episodes_status ON podcast_episodes(download_status);
 CREATE INDEX IF NOT EXISTS idx_bulk_action_undo_log_batch ON bulk_action_undo_log(batch_id);
 """
 

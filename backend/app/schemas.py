@@ -1378,6 +1378,66 @@ class AudiobookSyncExportResponse(BaseModel):
     generated_at: str
 
 
+class PodcastSubscriptionPayload(BaseModel):
+    title: str | None = None
+    feed_url: str
+    site_url: str | None = None
+    description: str | None = None
+    auto_download: bool = False
+    download_folder: str | None = None
+
+    @field_validator("feed_url")
+    @classmethod
+    def podcast_feed_required(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("feed_url is required")
+        return cleaned
+
+
+class PodcastSubscription(BaseModel):
+    id: int
+    title: str
+    feed_url: str
+    site_url: str | None = None
+    description: str | None = None
+    auto_download: bool = False
+    download_folder: str | None = None
+    last_checked_at: str | None = None
+    episode_count: int = 0
+    downloaded_count: int = 0
+    created_at: str
+    updated_at: str
+
+
+class PodcastEpisode(BaseModel):
+    id: int
+    subscription_id: int
+    subscription_title: str | None = None
+    guid: str
+    title: str
+    description: str | None = None
+    audio_url: str | None = None
+    published_at: str | None = None
+    duration_seconds: float | None = None
+    local_path: str | None = None
+    download_status: str = "remote"
+    downloaded_at: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class PodcastRefreshResponse(BaseModel):
+    subscription: PodcastSubscription
+    inserted: int = 0
+    updated: int = 0
+    total: int = 0
+
+
+class PodcastDownloadRequest(BaseModel):
+    download_folder: str | None = None
+
+
 class ClapConfigRequest(BaseModel):
     model_id: str | None = Field(default=None, max_length=200)
     cache_dir: str | None = None

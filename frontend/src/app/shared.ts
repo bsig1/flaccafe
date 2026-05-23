@@ -17,7 +17,7 @@ import type {
   Track,
 } from "../types/api";
 
-export type Page = "library" | "analysis" | "nowPlaying" | "artist" | "history" | "autodj" | "audiobooks" | "fileManagement" | "settings";
+export type Page = "library" | "analysis" | "nowPlaying" | "artist" | "history" | "autodj" | "audiobooks" | "podcasts" | "fileManagement" | "settings";
 export type LibraryView = "tracks" | "albums" | "playlists" | "inbox" | "smart" | "health";
 export type BackendStatus = "unknown" | "ok" | "down" | "restarting";
 export type PlaybackMode = "normal" | "repeatOne" | "repeatQueue" | "stopAfterCurrent";
@@ -40,6 +40,7 @@ export type KeyboardShortcutAction =
   | "page.history"
   | "page.autodj"
   | "page.audiobooks"
+  | "page.podcasts"
   | "page.fileManagement"
   | "page.settings"
   | "playback.playPause"
@@ -352,10 +353,11 @@ export const defaultKeyboardShortcuts: Record<KeyboardShortcutAction, KeyboardSh
   "page.nowPlaying": { key: "3", ctrl: true, alt: false, shift: false },
   "page.artist": { key: "4", ctrl: true, alt: false, shift: false },
   "page.audiobooks": { key: "5", ctrl: true, alt: false, shift: false },
-  "page.history": { key: "6", ctrl: true, alt: false, shift: false },
-  "page.autodj": { key: "7", ctrl: true, alt: false, shift: false },
-  "page.fileManagement": { key: "8", ctrl: true, alt: false, shift: false },
-  "page.settings": { key: "9", ctrl: true, alt: false, shift: false },
+  "page.podcasts": { key: "6", ctrl: true, alt: false, shift: false },
+  "page.history": { key: "7", ctrl: true, alt: false, shift: false },
+  "page.autodj": { key: "8", ctrl: true, alt: false, shift: false },
+  "page.fileManagement": { key: "9", ctrl: true, alt: false, shift: false },
+  "page.settings": { key: "0", ctrl: true, alt: false, shift: false },
   "playback.playPause": { key: "Space", ctrl: false, alt: false, shift: false },
   "playback.previous": { key: ",", ctrl: false, alt: true, shift: false },
   "playback.next": { key: ".", ctrl: false, alt: true, shift: false },
@@ -372,6 +374,7 @@ export const keyboardShortcutLabels: Record<KeyboardShortcutAction, string> = {
   "page.nowPlaying": "Now Playing page",
   "page.artist": "Artist page",
   "page.audiobooks": "Audiobooks page",
+  "page.podcasts": "Podcasts page",
   "page.history": "History page",
   "page.autodj": "AutoDJ page",
   "page.fileManagement": "File Management page",
@@ -395,6 +398,7 @@ export const keyboardShortcutGroups: Array<{ title: string; actions: KeyboardSho
       "page.nowPlaying",
       "page.artist",
       "page.audiobooks",
+      "page.podcasts",
       "page.history",
       "page.autodj",
       "page.fileManagement",
@@ -1213,7 +1217,7 @@ export function readUiPreferences(): UiPreferences {
       const parsed = JSON.parse(modern) as Partial<UiPreferences> & { playerLayout?: string };
       // Older builds stored compact mode as playerLayout; keep honoring it while using one setting now.
       const legacyMiniPlayer = parsed.playerLayout === "compact";
-      const validPages: Page[] = ["library", "analysis", "nowPlaying", "artist", "audiobooks", "history", "autodj", "fileManagement", "settings"];
+      const validPages: Page[] = ["library", "analysis", "nowPlaying", "artist", "audiobooks", "podcasts", "history", "autodj", "fileManagement", "settings"];
       return {
         ...defaults,
         ...parsed,

@@ -113,6 +113,13 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `GET /audiobooks/{track_id}/chapters` lists saved or generated audiobook chapters.
 - `PUT /audiobooks/{track_id}/chapters` replaces saved audiobook chapters.
 - `POST /audiobooks/sync-export` writes audiobook progress/bookmark/chapter metadata for device sync workflows.
+- `GET /podcasts/subscriptions` lists saved podcast feed subscriptions.
+- `POST /podcasts/subscriptions` creates or replaces a podcast subscription.
+- `PATCH /podcasts/subscriptions/{subscription_id}` updates a podcast subscription.
+- `DELETE /podcasts/subscriptions/{subscription_id}` deletes a podcast subscription and its episodes.
+- `POST /podcasts/subscriptions/{subscription_id}/refresh` fetches a feed and upserts episode rows.
+- `GET /podcasts/episodes` lists podcast episodes, optionally by subscription.
+- `POST /podcasts/episodes/{episode_id}/download` downloads an episode to the subscription or app podcast folder.
 
 ## Albums, Playlists, And Smart Playlists
 

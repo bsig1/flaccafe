@@ -91,6 +91,10 @@ import type {
   LyricsUpdateRequest,
   PlayEventEntry,
   PlaylistSummary,
+  PodcastEpisode,
+  PodcastRefreshResponse,
+  PodcastSubscription,
+  PodcastSubscriptionPayload,
   RecommendationProfile,
   RecommendationAbChoiceResponse,
   RecommendationAbTestResponse,
@@ -635,6 +639,43 @@ export function exportAudiobookSyncMetadata(trackIds?: number[] | null): Promise
   return request<AudiobookSyncExportResponse>("/audiobooks/sync-export", {
     method: "POST",
     body: JSON.stringify({ track_ids: trackIds?.length ? trackIds : null }),
+  });
+}
+
+export function fetchPodcastSubscriptions(): Promise<PodcastSubscription[]> {
+  return request<PodcastSubscription[]>("/podcasts/subscriptions");
+}
+
+export function savePodcastSubscription(
+  requestBody: PodcastSubscriptionPayload,
+  subscriptionId?: number | null,
+): Promise<PodcastSubscription> {
+  return request<PodcastSubscription>(
+    subscriptionId ? `/podcasts/subscriptions/${subscriptionId}` : "/podcasts/subscriptions",
+    {
+      method: subscriptionId ? "PATCH" : "POST",
+      body: JSON.stringify(requestBody),
+    },
+  );
+}
+
+export function deletePodcastSubscription(subscriptionId: number): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>(`/podcasts/subscriptions/${subscriptionId}`, { method: "DELETE" });
+}
+
+export function refreshPodcastSubscription(subscriptionId: number): Promise<PodcastRefreshResponse> {
+  return request<PodcastRefreshResponse>(`/podcasts/subscriptions/${subscriptionId}/refresh`, { method: "POST" });
+}
+
+export function fetchPodcastEpisodes(subscriptionId?: number | null, limit = 200): Promise<PodcastEpisode[]> {
+  const query = subscriptionId ? `?subscription_id=${subscriptionId}&limit=${limit}` : `?limit=${limit}`;
+  return request<PodcastEpisode[]>(`/podcasts/episodes${query}`);
+}
+
+export function downloadPodcastEpisode(episodeId: number, downloadFolder?: string | null): Promise<PodcastEpisode> {
+  return request<PodcastEpisode>(`/podcasts/episodes/${episodeId}/download`, {
+    method: "POST",
+    body: JSON.stringify({ download_folder: downloadFolder || null }),
   });
 }
 

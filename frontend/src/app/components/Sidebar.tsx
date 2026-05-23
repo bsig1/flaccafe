@@ -6,6 +6,7 @@ import {
   FileText,
   FolderCog,
   Library,
+  Podcast,
   Settings,
   UserRound,
   Wand2,
@@ -38,6 +39,7 @@ export function Sidebar({
   const toolItems = [
     { id: "artist" as const, label: "Artist", icon: UserRound },
     { id: "audiobooks" as const, label: "Audiobooks", icon: BookOpen },
+    { id: "podcasts" as const, label: "Podcasts", icon: Podcast },
     { id: "history" as const, label: "History", icon: Clock3 },
     { id: "analysis" as const, label: "Analysis", icon: BarChart3 },
     { id: "fileManagement" as const, label: "File Management", icon: FolderCog },
