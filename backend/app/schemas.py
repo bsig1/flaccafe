@@ -1438,6 +1438,29 @@ class PodcastDownloadRequest(BaseModel):
     download_folder: str | None = None
 
 
+class RadioStationPayload(BaseModel):
+    name: str
+    stream_url: str
+    homepage_url: str | None = None
+    genre: str | None = None
+    notes: str | None = None
+
+    @field_validator("name", "stream_url")
+    @classmethod
+    def radio_required_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("value is required")
+        return cleaned
+
+
+class RadioStation(RadioStationPayload):
+    id: int
+    last_played_at: str | None = None
+    created_at: str
+    updated_at: str
+
+
 class ClapConfigRequest(BaseModel):
     model_id: str | None = Field(default=None, max_length=200)
     cache_dir: str | None = None

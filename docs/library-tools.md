@@ -57,6 +57,10 @@ The Podcasts page is an optional RSS feed manager. Subscriptions and episode row
 
 Episode downloads are explicit. FLAC Cafe writes downloaded media into the subscription download folder, or `backend/exports/podcasts` when no folder is set. Downloaded files are not automatically added to the music library; scan the target folder when you want podcast files to appear beside local tracks.
 
+## Web Radio
+
+The Web Radio page stores stream bookmarks in SQLite and plays them through the WebView audio element. Save the direct stream URL, not just the station homepage. When playback starts, FLAC Cafe records `last_played_at` so favorite streams bubble up naturally.
+
 ## Regex Tag Cleanup
 
 The File Management page includes a preview-first regex search/replace tool for common text tags: title, artist, album, album artist, and genre. It is useful for cleanup patterns such as removing trailing `feat.` text, normalizing separators, or replacing repeated label suffixes.

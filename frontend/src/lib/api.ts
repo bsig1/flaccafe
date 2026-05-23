@@ -95,6 +95,8 @@ import type {
   PodcastRefreshResponse,
   PodcastSubscription,
   PodcastSubscriptionPayload,
+  RadioStation,
+  RadioStationPayload,
   RecommendationProfile,
   RecommendationAbChoiceResponse,
   RecommendationAbTestResponse,
@@ -677,6 +679,25 @@ export function downloadPodcastEpisode(episodeId: number, downloadFolder?: strin
     method: "POST",
     body: JSON.stringify({ download_folder: downloadFolder || null }),
   });
+}
+
+export function fetchRadioStations(): Promise<RadioStation[]> {
+  return request<RadioStation[]>("/radio/stations");
+}
+
+export function saveRadioStation(requestBody: RadioStationPayload, stationId?: number | null): Promise<RadioStation> {
+  return request<RadioStation>(stationId ? `/radio/stations/${stationId}` : "/radio/stations", {
+    method: stationId ? "PATCH" : "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function deleteRadioStation(stationId: number): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>(`/radio/stations/${stationId}`, { method: "DELETE" });
+}
+
+export function markRadioStationPlayed(stationId: number): Promise<RadioStation> {
+  return request<RadioStation>(`/radio/stations/${stationId}/played`, { method: "POST" });
 }
 
 export function fetchClapStatus(): Promise<ClapStatusResponse> {

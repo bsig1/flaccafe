@@ -120,6 +120,11 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `POST /podcasts/subscriptions/{subscription_id}/refresh` fetches a feed and upserts episode rows.
 - `GET /podcasts/episodes` lists podcast episodes, optionally by subscription.
 - `POST /podcasts/episodes/{episode_id}/download` downloads an episode to the subscription or app podcast folder.
+- `GET /radio/stations` lists web radio stream bookmarks.
+- `POST /radio/stations` creates or replaces a web radio bookmark by stream URL.
+- `PATCH /radio/stations/{station_id}` updates a web radio bookmark.
+- `DELETE /radio/stations/{station_id}` deletes a web radio bookmark.
+- `POST /radio/stations/{station_id}/played` records that a web radio bookmark was started.
 
 ## Albums, Playlists, And Smart Playlists
 

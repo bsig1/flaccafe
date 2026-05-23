@@ -1179,6 +1179,43 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(deleted.status_code, 200)
         self.assertTrue(deleted.json()["deleted"])
 
+    def test_radio_station_bookmarks_and_played_timestamp(self) -> None:
+        created = self.client.post(
+            "/radio/stations",
+            json={
+                "name": "Test Radio",
+                "stream_url": "https://example.test/live.mp3",
+                "homepage_url": "https://example.test",
+                "genre": "Jazz",
+                "notes": "Late night",
+            },
+        )
+        self.assertEqual(created.status_code, 200)
+        station_id = created.json()["id"]
+
+        stations = self.client.get("/radio/stations")
+        self.assertEqual(stations.status_code, 200)
+        self.assertEqual(stations.json()[0]["name"], "Test Radio")
+
+        played = self.client.post(f"/radio/stations/{station_id}/played")
+        self.assertEqual(played.status_code, 200)
+        self.assertIsNotNone(played.json()["last_played_at"])
+
+        updated = self.client.patch(
+            f"/radio/stations/{station_id}",
+            json={
+                "name": "Updated Radio",
+                "stream_url": "https://example.test/live.mp3",
+                "genre": "Ambient",
+            },
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["name"], "Updated Radio")
+
+        deleted = self.client.delete(f"/radio/stations/{station_id}")
+        self.assertEqual(deleted.status_code, 200)
+        self.assertTrue(deleted.json()["deleted"])
+
     def test_duplicate_actions_can_remove_selected_and_export_reports(self) -> None:
         first = self.root / "dup-action-a.mp3"
         second = self.root / "dup-action-b.mp3"

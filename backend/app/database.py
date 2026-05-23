@@ -292,6 +292,18 @@ CREATE TABLE IF NOT EXISTS podcast_episodes (
   UNIQUE(subscription_id, guid)
 );
 
+CREATE TABLE IF NOT EXISTS radio_stations (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  stream_url TEXT NOT NULL UNIQUE,
+  homepage_url TEXT,
+  genre TEXT,
+  notes TEXT,
+  last_played_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS artwork_cache (
   path_key TEXT PRIMARY KEY,
   path TEXT NOT NULL,
@@ -337,6 +349,8 @@ CREATE INDEX IF NOT EXISTS idx_audiobook_bookmarks_track ON audiobook_bookmarks(
 CREATE INDEX IF NOT EXISTS idx_audiobook_chapters_track ON audiobook_chapters(track_id, chapter_index);
 CREATE INDEX IF NOT EXISTS idx_podcast_episodes_subscription ON podcast_episodes(subscription_id, published_at);
 CREATE INDEX IF NOT EXISTS idx_podcast_episodes_status ON podcast_episodes(download_status);
+CREATE INDEX IF NOT EXISTS idx_radio_stations_name ON radio_stations(lower(name));
+CREATE INDEX IF NOT EXISTS idx_radio_stations_last_played ON radio_stations(last_played_at);
 CREATE INDEX IF NOT EXISTS idx_bulk_action_undo_log_batch ON bulk_action_undo_log(batch_id);
 """
 

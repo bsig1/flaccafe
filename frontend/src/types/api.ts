@@ -1312,6 +1312,21 @@ export interface PodcastRefreshResponse {
   total: number;
 }
 
+export interface RadioStationPayload {
+  name: string;
+  stream_url: string;
+  homepage_url?: string | null;
+  genre?: string | null;
+  notes?: string | null;
+}
+
+export interface RadioStation extends RadioStationPayload {
+  id: number;
+  last_played_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ClapStatusResponse {
   installed: boolean;
   dependencies: Record<string, boolean>;

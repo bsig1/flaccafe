@@ -210,6 +210,7 @@ import { HistoryPage } from "./pages/HistoryPage";
 import { LibraryPage } from "./pages/LibraryPage";
 import { NowPlayingPage } from "./pages/NowPlayingPage";
 import { PodcastsPage } from "./pages/PodcastsPage";
+import { RadioPage } from "./pages/RadioPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { MiniPlayerWindow } from "./player/MiniPlayerWindow";
 import { PlayerBar } from "./player/PlayerBar";
@@ -2993,6 +2994,7 @@ export default function App() {
         ["artist", "page.artist"],
         ["audiobooks", "page.audiobooks"],
         ["podcasts", "page.podcasts"],
+        ["radio", "page.radio"],
         ["history", "page.history"],
         ["autodj", "page.autodj"],
         ["fileManagement", "page.fileManagement"],
@@ -3329,6 +3331,8 @@ export default function App() {
             <AudiobooksPage setStatus={setStatus} />
           ) : activePage === "podcasts" ? (
             <PodcastsPage setStatus={setStatus} />
+          ) : activePage === "radio" ? (
+            <RadioPage setStatus={setStatus} />
           ) : activePage === "history" ? (
             <HistoryPage
               events={historyEvents}

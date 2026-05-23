@@ -102,6 +102,12 @@ from .podcasts import (
     refresh_subscription as refresh_podcast_subscription,
     upsert_subscription as upsert_podcast_subscription,
 )
+from .radio import (
+    delete_radio_station,
+    list_radio_stations,
+    mark_radio_station_played,
+    save_radio_station,
+)
 from .recommender import (
     album_token,
     artist_tokens,
@@ -243,6 +249,8 @@ from .schemas import (
     PodcastSubscription,
     PodcastSubscriptionPayload,
     RatingRequest,
+    RadioStation,
+    RadioStationPayload,
     ReportFileRequest,
     ReportFileResponse,
     RecommendationFeedbackRequest,
@@ -3080,6 +3088,42 @@ def download_podcast_episode_route(episode_id: int, request: PodcastDownloadRequ
     if episode is None:
         raise HTTPException(status_code=404, detail="Podcast episode not found")
     return PodcastEpisode(**episode)
+
+
+@app.get("/radio/stations", response_model=list[RadioStation])
+def get_radio_stations() -> list[RadioStation]:
+    return [RadioStation(**station) for station in list_radio_stations()]
+
+
+@app.post("/radio/stations", response_model=RadioStation)
+def create_radio_station(request: RadioStationPayload) -> RadioStation:
+    station = save_radio_station(request)
+    if station is None:
+        raise HTTPException(status_code=400, detail="Could not save radio station")
+    return RadioStation(**station)
+
+
+@app.patch("/radio/stations/{station_id}", response_model=RadioStation)
+def update_radio_station(station_id: int, request: RadioStationPayload) -> RadioStation:
+    station = save_radio_station(request, station_id)
+    if station is None:
+        raise HTTPException(status_code=404, detail="Radio station not found")
+    return RadioStation(**station)
+
+
+@app.delete("/radio/stations/{station_id}")
+def remove_radio_station(station_id: int) -> dict:
+    if not delete_radio_station(station_id):
+        raise HTTPException(status_code=404, detail="Radio station not found")
+    return {"deleted": True}
+
+
+@app.post("/radio/stations/{station_id}/played", response_model=RadioStation)
+def mark_radio_played(station_id: int) -> RadioStation:
+    station = mark_radio_station_played(station_id)
+    if station is None:
+        raise HTTPException(status_code=404, detail="Radio station not found")
+    return RadioStation(**station)
 
 
 @app.get("/library/health", response_model=LibraryHealthResponse)
