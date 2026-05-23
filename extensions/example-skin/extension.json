@@ -1,0 +1,11 @@
+{
+  "id": "flac-cafe.example-skin",
+  "name": "Example Skin Package",
+  "version": "0.1.0",
+  "kind": "skin",
+  "description": "A sample manifest that documents how FLAC Cafe discovers skins and extension metadata.",
+  "author": "FLAC Cafe contributors",
+  "entry": "theme.json",
+  "capabilities": ["theme-palette", "font-preset"],
+  "permissions": []
+}

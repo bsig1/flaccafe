@@ -7,6 +7,7 @@ Start here when you need the maintainer or user docs without hunting through the
 - [Keyboard Shortcuts](keyboard-shortcuts.md): default page and playback shortcuts, plus where to customize them.
 - [Troubleshooting](troubleshooting.md): backend startup, codec support, installer, and optional ML runtime checks.
 - [Themes](themes.md): JSON theme files, fonts, and where local theme folders live.
+- [Extensions And Skins](extensions.md): manifest package shape for skins and future plugins.
 - [Playback](playback.md): WebView playback, experimental native playback, fades, queue behavior, and diagnostics.
 - [CLAP Analysis](clap-analysis.md): optional audio analysis runtime, CPU/CUDA choices, and validation.
 - [Library Tools](library-tools.md): duplicate review, filename-to-tag inference, file organization, and undo.

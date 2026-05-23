@@ -13,6 +13,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from backend.app.database import connect, init_db, set_setting
+from backend.app.extensions import discover_extensions
 from backend.app.main import app
 from backend.app.scanner import file_fingerprint, file_modified_at, path_key
 
@@ -1285,6 +1286,31 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(body["pairs"][0]["left_track_id"], first_id)
         self.assertFalse(body["pairs"][0]["sample_accurate_ready"])
         self.assertTrue(body["pairs"][0]["warnings"])
+
+    def test_extension_discovery_validates_manifests(self) -> None:
+        extension_dir = self.root / "extensions"
+        package_dir = extension_dir / "example"
+        package_dir.mkdir(parents=True)
+        (package_dir / "theme.json").write_text("{}", encoding="utf-8")
+        (package_dir / "extension.json").write_text(
+            json.dumps(
+                {
+                    "id": "flac-cafe.test",
+                    "name": "Test Skin",
+                    "version": "1.0.0",
+                    "kind": "skin",
+                    "entry": "theme.json",
+                    "capabilities": ["theme-palette"],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        response = discover_extensions([extension_dir], create_user_dir=False)
+
+        self.assertEqual(response["extensions"][0]["id"], "flac-cafe.test")
+        self.assertTrue(response["extensions"][0]["valid"])
+        self.assertEqual(response["extensions"][0]["capabilities"], ["theme-palette"])
 
     def test_duplicate_actions_can_remove_selected_and_export_reports(self) -> None:
         first = self.root / "dup-action-a.mp3"

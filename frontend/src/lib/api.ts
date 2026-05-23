@@ -60,6 +60,7 @@ import type {
   CustomTagBatchRequest,
   CustomTagBatchResponse,
   ExportResponse,
+  ExtensionListResponse,
   DuplicateActionRequest,
   DuplicateActionResponse,
   DeviceSyncDevicesResponse,
@@ -763,6 +764,14 @@ export function validateGaplessPlayback(requestBody: GaplessValidationRequest): 
     method: "POST",
     body: JSON.stringify(requestBody),
   });
+}
+
+export function fetchExtensions(): Promise<ExtensionListResponse> {
+  return request<ExtensionListResponse>("/extensions");
+}
+
+export function reloadExtensions(): Promise<ExtensionListResponse> {
+  return request<ExtensionListResponse>("/extensions/reload", { method: "POST" });
 }
 
 export function fetchClapStatus(): Promise<ClapStatusResponse> {

@@ -13,6 +13,7 @@ This is still an alpha prototype. Expect sharp edges.
 - Local playback through the Tauri WebView with queue controls, fade/crossfade, sleep timer, lyrics, artist info, and media-key integration.
 - AutoDJ with beginner and advanced controls, temperature sampling, cooldowns, unrated exploration, seed-track similarity, and optional CLAP audio embeddings.
 - Theme and font customization through JSON theme files plus in-app settings.
+- Manifest-based extension and skin discovery for advanced customization experiments.
 - MSI packaging helpers for Windows.
 
 ## Stack
@@ -110,6 +111,7 @@ Before publishing, follow [docs/release-checklist.md](docs/release-checklist.md)
 - [Project Structure](docs/project-structure.md)
 - [Playback](docs/playback.md)
 - [Themes](docs/themes.md)
+- [Extensions And Skins](docs/extensions.md)
 - [CLAP Analysis](docs/clap-analysis.md)
 - [Keyboard Shortcuts](docs/keyboard-shortcuts.md)
 - [Troubleshooting](docs/troubleshooting.md)

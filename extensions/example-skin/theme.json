@@ -1,0 +1,14 @@
+{
+  "name": "Example Skin",
+  "fontChoice": "system",
+  "palette": {
+    "ink": "31 25 21",
+    "panel": "43 35 29",
+    "sidebar": "27 23 21",
+    "popover": "51 42 34",
+    "line": "83 70 58",
+    "muted": "184 169 149",
+    "moss": "151 178 142",
+    "ember": "230 157 99"
+  }
+}

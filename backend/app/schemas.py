@@ -1599,6 +1599,32 @@ class GaplessValidationResponse(BaseModel):
     message: str
 
 
+class ExtensionManifest(BaseModel):
+    id: str
+    name: str
+    version: str
+    kind: str
+    description: str | None = None
+    author: str | None = None
+    homepage: str | None = None
+    entry: str | None = None
+    entry_path: str | None = None
+    directory: str
+    manifest_path: str
+    capabilities: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
+    enabled: bool = True
+    valid: bool = True
+    errors: list[str] = Field(default_factory=list)
+
+
+class ExtensionListResponse(BaseModel):
+    user_extensions_dir: str
+    search_directories: list[str] = Field(default_factory=list)
+    manifest_names: list[str] = Field(default_factory=list)
+    extensions: list[ExtensionManifest] = Field(default_factory=list)
+
+
 class ClapConfigRequest(BaseModel):
     model_id: str | None = Field(default=None, max_length=200)
     cache_dir: str | None = None

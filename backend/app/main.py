@@ -32,6 +32,7 @@ from mutagen.mp4 import MP4Cover
 
 from .config import APP_STORAGE_ROOT, EXPORT_DIR, MODEL_DIR, database_path
 from .database import connect, get_setting, init_db, rows_to_dicts, set_setting
+from .extensions import discover_extensions
 from .file_tags import write_custom_tags, write_track_artwork, write_track_lyrics, write_track_metadata, write_track_rating
 from .gapless import gapless_validate
 from . import inbox as inbox_service
@@ -218,6 +219,7 @@ from .schemas import (
     DeviceSyncResponse,
     ExportRequest,
     ExportResponse,
+    ExtensionListResponse,
     FileOrganizationChange,
     FileOrganizationReportRequest,
     FileOrganizationReportResponse,
@@ -3207,6 +3209,16 @@ def validate_gapless_playback(request: GaplessValidationRequest) -> GaplessValid
     if not request.track_ids and request.album_id is None:
         raise HTTPException(status_code=400, detail="Provide track_ids or album_id")
     return GaplessValidationResponse(**gapless_validate(request.track_ids, request.album_id, request.limit))
+
+
+@app.get("/extensions", response_model=ExtensionListResponse)
+def list_extensions() -> ExtensionListResponse:
+    return ExtensionListResponse(**discover_extensions())
+
+
+@app.post("/extensions/reload", response_model=ExtensionListResponse)
+def reload_extensions() -> ExtensionListResponse:
+    return ExtensionListResponse(**discover_extensions())
 
 
 @app.get("/library/health", response_model=LibraryHealthResponse)

@@ -9,6 +9,7 @@ FLAC Cafe is split by runtime boundary first, then by responsibility. The import
 ├── backend/          Python FastAPI backend, scanner, SQLite, recommender, optional ML hooks
 ├── frontend/         React/TypeScript/Tailwind UI and browser-facing API clients
 ├── src-tauri/        Tauri v2 shell, Windows commands, app icons, and installer metadata
+├── extensions/       bundled extension/skin manifest examples
 ├── scripts/          Windows-oriented development, test, validation, and packaging helpers
 ├── docs/             Maintainer and user-facing project documentation
 ├── .github/          Issue templates and CI workflow
@@ -32,6 +33,7 @@ backend/
 │   ├── database.py          SQLite schema setup and migration helpers
 │   ├── scanner.py           recursive library scanning and mutagen metadata reads
 │   ├── file_tags.py         opt-in metadata, rating, and lyric writes to audio files
+│   ├── extensions.py        skin/plugin manifest discovery and validation
 │   ├── audiobooks.py        long-form resume positions, bookmarks, chapters, and sync exports
 │   ├── inbox.py             Inbox notes and auto-review rule matching
 │   ├── library_tools.py     filename-tag inference and file-organization helpers

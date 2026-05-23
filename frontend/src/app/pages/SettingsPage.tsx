@@ -55,6 +55,7 @@ import {
   formatTime,
 } from "../shared";
 import { KeyboardShortcutsSection } from "./settings/KeyboardShortcutsSection";
+import { ExtensionsSection } from "./settings/ExtensionsSection";
 import { MaintenanceSection } from "./settings/MaintenanceSection";
 import {
   PlayerSettingsSection,
@@ -456,6 +457,8 @@ export function SettingsPage({
             uiPreferences={uiPreferences}
             setUiPreferences={setUiPreferences}
           />
+
+          <ExtensionsSection />
 
           <DisclosureSection title="AutoDJ Defaults" description="Queue size, temperature, and similarity bias">
             <div className="grid gap-4 text-sm text-neutral-200">

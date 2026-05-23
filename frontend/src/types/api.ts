@@ -1439,6 +1439,32 @@ export interface GaplessValidationResponse {
   message: string;
 }
 
+export interface ExtensionManifest {
+  id: string;
+  name: string;
+  version: string;
+  kind: string;
+  description: string | null;
+  author: string | null;
+  homepage: string | null;
+  entry: string | null;
+  entry_path: string | null;
+  directory: string;
+  manifest_path: string;
+  capabilities: string[];
+  permissions: string[];
+  enabled: boolean;
+  valid: boolean;
+  errors: string[];
+}
+
+export interface ExtensionListResponse {
+  user_extensions_dir: string;
+  search_directories: string[];
+  manifest_names: string[];
+  extensions: ExtensionManifest[];
+}
+
 export interface ClapStatusResponse {
   installed: boolean;
   dependencies: Record<string, boolean>;

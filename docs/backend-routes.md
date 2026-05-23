@@ -11,6 +11,8 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `GET /settings` returns library path, database path, and user flags.
 - `PATCH /settings` updates user flags such as file tag writing.
 - `POST /settings/backup` copies the SQLite database to the export folder.
+- `GET /extensions` lists discovered skin/plugin manifests.
+- `POST /extensions/reload` rescans extension manifest folders.
 
 ## Library And Maintenance
 

@@ -6,7 +6,6 @@
 - Smoke-test CD ripping on a Windows machine with an optical drive and `cdparanoia` or `cdda2wav` installed in the app tool folder.
 
 ## MusicBee-Inspired Feature Gaps
-- Add a skin/plugin extension story for advanced users without making the core app harder to maintain.
 - Add deeper library importers for MusicBee, iTunes, and Windows Media Player ratings/play counts.
 
 ## Code Health
