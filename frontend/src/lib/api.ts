@@ -15,6 +15,13 @@ import type {
   AudioConversionSetupRequest,
   AudioConversionSetupResponse,
   AudioConversionStartResponse,
+  AudiobookBookmark,
+  AudiobookBookmarkRequest,
+  AudiobookChapter,
+  AudiobookListResponse,
+  AudiobookProgressRequest,
+  AudiobookProgressResponse,
+  AudiobookSyncExportResponse,
   AutoDjAvoidRule,
   AutoDjResponse,
   AutoDjSettings,
@@ -585,6 +592,50 @@ export function playCdTrack(trackNumber: number, driveId?: string | null): Promi
 
 export function stopCdPlayback(): Promise<CdPlaybackResponse> {
   return request<CdPlaybackResponse>("/library/tools/cd-rip/playback/stop", { method: "POST" });
+}
+
+export function fetchAudiobooks(limit = 200, offset = 0): Promise<AudiobookListResponse> {
+  return request<AudiobookListResponse>(`/audiobooks?limit=${limit}&offset=${offset}`);
+}
+
+export function updateAudiobookProgress(trackId: number, requestBody: AudiobookProgressRequest): Promise<AudiobookProgressResponse> {
+  return request<AudiobookProgressResponse>(`/audiobooks/${trackId}/progress`, {
+    method: "PATCH",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function fetchAudiobookBookmarks(trackId: number): Promise<AudiobookBookmark[]> {
+  return request<AudiobookBookmark[]>(`/audiobooks/${trackId}/bookmarks`);
+}
+
+export function createAudiobookBookmark(trackId: number, requestBody: AudiobookBookmarkRequest): Promise<AudiobookBookmark> {
+  return request<AudiobookBookmark>(`/audiobooks/${trackId}/bookmarks`, {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function deleteAudiobookBookmark(bookmarkId: number): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>(`/audiobooks/bookmarks/${bookmarkId}`, { method: "DELETE" });
+}
+
+export function fetchAudiobookChapters(trackId: number): Promise<AudiobookChapter[]> {
+  return request<AudiobookChapter[]>(`/audiobooks/${trackId}/chapters`);
+}
+
+export function saveAudiobookChapters(trackId: number, chapters: AudiobookChapter[]): Promise<AudiobookChapter[]> {
+  return request<AudiobookChapter[]>(`/audiobooks/${trackId}/chapters`, {
+    method: "PUT",
+    body: JSON.stringify({ chapters }),
+  });
+}
+
+export function exportAudiobookSyncMetadata(trackIds?: number[] | null): Promise<AudiobookSyncExportResponse> {
+  return request<AudiobookSyncExportResponse>("/audiobooks/sync-export", {
+    method: "POST",
+    body: JSON.stringify({ track_ids: trackIds?.length ? trackIds : null }),
+  });
 }
 
 export function fetchClapStatus(): Promise<ClapStatusResponse> {

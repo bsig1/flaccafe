@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  BookOpen,
   Clock3,
   Coffee,
   FileText,
@@ -36,6 +37,7 @@ export function Sidebar({
   ];
   const toolItems = [
     { id: "artist" as const, label: "Artist", icon: UserRound },
+    { id: "audiobooks" as const, label: "Audiobooks", icon: BookOpen },
     { id: "history" as const, label: "History", icon: Clock3 },
     { id: "analysis" as const, label: "Analysis", icon: BarChart3 },
     { id: "fileManagement" as const, label: "File Management", icon: FolderCog },

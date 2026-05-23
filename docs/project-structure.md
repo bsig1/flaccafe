@@ -32,6 +32,7 @@ backend/
 │   ├── database.py          SQLite schema setup and migration helpers
 │   ├── scanner.py           recursive library scanning and mutagen metadata reads
 │   ├── file_tags.py         opt-in metadata, rating, and lyric writes to audio files
+│   ├── audiobooks.py        long-form resume positions, bookmarks, chapters, and sync exports
 │   ├── inbox.py             Inbox notes and auto-review rule matching
 │   ├── library_tools.py     filename-tag inference and file-organization helpers
 │   ├── library_watcher.py   background folder-watch detection and pending-change apply logic

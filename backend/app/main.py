@@ -65,6 +65,16 @@ from .audio_conversion_jobs import (
     resolve_ffmpeg_path,
     start_audio_conversion_job,
 )
+from .audiobooks import (
+    add_bookmark as add_audiobook_bookmark,
+    audiobook_sync_export,
+    delete_bookmark as delete_audiobook_bookmark,
+    list_audiobooks,
+    list_bookmarks as list_audiobook_bookmarks,
+    list_chapters as list_audiobook_chapters,
+    replace_chapters as replace_audiobook_chapters,
+    upsert_audiobook_progress,
+)
 from .cd_ripping import (
     cancel_cd_rip_job,
     cd_rip_setup,
@@ -110,6 +120,15 @@ from .schemas import (
     AudioConversionSetupRequest,
     AudioConversionSetupResponse,
     AudioConversionStartResponse,
+    AudiobookBookmark,
+    AudiobookBookmarkRequest,
+    AudiobookChapter,
+    AudiobookChapterUpdateRequest,
+    AudiobookListResponse,
+    AudiobookProgressRequest,
+    AudiobookProgressResponse,
+    AudiobookSyncExportRequest,
+    AudiobookSyncExportResponse,
     CdPlaybackRequest,
     CdPlaybackResponse,
     CdRipMetadataRequest,
@@ -2937,6 +2956,60 @@ def stop_cd_playback_route() -> CdPlaybackResponse:
         return CdPlaybackResponse(**stop_cd_playback())
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/audiobooks", response_model=AudiobookListResponse)
+def get_audiobooks(limit: int = Query(default=200, ge=1, le=1000), offset: int = Query(default=0, ge=0)) -> AudiobookListResponse:
+    return AudiobookListResponse(**list_audiobooks(limit, offset))
+
+
+@app.patch("/audiobooks/{track_id}/progress", response_model=AudiobookProgressResponse)
+def update_audiobook_progress(track_id: int, request: AudiobookProgressRequest) -> AudiobookProgressResponse:
+    progress = upsert_audiobook_progress(track_id, request.position_seconds, request.duration_seconds)
+    if progress is None:
+        raise HTTPException(status_code=404, detail="Audiobook track not found")
+    return AudiobookProgressResponse(**progress)
+
+
+@app.get("/audiobooks/{track_id}/bookmarks", response_model=list[AudiobookBookmark])
+def get_audiobook_bookmarks(track_id: int) -> list[AudiobookBookmark]:
+    return [AudiobookBookmark(**bookmark) for bookmark in list_audiobook_bookmarks(track_id)]
+
+
+@app.post("/audiobooks/{track_id}/bookmarks", response_model=AudiobookBookmark)
+def create_audiobook_bookmark(track_id: int, request: AudiobookBookmarkRequest) -> AudiobookBookmark:
+    bookmark = add_audiobook_bookmark(track_id, request.position_seconds, request.label, request.note)
+    if bookmark is None:
+        raise HTTPException(status_code=404, detail="Audiobook track not found")
+    return AudiobookBookmark(**bookmark)
+
+
+@app.delete("/audiobooks/bookmarks/{bookmark_id}")
+def remove_audiobook_bookmark(bookmark_id: int) -> dict:
+    if not delete_audiobook_bookmark(bookmark_id):
+        raise HTTPException(status_code=404, detail="Audiobook bookmark not found")
+    return {"deleted": True}
+
+
+@app.get("/audiobooks/{track_id}/chapters", response_model=list[AudiobookChapter])
+def get_audiobook_chapters(track_id: int) -> list[AudiobookChapter]:
+    return [AudiobookChapter(**chapter) for chapter in list_audiobook_chapters(track_id)]
+
+
+@app.put("/audiobooks/{track_id}/chapters", response_model=list[AudiobookChapter])
+def update_audiobook_chapters(track_id: int, request: AudiobookChapterUpdateRequest) -> list[AudiobookChapter]:
+    chapters = replace_audiobook_chapters(track_id, [chapter.model_dump(mode="json") for chapter in request.chapters])
+    if chapters is None:
+        raise HTTPException(status_code=404, detail="Audiobook track not found")
+    return [AudiobookChapter(**chapter) for chapter in chapters]
+
+
+@app.post("/audiobooks/sync-export", response_model=AudiobookSyncExportResponse)
+def export_audiobook_sync_metadata(request: AudiobookSyncExportRequest) -> AudiobookSyncExportResponse:
+    try:
+        return AudiobookSyncExportResponse(**audiobook_sync_export(request.track_ids, request.limit))
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Could not export audiobook sync metadata: {exc}") from exc
 
 
 @app.get("/library/health", response_model=LibraryHealthResponse)

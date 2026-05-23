@@ -105,6 +105,14 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `POST /tracks/{track_id}/played` records a play.
 - `POST /tracks/{track_id}/skipped` records a skip.
 - `GET /history` returns recent play, skip, and rating events.
+- `GET /audiobooks` lists audiobook-like local tracks with resume/bookmark/chapter counts.
+- `PATCH /audiobooks/{track_id}/progress` saves an audiobook resume position.
+- `GET /audiobooks/{track_id}/bookmarks` lists audiobook bookmarks.
+- `POST /audiobooks/{track_id}/bookmarks` creates an audiobook bookmark.
+- `DELETE /audiobooks/bookmarks/{bookmark_id}` deletes an audiobook bookmark.
+- `GET /audiobooks/{track_id}/chapters` lists saved or generated audiobook chapters.
+- `PUT /audiobooks/{track_id}/chapters` replaces saved audiobook chapters.
+- `POST /audiobooks/sync-export` writes audiobook progress/bookmark/chapter metadata for device sync workflows.
 
 ## Albums, Playlists, And Smart Playlists
 

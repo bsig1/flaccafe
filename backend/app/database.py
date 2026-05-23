@@ -234,6 +234,34 @@ CREATE TABLE IF NOT EXISTS device_sync_profiles (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS audiobook_progress (
+  track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+  position_seconds REAL NOT NULL DEFAULT 0,
+  duration_seconds REAL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS audiobook_bookmarks (
+  id INTEGER PRIMARY KEY,
+  track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+  position_seconds REAL NOT NULL DEFAULT 0,
+  label TEXT NOT NULL DEFAULT '',
+  note TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS audiobook_chapters (
+  id INTEGER PRIMARY KEY,
+  track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+  chapter_index INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  start_seconds REAL NOT NULL DEFAULT 0,
+  end_seconds REAL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(track_id, chapter_index)
+);
+
 CREATE TABLE IF NOT EXISTS artwork_cache (
   path_key TEXT PRIMARY KEY,
   path TEXT NOT NULL,
@@ -275,6 +303,8 @@ CREATE INDEX IF NOT EXISTS idx_track_inbox_state_status ON track_inbox_state(sta
 CREATE INDEX IF NOT EXISTS idx_track_inbox_notes_updated_at ON track_inbox_notes(updated_at);
 CREATE INDEX IF NOT EXISTS idx_inbox_auto_review_rules_enabled ON inbox_auto_review_rules(enabled, updated_at);
 CREATE INDEX IF NOT EXISTS idx_device_sync_profiles_name ON device_sync_profiles(name);
+CREATE INDEX IF NOT EXISTS idx_audiobook_bookmarks_track ON audiobook_bookmarks(track_id, position_seconds);
+CREATE INDEX IF NOT EXISTS idx_audiobook_chapters_track ON audiobook_chapters(track_id, chapter_index);
 CREATE INDEX IF NOT EXISTS idx_bulk_action_undo_log_batch ON bulk_action_undo_log(batch_id);
 """
 

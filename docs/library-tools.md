@@ -43,6 +43,14 @@ Use Check Now for an immediate pass, then apply selected changes after reviewing
 
 When the watcher detects a new pending-change set, it records a notification summary and the app can surface it as a toast or File Management banner. Dismissing the notification does not apply changes; it only marks the notice reviewed.
 
+## Audiobooks
+
+The Audiobooks page shows long-form tracks separately from the main music table. A track appears there when its genre or path looks audiobook/book-oriented, such as `Audiobook`, `Audio Book`, or an audiobook folder.
+
+Audiobook resume positions are stored in SQLite, not written back to audio files. The page also supports per-track bookmarks and editable chapter rows. Chapter text uses `index|start|end|title`, with times like `1:23:45` or `12:34`; the end time can be blank.
+
+The sync export writes a JSON file with track metadata, resume position, bookmarks, and chapters. This gives phone/device workflows a stable handoff format without forcing FLAC Cafe to invent a device-specific audiobook database.
+
 ## Regex Tag Cleanup
 
 The File Management page includes a preview-first regex search/replace tool for common text tags: title, artist, album, album artist, and genre. It is useful for cleanup patterns such as removing trailing `feat.` text, normalizing separators, or replacing repeated label suffixes.

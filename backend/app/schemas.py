@@ -1297,6 +1297,87 @@ class CdPlaybackResponse(BaseModel):
     message: str
 
 
+class AudiobookTrack(BaseModel):
+    id: int
+    path: str
+    title: str | None = None
+    artist: str | None = None
+    album: str | None = None
+    album_artist: str | None = None
+    track_number: int | None = None
+    disc_number: int | None = None
+    genre: str | None = None
+    year: int | None = None
+    duration_seconds: float | None = None
+    rating: float | None = None
+    play_count: int = 0
+    last_played_at: str | None = None
+    date_added: str
+    position_seconds: float = 0
+    progress_percent: float = 0
+    bookmark_count: int = 0
+    chapter_count: int = 0
+    progress_updated_at: str | None = None
+
+
+class AudiobookListResponse(BaseModel):
+    total: int = 0
+    tracks: list[AudiobookTrack] = Field(default_factory=list)
+
+
+class AudiobookProgressRequest(BaseModel):
+    position_seconds: float = Field(ge=0)
+    duration_seconds: float | None = Field(default=None, ge=0)
+
+
+class AudiobookProgressResponse(BaseModel):
+    track_id: int
+    position_seconds: float
+    duration_seconds: float | None = None
+    updated_at: str
+
+
+class AudiobookBookmarkRequest(BaseModel):
+    position_seconds: float = Field(ge=0)
+    label: str = "Bookmark"
+    note: str | None = None
+
+
+class AudiobookBookmark(BaseModel):
+    id: int
+    track_id: int
+    position_seconds: float
+    label: str
+    note: str | None = None
+    created_at: str
+
+
+class AudiobookChapter(BaseModel):
+    id: int | None = None
+    track_id: int | None = None
+    chapter_index: int = Field(ge=1)
+    title: str
+    start_seconds: float = Field(ge=0)
+    end_seconds: float | None = Field(default=None, ge=0)
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class AudiobookChapterUpdateRequest(BaseModel):
+    chapters: list[AudiobookChapter] = Field(default_factory=list, max_length=500)
+
+
+class AudiobookSyncExportRequest(BaseModel):
+    track_ids: list[int] | None = Field(default=None, max_length=10000)
+    limit: int = Field(default=10000, ge=1, le=100000)
+
+
+class AudiobookSyncExportResponse(BaseModel):
+    export_path: str
+    track_count: int
+    generated_at: str
+
+
 class ClapConfigRequest(BaseModel):
     model_id: str | None = Field(default=None, max_length=200)
     cache_dir: str | None = None

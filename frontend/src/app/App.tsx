@@ -202,6 +202,7 @@ import {
 } from "./components/modals";
 import { AnalysisPage } from "./pages/AnalysisPage";
 import { ArtistPage } from "./pages/ArtistPage";
+import { AudiobooksPage } from "./pages/AudiobooksPage";
 import { AutoDjPage } from "./pages/AutoDjPage";
 import { BackendRecoveryPage } from "./pages/BackendRecoveryPage";
 import { FileManagementPage } from "./pages/FileManagementPage";
@@ -2989,6 +2990,7 @@ export default function App() {
         ["analysis", "page.analysis"],
         ["nowPlaying", "page.nowPlaying"],
         ["artist", "page.artist"],
+        ["audiobooks", "page.audiobooks"],
         ["history", "page.history"],
         ["autodj", "page.autodj"],
         ["fileManagement", "page.fileManagement"],
@@ -3321,6 +3323,8 @@ export default function App() {
               onRefresh={() => void loadArtistInfo(true)}
               onPlayTrack={handlePlayTrack}
             />
+          ) : activePage === "audiobooks" ? (
+            <AudiobooksPage setStatus={setStatus} />
           ) : activePage === "history" ? (
             <HistoryPage
               events={historyEvents}

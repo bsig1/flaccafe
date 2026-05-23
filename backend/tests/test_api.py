@@ -1071,6 +1071,66 @@ class ApiTests(unittest.TestCase):
         self.assertGreaterEqual(len(commands), 2)
         self.assertIn("-metadata title=First Song", " ".join(commands[-1]))
 
+    def test_audiobook_progress_bookmarks_chapters_and_sync_export(self) -> None:
+        audio_file = self.root / "Audiobooks" / "Author" / "book.mp3"
+        audio_file.parent.mkdir(parents=True)
+        audio_file.write_bytes(b"audio")
+        track_id = insert_track(
+            audio_file,
+            title="Book",
+            artist="Author",
+            album="Book Album",
+            genre="Audiobook",
+            duration_seconds=3600,
+        )
+
+        listing = self.client.get("/audiobooks")
+        self.assertEqual(listing.status_code, 200)
+        self.assertEqual(listing.json()["total"], 1)
+        self.assertEqual(listing.json()["tracks"][0]["id"], track_id)
+
+        progress = self.client.patch(
+            f"/audiobooks/{track_id}/progress",
+            json={"position_seconds": 120, "duration_seconds": 3600},
+        )
+        self.assertEqual(progress.status_code, 200)
+        self.assertEqual(progress.json()["position_seconds"], 120)
+
+        bookmark = self.client.post(
+            f"/audiobooks/{track_id}/bookmarks",
+            json={"position_seconds": 125, "label": "Good part", "note": "Remember this"},
+        )
+        self.assertEqual(bookmark.status_code, 200)
+        bookmark_id = bookmark.json()["id"]
+        bookmarks = self.client.get(f"/audiobooks/{track_id}/bookmarks")
+        self.assertEqual(bookmarks.status_code, 200)
+        self.assertEqual(bookmarks.json()[0]["label"], "Good part")
+
+        chapters = self.client.put(
+            f"/audiobooks/{track_id}/chapters",
+            json={
+                "chapters": [
+                    {"chapter_index": 1, "title": "Opening", "start_seconds": 0, "end_seconds": 600},
+                    {"chapter_index": 2, "title": "Middle", "start_seconds": 600, "end_seconds": None},
+                ],
+            },
+        )
+        self.assertEqual(chapters.status_code, 200)
+        self.assertEqual(len(chapters.json()), 2)
+
+        export = self.client.post("/audiobooks/sync-export", json={"track_ids": [track_id]})
+        self.assertEqual(export.status_code, 200)
+        export_path = Path(export.json()["export_path"])
+        self.assertTrue(export_path.exists())
+        payload = json.loads(export_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["tracks"][0]["track"]["id"], track_id)
+        self.assertEqual(payload["tracks"][0]["bookmarks"][0]["label"], "Good part")
+        export_path.unlink(missing_ok=True)
+
+        deleted = self.client.delete(f"/audiobooks/bookmarks/{bookmark_id}")
+        self.assertEqual(deleted.status_code, 200)
+        self.assertTrue(deleted.json()["deleted"])
+
     def test_duplicate_actions_can_remove_selected_and_export_reports(self) -> None:
         first = self.root / "dup-action-a.mp3"
         second = self.root / "dup-action-b.mp3"

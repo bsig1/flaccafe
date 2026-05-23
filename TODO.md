@@ -6,7 +6,6 @@
 - Smoke-test CD ripping on a Windows machine with an optical drive and `cdparanoia` or `cdda2wav` installed in the app tool folder.
 
 ## MusicBee-Inspired Feature Gaps
-- Add audiobook handling with separate library views, resume position, bookmarks, chapter support, and sync-friendly metadata.
 - Add podcast subscriptions and episode download management as an optional non-core module.
 - Add web radio bookmarks and stream playback as an optional non-core module.
 - Add Last.fm/ListenBrainz scrobbling, loved-track sync, and optional import of historical play counts/ratings.

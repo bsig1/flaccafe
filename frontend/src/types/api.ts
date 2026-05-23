@@ -1192,6 +1192,78 @@ export interface CdPlaybackResponse {
   message: string;
 }
 
+export interface AudiobookTrack {
+  id: number;
+  path: string;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  album_artist: string | null;
+  track_number: number | null;
+  disc_number: number | null;
+  genre: string | null;
+  year: number | null;
+  duration_seconds: number | null;
+  rating: number | null;
+  play_count: number;
+  last_played_at: string | null;
+  date_added: string;
+  position_seconds: number;
+  progress_percent: number;
+  bookmark_count: number;
+  chapter_count: number;
+  progress_updated_at: string | null;
+}
+
+export interface AudiobookListResponse {
+  total: number;
+  tracks: AudiobookTrack[];
+}
+
+export interface AudiobookProgressRequest {
+  position_seconds: number;
+  duration_seconds?: number | null;
+}
+
+export interface AudiobookProgressResponse {
+  track_id: number;
+  position_seconds: number;
+  duration_seconds: number | null;
+  updated_at: string;
+}
+
+export interface AudiobookBookmarkRequest {
+  position_seconds: number;
+  label?: string;
+  note?: string | null;
+}
+
+export interface AudiobookBookmark {
+  id: number;
+  track_id: number;
+  position_seconds: number;
+  label: string;
+  note: string | null;
+  created_at: string;
+}
+
+export interface AudiobookChapter {
+  id?: number | null;
+  track_id?: number | null;
+  chapter_index: number;
+  title: string;
+  start_seconds: number;
+  end_seconds?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface AudiobookSyncExportResponse {
+  export_path: string;
+  track_count: number;
+  generated_at: string;
+}
+
 export interface ClapStatusResponse {
   installed: boolean;
   dependencies: Record<string, boolean>;
