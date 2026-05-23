@@ -119,12 +119,14 @@ function drawRadial(context: CanvasRenderingContext2D, width: number, height: nu
 export function AudioVisualizer({
   active,
   className = "",
+  frameless = false,
   frame,
   seed = 0,
   style,
 }: {
   active: boolean;
   className?: string;
+  frameless?: boolean;
   frame: VisualizerFrame | null;
   seed?: number;
   style: NowPlayingVisualizerStyle;
@@ -168,13 +170,15 @@ export function AudioVisualizer({
         return;
       }
       resize();
-      const panel = cssRgb("--color-panel", "31 24 21");
-      const line = cssRgb("--color-line", "79 68 60");
       context.clearRect(0, 0, width, height);
-      context.fillStyle = `rgba(${panel} / 0.42)`;
-      context.fillRect(0, 0, width, height);
-      context.strokeStyle = `rgba(${line} / 0.42)`;
-      context.strokeRect(0.5, 0.5, width - 1, height - 1);
+      if (!frameless) {
+        const panel = cssRgb("--color-panel", "31 24 21");
+        const line = cssRgb("--color-line", "79 68 60");
+        context.fillStyle = `rgba(${panel} / 0.42)`;
+        context.fillRect(0, 0, width, height);
+        context.strokeStyle = `rgba(${line} / 0.42)`;
+        context.strokeRect(0.5, 0.5, width - 1, height - 1);
+      }
 
       const liveFrame = latestFrameRef.current?.isLive ? latestFrameRef.current : null;
       const level = active ? Math.max(liveFrame?.level ?? 0.18, 0.08) : 0.04;
@@ -199,7 +203,7 @@ export function AudioVisualizer({
       canceled = true;
       observer.disconnect();
     };
-  }, [active, seed, style]);
+  }, [active, frameless, seed, style]);
 
   if (style === "off") {
     return null;

@@ -100,7 +100,7 @@ frontend/
 └── vitest.config.ts
 ```
 
-Add page-level UI in `frontend/src/app/pages/`. When a page grows into several independent panels, keep the page as the coordinator and move those panels into a same-named subfolder such as `pages/settings/` or `pages/file-management/`. Add reusable controls in `frontend/src/app/components/`. Keep backend calls in `frontend/src/lib/api.ts` instead of calling `fetch` from page components. Keep native Tauri calls behind small bridge modules in `frontend/src/lib/`.
+Add page-level UI in `frontend/src/app/pages/`. When a page grows into several independent panels, keep the page as the coordinator and move those panels into a same-named subfolder such as `pages/settings/` or `pages/file-management/`. File Management uses that pattern for self-contained tools plus its search/category navigator, so new maintenance tools should usually land there instead of expanding `FileManagementPage.tsx`. Add reusable controls in `frontend/src/app/components/`. Keep backend calls in `frontend/src/lib/api.ts` instead of calling `fetch` from page components. Keep native Tauri calls behind small bridge modules in `frontend/src/lib/`.
 
 ## Tauri Shell
 

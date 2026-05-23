@@ -7,9 +7,11 @@ import {
   EyeOff,
   FolderOpen,
   RefreshCw,
+  Search,
   ShieldCheck,
   Star,
   Wand2,
+  X,
 } from "lucide-react";
 
 import type {
@@ -36,12 +38,11 @@ import type {
   AudioAnalysisProgress,
   ClapStatusResponse,
   LogTailResponse,
-  ScanProgress,
-  ScanResult,
   SettingsResponse,
   StartupDiagnosticsResponse,
 } from "../../types/api";
 import {
+  DisclosureAccordionProvider,
   DisclosureSection,
   NumberField,
 } from "../components/common";
@@ -51,7 +52,6 @@ import {
   Page,
   UiDensity,
   UiPreferences,
-  fileName,
   formatTime,
 } from "../shared";
 import { KeyboardShortcutsSection } from "./settings/KeyboardShortcutsSection";
@@ -64,13 +64,6 @@ import {
 
 export function SettingsPage({
   settings,
-  folderPath,
-  setFolderPath,
-  onBrowse,
-  onScan,
-  scanResult,
-  scanProgress,
-  isScanning,
   backendStatus,
   backendMessage,
   backendCheckedAt,
@@ -104,6 +97,8 @@ export function SettingsPage({
   setUiPreferences,
   writeRatingsToFiles,
   onWriteRatingsToFilesChange,
+  autoWriteFetchedLyricsSidecars,
+  onAutoWriteFetchedLyricsSidecarsChange,
   onBackupDatabase,
   onCreateSupportBundle,
   supportBundlePath,
@@ -113,13 +108,6 @@ export function SettingsPage({
   onClearArtistCache,
 }: {
   settings: SettingsResponse | null;
-  folderPath: string;
-  setFolderPath: (value: string) => void;
-  onBrowse: () => void;
-  onScan: () => void;
-  scanResult: ScanResult | null;
-  scanProgress: ScanProgress | null;
-  isScanning: boolean;
   backendStatus: BackendStatus;
   backendMessage: string;
   backendCheckedAt: string | null;
@@ -153,6 +141,8 @@ export function SettingsPage({
   setUiPreferences: (updater: (current: UiPreferences) => UiPreferences) => void;
   writeRatingsToFiles: boolean;
   onWriteRatingsToFilesChange: (value: boolean) => void;
+  autoWriteFetchedLyricsSidecars: boolean;
+  onAutoWriteFetchedLyricsSidecarsChange: (value: boolean) => void;
   onBackupDatabase: () => void;
   onCreateSupportBundle: () => void;
   supportBundlePath: string | null;
@@ -167,10 +157,22 @@ export function SettingsPage({
   const [nativeDeviceMessage, setNativeDeviceMessage] = useState<string | null>(null);
   const [nativePlaybackDiagnostics, setNativePlaybackDiagnostics] = useState<NativePlaybackDiagnosticsResponse | null>(null);
   const [nativeDiagnosticsMessage, setNativeDiagnosticsMessage] = useState<string | null>(null);
-  const progressPercent = Math.max(0, Math.min(100, scanProgress?.percent ?? 0));
-  const hasCount = Boolean(scanProgress && scanProgress.total_files > 0);
+  const [settingsSearch, setSettingsSearch] = useState("");
+  const [openSettingsSection, setOpenSettingsSection] = useState<string | null>(null);
   const audioProgressPercent = Math.max(0, Math.min(100, audioAnalysisProgress?.percent ?? 0));
   const clapReady = Boolean(clapStatus?.installed);
+  const settingsQuery = settingsSearch.trim().toLowerCase();
+  const showSettingsSection = (...keywords: string[]) =>
+    !settingsQuery || keywords.join(" ").toLowerCase().includes(settingsQuery);
+  const visibleSettingsSections = [
+    showSettingsSection("library preferences display ratings metadata startup theme font density"),
+    showSettingsSection("keyboard shortcuts hotkeys local playback controls media keys"),
+    showSettingsSection("extensions skins plugins themes manifest customization"),
+    showSettingsSection("autodj defaults queue length temperature similarity recommendations"),
+    showSettingsSection("clap audio analysis model genre similarity machine learning"),
+    showSettingsSection("player playback audio output mini player now playing lyrics autofetch lrc sidecar cache follow equalizer replaygain fade skip visualizer"),
+    showSettingsSection("maintenance backend diagnostics database support bundle source folder logs cache"),
+  ].filter(Boolean).length;
   const backendStatusClass =
     backendStatus === "ok"
       ? "border-moss/40 bg-moss/10 text-moss"
@@ -255,45 +257,45 @@ export function SettingsPage({
         </div>
       </header>
       <section className="min-h-0 flex-1 overflow-auto p-6">
+        <DisclosureAccordionProvider
+          openSectionId={openSettingsSection}
+          onOpenSectionChange={setOpenSettingsSection}
+        >
         <div className="grid max-w-3xl gap-5">
           <label className="grid gap-2 text-sm text-neutral-200">
-            <span className="text-xs uppercase text-muted">Music Folder Path</span>
-            <div className="flex gap-2">
+            <span className="text-xs uppercase text-muted">Search Settings</span>
+            <div className="flex h-10 items-center gap-2 rounded border border-line bg-panel px-3 ring-moss/40 focus-within:ring-2">
+              <Search size={16} className="shrink-0 text-muted" />
               <input
-                value={folderPath}
-                onChange={(event) => setFolderPath(event.target.value)}
-                className="h-10 flex-1 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
-                placeholder="C:\\Users\\you\\Music"
+                className="min-w-0 flex-1 bg-transparent text-white outline-none placeholder:text-muted"
+                value={settingsSearch}
+                placeholder="Find playback, lyrics, themes, shortcuts, maintenance..."
+                onChange={(event) => setSettingsSearch(event.target.value)}
               />
-              <button className="secondary-button h-10" type="button" onClick={onBrowse} disabled={isScanning}>
-                <FolderOpen size={17} />
-                Browse
-              </button>
-              <button className="primary-button h-10" type="button" onClick={onScan} disabled={isScanning}>
-                <RefreshCw size={17} />
-                {isScanning ? "Scanning" : "Rescan"}
-              </button>
+              {settingsSearch && (
+                <button
+                  className="icon-button h-7 w-7 shrink-0"
+                  type="button"
+                  title="Clear settings search"
+                  onClick={() => setSettingsSearch("")}
+                >
+                  <X size={14} />
+                </button>
+              )}
+              <span className="shrink-0 text-xs text-muted">
+                {visibleSettingsSections} section{visibleSettingsSections === 1 ? "" : "s"}
+              </span>
             </div>
           </label>
 
-          {!settings?.library_path && settings?.suggested_music_path && (
-            <div className="flex items-center justify-between gap-3 rounded border border-ember/30 bg-ember/10 p-3 text-sm">
-              <div className="min-w-0">
-                <div className="font-medium text-white">Use your Windows Music folder?</div>
-                <div className="truncate text-xs text-muted">{settings.suggested_music_path}</div>
-              </div>
-              <button
-                className="secondary-button shrink-0"
-                type="button"
-                onClick={() => setFolderPath(settings.suggested_music_path ?? "")}
-              >
-                <FolderOpen size={15} />
-                Use Folder
-              </button>
+          {visibleSettingsSections === 0 && (
+            <div className="rounded border border-dashed border-line bg-panel px-4 py-8 text-center text-sm text-muted">
+              No settings match that search.
             </div>
           )}
 
-          <DisclosureSection title="Library Preferences" description="Display, rating storage, and startup behavior" defaultOpen>
+          {showSettingsSection("library preferences display ratings metadata startup theme font density") && (
+          <DisclosureSection title="Library Preferences" description="Display, rating storage, and startup behavior">
             <div className="grid gap-3 text-sm text-neutral-200">
               <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-ink p-3">
                 <div className="flex min-w-0 items-center gap-3">
@@ -452,14 +454,18 @@ export function SettingsPage({
               </div>
             </div>
           </DisclosureSection>
+          )}
 
+          {showSettingsSection("keyboard shortcuts hotkeys local playback controls media keys") && (
           <KeyboardShortcutsSection
             uiPreferences={uiPreferences}
             setUiPreferences={setUiPreferences}
           />
+          )}
 
-          <ExtensionsSection />
+          {showSettingsSection("extensions skins plugins themes manifest customization") && <ExtensionsSection />}
 
+          {showSettingsSection("autodj defaults queue length temperature similarity recommendations") && (
           <DisclosureSection title="AutoDJ Defaults" description="Queue size, temperature, and similarity bias">
             <div className="grid gap-4 text-sm text-neutral-200">
             <NumberField
@@ -505,7 +511,9 @@ export function SettingsPage({
             </label>
             </div>
           </DisclosureSection>
+          )}
 
+          {showSettingsSection("clap audio analysis model genre similarity machine learning") && (
           <DisclosureSection title="CLAP Audio Analysis" description={clapStatus?.message ?? "Optional genre and similarity analysis"}>
             <div className="grid gap-4 text-sm text-neutral-200">
             <div className="flex items-center justify-between gap-3">
@@ -631,7 +639,9 @@ export function SettingsPage({
             )}
             </div>
           </DisclosureSection>
+          )}
 
+          {showSettingsSection("player playback audio output mini player now playing lyrics autofetch lrc sidecar cache follow equalizer replaygain fade skip visualizer") && (
           <PlayerSettingsSection
             uiPreferences={uiPreferences}
             setUiPreferences={setUiPreferences}
@@ -645,8 +655,12 @@ export function SettingsPage({
             onClearNativeDiagnostics={clearNativePlaybackDiagnostics}
             codecSupport={codecSupport}
             onRefreshCodecSupport={() => setCodecSupport(detectCodecSupport())}
+            autoWriteFetchedLyricsSidecars={autoWriteFetchedLyricsSidecars}
+            onAutoWriteFetchedLyricsSidecarsChange={onAutoWriteFetchedLyricsSidecarsChange}
           />
+          )}
 
+          {showSettingsSection("maintenance backend diagnostics database support bundle source folder logs cache") && (
           <MaintenanceSection
             backendStatus={backendStatus}
             backendStatusClass={backendStatusClass}
@@ -667,112 +681,9 @@ export function SettingsPage({
             onCopySupportBundlePath={onCopySupportBundlePath}
             onClearArtistCache={onClearArtistCache}
           />
-
-          {scanProgress && scanProgress.status !== "completed" && scanProgress.status !== "failed" && (
-            <div className="rounded border border-line bg-panel p-4 text-sm text-neutral-200">
-              <div className="mb-3 flex items-center justify-between gap-4">
-                <div>
-                  <div className="font-medium text-white">
-                    {scanProgress.status === "cleaning" ? "Removing missing files" : hasCount ? "Scanning library" : "Finding audio files"}
-                  </div>
-                  <div className="mt-1 text-xs text-muted">
-                    {hasCount
-                      ? `${scanProgress.processed_files.toLocaleString()} of ${scanProgress.total_files.toLocaleString()} files`
-                      : "Counting supported audio files"}
-                  </div>
-                </div>
-                <div className="text-right text-xs text-muted">
-                  <div>Elapsed {formatTime(scanProgress.elapsed_seconds)}</div>
-                  <div>ETA {formatTime(scanProgress.eta_seconds)}</div>
-                </div>
-              </div>
-
-              <div className="h-2 overflow-hidden rounded bg-ink">
-                <div
-                  className={`h-full rounded bg-moss transition-all duration-300 ${
-                    hasCount ? "" : "w-1/3 animate-pulse"
-                  }`}
-                  style={hasCount ? { width: `${progressPercent}%` } : undefined}
-                />
-              </div>
-
-              <div className="mt-3 grid grid-cols-5 gap-3 text-center">
-                <div>
-                  <div className="font-semibold text-white">{scanProgress.inserted}</div>
-                  <div className="text-xs text-muted">Inserted</div>
-                </div>
-                <div>
-                  <div className="font-semibold text-ember">{scanProgress.updated}</div>
-                  <div className="text-xs text-muted">Updated</div>
-                </div>
-                <div>
-                  <div className="font-semibold text-red-200">{scanProgress.removed}</div>
-                  <div className="text-xs text-muted">Removed</div>
-                </div>
-                <div>
-                  <div className="font-semibold text-red-300">{scanProgress.skipped}</div>
-                  <div className="text-xs text-muted">Skipped</div>
-                </div>
-                <div>
-                  <div className="font-semibold text-moss">{progressPercent.toFixed(0)}%</div>
-                  <div className="text-xs text-muted">Progress</div>
-                </div>
-              </div>
-
-              {scanProgress.current_path && (
-                <div className="mt-3 truncate text-xs text-muted" title={scanProgress.current_path}>
-                  {fileName(scanProgress.current_path)}
-                </div>
-              )}
-            </div>
-          )}
-
-          {scanProgress?.status === "failed" && (
-            <div className="rounded border border-red-400/40 bg-red-950/20 p-4 text-sm text-red-200">
-              {scanProgress.error ?? "Scan failed"}
-            </div>
-          )}
-
-          {scanResult && (
-            <div className="rounded border border-line bg-panel p-4 text-sm text-neutral-200">
-              <div className="mb-2 font-medium text-white">{scanResult.folder_path}</div>
-              <div className="grid grid-cols-5 gap-3 text-center">
-                <div>
-                  <div className="text-lg font-semibold text-white">{scanResult.scanned_files}</div>
-                  <div className="text-xs text-muted">Scanned</div>
-                </div>
-                <div>
-                  <div className="text-lg font-semibold text-moss">{scanResult.inserted}</div>
-                  <div className="text-xs text-muted">Inserted</div>
-                </div>
-                <div>
-                  <div className="text-lg font-semibold text-ember">{scanResult.updated}</div>
-                  <div className="text-xs text-muted">Updated</div>
-                </div>
-                <div>
-                  <div className="text-lg font-semibold text-red-200">{scanResult.removed}</div>
-                  <div className="text-xs text-muted">Removed</div>
-                </div>
-                <div>
-                  <div className="text-lg font-semibold text-red-300">{scanResult.skipped}</div>
-                  <div className="text-xs text-muted">Skipped</div>
-                </div>
-              </div>
-              {scanResult.errors.length > 0 && (
-                <details className="mt-3 text-xs text-muted">
-                  <summary>Scan errors</summary>
-                  <ul className="mt-2 grid gap-1">
-                    {scanResult.errors.slice(0, 20).map((error) => (
-                      <li key={error} className="truncate">
-                        {error}
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              )}
-            </div>
           )}
         </div>
+        </DisclosureAccordionProvider>
       </section>
     </main>
   );

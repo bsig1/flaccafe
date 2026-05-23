@@ -1,10 +1,10 @@
 import {
-  CheckCircle2,
-  CircleStop,
-  ExternalLink,
+  FileText,
   Pause,
   Play,
   Repeat,
+  Repeat1,
+  Repeat2,
   SkipBack,
   SkipForward,
   Volume2,
@@ -14,6 +14,7 @@ import type {
   CSSProperties,
   ChangeEvent,
   MutableRefObject,
+  WheelEvent as ReactWheelEvent,
 } from "react";
 import {
   useEffect,
@@ -36,6 +37,7 @@ import {
   nativeSetVolume,
   nativeStatus,
   nativeStop,
+  nativeVisualizerFrame,
 } from "../../lib/nativePlayback";
 import type { NativeDspSettings } from "../../lib/nativePlayback";
 import type { SmtcButtonPayload } from "../../lib/tauriMedia";
@@ -74,7 +76,6 @@ import {
   replayGainMultiplier,
   shouldRecordTrackAsPlayed,
   shortcutMatchesEvent,
-  trackGenre,
   writeStoredAudioControls,
 } from "../shared";
 
@@ -105,6 +106,10 @@ export function PlayerBar({
   playbackMode,
   setPlaybackMode,
   onOpenMiniPlayer,
+  onOpenLyricsView,
+  onOpenCurrentTrack,
+  onOpenCurrentArtist,
+  onOpenCurrentAlbum,
   setStatus,
 }: {
   currentTrack: Track | null;
@@ -133,6 +138,10 @@ export function PlayerBar({
   playbackMode: PlaybackMode;
   setPlaybackMode: (mode: PlaybackMode) => void;
   onOpenMiniPlayer: () => void | Promise<void>;
+  onOpenLyricsView: () => void;
+  onOpenCurrentTrack: (track: Track) => void;
+  onOpenCurrentArtist: (track: Track) => void;
+  onOpenCurrentAlbum: (track: Track) => void;
   setStatus: (message: string) => void;
 }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -470,9 +479,42 @@ export function PlayerBar({
   useEffect(() => {
     emitVisualizerState(false);
     cancelVisualizerLoop();
-    if (useNativePlayback || !isPlaying || !currentTrack) {
+    if (!isPlaying || !currentTrack) {
       return;
     }
+    if (useNativePlayback) {
+      let nativeVisualizerInFlight = false;
+      const tick = (timestamp: number) => {
+        if (!nativeVisualizerInFlight && timestamp - visualizerLastEmitRef.current >= 33) {
+          nativeVisualizerInFlight = true;
+          void nativeVisualizerFrame()
+            .then((frame) => {
+              emitVisualizerFrame({
+                trackId: currentTrack.id,
+                isPlaying,
+                isLive: frame.is_live,
+                level: frame.level,
+                frequencyBins: frame.frequency_bins,
+                waveform: frame.waveform,
+                timestamp,
+              });
+              visualizerLastEmitRef.current = timestamp;
+            })
+            .catch(() => {
+              emitVisualizerState(false);
+              visualizerLastEmitRef.current = timestamp;
+            })
+            .finally(() => {
+              nativeVisualizerInFlight = false;
+            });
+        }
+        visualizerFrameRef.current = window.requestAnimationFrame(tick);
+      };
+
+      visualizerFrameRef.current = window.requestAnimationFrame(tick);
+      return cancelVisualizerLoop;
+    }
+
     ensureWebAudioGraph();
     const analyser = analyserRef.current;
     if (!analyser) {
@@ -885,21 +927,13 @@ export function PlayerBar({
     changeVolume(Number(event.target.value));
   }
 
-  function toggleMuted() {
-    setMuted((current) => !current);
+  function handleVolumeWheel(event: ReactWheelEvent) {
+    event.preventDefault();
+    changeVolume(volume + (event.deltaY < 0 ? 0.05 : -0.05));
   }
 
-  async function openCurrentTrackExternally() {
-    if (!currentTrack) {
-      return;
-    }
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("open_file_with_default_app", { path: currentTrack.path });
-      setStatus("Opened track in the system default audio app");
-    } catch {
-      setStatus("This file may not be supported by WebView playback. Use Reveal to open it with another local player.");
-    }
+  function toggleMuted() {
+    setMuted((current) => !current);
   }
 
   function playRelative(offset: number, recordExit = true) {
@@ -938,26 +972,6 @@ export function PlayerBar({
         cancelFade();
         onSelectTrack(nextTrack, queue, { suppressExitRecord: true });
       }
-    }
-  }
-
-  async function skipCurrent() {
-    if (!currentTrack) {
-      return;
-    }
-    await recordCurrentTrackExit();
-    if (hasNext) {
-      playRelative(1, false);
-    } else {
-      if (useNativePlayback) {
-        await nativeStop().catch(() => {
-          // Native stop is best-effort here; the UI state still updates.
-        });
-        nativeLoadedTrackIdRef.current = null;
-      }
-      const audio = audioRef.current;
-      audio?.pause();
-      setIsPlaying(false);
     }
   }
 
@@ -1112,6 +1126,8 @@ export function PlayerBar({
   }, [useNativePlayback, preloadedNextTrack?.id, preloadedNextTrack?.path, playbackMode]);
 
   const artworkSrc = currentTrack && !artworkFailed ? albumArtworkUrl(currentTrack.id) : null;
+  const hasCurrentArtist = Boolean(currentTrack?.artist?.trim());
+  const hasCurrentAlbum = Boolean(currentTrack?.album?.trim());
 
   miniPlayerCommandRef.current = (command: MiniPlayerCommand) => {
     if (command.type === "playPause") {
@@ -1289,20 +1305,49 @@ export function PlayerBar({
             <Volume2 size={22} />
           )}
         </div>
-        <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-white">
+        <div className="grid min-w-0 gap-0.5 overflow-hidden">
+          <button
+            className="min-w-0 max-w-full truncate rounded text-left text-sm font-semibold text-white transition hover:text-moss disabled:cursor-default disabled:hover:text-white"
+            type="button"
+            disabled={!currentTrack}
+            title={currentTrack ? "Show track in Library" : undefined}
+            onClick={() => currentTrack && onOpenCurrentTrack(currentTrack)}
+          >
             {currentTrack ? display(currentTrack.title, "Untitled") : "Nothing playing"}
-          </div>
-          <div className="truncate text-xs text-muted">
-            {currentTrack
-              ? `${display(currentTrack.artist)} - ${display(currentTrack.album, "Unknown album")}`
-              : "Select a track from Library or AutoDJ"}
-          </div>
+          </button>
+          {currentTrack ? (
+            <div
+              className="flex min-w-0 max-w-full items-center gap-1 overflow-hidden text-muted"
+              style={{ fontSize: "clamp(0.68rem, 0.58rem + 0.22vw, 0.75rem)" }}
+            >
+              <button
+                className="min-w-0 max-w-full shrink truncate rounded text-left transition hover:text-white disabled:cursor-default disabled:hover:text-muted"
+                type="button"
+                title={`Open artist: ${display(currentTrack.artist)}`}
+                disabled={!hasCurrentArtist}
+                onClick={() => onOpenCurrentArtist(currentTrack)}
+              >
+                {display(currentTrack.artist)}
+              </button>
+              <span className="shrink-0">-</span>
+              <button
+                className="min-w-0 max-w-full shrink truncate rounded text-left transition hover:text-white disabled:cursor-default disabled:hover:text-muted"
+                type="button"
+                title={`Open album: ${display(currentTrack.album, "Unknown album")}`}
+                disabled={!hasCurrentAlbum}
+                onClick={() => onOpenCurrentAlbum(currentTrack)}
+              >
+                {display(currentTrack.album, "Unknown album")}
+              </button>
+            </div>
+          ) : (
+            <div className="truncate text-xs text-muted">Select a track from Library or AutoDJ</div>
+          )}
         </div>
       </div>
 
       <div className="flex min-w-0 flex-col gap-3">
-        <div className="flex items-center justify-center gap-3">
+        <div className="flex items-center justify-center gap-2">
           <button
             className="icon-button"
             type="button"
@@ -1329,15 +1374,6 @@ export function PlayerBar({
             onClick={() => playRelative(1)}
           >
             <SkipForward size={17} />
-          </button>
-          <button
-            className="icon-button"
-            type="button"
-            title="Skip and learn"
-            disabled={!currentTrack}
-            onClick={() => void skipCurrent()}
-          >
-            <CheckCircle2 size={17} />
           </button>
         </div>
 
@@ -1380,7 +1416,7 @@ export function PlayerBar({
           />
         )}
 
-        <div className="grid grid-cols-[42px_1fr_42px] items-center gap-3 text-xs tabular-nums text-muted">
+        <div className="grid grid-cols-[minmax(48px,auto)_1fr_minmax(48px,auto)_auto] items-center gap-3 text-xs tabular-nums text-muted">
           <span className="text-right">{formatPlaybackTime(currentTime)}</span>
           <input
             aria-label="Playback position"
@@ -1395,65 +1431,13 @@ export function PlayerBar({
             onChange={handleSeek}
           />
           <span>{formatPlaybackTime(effectiveDuration)}</span>
-        </div>
-      </div>
-
-      <div className="flex min-w-0 flex-col items-end justify-center gap-1.5 text-right text-xs text-muted">
-        {currentTrack && !miniPlayer && (
-          <div className="w-full truncate text-neutral-400">
-            {[trackGenre(currentTrack), currentTrack.year].filter(Boolean).join(" - ")}
-          </div>
-        )}
-        <div className="flex items-center justify-end gap-2">
-          <button
-            className={`icon-button h-7 w-7 ${muted || volume === 0 ? "border-ember text-ember" : ""}`}
-            type="button"
-            title={muted || volume === 0 ? "Unmute" : "Mute"}
-            onClick={toggleMuted}
-          >
-            {muted || volume === 0 ? <VolumeX size={13} /> : <Volume2 size={13} />}
-          </button>
-          <input
-            aria-label="Volume"
-            className="h-2 w-24 accent-moss"
-            max={1}
-            min={0}
-            step={0.01}
-            type="range"
-            value={volume}
-            onChange={handleVolumeChange}
-          />
-        </div>
-        <div className="flex max-w-full items-center justify-end gap-2">
-          {currentTrack && !miniPlayer && (
-            <div className="shrink min-w-0 scale-90 origin-right">
-              <RatingStars rating={currentTrack.rating} onChange={(rating) => onRating(currentTrack.id, rating)} />
-            </div>
-          )}
-          <div className="flex shrink-0 justify-end gap-1">
+          <div className="flex items-center justify-end gap-1">
             <button
-              className="icon-button h-7 w-7"
-              type="button"
-              title="Open detached mini player"
-              onClick={() => void onOpenMiniPlayer()}
-            >
-              <ExternalLink size={13} />
-            </button>
-            <button
-              className="icon-button h-7 w-7"
-              type="button"
-              title="Open in default audio app"
-              disabled={!currentTrack}
-              onClick={() => void openCurrentTrackExternally()}
-            >
-              <CircleStop size={13} />
-            </button>
-            <button
-              className={`icon-button h-7 w-7 ${
+              className={`icon-button h-8 w-8 ${
                 playbackMode === "repeatQueue" || playbackMode === "repeatOne" ? "border-moss text-moss" : ""
               }`}
               type="button"
-              title={playbackMode === "repeatOne" ? "Repeat one" : "Repeat queue"}
+              title={playbackMode === "repeatOne" ? "Repeat one" : playbackMode === "repeatQueue" ? "Repeat queue" : "Repeat off"}
               onClick={() =>
                 setPlaybackMode(
                   playbackMode === "normal"
@@ -1464,17 +1448,57 @@ export function PlayerBar({
                 )
               }
             >
-              <Repeat size={13} />
+              {playbackMode === "repeatOne" ? (
+                <Repeat1 size={14} />
+              ) : playbackMode === "repeatQueue" ? (
+                <Repeat2 size={14} />
+              ) : (
+                <Repeat size={14} />
+              )}
             </button>
             <button
-              className={`icon-button h-7 w-7 ${playbackMode === "stopAfterCurrent" ? "border-ember text-ember" : ""}`}
+              className="icon-button h-8 w-8"
               type="button"
-              title="Stop after current"
-              onClick={() => setPlaybackMode(playbackMode === "stopAfterCurrent" ? "normal" : "stopAfterCurrent")}
+              title="Open clean lyrics view"
+              onClick={onOpenLyricsView}
             >
-              <CircleStop size={13} />
+              <FileText size={14} />
             </button>
           </div>
+        </div>
+      </div>
+
+      <div className="grid min-w-0 justify-items-end gap-2 text-right text-xs text-muted">
+        <div
+          className={`grid ${miniPlayer ? "w-[144px] grid-cols-[28px_1fr_32px]" : "w-[176px] grid-cols-[28px_1fr_36px]"} items-center gap-2`}
+          onWheel={handleVolumeWheel}
+        >
+          <button
+            className={`icon-button h-7 w-7 ${muted || volume === 0 ? "border-ember text-ember" : ""}`}
+            type="button"
+            title={muted || volume === 0 ? "Unmute" : "Mute"}
+            onClick={toggleMuted}
+          >
+            {muted || volume === 0 ? <VolumeX size={13} /> : <Volume2 size={13} />}
+          </button>
+          <input
+            aria-label="Volume"
+            className="h-2 w-full accent-moss"
+            max={1}
+            min={0}
+            step={0.01}
+            type="range"
+            value={volume}
+            onChange={handleVolumeChange}
+          />
+          <span className="text-right tabular-nums text-neutral-300">{Math.round(volume * 100)}%</span>
+        </div>
+        <div className={`flex ${miniPlayer ? "w-[144px]" : "w-[176px]"} max-w-full items-center justify-end`}>
+          {currentTrack && !miniPlayer && (
+            <div className="shrink min-w-0 scale-90 origin-right">
+              <RatingStars rating={currentTrack.rating} onChange={(rating) => onRating(currentTrack.id, rating)} />
+            </div>
+          )}
         </div>
       </div>
     </section>

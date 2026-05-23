@@ -17,6 +17,15 @@ export interface NativePlaybackStatus {
   message: string | null;
 }
 
+export interface NativeVisualizerFrame {
+  is_live: boolean;
+  level: number;
+  peak: number;
+  frequency_bins: number[];
+  waveform: number[];
+  timestamp_ms: number;
+}
+
 export interface NativePlaybackDiagnostic {
   id: number;
   timestamp_ms: number;
@@ -165,6 +174,10 @@ export function nativeSetDsp(dspSettings: NativeDspSettings): Promise<NativePlay
 
 export function nativeStatus(): Promise<NativePlaybackStatus> {
   return invokeNative<NativePlaybackStatus>("native_status");
+}
+
+export function nativeVisualizerFrame(): Promise<NativeVisualizerFrame> {
+  return invokeNative<NativeVisualizerFrame>("native_visualizer_frame");
 }
 
 export function nativeDiagnostics(): Promise<NativePlaybackDiagnosticsResponse> {

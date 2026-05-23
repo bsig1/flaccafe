@@ -29,6 +29,18 @@ struct BackendState {
     child: Mutex<Option<Child>>,
 }
 
+#[cfg(windows)]
+fn explorer_compatible_path(path: &std::path::Path) -> String {
+    let raw = path.to_string_lossy().to_string();
+    if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{}", rest)
+    } else if let Some(rest) = raw.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        raw
+    }
+}
+
 #[cfg(not(debug_assertions))]
 fn backend_addr() -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], 8765))
@@ -202,22 +214,26 @@ fn stop_packaged_backend(app: &tauri::AppHandle) {
 fn reveal_in_file_explorer(path: String) -> Result<(), String> {
     let path = std::path::PathBuf::from(path);
     let target = if path.exists() {
-        path
+        path.canonicalize()
+            .map_err(|error| format!("Could not resolve path: {error}"))?
     } else if let Some(parent) = path.parent() {
-        parent.to_path_buf()
+        parent
+            .canonicalize()
+            .map_err(|error| format!("Could not resolve parent folder: {error}"))?
     } else {
         return Err("Path does not exist".to_string());
     };
 
     #[cfg(windows)]
     {
-        let selector = if target.is_file() {
-            format!("/select,{}", target.display())
+        let explorer_path = explorer_compatible_path(&target);
+        let mut command = Command::new("explorer.exe");
+        if target.is_file() {
+            command.arg(format!("/select,\"{}\"", explorer_path));
         } else {
-            target.display().to_string()
-        };
-        Command::new("explorer.exe")
-            .arg(selector)
+            command.arg(explorer_path);
+        }
+        command
             .creation_flags(0x08000000)
             .spawn()
             .map_err(|error| format!("Could not open File Explorer: {error}"))?;
@@ -235,28 +251,28 @@ fn reveal_in_file_explorer(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn open_file_with_default_app(path: String) -> Result<(), String> {
-    let path = std::path::PathBuf::from(path);
-    if !path.exists() || !path.is_file() {
-        return Err("Audio file does not exist".to_string());
+fn open_external_url(url: String) -> Result<(), String> {
+    let trimmed = url.trim();
+    if !(trimmed.starts_with("https://") || trimmed.starts_with("http://")) {
+        return Err("Only http and https links can be opened".to_string());
     }
 
     #[cfg(windows)]
     {
-        Command::new("cmd")
-            .args(["/C", "start", "", &path.display().to_string()])
+        Command::new("rundll32.exe")
+            .args(["url.dll,FileProtocolHandler", trimmed])
             .creation_flags(0x08000000)
             .spawn()
-            .map_err(|error| format!("Could not open default app: {error}"))?;
+            .map_err(|error| format!("Could not open link: {error}"))?;
         Ok(())
     }
 
     #[cfg(not(windows))]
     {
         Command::new("xdg-open")
-            .arg(&path)
+            .arg(trimmed)
             .spawn()
-            .map_err(|error| format!("Could not open default app: {error}"))?;
+            .map_err(|error| format!("Could not open link: {error}"))?;
         Ok(())
     }
 }
@@ -312,7 +328,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             backend_restart,
             open_source_folder,
-            open_file_with_default_app,
+            open_external_url,
             reveal_in_file_explorer,
             native_playback::native_play_file,
             native_playback::native_crossfade_to_file,
@@ -323,6 +339,7 @@ fn main() {
             native_playback::native_set_dsp,
             native_playback::native_set_volume,
             native_playback::native_status,
+            native_playback::native_visualizer_frame,
             native_playback::native_diagnostics,
             native_playback::native_clear_diagnostics,
             native_playback::native_prepare_next_file,

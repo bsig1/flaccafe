@@ -35,6 +35,7 @@ import type {
   ChromaprintInstallResponse,
   CacheClearTarget,
   ChromaprintStatusResponse,
+  ClapGenreTagResponse,
   CsvMetadataExportResponse,
   CsvMetadataImportReportResponse,
   CsvMetadataImportResponse,
@@ -59,10 +60,12 @@ import {
   deleteDeviceSyncProfile,
   fetchDeviceSyncDevices,
   fetchDeviceSyncProfiles,
+  clapGenreTags,
   previewArtworkCollisions,
   saveDeviceSyncProfile,
 } from "../../lib/api";
 import {
+  DisclosureAccordionProvider,
   DisclosureSection,
   NumberField,
 } from "../components/common";
@@ -73,6 +76,14 @@ import {
 } from "./file-management/AudioConversionSection";
 import { CacheUndoLogSection } from "./file-management/CacheUndoLogSection";
 import { CdRipperSection } from "./file-management/CdRipperSection";
+import {
+  FileManagementNavigator,
+  filterFileManagementSections,
+  fileManagementSections,
+} from "./file-management/FileManagementNavigator";
+import type {
+  FileManagementCategory,
+} from "./file-management/FileManagementNavigator";
 import { LibraryImportersSection } from "./file-management/LibraryImportersSection";
 import { ReportViewerSection } from "./file-management/ReportViewerSection";
 import {
@@ -95,6 +106,8 @@ import type {
 } from "./file-management/fileManagementUtils";
 
 export function FileManagementPage({
+  initialFocusToolId,
+  initialTrackScopeIds,
   folderPath,
   playlists,
   onClearArtistCache,
@@ -157,8 +170,12 @@ export function FileManagementPage({
   reportFile,
   onReadReportFile,
   onAdvancedTagLibraryChanged,
+  onClearTrackScope,
+  onSelectLibraryTarget,
   setStatus,
 }: {
+  initialFocusToolId?: string | null;
+  initialTrackScopeIds?: number[] | null;
   folderPath: string;
   playlists: PlaylistSummary[];
   onClearArtistCache: () => void;
@@ -256,6 +273,8 @@ export function FileManagementPage({
   reportFile: ReportFileResponse | null;
   onReadReportFile: (reportPath: string) => void | Promise<void>;
   onAdvancedTagLibraryChanged: () => void | Promise<void>;
+  onClearTrackScope: () => void;
+  onSelectLibraryTarget: (view: "tracks" | "albums") => void;
   setStatus: (message: string) => void;
 }) {
   const [trackScopeText, setTrackScopeText] = useState("");
@@ -274,6 +293,10 @@ export function FileManagementPage({
   const [autoTagIncludeArtwork, setAutoTagIncludeArtwork] = useState(true);
   const [autoTagSaveArtwork, setAutoTagSaveArtwork] = useState(false);
   const [acceptedAutoTagTrackIds, setAcceptedAutoTagTrackIds] = useState<Set<number>>(() => new Set());
+  const [clapGenreMissingOnly, setClapGenreMissingOnly] = useState(true);
+  const [clapGenreMinConfidence, setClapGenreMinConfidence] = useState(0.35);
+  const [clapGenrePreview, setClapGenrePreview] = useState<ClapGenreTagResponse | null>(null);
+  const [clapGenreBusy, setClapGenreBusy] = useState(false);
   const [organizeTemplate, setOrganizeTemplate] = useState("<Album Artist>/<Album> (<Year>)/<Track#> - <Title>");
   const [organizeBaseFolder, setOrganizeBaseFolder] = useState("");
   const [organizeCollisionStrategy, setOrganizeCollisionStrategy] = useState<"skip" | "auto_rename">("skip");
@@ -310,8 +333,19 @@ export function FileManagementPage({
   const [artworkCollisionLimit, setArtworkCollisionLimit] = useState(200);
   const [artworkCollisionPreview, setArtworkCollisionPreview] = useState<AlbumArtworkCollisionResponse | null>(null);
   const [artworkCollisionBusy, setArtworkCollisionBusy] = useState(false);
+  const [toolSearch, setToolSearch] = useState("");
+  const [toolCategory, setToolCategory] = useState<FileManagementCategory>("Tags");
+  const [openFileManagementSection, setOpenFileManagementSection] = useState<string | null>(null);
 
+  const initialScopeKey = (initialTrackScopeIds ?? []).join(",");
+  const incomingTrackScopeIds = useMemo(() => Array.from(new Set(initialTrackScopeIds ?? [])), [initialScopeKey, initialTrackScopeIds]);
   const scopedTrackIds = useMemo(() => parseTrackIds(trackScopeText), [trackScopeText]);
+  const visibleSections = useMemo(
+    () => filterFileManagementSections(fileManagementSections, toolCategory, toolSearch),
+    [toolCategory, toolSearch],
+  );
+  const visibleSectionIds = useMemo(() => new Set(visibleSections.map((section) => section.id)), [visibleSections]);
+  const focusOpenSignal = initialFocusToolId ? `${initialFocusToolId}:${initialScopeKey}` : null;
   const duplicateTrackIds = useMemo(
     () => parseTrackIds(duplicateTrackIdsText.trim() ? duplicateTrackIdsText : trackScopeText),
     [duplicateTrackIdsText, trackScopeText],
@@ -344,6 +378,32 @@ export function FileManagementPage({
         .map((preview) => preview.track_id) ?? [],
     [acceptedFilenameTrackIds, filenameTagPreview],
   );
+
+  function showTool(sectionId: string) {
+    return visibleSectionIds.has(sectionId);
+  }
+
+  function openSignalFor(sectionId: string) {
+    return initialFocusToolId === sectionId ? focusOpenSignal : undefined;
+  }
+
+  useEffect(() => {
+    if (incomingTrackScopeIds.length) {
+      setTrackScopeText(incomingTrackScopeIds.join(", "));
+    } else {
+      setTrackScopeText("");
+    }
+  }, [initialScopeKey, incomingTrackScopeIds]);
+
+  useEffect(() => {
+    if (!initialFocusToolId) {
+      return;
+    }
+    const section = fileManagementSections.find((item) => item.id === initialFocusToolId);
+    setToolCategory("All");
+    setToolSearch(section?.title ?? initialFocusToolId);
+    setOpenFileManagementSection(section?.title ?? null);
+  }, [initialFocusToolId, initialScopeKey]);
 
   useEffect(() => {
     const next = new Set<number>();
@@ -500,6 +560,36 @@ export function FileManagementPage({
       setStatus(error instanceof Error ? error.message : "Could not repair artwork collisions");
     } finally {
       setArtworkCollisionBusy(false);
+    }
+  }
+
+  async function previewClapGenreTags(apply = false) {
+    if (apply && !window.confirm("Apply CLAP genre predictions to the visible/selected tracks?")) {
+      return;
+    }
+    setClapGenreBusy(true);
+    setStatus(apply ? "Applying CLAP genre tags..." : "Building CLAP genre tag preview...");
+    try {
+      const response = await clapGenreTags({
+        track_ids: currentScope(scopedTrackIds),
+        missing_only: clapGenreMissingOnly,
+        min_confidence: clapGenreMinConfidence,
+        apply,
+        limit: 500,
+      });
+      setClapGenrePreview(response);
+      if (apply && response.applied > 0) {
+        await onAdvancedTagLibraryChanged();
+      }
+      setStatus(
+        apply
+          ? `Applied CLAP genres to ${response.applied.toLocaleString()} track${response.applied === 1 ? "" : "s"}`
+          : `CLAP preview found ${response.changed.toLocaleString()} genre change${response.changed === 1 ? "" : "s"}`,
+      );
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not preview CLAP genre tags");
+    } finally {
+      setClapGenreBusy(false);
     }
   }
 
@@ -729,6 +819,66 @@ export function FileManagementPage({
     });
   }
 
+  function setToolTarget(value: string) {
+    if (value === "selected" && incomingTrackScopeIds.length) {
+      setTrackScopeText(incomingTrackScopeIds.join(", "));
+      setStatus(`Using ${incomingTrackScopeIds.length.toLocaleString()} selected track${incomingTrackScopeIds.length === 1 ? "" : "s"}`);
+      return;
+    }
+    setTrackScopeText("");
+    onClearTrackScope();
+    setStatus("Using each tool's default target");
+  }
+
+  async function previewMusicBrainzAutoTags() {
+    const scope = currentScope(scopedTrackIds);
+    setStatus(
+      scope
+        ? `Previewing MusicBrainz tags for ${scope.length.toLocaleString()} selected track${scope.length === 1 ? "" : "s"}...`
+        : "Previewing MusicBrainz tags for the default tool target...",
+    );
+    await onPreviewAutoTag(autoTagMode, autoTagMissingOnly, autoTagIncludeArtwork, scope);
+  }
+
+  async function applyMusicBrainzAutoTags() {
+    const scope = autoTagPreview
+      ? Array.from(new Set([...autoTagChangedIds, ...(autoTagSaveArtwork ? autoTagArtworkIds : [])]))
+      : currentScope(scopedTrackIds);
+    const scopedCount = scopedTrackIds.length;
+    setStatus(
+      scope?.length
+        ? `Applying MusicBrainz tags to ${scope.length.toLocaleString()} track${scope.length === 1 ? "" : "s"}...`
+        : "Applying MusicBrainz tags to the default tool target...",
+    );
+    await onApplyAutoTag(autoTagMode, autoTagMissingOnly, autoTagIncludeArtwork, autoTagSaveArtwork, scope);
+    if (scopedCount) {
+      setTrackScopeText("");
+      onClearTrackScope();
+    }
+  }
+
+  async function analyzeAcousticFingerprints() {
+    const scope = currentScope(scopedTrackIds);
+    setStatus(
+      scope
+        ? `Analyzing fingerprints for ${scope.length.toLocaleString()} selected track${scope.length === 1 ? "" : "s"}...`
+        : "Analyzing fingerprints for the default tool target...",
+    );
+    await onRunAcousticFingerprintPass(scope, acousticOverwrite, acousticLimit);
+  }
+
+  async function previewAcousticFingerprintTags() {
+    const scope = currentScope(scopedTrackIds);
+    setStatus(
+      scope
+        ? `Fingerprinting ${scope.length.toLocaleString()} selected track${scope.length === 1 ? "" : "s"} before tag preview...`
+        : "Fingerprinting the default tool target before tag preview...",
+    );
+    await onRunAcousticFingerprintPass(scope, acousticOverwrite, acousticLimit);
+    setStatus("Building MusicBrainz tag preview from fingerprints...");
+    await onPreviewAutoTag("track", true, true, scope);
+  }
+
   function autoTagFieldSummary(preview: NonNullable<typeof autoTagPreview>["previews"][number]): string {
     if (preview.error) {
       return preview.error;
@@ -752,25 +902,67 @@ export function FileManagementPage({
         </button>
       </header>
       <section className="min-h-0 flex-1 overflow-auto p-6">
-        <div className="grid max-w-4xl gap-5">
+        <DisclosureAccordionProvider
+          openSectionId={openFileManagementSection}
+          onOpenSectionChange={setOpenFileManagementSection}
+        >
+        <div className="grid max-w-6xl gap-5">
           <div className="rounded border border-line bg-panel p-4">
-            <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
-              <label className="grid gap-2 text-sm text-neutral-200">
-                <span className="text-xs uppercase text-muted">Track Scope IDs</span>
-                <input
-                  className="h-10 rounded border border-line bg-ink px-3 text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
-                  value={trackScopeText}
-                  placeholder="Optional: paste track IDs, separated by commas or spaces. Blank means all previewed tracks."
-                  onChange={(event) => setTrackScopeText(event.target.value)}
-                />
-              </label>
-              <div className="rounded border border-line/70 bg-ink px-3 py-2 text-xs text-muted">
-                {scopedTrackIds.length ? `${scopedTrackIds.length.toLocaleString()} scoped` : "All tracks"}
+            <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-center">
+              <div>
+                <div className="text-xs uppercase text-muted">Current Target</div>
+                <div className="mt-1 text-sm font-medium text-neutral-100">
+                  {scopedTrackIds.length
+                    ? `${scopedTrackIds.length.toLocaleString()} selected track${scopedTrackIds.length === 1 ? "" : "s"}`
+                    : "Tool defaults"}
+                </div>
+                <div className="mt-1 text-xs text-muted">
+                  {scopedTrackIds.length
+                    ? "Scoped tools will only act on those tracks until you clear the target."
+                    : "Each tool chooses its normal safe target, usually recent or missing-metadata tracks."}
+                </div>
+              </div>
+              <div className="flex flex-wrap justify-end gap-2">
+                {incomingTrackScopeIds.length > 0 && !scopedTrackIds.length && (
+                  <button className="secondary-button h-9" type="button" onClick={() => setToolTarget("selected")}>
+                    Use Selected
+                  </button>
+                )}
+                <button className="secondary-button h-9" type="button" onClick={() => onSelectLibraryTarget("tracks")}>
+                  Choose Tracks
+                </button>
+                <button className="secondary-button h-9" type="button" onClick={() => onSelectLibraryTarget("albums")}>
+                  Choose Albums
+                </button>
+                <button
+                  className="secondary-button h-9"
+                  type="button"
+                  disabled={!scopedTrackIds.length}
+                  onClick={() => setToolTarget("tool-default")}
+                >
+                  Clear
+                </button>
               </div>
             </div>
           </div>
 
-          <DisclosureSection title="Folder Watch" description="Background change detection with a review step before the database changes" defaultOpen>
+          <FileManagementNavigator
+            sections={fileManagementSections}
+            visibleSectionIds={visibleSectionIds}
+            activeCategory={toolCategory}
+            setActiveCategory={setToolCategory}
+            query={toolSearch}
+            setQuery={setToolSearch}
+          />
+
+          {visibleSectionIds.size === 0 && (
+            <div className="rounded border border-dashed border-line bg-panel px-4 py-8 text-center text-sm text-muted">
+              No file-management tools match that filter.
+            </div>
+          )}
+
+          {showTool("folderWatch") && (
+          <DisclosureSection title="Folder Watch" description="Background change detection with a review step before the database changes">
             <div className="grid gap-4 text-sm text-neutral-200">
               <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-center">
                 <div className="min-w-0">
@@ -961,7 +1153,9 @@ export function FileManagementPage({
               )}
             </div>
           </DisclosureSection>
+          )}
 
+          {showTool("artworkCollisions") && (
           <DisclosureSection title="Artwork Collision Repair" description="Find shared folder covers that make multiple albums show the same artwork">
             <div className="grid gap-4 text-sm text-neutral-200">
               <div className="grid gap-3 md:grid-cols-[140px_1fr] md:items-end">
@@ -1045,8 +1239,10 @@ export function FileManagementPage({
               )}
             </div>
           </DisclosureSection>
+          )}
 
-          <DisclosureSection title="Filename Tag Inference" description="Infer metadata from folder and file naming patterns" defaultOpen>
+          {showTool("filenameTags") && (
+          <DisclosureSection title="Filename Tag Inference" description="Infer metadata from folder and file naming patterns">
             <div className="grid gap-4 text-sm text-neutral-200">
               <label className="grid gap-2">
                 <span className="text-xs uppercase text-muted">Pattern</span>
@@ -1190,7 +1386,9 @@ export function FileManagementPage({
                       {duplicateReview.groups.length.toLocaleString()} review groups
                     </div>
                     {duplicateReview.missing_track_ids.length > 0 && (
-                      <div className="text-ember">Missing IDs: {duplicateReview.missing_track_ids.join(", ")}</div>
+                      <div className="text-ember">
+                        {duplicateReview.missing_track_ids.length.toLocaleString()} selected track{duplicateReview.missing_track_ids.length === 1 ? "" : "s"} could not be loaded.
+                      </div>
                     )}
                   </div>
                   {duplicateReview.groups.length > 0 && (
@@ -1209,7 +1407,6 @@ export function FileManagementPage({
                     <table className="w-full min-w-[760px] border-collapse text-left">
                       <thead className="sticky top-0 bg-panel text-[11px] uppercase text-muted">
                         <tr>
-                          <th className="px-2 py-2">ID</th>
                           <th className="px-2 py-2">Title</th>
                           <th className="px-2 py-2">Artist</th>
                           <th className="px-2 py-2">Album</th>
@@ -1221,7 +1418,6 @@ export function FileManagementPage({
                       <tbody>
                         {duplicateReview.tracks.slice(0, 100).map((track) => (
                           <tr key={track.id} className="border-t border-line/60">
-                            <td className="px-2 py-1.5 text-muted">{track.id}</td>
                             <td className="max-w-48 truncate px-2 py-1.5 text-neutral-200">{track.title ?? "(untitled)"}</td>
                             <td className="max-w-40 truncate px-2 py-1.5 text-muted">{track.artist ?? ""}</td>
                             <td className="max-w-40 truncate px-2 py-1.5 text-muted">{track.album ?? ""}</td>
@@ -1239,7 +1435,9 @@ export function FileManagementPage({
               )}
             </div>
           </DisclosureSection>
+          )}
 
+          {showTool("regexTags") && (
           <DisclosureSection title="Regex Tag Cleanup" description="Preview and apply MusicBee-style search/replace for common text tags">
             <div className="grid gap-4 text-sm text-neutral-200">
               <div className="grid gap-3 md:grid-cols-[180px_1fr_1fr]">
@@ -1342,8 +1540,15 @@ export function FileManagementPage({
               )}
             </div>
           </DisclosureSection>
+          )}
 
-          <DisclosureSection title="MusicBrainz Auto-Tag" description="Preview album or track matches, missing-field fills, and Cover Art Archive artwork">
+          {showTool("musicBrainz") && (
+          <DisclosureSection
+            title="MusicBrainz Auto-Tag"
+            description="Preview album or track matches, missing-field fills, and Cover Art Archive artwork"
+            defaultOpen={initialFocusToolId === "musicBrainz"}
+            openSignal={openSignalFor("musicBrainz")}
+          >
             <div className="grid gap-4 text-sm text-neutral-200">
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="grid gap-2">
@@ -1358,14 +1563,16 @@ export function FileManagementPage({
                   </select>
                 </label>
                 <div className="grid gap-2 sm:grid-cols-3">
-                  <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-ink px-3 py-2">
-                    <span className="text-muted">Missing only</span>
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 accent-moss"
-                      checked={autoTagMissingOnly}
-                      onChange={(event) => setAutoTagMissingOnly(event.target.checked)}
-                    />
+                  <label className="grid gap-1 rounded border border-line/70 bg-ink px-3 py-2">
+                    <span className="text-xs uppercase text-muted">Write Mode</span>
+                    <select
+                      className="h-7 rounded border border-line/70 bg-panel px-2 text-sm text-white outline-none ring-moss/40 focus:ring-2"
+                      value={autoTagMissingOnly ? "missing" : "replace"}
+                      onChange={(event) => setAutoTagMissingOnly(event.target.value === "missing")}
+                    >
+                      <option value="missing">Fill missing only</option>
+                      <option value="replace">Replace metadata</option>
+                    </select>
                   </label>
                   <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-ink px-3 py-2">
                     <span className="text-muted">Find artwork</span>
@@ -1397,7 +1604,7 @@ export function FileManagementPage({
                   <button
                     className="secondary-button"
                     type="button"
-                    onClick={() => void onPreviewAutoTag(autoTagMode, autoTagMissingOnly, autoTagIncludeArtwork, currentScope(scopedTrackIds))}
+                    onClick={() => void previewMusicBrainzAutoTags()}
                   >
                     <Eye size={15} />
                     Preview Matches
@@ -1406,17 +1613,7 @@ export function FileManagementPage({
                     className="primary-button"
                     type="button"
                     disabled={Boolean(autoTagPreview) && autoTagChangedIds.length === 0 && (!autoTagSaveArtwork || autoTagArtworkIds.length === 0)}
-                    onClick={() =>
-                      void onApplyAutoTag(
-                        autoTagMode,
-                        autoTagMissingOnly,
-                        autoTagIncludeArtwork,
-                        autoTagSaveArtwork,
-                        autoTagPreview
-                          ? Array.from(new Set([...autoTagChangedIds, ...(autoTagSaveArtwork ? autoTagArtworkIds : [])]))
-                          : currentScope(scopedTrackIds),
-                      )
-                    }
+                    onClick={() => void applyMusicBrainzAutoTags()}
                   >
                     <Wand2 size={15} />
                     {autoTagPreview ? "Apply Accepted" : "Apply Auto-Tags"}
@@ -1482,7 +1679,6 @@ export function FileManagementPage({
                           {preview.release_title && (
                             <div className="truncate text-muted">
                               Release: {preview.release_title}
-                              {preview.release_id ? ` (${preview.release_id})` : ""}
                             </div>
                           )}
                         </div>
@@ -1503,7 +1699,120 @@ export function FileManagementPage({
               )}
             </div>
           </DisclosureSection>
+          )}
 
+          {showTool("clapGenreTags") && (
+          <DisclosureSection
+            title="CLAP Genre Tags"
+            description="Preview CLAP genre predictions before copying them into editable metadata"
+            defaultOpen={initialFocusToolId === "clapGenreTags"}
+            openSignal={openSignalFor("clapGenreTags")}
+          >
+            <div className="grid gap-4 text-sm text-neutral-200">
+              <div className="grid gap-3 md:grid-cols-[1fr_220px]">
+                <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-ink px-3 py-2">
+                  <span>
+                    <span className="block text-neutral-200">Only fill empty genres</span>
+                    <span className="text-xs text-muted">Leaves existing genre tags alone unless this is off.</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 accent-moss"
+                    checked={clapGenreMissingOnly}
+                    onChange={(event) => setClapGenreMissingOnly(event.target.checked)}
+                  />
+                </label>
+                <label className="grid gap-2">
+                  <span className="text-xs uppercase text-muted">Min Confidence {(clapGenreMinConfidence * 100).toFixed(0)}%</span>
+                  <input
+                    className="accent-moss"
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={clapGenreMinConfidence}
+                    onChange={(event) => setClapGenreMinConfidence(Number(event.target.value))}
+                  />
+                </label>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="text-xs text-muted">
+                  Requires tracks already analyzed by CLAP. The preview is limited to 500 tracks per pass.
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button className="secondary-button" type="button" disabled={clapGenreBusy} onClick={() => void previewClapGenreTags(false)}>
+                    <Eye size={15} />
+                    Preview Genres
+                  </button>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    disabled={clapGenreBusy || (clapGenrePreview?.changed ?? 1) === 0}
+                    onClick={() => void previewClapGenreTags(true)}
+                  >
+                    <Wand2 size={15} />
+                    Apply Preview
+                  </button>
+                </div>
+              </div>
+              {clapGenrePreview && (
+                <div className="rounded border border-line bg-ink p-3 text-xs">
+                  <div className="mb-3 grid gap-2 sm:grid-cols-4">
+                    <div>
+                      <div className="font-semibold text-white">{clapGenrePreview.total.toLocaleString()}</div>
+                      <div className="text-muted">Analyzed</div>
+                    </div>
+                    <div>
+                      <div className="font-semibold text-white">{clapGenrePreview.matched.toLocaleString()}</div>
+                      <div className="text-muted">Predicted</div>
+                    </div>
+                    <div>
+                      <div className="font-semibold text-moss">{clapGenrePreview.changed.toLocaleString()}</div>
+                      <div className="text-muted">Would change</div>
+                    </div>
+                    <div>
+                      <div className="font-semibold text-ember">{clapGenrePreview.applied.toLocaleString()}</div>
+                      <div className="text-muted">Applied</div>
+                    </div>
+                  </div>
+                  <div className="grid max-h-80 gap-1 overflow-auto pr-1">
+                    {clapGenrePreview.previews.slice(0, 80).map((preview) => (
+                      <div key={preview.track_id} className="grid gap-1 rounded bg-panel px-2 py-2">
+                        <div className="truncate font-medium text-neutral-200">
+                          {preview.title || "(untitled)"}
+                          {preview.artist ? ` - ${preview.artist}` : ""}
+                        </div>
+                        <div className="truncate text-muted">
+                          {preview.album || "Unknown album"}
+                        </div>
+                        <div className={preview.error ? "text-ember" : preview.changed ? "text-moss" : "text-muted"}>
+                          {preview.error ??
+                            `${preview.current_genre || "(empty)"} -> ${preview.proposed_genre || "(none)"}${
+                              preview.confidence !== null && preview.confidence !== undefined
+                                ? ` (${(preview.confidence * 100).toFixed(0)}%)`
+                                : ""
+                            }${preview.applied ? " - applied" : preview.changed ? "" : " - no change"}`}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {clapGenrePreview.errors.length > 0 && (
+                    <details className="mt-3 text-xs text-ember">
+                      <summary>CLAP genre notes</summary>
+                      <div className="mt-2 grid gap-1">
+                        {clapGenrePreview.errors.slice(0, 20).map((error) => (
+                          <div key={error} className="truncate">{error}</div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                </div>
+              )}
+            </div>
+          </DisclosureSection>
+          )}
+
+          {showTool("organizer") && (
           <DisclosureSection title="File Organizer" description="Preview tag-based moves and export a review report">
             <div className="grid gap-4 text-sm text-neutral-200">
               <label className="grid gap-2">
@@ -1591,7 +1900,9 @@ export function FileManagementPage({
               )}
             </div>
           </DisclosureSection>
+          )}
 
+          {showTool("deviceSync") && (
           <DisclosureSection title="Device Sync Folder" description="Preview copy jobs and playlist exports for a phone, USB drive, or portable player">
             <div className="grid gap-4 text-sm text-neutral-200">
               <div className="grid gap-3 rounded border border-line bg-ink p-3">
@@ -1830,9 +2141,11 @@ export function FileManagementPage({
               )}
             </div>
           </DisclosureSection>
+          )}
 
-          <CdRipperSection setStatus={setStatus} />
+          {showTool("cdRipper") && <CdRipperSection setStatus={setStatus} />}
 
+          {showTool("audioConversion") && (
           <AudioConversionSection
             scopedTrackIds={scopedTrackIds}
             setup={audioConversionSetup}
@@ -1844,9 +2157,11 @@ export function FileManagementPage({
             onStart={onStartAudioConversion}
             onCancel={onCancelAudioConversion}
           />
+          )}
 
-          <LibraryImportersSection setStatus={setStatus} />
+          {showTool("libraryImporters") && <LibraryImportersSection setStatus={setStatus} />}
 
+          {showTool("csvMetadata") && (
           <DisclosureSection title="CSV Metadata Import" description="Spreadsheet cleanup with saved mappings, conflict review, and blank-field control">
             <div className="grid gap-4 text-sm text-neutral-200">
               <div className="flex flex-wrap gap-2">
@@ -1998,33 +2313,42 @@ export function FileManagementPage({
               )}
             </div>
           </DisclosureSection>
+          )}
 
+          {showTool("advancedTags") && (
           <AdvancedTagToolsSection
             scopedTrackIds={scopedTrackIds}
             onLibraryChanged={onAdvancedTagLibraryChanged}
             setStatus={setStatus}
           />
+          )}
 
+          {showTool("duplicates") && (
           <DisclosureSection title="Duplicate Review" description="Keep the best copy, remove selected tracks, reveal files, or export a duplicate report">
             <div className="grid gap-4 text-sm text-neutral-200">
-              <label className="grid gap-2">
-                <span className="text-xs uppercase text-muted">Duplicate Track IDs</span>
-                <input
-                  className="h-9 rounded border border-line bg-ink px-3 text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
-                  value={duplicateTrackIdsText}
-                  placeholder="Optional override. Blank uses the global scope IDs."
-                  onChange={(event) => setDuplicateTrackIdsText(event.target.value)}
-                />
-              </label>
-              <label className="grid gap-2">
-                <span className="text-xs uppercase text-muted">Keep-Best Groups</span>
-                <textarea
-                  className="min-h-20 rounded border border-line bg-ink px-3 py-2 font-mono text-xs text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
-                  value={duplicateGroupsText}
-                  placeholder="One duplicate group per line, for example: 12, 34, 56"
-                  onChange={(event) => setDuplicateGroupsText(event.target.value)}
-                />
-              </label>
+              <details className="rounded border border-line/70 bg-ink px-3 py-2">
+                <summary className="cursor-pointer text-xs uppercase text-muted">Advanced duplicate target overrides</summary>
+                <div className="mt-3 grid gap-3">
+                  <label className="grid gap-2">
+                    <span className="text-xs uppercase text-muted">Specific Tracks</span>
+                    <input
+                      className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
+                      value={duplicateTrackIdsText}
+                      placeholder="Optional advanced override. Blank uses the current target."
+                      onChange={(event) => setDuplicateTrackIdsText(event.target.value)}
+                    />
+                  </label>
+                  <label className="grid gap-2">
+                    <span className="text-xs uppercase text-muted">Keep-Best Groups</span>
+                    <textarea
+                      className="min-h-20 rounded border border-line bg-panel px-3 py-2 font-mono text-xs text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
+                      value={duplicateGroupsText}
+                      placeholder="One duplicate group per line, for example: 12, 34, 56"
+                      onChange={(event) => setDuplicateGroupsText(event.target.value)}
+                    />
+                  </label>
+                </div>
+              </details>
               <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-ink px-3 py-2">
                 <span className="text-muted">Also delete files from disk</span>
                 <input
@@ -2105,23 +2429,90 @@ export function FileManagementPage({
               )}
             </div>
           </DisclosureSection>
+          )}
 
-          <DisclosureSection title="Acoustic Fingerprints" description="Optional Chromaprint fpcalc pass for stronger duplicate matching">
+          {showTool("acousticFingerprints") && (
+          <DisclosureSection
+            title="Acoustic Fingerprints"
+            description="Optional Chromaprint fpcalc pass for stronger duplicate matching and fingerprint-assisted tagging"
+            defaultOpen={initialFocusToolId === "acousticFingerprints"}
+            openSignal={openSignalFor("acousticFingerprints")}
+          >
             <div className="grid gap-4 text-sm text-neutral-200">
-              <div className="rounded border border-line bg-ink p-3 text-xs">
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                  <div className={chromaprintSetup?.available ? "font-medium text-moss" : "font-medium text-ember"}>
-                    {chromaprintSetup?.available ? "Chromaprint ready" : "Chromaprint setup needed"}
+              <div className="grid gap-3 rounded border border-line bg-ink p-3 md:grid-cols-[1fr_220px] md:items-end">
+                <div>
+                  <div className="text-xs uppercase text-muted">Fingerprint Target</div>
+                  <div className="mt-1 text-neutral-200">
+                    {scopedTrackIds.length
+                      ? `${scopedTrackIds.length.toLocaleString()} selected track${scopedTrackIds.length === 1 ? "" : "s"}`
+                      : "Tool default target"}
                   </div>
-                  <button className="secondary-button h-8" type="button" onClick={() => void onRefreshChromaprintSetup()}>
-                    <RefreshCw size={14} />
-                    Check
+                  <div className="mt-1 text-xs text-muted">
+                    Run fingerprints first, then build a MusicBrainz preview from the stronger match data.
+                  </div>
+                </div>
+                <NumberField label="Fingerprint Limit" value={acousticLimit} min={1} max={10000} onChange={setAcousticLimit} />
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <label className="flex items-center gap-3 rounded border border-line/70 bg-ink px-3 py-2">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 accent-moss"
+                    checked={acousticOverwrite}
+                    onChange={(event) => setAcousticOverwrite(event.target.checked)}
+                  />
+                  <span className="text-muted">Overwrite existing fingerprints</span>
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => void analyzeAcousticFingerprints()}
+                  >
+                    <Fingerprint size={15} />
+                    Analyze Fingerprints
+                  </button>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    onClick={() => void previewAcousticFingerprintTags()}
+                  >
+                    <Wand2 size={15} />
+                    Fingerprint Tag Preview
                   </button>
                 </div>
-                <div className="text-muted">{chromaprintSetup?.message ?? "Checking fpcalc setup"}</div>
-                {chromaprintSetup?.resolved_path && <div className="mt-1 truncate text-muted">Using {chromaprintSetup.resolved_path}</div>}
-                {chromaprintSetup?.version && <div className="mt-1 truncate text-muted">{chromaprintSetup.version}</div>}
-                <div className="mt-3 grid gap-2 md:grid-cols-[1fr_auto_auto_auto]">
+              </div>
+              {acousticFingerprintResult && (
+                <div className="rounded border border-line bg-ink px-3 py-2 text-xs text-muted">
+                  <div>
+                    {acousticFingerprintResult.tool_available ? "fpcalc available" : "fpcalc missing"} -{" "}
+                    {acousticFingerprintResult.updated.toLocaleString()} updated, {acousticFingerprintResult.skipped.toLocaleString()} skipped
+                  </div>
+                  {acousticFingerprintResult.errors.map((error) => (
+                    <div key={error} className="truncate text-ember">
+                      {error}
+                    </div>
+                  ))}
+                </div>
+              )}
+              <details className="rounded border border-line bg-ink p-3 text-xs text-muted">
+                <summary className="cursor-pointer select-none text-xs uppercase text-neutral-200">
+                  Chromaprint Setup
+                  <span className={chromaprintSetup?.available ? "ml-2 text-moss" : "ml-2 text-ember"}>
+                    {chromaprintSetup?.available ? "Ready" : "Needs setup"}
+                  </span>
+                </summary>
+                <div className="mt-3 grid gap-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>{chromaprintSetup?.message ?? "Checking fpcalc setup"}</div>
+                    <button className="secondary-button h-8" type="button" onClick={() => void onRefreshChromaprintSetup()}>
+                      <RefreshCw size={14} />
+                      Check
+                    </button>
+                  </div>
+                  {chromaprintSetup?.resolved_path && <div className="truncate">Using {chromaprintSetup.resolved_path}</div>}
+                  {chromaprintSetup?.version && <div className="truncate">{chromaprintSetup.version}</div>}
+                  <div className="grid gap-2 md:grid-cols-[1fr_auto_auto_auto]">
                   <input
                     className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
                     value={fpcalcPath}
@@ -2141,58 +2532,28 @@ export function FileManagementPage({
                   </button>
                 </div>
                 {chromaprintSetup?.tool_directory && (
-                  <div className="mt-2 truncate text-muted">
+                  <div className="truncate">
                     Portable option: put fpcalc.exe in {chromaprintSetup.tool_directory}; PATH is optional.
                   </div>
                 )}
                 {chromaprintSetup?.errors.map((error) => (
-                  <div key={error} className="mt-1 truncate text-ember">
+                  <div key={error} className="truncate text-ember">
                     {error}
                   </div>
                 ))}
                 {chromaprintInstallResult && (
-                  <div className={chromaprintInstallResult.installed ? "mt-2 text-moss" : "mt-2 text-ember"}>
+                  <div className={chromaprintInstallResult.installed ? "text-moss" : "text-ember"}>
                     {chromaprintInstallResult.message}
                     {chromaprintInstallResult.fpcalc_path ? ` ${chromaprintInstallResult.fpcalc_path}` : ""}
                   </div>
                 )}
-              </div>
-              <div className="grid gap-3 md:grid-cols-2">
-                <NumberField label="Fingerprint Limit" value={acousticLimit} min={1} max={10000} onChange={setAcousticLimit} />
-                <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-ink px-3 py-2">
-                  <span className="text-muted">Overwrite existing fingerprints</span>
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4 accent-moss"
-                    checked={acousticOverwrite}
-                    onChange={(event) => setAcousticOverwrite(event.target.checked)}
-                  />
-                </label>
-              </div>
-              <button
-                className="secondary-button w-fit"
-                type="button"
-                onClick={() => void onRunAcousticFingerprintPass(currentScope(scopedTrackIds), acousticOverwrite, acousticLimit)}
-              >
-                <Fingerprint size={15} />
-                Analyze Fingerprints
-              </button>
-              {acousticFingerprintResult && (
-                <div className="rounded border border-line bg-ink px-3 py-2 text-xs text-muted">
-                  <div>
-                    {acousticFingerprintResult.tool_available ? "fpcalc available" : "fpcalc missing"} -{" "}
-                    {acousticFingerprintResult.updated.toLocaleString()} updated, {acousticFingerprintResult.skipped.toLocaleString()} skipped
-                  </div>
-                  {acousticFingerprintResult.errors.map((error) => (
-                    <div key={error} className="truncate text-ember">
-                      {error}
-                    </div>
-                  ))}
                 </div>
-              )}
+              </details>
             </div>
           </DisclosureSection>
+          )}
 
+          {showTool("reportViewer") && (
           <ReportViewerSection
             reportPath={reportPath}
             setReportPath={setReportPath}
@@ -2202,7 +2563,9 @@ export function FileManagementPage({
             reportFile={reportFile}
             onReadReportFile={onReadReportFile}
           />
+          )}
 
+          {showTool("cacheUndo") && (
           <CacheUndoLogSection
             bulkUndoLog={bulkUndoLog}
             bulkUndoBatches={bulkUndoBatches}
@@ -2213,7 +2576,9 @@ export function FileManagementPage({
             onClearArtistCache={onClearArtistCache}
             onClearLibraryCaches={onClearLibraryCaches}
           />
+          )}
         </div>
+        </DisclosureAccordionProvider>
       </section>
     </main>
   );

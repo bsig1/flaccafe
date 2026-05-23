@@ -2,9 +2,19 @@
 
 FLAC Cafe keeps risky library maintenance behind preview-first tools. These tools update the SQLite library first and only touch files when the user explicitly applies a move or has file tag writing enabled.
 
+## File Management Navigation
+
+The File Management page groups tools into Watch, Tags, Files, Devices, Import, and Maintenance categories. Use the search box to narrow the page by tool name, description, or common task keywords such as `duplicates`, `MusicBee`, `artwork`, or `ffmpeg`.
+
+Most tools remain preview-first. Filtering the page only changes what is visible; it does not reset staged previews, selected track scopes, or pending watcher changes.
+
+## Right-Click Tagging
+
+The Library track context menu includes a Tagging submenu. It supports the full metadata editor plus quick setters for genre, artist, album, album artist, and year. When multiple tracks are selected, the quick setters apply to the selection using the same SQLite/file-writing behavior as bulk metadata edits.
+
 ## Filename Tag Inference
 
-Settings > Library Tools can infer metadata from folder and file names with token patterns such as:
+File Management can infer metadata from folder and file names with token patterns such as:
 
 ```text
 <Album Artist> - <Album> [<Year>]/<Track#> - <Artist> - <Title>
@@ -45,17 +55,17 @@ When the watcher detects a new pending-change set, it records a notification sum
 
 ## Audiobooks
 
-The Audiobooks page shows long-form tracks separately from the main music table. A track appears there when its genre or path looks audiobook/book-oriented, such as `Audiobook`, `Audio Book`, or an audiobook folder.
+The Audiobooks page shows long-form tracks separately from the main music table and groups them by book. A track appears there when its genre or path looks audiobook/book-oriented, such as `Audiobook`, `Audio Book`, or an audiobook folder. From the Library context menu, use `Tagging > Mark as Audiobook` to set the `Audiobook` genre and move selected tracks out of the main music views.
 
-Audiobook resume positions are stored in SQLite, not written back to audio files. The page also supports per-track bookmarks and editable chapter rows. Chapter text uses `index|start|end|title`, with times like `1:23:45` or `12:34`; the end time can be blank.
+Audiobook resume positions are stored in SQLite, not written back to audio files. The page also supports playback through the normal player, per-track bookmarks, and editable chapter rows. Chapter text uses `index|start|end|title`, with times like `1:23:45` or `12:34`; the end time can be blank.
 
 The sync export writes a JSON file with track metadata, resume position, bookmarks, and chapters. This gives phone/device workflows a stable handoff format without forcing FLAC Cafe to invent a device-specific audiobook database.
 
 ## Podcasts
 
-The Podcasts page is an optional RSS feed manager. Subscriptions and episode rows are stored in SQLite, and refreshing a subscription fetches the feed and upserts remote episodes.
+The Podcasts page is an optional RSS feed manager. Subscriptions and episode rows are stored in SQLite, and refreshing a subscription fetches the feed and upserts remote episodes. Use the download-folder Browse button to choose a subscription folder, or leave the field blank to use FLAC Cafe's default podcast cache.
 
-Episode downloads are explicit. FLAC Cafe writes downloaded media into the subscription download folder, or `backend/exports/podcasts` when no folder is set. Downloaded files are not automatically added to the music library; scan the target folder when you want podcast files to appear beside local tracks.
+Episode downloads are explicit. FLAC Cafe writes downloaded media into the subscription download folder, or `backend/exports/podcasts` when no folder is set. Episodes downloaded to the default folder are automatically added to SQLite as `Podcast` tracks so the Podcasts tab can play them through the normal player. Podcast-marked tracks are excluded from the primary Library and album views.
 
 ## Web Radio
 
@@ -75,11 +85,17 @@ Applied regex changes are written through the same metadata path as manual edits
 
 ## MusicBrainz Auto-Tag
 
-The MusicBrainz Auto-Tag tool searches MusicBrainz in either album/release mode or individual track mode. Preview rows show the proposed metadata, confidence, changed fields, MusicBrainz IDs, and any matched Cover Art Archive image.
+The MusicBrainz Auto-Tag tool searches MusicBrainz in either album/release mode or individual track mode. Preview rows show the proposed metadata, confidence, changed fields, release title, and any matched Cover Art Archive image.
 
 "Missing only" keeps existing non-empty fields intact. Turning it off allows MusicBrainz data to replace current SQLite metadata. Applying uses the same metadata writer as manual edits, so the Settings file-writing toggle controls whether supported audio files are updated too.
 
 Artwork matching uses the Cover Art Archive front image for the matched MusicBrainz release. When "Save cover" is enabled during apply, FLAC Cafe downloads the image as a local sidecar file in the album folder and selects it for the album. Album artwork can also be embedded into supported audio files from the Albums view after review.
+
+## CLAP Genre Tags
+
+The CLAP Genre Tags tool uses existing CLAP analysis results to preview predicted genre labels before copying them into the editable `genre` field. It is preview-first, supports a confidence threshold, and can be limited to tracks with empty genre tags.
+
+Applying the preview uses the same metadata writer as manual edits. If file tag writing is enabled in Settings, supported audio files are updated; otherwise the genre changes stay in SQLite.
 
 ## File Organization
 
@@ -105,7 +121,7 @@ Saved sync profiles store the target folder, device type, music and playlist sub
 
 The CD Ripper panel on the File Management page detects local CD drives, checks for external extraction tools, looks up album metadata through MusicBrainz, and starts background rip jobs to FLAC, MP3, or WAV.
 
-Secure extraction is tool-backed. Put `cdparanoia.exe`, `cdda2wav.exe`, or `icedax.exe` in the app CD tool folder, or make one available on `PATH`. FLAC and MP3 encoding use the same FFmpeg setup as Audio Conversion. If an AccurateRip-capable tool is installed, FLAC Cafe reports that capability; current rip jobs always write local SHA-256 verification hashes so a rip has an audit trail even when official AccurateRip database matching is unavailable.
+Secure extraction is tool-backed. Put `cdparanoia.exe`, `cdda2wav.exe`, or `icedax.exe` in the app CD tool folder, or make one available on `PATH`. FLAC and MP3 encoding use the same FFmpeg setup as Audio Conversion. FLAC Cafe checks for those tools but does not currently auto-install them. If an AccurateRip-capable tool is installed, FLAC Cafe reports that capability; current rip jobs always write local SHA-256 verification hashes so a rip has an audit trail even when official AccurateRip database matching is unavailable.
 
 CD playback uses Windows CD audio control for quick track checks. It is intentionally separate from the local-file player and does not add ripped tracks to the library until the output folder is scanned.
 

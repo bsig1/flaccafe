@@ -56,6 +56,7 @@ export interface TrackMetadataUpdate {
   disc_number?: number | null;
   genre?: string | null;
   year?: number | null;
+  write_to_file?: boolean | null;
 }
 
 export interface AlbumSummary {
@@ -65,6 +66,8 @@ export interface AlbumSummary {
   year: number | null;
   artwork_path?: string | null;
   track_count: number;
+  expected_track_count?: number | null;
+  missing_track_count?: number;
   duration_seconds: number | null;
   average_rating: number | null;
   artwork_track_id: number | null;
@@ -741,6 +744,37 @@ export interface AutoTagResponse {
   previews: AutoTagPreview[];
 }
 
+export interface ClapGenreTagRequest {
+  track_ids?: number[] | null;
+  missing_only?: boolean;
+  min_confidence?: number;
+  apply?: boolean;
+  write_to_file?: boolean | null;
+  limit?: number;
+}
+
+export interface ClapGenreTagPreview {
+  track_id: number;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  current_genre: string | null;
+  proposed_genre: string | null;
+  confidence: number | null;
+  changed: boolean;
+  applied: boolean;
+  error: string | null;
+}
+
+export interface ClapGenreTagResponse {
+  total: number;
+  matched: number;
+  changed: number;
+  applied: number;
+  errors: string[];
+  previews: ClapGenreTagPreview[];
+}
+
 export interface DuplicateActionRequest {
   action: "keep_best" | "remove_selected" | "export_report";
   track_ids?: number[];
@@ -868,6 +902,7 @@ export interface LyricsResponse {
   lyrics: string | null;
   source: string | null;
   is_synced: boolean;
+  sidecar_path?: string | null;
 }
 
 export interface LyricsUpdateRequest {
@@ -892,6 +927,7 @@ export interface ArtistInfoResponse {
 
 export interface ScanResult {
   folder_path: string;
+  folder_paths: string[];
   scanned_files: number;
   inserted: number;
   updated: number;
@@ -903,12 +939,14 @@ export interface ScanResult {
 export interface ScanStartResponse {
   job_id: string;
   folder_path: string;
+  folder_paths: string[];
   status: string;
 }
 
 export interface ScanProgress {
   job_id: string;
   folder_path: string;
+  folder_paths: string[];
   status: "pending" | "counting" | "scanning" | "cleaning" | "completed" | "failed";
   total_files: number;
   processed_files: number;
@@ -1292,6 +1330,7 @@ export interface PodcastEpisode {
   id: number;
   subscription_id: number;
   subscription_title: string | null;
+  track_id?: number | null;
   guid: string;
   title: string;
   description: string | null;
@@ -1604,14 +1643,17 @@ export interface AudioAnalysisProgress {
 
 export interface SettingsResponse {
   library_path: string | null;
+  library_paths: string[];
   database_path: string;
   suggested_music_path?: string | null;
   write_ratings_to_files: boolean;
+  auto_write_fetched_lyrics_sidecars: boolean;
   extra: Record<string, unknown>;
 }
 
 export interface SettingsUpdateRequest {
   write_ratings_to_files?: boolean;
+  auto_write_fetched_lyrics_sidecars?: boolean;
 }
 
 export interface DiagnosticItem {
@@ -1662,6 +1704,7 @@ export interface AutoDjSettings {
   target_unrated_percent?: number | null;
   target_exploration_percent?: number | null;
   max_repeat_artist_percent?: number | null;
+  minimum_rating?: number | null;
   recently_played_cooldown_days: number;
   seed_track_id?: number | null;
   similarity_weight?: number;

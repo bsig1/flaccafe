@@ -1,7 +1,10 @@
 import {
   Bookmark,
   BookOpen,
+  ChevronDown,
+  ChevronRight,
   Download,
+  Play,
   Plus,
   RefreshCw,
   Save,
@@ -27,6 +30,7 @@ import type {
   AudiobookBookmark,
   AudiobookChapter,
   AudiobookTrack,
+  Track,
 } from "../../types/api";
 import {
   NumberField,
@@ -82,10 +86,88 @@ function parseChapters(text: string): AudiobookChapter[] {
     .filter((chapter) => chapter.title.trim().length > 0);
 }
 
-export function AudiobooksPage({ setStatus }: { setStatus: (message: string) => void }) {
+function audiobookToTrack(track: AudiobookTrack): Track {
+  return {
+    ...track,
+    analysis_provider: null,
+    analysis_model: null,
+    analysis_genre: null,
+    analysis_genre_confidence: null,
+    analysis_genre_tags: null,
+    analysis_embedding: null,
+    analysis_updated_at: null,
+    bitrate: null,
+    replaygain_track_gain_db: null,
+    replaygain_album_gain_db: null,
+    replaygain_track_peak: null,
+    replaygain_album_peak: null,
+    audio_fingerprint: null,
+    acoustic_fingerprint: null,
+    acoustic_fingerprint_updated_at: null,
+    skip_count: 0,
+    last_skipped_at: null,
+    file_modified_at: null,
+  };
+}
+
+interface AudiobookBookGroup {
+  key: string;
+  title: string;
+  author: string;
+  tracks: AudiobookTrack[];
+  durationSeconds: number;
+  positionSeconds: number;
+  progressPercent: number;
+}
+
+function audiobookFolderName(track: AudiobookTrack) {
+  const parts = track.path.split(/[\\/]/).filter(Boolean);
+  return parts.length >= 2 ? parts[parts.length - 2] : null;
+}
+
+function audiobookBookTitle(track: AudiobookTrack) {
+  return track.album || audiobookFolderName(track) || track.title || "Untitled book";
+}
+
+function audiobookBookKey(track: AudiobookTrack) {
+  const author = (track.album_artist || track.artist || "Unknown author").trim().toLowerCase();
+  const book = audiobookBookTitle(track).trim().toLowerCase();
+  return `${author}::${book}`;
+}
+
+function groupAudiobooksByBook(tracks: AudiobookTrack[]): AudiobookBookGroup[] {
+  const groups = new Map<string, AudiobookBookGroup>();
+  for (const track of tracks) {
+    const key = audiobookBookKey(track);
+    const group = groups.get(key) ?? {
+      key,
+      title: audiobookBookTitle(track),
+      author: track.album_artist || track.artist || "Unknown author",
+      tracks: [],
+      durationSeconds: 0,
+      positionSeconds: 0,
+      progressPercent: 0,
+    };
+    group.tracks.push(track);
+    group.durationSeconds += track.duration_seconds || 0;
+    group.positionSeconds += track.position_seconds || 0;
+    group.progressPercent = group.durationSeconds > 0 ? Math.min(100, (group.positionSeconds / group.durationSeconds) * 100) : 0;
+    groups.set(key, group);
+  }
+  return [...groups.values()];
+}
+
+interface AudiobooksPageProps {
+  setStatus: (message: string) => void;
+  onPlayTrack: (track: Track, queueItems: Track[]) => void;
+  onAddToQueue: (track: Track) => void;
+}
+
+export function AudiobooksPage({ setStatus, onPlayTrack, onAddToQueue }: AudiobooksPageProps) {
   const [tracks, setTracks] = useState<AudiobookTrack[]>([]);
   const [total, setTotal] = useState(0);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [openBookKeys, setOpenBookKeys] = useState<Set<string>>(new Set());
   const [bookmarks, setBookmarks] = useState<AudiobookBookmark[]>([]);
   const [chapters, setChapters] = useState<AudiobookChapter[]>([]);
   const [positionSeconds, setPositionSeconds] = useState(0);
@@ -93,6 +175,14 @@ export function AudiobooksPage({ setStatus }: { setStatus: (message: string) => 
   const [bookmarkNote, setBookmarkNote] = useState("");
   const [chapterText, setChapterText] = useState("");
   const selected = useMemo(() => tracks.find((track) => track.id === selectedId) ?? tracks[0] ?? null, [selectedId, tracks]);
+  const playableTracks = useMemo(() => tracks.map(audiobookToTrack), [tracks]);
+  const selectedTrack = useMemo(() => (selected ? audiobookToTrack(selected) : null), [selected]);
+  const bookGroups = useMemo(() => groupAudiobooksByBook(tracks), [tracks]);
+  const selectedBookKey = selected ? audiobookBookKey(selected) : null;
+  const selectedGroup = useMemo(
+    () => (selectedBookKey ? bookGroups.find((group) => group.key === selectedBookKey) ?? null : null),
+    [bookGroups, selectedBookKey],
+  );
 
   async function loadAudiobooks() {
     try {
@@ -139,6 +229,20 @@ export function AudiobooksPage({ setStatus }: { setStatus: (message: string) => 
     void loadSelectedDetails(selected);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id]);
+
+  useEffect(() => {
+    if (!selectedBookKey) {
+      return;
+    }
+    setOpenBookKeys((current) => {
+      if (current.has(selectedBookKey)) {
+        return current;
+      }
+      const next = new Set(current);
+      next.add(selectedBookKey);
+      return next;
+    });
+  }, [selectedBookKey]);
 
   async function saveProgress() {
     if (!selected) {
@@ -207,6 +311,25 @@ export function AudiobooksPage({ setStatus }: { setStatus: (message: string) => 
     }
   }
 
+  function playAudiobook(track: AudiobookTrack, queueSource: AudiobookTrack[] = tracks) {
+    const playable = audiobookToTrack(track);
+    const queueItems = queueSource.map(audiobookToTrack);
+    onPlayTrack(playable, queueItems.length ? queueItems : playableTracks.length ? playableTracks : [playable]);
+  }
+
+  function toggleBook(group: AudiobookBookGroup) {
+    setSelectedId(group.tracks[0]?.id ?? null);
+    setOpenBookKeys((current) => {
+      const next = new Set(current);
+      if (next.has(group.key)) {
+        next.delete(group.key);
+      } else {
+        next.add(group.key);
+      }
+      return next;
+    });
+  }
+
   return (
     <section className="flex min-h-0 flex-1 flex-col overflow-hidden bg-app">
       <header className="border-b border-line px-6 py-4">
@@ -232,26 +355,74 @@ export function AudiobooksPage({ setStatus }: { setStatus: (message: string) => 
           <div className="border-b border-line px-3 py-2 text-xs uppercase text-muted">
             {total.toLocaleString()} audiobook track{total === 1 ? "" : "s"}
           </div>
-          <div className="grid max-h-full gap-1 overflow-auto p-2">
-            {tracks.map((track) => (
-              <button
-                key={track.id}
-                className={`grid min-w-0 gap-1 rounded px-3 py-2 text-left transition ${
-                  selected?.id === track.id ? "bg-white/10 text-white" : "text-neutral-200 hover:bg-white/5"
-                }`}
-                type="button"
-                onClick={() => setSelectedId(track.id)}
-              >
-                <span className="truncate text-sm font-medium">{track.title ?? "Untitled audiobook"}</span>
-                <span className="truncate text-xs text-muted">{track.artist ?? track.album_artist ?? "Unknown author"} · {track.album ?? "Unknown book"}</span>
-                <span className="h-1.5 overflow-hidden rounded-full bg-ink">
-                  <span className="block h-full rounded-full bg-moss" style={{ width: `${track.progress_percent}%` }} />
-                </span>
-                <span className="text-xs text-muted">
-                  {formatTime(track.position_seconds)} / {formatTime(track.duration_seconds)} · {track.bookmark_count} bookmark{track.bookmark_count === 1 ? "" : "s"}
-                </span>
-              </button>
-            ))}
+          <div className="grid max-h-full gap-2 overflow-auto p-2">
+            {bookGroups.map((group) => {
+              const open = openBookKeys.has(group.key);
+              const groupSelected = group.tracks.some((track) => track.id === selected?.id);
+              const firstTrack = group.tracks[0];
+              return (
+                <div key={group.key} className={`rounded border transition ${groupSelected ? "border-moss/50 bg-white/5" : "border-line bg-ink/50"}`}>
+                  <button
+                    className="grid w-full min-w-0 gap-1 px-3 py-2 text-left hover:bg-white/5"
+                    type="button"
+                    onClick={() => toggleBook(group)}
+                  >
+                    <span className="flex min-w-0 items-center justify-between gap-3">
+                      <span className="inline-flex min-w-0 items-center gap-2">
+                        {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                        <BookOpen size={15} className="shrink-0 text-moss" />
+                        <span className="truncate text-sm font-medium text-neutral-100">{group.title}</span>
+                      </span>
+                      <span className="shrink-0 text-xs text-muted">{group.tracks.length.toLocaleString()} track{group.tracks.length === 1 ? "" : "s"}</span>
+                    </span>
+                    <span className="truncate pl-12 text-xs text-muted">{group.author} · {formatTime(group.positionSeconds)} / {formatTime(group.durationSeconds)}</span>
+                    <span className="ml-12 h-1.5 overflow-hidden rounded-full bg-panel">
+                      <span className="block h-full rounded-full bg-moss" style={{ width: `${group.progressPercent}%` }} />
+                    </span>
+                  </button>
+                  {open && (
+                    <div className="grid gap-1 border-t border-line p-1">
+                      {group.tracks.map((track) => (
+                        <div
+                          key={track.id}
+                          className={`grid min-w-0 gap-1 rounded px-3 py-2 text-left transition ${
+                            selected?.id === track.id ? "bg-white/10 text-white" : "text-neutral-200 hover:bg-white/5"
+                          }`}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setSelectedId(track.id)}
+                          onDoubleClick={() => playAudiobook(track, group.tracks)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              playAudiobook(track, group.tracks);
+                            }
+                          }}
+                        >
+                          <span className="flex min-w-0 items-center justify-between gap-3">
+                            <span className="truncate text-sm font-medium">{track.title ?? firstTrack?.title ?? "Untitled audiobook"}</span>
+                            <button
+                              className="icon-button h-7 w-7 shrink-0"
+                              type="button"
+                              title="Play audiobook"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                playAudiobook(track, group.tracks);
+                              }}
+                            >
+                              <Play size={14} />
+                            </button>
+                          </span>
+                          <span className="truncate text-xs text-muted">{track.artist ?? track.album_artist ?? "Unknown author"}</span>
+                          <span className="text-xs text-muted">
+                            {formatTime(track.position_seconds)} / {formatTime(track.duration_seconds)} · {track.bookmark_count} bookmark{track.bookmark_count === 1 ? "" : "s"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
             {tracks.length === 0 && (
               <div className="grid place-items-center py-16 text-center text-sm text-muted">
                 Tracks with audiobook genres or audiobook/book paths will appear here after scanning.
@@ -269,6 +440,16 @@ export function AudiobooksPage({ setStatus }: { setStatus: (message: string) => 
                   <span className="min-w-0 truncate">{selected.title ?? "Untitled audiobook"}</span>
                 </div>
                 <div className="mt-1 truncate text-sm text-muted">{selected.artist ?? selected.album_artist ?? "Unknown author"} · {selected.album ?? "Unknown book"}</div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button className="primary-button" type="button" onClick={() => playAudiobook(selected, selectedGroup?.tracks ?? [selected])}>
+                    <Play size={15} />
+                    Play
+                  </button>
+                  <button className="secondary-button" type="button" onClick={() => selectedTrack && onAddToQueue(selectedTrack)}>
+                    <Plus size={15} />
+                    Add To Queue
+                  </button>
+                </div>
               </div>
 
               <div className="grid gap-3 rounded border border-line bg-ink p-3">

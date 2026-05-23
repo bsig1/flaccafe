@@ -59,10 +59,29 @@ export function TrackDetailsPanel({
   onRevealTrack: (track: Track) => void;
 }) {
   const [artworkFailed, setArtworkFailed] = useState(false);
+  const [actionsOpen, setActionsOpen] = useState(false);
 
   useEffect(() => {
     setArtworkFailed(false);
+    setActionsOpen(false);
   }, [track?.id]);
+
+  useEffect(() => {
+    if (!actionsOpen) {
+      return;
+    }
+
+    function closeActions() {
+      setActionsOpen(false);
+    }
+
+    window.addEventListener("click", closeActions);
+    window.addEventListener("keydown", closeActions);
+    return () => {
+      window.removeEventListener("click", closeActions);
+      window.removeEventListener("keydown", closeActions);
+    };
+  }, [actionsOpen]);
 
   if (!track) {
     return null;
@@ -107,29 +126,56 @@ export function TrackDetailsPanel({
                 <Play size={14} />
                 Play
               </button>
-              <details className="relative" data-auto-close>
-                <summary className="icon-button h-8 w-8 cursor-pointer list-none [&::-webkit-details-marker]:hidden" title="More track actions">
+              <details
+                className="relative"
+                open={actionsOpen}
+                onClick={(event) => event.stopPropagation()}
+                onToggle={(event) => setActionsOpen(event.currentTarget.open)}
+              >
+                <summary
+                  className="icon-button h-8 w-8 cursor-pointer list-none [&::-webkit-details-marker]:hidden"
+                  title="More track actions"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    setActionsOpen((current) => !current);
+                  }}
+                >
                   <MoreHorizontal size={15} />
                 </summary>
                 <div className="absolute left-0 top-9 z-30 w-48 overflow-hidden rounded border border-line bg-[rgb(var(--color-popover))] py-1 text-sm shadow-2xl">
-                  <button className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10" type="button" onClick={() => onAddTracksToPlaylist([track.id])}>
+                  <button className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10" type="button" onClick={() => {
+                    onAddTracksToPlaylist([track.id]);
+                    setActionsOpen(false);
+                  }}>
                     <Plus size={14} />
                     Add to playlist
                   </button>
-                  <button className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10 disabled:text-muted" type="button" disabled={isAudioAnalyzing} onClick={() => onAnalyzeTracks([track.id])}>
+                  <button className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10 disabled:text-muted" type="button" disabled={isAudioAnalyzing} onClick={() => {
+                    onAnalyzeTracks([track.id]);
+                    setActionsOpen(false);
+                  }}>
                     <BarChart3 size={14} />
                     Analyze track
                   </button>
-                  <button className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10" type="button" onClick={() => onEditTrack(track)}>
+                  <button className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10" type="button" onClick={() => {
+                    onEditTrack(track);
+                    setActionsOpen(false);
+                  }}>
                     <Pencil size={14} />
                     Edit metadata
                   </button>
-                  <button className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10" type="button" onClick={() => onRevealTrack(track)}>
+                  <button className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10" type="button" onClick={() => {
+                    onRevealTrack(track);
+                    setActionsOpen(false);
+                  }}>
                     <FolderOpen size={14} />
                     Reveal in Explorer
                   </button>
                   <div className="my-1 border-t border-line" />
-                  <button className="flex w-full items-center gap-2 px-3 py-2 text-left text-ember hover:bg-white/10" type="button" onClick={() => onDeleteTrack(track.id, false)}>
+                  <button className="flex w-full items-center gap-2 px-3 py-2 text-left text-ember hover:bg-white/10" type="button" onClick={() => {
+                    onDeleteTrack(track.id, false);
+                    setActionsOpen(false);
+                  }}>
                     <Trash2 size={14} />
                     Remove from library
                   </button>

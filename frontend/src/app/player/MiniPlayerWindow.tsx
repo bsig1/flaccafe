@@ -175,10 +175,16 @@ export function MiniPlayerWindow() {
               </span>
             )}
           </div>
-          <div className="truncate text-xs text-muted">
-            {track ? `${display(track.artist)} - ${display(track.album, "Unknown album")}` : "Use the main window to start a queue"}
-          </div>
-          <div className="mt-3 grid grid-cols-[38px_1fr_38px] items-center gap-2 text-[11px] tabular-nums text-muted">
+          {track ? (
+            <div className="flex min-w-0 items-center gap-1 text-xs text-muted">
+              <span className="max-w-[52%] truncate">{display(track.artist)}</span>
+              <span className="shrink-0">-</span>
+              <span className="min-w-0 truncate">{display(track.album, "Unknown album")}</span>
+            </div>
+          ) : (
+            <div className="truncate text-xs text-muted">Use the main window to start a queue</div>
+          )}
+          <div className="mt-3 grid grid-cols-[minmax(40px,auto)_1fr_minmax(40px,auto)] items-center gap-2 text-[11px] tabular-nums text-muted">
             <span className="text-right">{formatPlaybackTime(snapshot.currentTime)}</span>
             <input
               aria-label="Mini player position"

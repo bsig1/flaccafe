@@ -1,10 +1,13 @@
 import {
   Globe2,
+  Pause,
+  Play,
   Plus,
   Radio,
   RefreshCw,
   Save,
   Trash2,
+  Volume2,
 } from "lucide-react";
 import {
   useEffect,
@@ -41,6 +44,7 @@ export function RadioPage({ setStatus }: { setStatus: (message: string) => void 
   const [homepageUrl, setHomepageUrl] = useState("");
   const [genre, setGenre] = useState("");
   const [notes, setNotes] = useState("");
+  const [isRadioPlaying, setIsRadioPlaying] = useState(false);
   const selected = useMemo(() => stations.find((station) => station.id === selectedId) ?? stations[0] ?? null, [selectedId, stations]);
   const playing = stations.find((station) => station.id === playingId) ?? null;
 
@@ -109,6 +113,7 @@ export function RadioPage({ setStatus }: { setStatus: (message: string) => void 
       await deleteRadioStation(selectedId);
       if (playingId === selectedId) {
         audioRef.current?.pause();
+        setIsRadioPlaying(false);
         setPlayingId(null);
       }
       setSelectedId(null);
@@ -125,13 +130,33 @@ export function RadioPage({ setStatus }: { setStatus: (message: string) => void 
       await markRadioStationPlayed(station.id);
       window.setTimeout(() => {
         void audioRef.current?.play().catch(() => {
+          setIsRadioPlaying(false);
           setStatus("The stream did not start automatically. Press play in the radio controls.");
         });
       }, 0);
       await loadStations();
-      setStatus(`Playing ${station.name}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not start radio stream");
+    }
+  }
+
+  async function toggleRadioPlayback() {
+    const audio = audioRef.current;
+    if (!playing && selected) {
+      await playStation(selected);
+      return;
+    }
+    if (!audio || !playing) {
+      return;
+    }
+    if (audio.paused) {
+      try {
+        await audio.play();
+      } catch {
+        setStatus("The stream could not be started.");
+      }
+    } else {
+      audio.pause();
     }
   }
 
@@ -256,9 +281,44 @@ export function RadioPage({ setStatus }: { setStatus: (message: string) => void 
             </div>
 
             <div className="rounded border border-line bg-ink p-3">
-              <div className="mb-2 text-xs uppercase text-muted">Stream Player</div>
-              <div className="mb-2 truncate text-sm text-neutral-100">{playing?.name ?? "No station playing"}</div>
-              <audio ref={audioRef} className="w-full" src={playing?.stream_url ?? undefined} controls preload="none" />
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-xs uppercase text-muted">Stream Player</div>
+                  <div className="mt-1 truncate text-sm font-medium text-neutral-100">{playing?.name ?? "No station playing"}</div>
+                  <div className="mt-1 truncate text-xs text-muted">{playing?.genre ?? "Live web stream"}</div>
+                </div>
+                <button
+                  className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-ember text-ink shadow-sm shadow-black/25 transition hover:bg-[rgb(var(--color-primary-hover))] disabled:cursor-not-allowed disabled:opacity-50"
+                  type="button"
+                  disabled={!playing && !selected}
+                  title={isRadioPlaying ? "Pause stream" : "Play stream"}
+                  onClick={() => void toggleRadioPlayback()}
+                >
+                  {isRadioPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" />}
+                </button>
+              </div>
+              <div className="flex items-center gap-3 rounded border border-line/70 bg-panel px-3 py-2">
+                <Volume2 className={isRadioPlaying ? "text-moss" : "text-muted"} size={16} />
+                <div className="h-2 min-w-0 flex-1 overflow-hidden rounded bg-line/70">
+                  <div className={`h-full rounded bg-ember ${isRadioPlaying ? "w-2/3 animate-pulse" : "w-0"}`} />
+                </div>
+                <span className="text-xs uppercase text-muted">{isRadioPlaying ? "Live" : "Idle"}</span>
+              </div>
+              <audio
+                ref={audioRef}
+                className="hidden"
+                src={playing?.stream_url ?? undefined}
+                preload="none"
+                onPlay={() => setIsRadioPlaying(true)}
+                onPause={() => setIsRadioPlaying(false)}
+                onEnded={() => setIsRadioPlaying(false)}
+                onError={() => {
+                  setIsRadioPlaying(false);
+                  if (playing) {
+                    setStatus("Radio stream could not be loaded.");
+                  }
+                }}
+              />
               {playing?.stream_url && <div className="mt-2 truncate text-xs text-muted">{playing.stream_url}</div>}
             </div>
           </div>

@@ -93,7 +93,7 @@ export function CdRipperSection({ setStatus }: { setStatus: (message: string) =>
     [selectedTrackNumbers, tracks],
   );
 
-  async function loadSetup() {
+  async function loadSetup(showToast = false) {
     try {
       const response = await fetchCdRipSetup();
       setSetup(response);
@@ -104,14 +104,16 @@ export function CdRipperSection({ setStatus }: { setStatus: (message: string) =>
         setTracks(drive.tracks);
         setSelectedTrackNumbers(new Set(drive.tracks.map((track) => track.track_number)));
       }
-      setStatus(response.message);
+      if (showToast) {
+        setStatus(response.message);
+      }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not check CD setup");
     }
   }
 
   useEffect(() => {
-    void loadSetup();
+    void loadSetup(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -301,7 +303,7 @@ export function CdRipperSection({ setStatus }: { setStatus: (message: string) =>
               <Disc3 size={16} />
               <span className="truncate">{setup?.message ?? "Checking CD tools"}</span>
             </div>
-            <button className="secondary-button h-8" type="button" onClick={() => void loadSetup()}>
+            <button className="secondary-button h-8" type="button" onClick={() => void loadSetup(true)}>
               <RefreshCw size={14} />
               Check
             </button>

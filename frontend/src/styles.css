@@ -74,9 +74,28 @@ body {
   background: rgb(var(--color-scroll-track));
 }
 
+.scrollbar-hidden {
+  scrollbar-width: none;
+}
+
+.scrollbar-hidden::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 button,
-input {
+input,
+select {
   font: inherit;
+}
+
+select {
+  color-scheme: dark;
+}
+
+select option {
+  background: rgb(var(--color-panel));
+  color: rgb(var(--color-paper));
 }
 
 input[type="number"] {

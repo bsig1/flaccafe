@@ -213,6 +213,7 @@ import { PodcastsPage } from "./pages/PodcastsPage";
 import { RadioPage } from "./pages/RadioPage";
 import { ScrobblingPage } from "./pages/ScrobblingPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { SourcesPage } from "./pages/SourcesPage";
 import { MiniPlayerWindow } from "./player/MiniPlayerWindow";
 import { PlayerBar } from "./player/PlayerBar";
 import {
@@ -255,6 +256,46 @@ import {
   writeRememberedDeleteChoice,
 } from "./shared";
 
+function normalizeLinkMatchValue(value: string | number | null | undefined) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function findAlbumForTrack(albumList: AlbumSummary[], track: Track) {
+  const trackAlbum = normalizeLinkMatchValue(track.album);
+  if (!trackAlbum) {
+    return null;
+  }
+
+  const artistCandidates = new Set(
+    [track.album_artist, track.artist].map(normalizeLinkMatchValue).filter(Boolean),
+  );
+  const sameAlbum = albumList.filter((album) => normalizeLinkMatchValue(album.album) === trackAlbum);
+  return (
+    sameAlbum.find((album) => artistCandidates.has(normalizeLinkMatchValue(album.album_artist))) ??
+    sameAlbum[0] ??
+    null
+  );
+}
+
+function lyricsHaveText(response: LyricsResponse | null) {
+  return Boolean(response?.lyrics?.trim());
+}
+
+function uniqueFolderPaths(paths: string[]) {
+  const seen = new Set<string>();
+  return paths
+    .map((path) => path.trim())
+    .filter(Boolean)
+    .filter((path) => {
+      const key = path.toLowerCase();
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+}
+
 
 export default function App() {
   if (new URLSearchParams(window.location.search).get("miniPlayer") === "1") {
@@ -271,7 +312,9 @@ export default function App() {
   const [recommendationHistory, setRecommendationHistory] = useState<RecommendationRun[]>([]);
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
   const [writeRatingsToFiles, setWriteRatingsToFiles] = useState(false);
+  const [autoWriteFetchedLyricsSidecars, setAutoWriteFetchedLyricsSidecars] = useState(false);
   const [folderPath, setFolderPath] = useState("");
+  const [libraryFolders, setLibraryFolders] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [backendStatus, setBackendStatus] = useState<BackendStatus>("unknown");
@@ -298,17 +341,23 @@ export default function App() {
   const [audioAnalysisOnlyMissing, setAudioAnalysisOnlyMissing] = useState(true);
   const [isAudioAnalyzing, setIsAudioAnalyzing] = useState(false);
   const [uiPreferences, setUiPreferences] = useState<UiPreferences>(readUiPreferences);
+  const [continuousAutoDjEnabled, setContinuousAutoDjEnabled] = useState(false);
+  const [continuousAutoDjBusy, setContinuousAutoDjBusy] = useState(false);
+  const [continuousAutoDjSettings, setContinuousAutoDjSettings] = useState<AutoDjSettings>(defaultAutoDj);
   const [quickStartDismissed, setQuickStartDismissed] = useState(readQuickStartDismissed);
   const [coffeeAnimating, setCoffeeAnimating] = useState(false);
   const [detailTrack, setDetailTrack] = useState<Track | null>(null);
   const [metadataEditTrack, setMetadataEditTrack] = useState<Track | null>(null);
   const [deletePrompt, setDeletePrompt] = useState<DeleteTrackPrompt | null>(null);
   const [appContextMenu, setAppContextMenu] = useState<AppContextMenu | null>(null);
+  const [fileManagementFocusToolId, setFileManagementFocusToolId] = useState<string | null>(null);
+  const [fileManagementScopeIds, setFileManagementScopeIds] = useState<number[] | null>(null);
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [autoPlayOnTrackChange, setAutoPlayOnTrackChange] = useState(false);
   const [playbackQueue, setPlaybackQueue] = useState<Track[]>([]);
   const [queueHistory, setQueueHistory] = useState<Track[][]>([]);
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode>("normal");
+  const continuousAutoDjInFlightRef = useRef(false);
   const [libraryTotal, setLibraryTotal] = useState(0);
   const [hasMoreTracks, setHasMoreTracks] = useState(true);
   const [isLibraryLoading, setIsLibraryLoading] = useState(false);
@@ -510,8 +559,6 @@ export default function App() {
       setTracks((current) => (reset ? response.tracks : [...current, ...response.tracks]));
       setLibraryTotal(response.total);
       setHasMoreTracks(response.offset + response.tracks.length < response.total);
-      const loadedCount = reset ? response.tracks.length : offset + response.tracks.length;
-      setStatus(`Loaded ${loadedCount.toLocaleString()} of ${response.total.toLocaleString()} tracks`);
     } catch (error) {
       if (requestId === libraryRequestId.current) {
         setStatus(error instanceof Error ? error.message : "Could not load tracks");
@@ -651,8 +698,11 @@ export default function App() {
     try {
       const response = await fetchSettings();
       setSettings(response);
-      setFolderPath(response.library_path ?? "");
+      const paths = response.library_paths?.length ? response.library_paths : response.library_path ? [response.library_path] : [];
+      setLibraryFolders(paths);
+      setFolderPath(paths[0] ?? "");
       setWriteRatingsToFiles(response.write_ratings_to_files);
+      setAutoWriteFetchedLyricsSidecars(response.auto_write_fetched_lyrics_sidecars);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not load settings");
     }
@@ -775,6 +825,17 @@ export default function App() {
     }
   }
 
+  function handleOpenLyricsViewFromPlayer() {
+    setUiPreferences((current) => ({
+      ...current,
+      nowPlayingLayout: "lyrics",
+      nowPlayingShowLyrics: true,
+      nowPlayingShowQueue: false,
+      nowPlayingAutoScrollLyrics: true,
+    }));
+    setActivePage("nowPlaying");
+  }
+
   async function handleWriteRatingsToFiles(value: boolean) {
     const previous = writeRatingsToFiles;
     setWriteRatingsToFiles(value);
@@ -782,10 +843,24 @@ export default function App() {
       const response = await updateSettings({ write_ratings_to_files: value });
       setSettings(response);
       setWriteRatingsToFiles(response.write_ratings_to_files);
-      setStatus(value ? "Star ratings will be written to audio files" : "Star ratings will stay in the database");
+      setStatus(value ? "Ratings and metadata will be written to audio files" : "Ratings and metadata will stay in the database");
     } catch (error) {
       setWriteRatingsToFiles(previous);
-      setStatus(error instanceof Error ? error.message : "Could not update rating write setting");
+      setStatus(error instanceof Error ? error.message : "Could not update file-write setting");
+    }
+  }
+
+  async function handleAutoWriteFetchedLyricsSidecars(value: boolean) {
+    const previous = autoWriteFetchedLyricsSidecars;
+    setAutoWriteFetchedLyricsSidecars(value);
+    try {
+      const response = await updateSettings({ auto_write_fetched_lyrics_sidecars: value });
+      setSettings(response);
+      setAutoWriteFetchedLyricsSidecars(response.auto_write_fetched_lyrics_sidecars);
+      setStatus(value ? "Fetched lyrics will be cached as app lyric sidecars" : "Fetched lyrics sidecar cache is off");
+    } catch (error) {
+      setAutoWriteFetchedLyricsSidecars(previous);
+      setStatus(error instanceof Error ? error.message : "Could not update lyrics cache setting");
     }
   }
 
@@ -992,18 +1067,25 @@ export default function App() {
     }
   }
 
-  async function handleScan(pathOverride?: string) {
-    const targetPath = (pathOverride ?? folderPath).trim();
-    if (!targetPath) {
-      setStatus("Enter a music folder path");
+  async function handleScan(pathOverride?: string | string[]) {
+    const targetPaths = uniqueFolderPaths(
+      Array.isArray(pathOverride)
+        ? pathOverride
+        : pathOverride
+          ? [pathOverride]
+          : [...libraryFolders, folderPath],
+    );
+    if (targetPaths.length === 0) {
+      setStatus("Add at least one music folder path");
       return;
     }
-    setStatus("Starting library scan");
+    setStatus(targetPaths.length === 1 ? "Starting library scan" : `Starting scan of ${targetPaths.length} folders`);
     setIsScanning(true);
     setScanResult(null);
     setScanProgress(null);
     try {
-      const started = await startScanLibrary(targetPath);
+      const savePaths = pathOverride ? uniqueFolderPaths([...libraryFolders, ...targetPaths]) : targetPaths;
+      const started = await startScanLibrary(targetPaths, savePaths);
       let latest: ScanProgress | null = null;
 
       while (true) {
@@ -1035,6 +1117,7 @@ export default function App() {
 
       const result = {
         folder_path: latest.folder_path,
+        folder_paths: latest.folder_paths?.length ? latest.folder_paths : targetPaths,
         scanned_files: latest.total_files,
         inserted: latest.inserted,
         updated: latest.updated,
@@ -1043,7 +1126,9 @@ export default function App() {
         errors: latest.errors,
       };
       setScanResult(result);
-      setFolderPath(result.folder_path);
+      const nextFolders = savePaths;
+      setLibraryFolders(nextFolders);
+      setFolderPath(nextFolders[0] ?? "");
       setStatus(
         `Scan complete: ${result.inserted} inserted, ${result.updated} updated, ${result.removed} removed, ${result.skipped} skipped`,
       );
@@ -1056,7 +1141,7 @@ export default function App() {
       await loadClapCoverage();
       await loadSettings();
       try {
-        applyFolderWatchStatus(await startFolderWatch(result.folder_path, folderWatchStatus?.interval_seconds ?? 45), false);
+        applyFolderWatchStatus(await startFolderWatch(result.folder_paths[0] ?? result.folder_path, folderWatchStatus?.interval_seconds ?? 45), false);
       } catch {
         await loadFolderWatchStatus();
       }
@@ -1068,7 +1153,7 @@ export default function App() {
   }
 
   async function handleStartFolderWatch(intervalSeconds: number) {
-    const targetPath = folderPath.trim() || settings?.library_path || "";
+    const targetPath = uniqueFolderPaths([...libraryFolders, folderPath])[0] || settings?.library_path || "";
     if (!targetPath) {
       setStatus("Choose a music folder before starting folder watch");
       return;
@@ -1094,7 +1179,7 @@ export default function App() {
 
   async function handleRefreshFolderWatch() {
     try {
-      const response = await refreshFolderWatch(folderPath.trim() || settings?.library_path || null);
+      const response = await refreshFolderWatch(uniqueFolderPaths([...libraryFolders, folderPath])[0] || settings?.library_path || null);
       applyFolderWatchStatus(response, false);
       setStatus(
         response.pending_count
@@ -1157,13 +1242,16 @@ export default function App() {
       const { open } = await import("@tauri-apps/plugin-dialog");
       const selected = await open({
         directory: true,
-        multiple: false,
-        title: "Select music folder",
+        multiple: true,
+        title: "Select music folders",
       });
 
-      if (typeof selected === "string") {
-        setFolderPath(selected);
-        setStatus(`Selected ${selected}`);
+      const selectedPaths = Array.isArray(selected) ? selected : typeof selected === "string" ? [selected] : [];
+      if (selectedPaths.length > 0) {
+        const next = uniqueFolderPaths([...libraryFolders, ...selectedPaths]);
+        setLibraryFolders(next);
+        setFolderPath(next[0] ?? "");
+        setStatus(`Selected ${selectedPaths.length.toLocaleString()} folder${selectedPaths.length === 1 ? "" : "s"}`);
       } else {
         setStatus("Folder selection canceled");
       }
@@ -1187,6 +1275,7 @@ export default function App() {
       }
 
       setFolderPath(selected);
+      setLibraryFolders(uniqueFolderPaths([selected]));
       await handleScan(selected);
     } catch {
       setStatus("Browse is available in the Tauri desktop app. Paste a folder path in Settings in browser mode.");
@@ -1195,6 +1284,7 @@ export default function App() {
 
   async function handleUseSuggestedFolder(path: string) {
     setFolderPath(path);
+    setLibraryFolders(uniqueFolderPaths([path]));
     await handleScan(path);
   }
 
@@ -1373,7 +1463,7 @@ export default function App() {
       replaceTrackEverywhere(updated);
       await Promise.all([loadAlbums(), loadLibraryStats()]);
       setMetadataEditTrack(null);
-      setStatus(writeRatingsToFiles ? "Metadata saved to library and file" : "Metadata saved to library");
+      setStatus((metadata.write_to_file ?? writeRatingsToFiles) ? "Metadata saved to library and file" : "Metadata saved to library");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not save metadata");
     }
@@ -1673,10 +1763,7 @@ export default function App() {
       setStatus("No tracks to shuffle");
       return;
     }
-    setPlaybackQueue(shuffled);
-    setAutoPlayOnTrackChange(true);
-    setCurrentTrack(shuffled[0]);
-    setStatus(`Shuffled ${shuffled.length} tracks`);
+    replaceUpcomingPlaybackQueue(shuffled, "Shuffle");
   }
 
   async function handleQuickAutoDj(seedTrack?: Track | null) {
@@ -1692,16 +1779,100 @@ export default function App() {
       setQueue(response.tracks);
       setRecommendationDrift(response.drift);
       void loadRecommendationHistory();
-      if (response.tracks[0]) {
-        setPlaybackQueue(response.tracks);
-        setAutoPlayOnTrackChange(true);
-        setCurrentTrack(response.tracks[0]);
-      }
-      setStatus(`Generated ${response.tracks.length} AutoDJ tracks`);
+      replaceUpcomingPlaybackQueue(response.tracks, seedTrack ? "AutoDJ from track" : "AutoDJ");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not generate AutoDJ");
     }
   }
+
+  function handleContinuousAutoDjChange(enabled: boolean) {
+    setContinuousAutoDjEnabled(enabled);
+    setStatus(enabled ? "Continuous AutoDJ will keep the upcoming queue filled" : "Continuous AutoDJ off");
+  }
+
+  function queueUpcomingPlaybackTracks(nextTracks: Track[]) {
+    if (!nextTracks.length) {
+      return;
+    }
+
+    if (currentTrack) {
+      const upcoming = nextTracks.filter((track) => track.id !== currentTrack.id);
+      setPlaybackQueue([currentTrack, ...upcoming]);
+      return;
+    }
+
+    setPlaybackQueue(nextTracks);
+    setAutoPlayOnTrackChange(false);
+    setCurrentTrack(nextTracks[0]);
+  }
+
+  function replaceUpcomingPlaybackQueue(nextTracks: Track[], label: string) {
+    if (!nextTracks.length) {
+      setStatus(`${label} did not find any tracks`);
+      return;
+    }
+
+    if (currentTrack) {
+      const upcoming = nextTracks.filter((track) => track.id !== currentTrack.id);
+      queueUpcomingPlaybackTracks(nextTracks);
+      setStatus(`${label} updated what plays next with ${upcoming.length.toLocaleString()} track${upcoming.length === 1 ? "" : "s"}`);
+      return;
+    }
+
+    queueUpcomingPlaybackTracks(nextTracks);
+    setStatus(`${label} queued ${nextTracks.length.toLocaleString()} track${nextTracks.length === 1 ? "" : "s"}`);
+  }
+
+  async function extendContinuousAutoDj() {
+    if (continuousAutoDjInFlightRef.current) {
+      return;
+    }
+    continuousAutoDjInFlightRef.current = true;
+    setContinuousAutoDjBusy(true);
+    try {
+      const appendLength = Math.max(10, Math.min(25, continuousAutoDjSettings.queue_length || uiPreferences.defaultQueueLength));
+      const response = await generateAutoDj({
+        ...continuousAutoDjSettings,
+        queue_length: appendLength,
+        seed_track_id: currentTrack?.id ?? continuousAutoDjSettings.seed_track_id ?? null,
+        similarity_weight: currentTrack
+          ? Math.max(Number(continuousAutoDjSettings.similarity_weight ?? 0), uiPreferences.similarityWeight * 0.5)
+          : continuousAutoDjSettings.similarity_weight,
+      });
+      setQueue(response.tracks);
+      setRecommendationDrift(response.drift);
+      void loadRecommendationHistory();
+
+      const snapshotIds = new Set(playbackQueue.map((track) => track.id));
+      const snapshotAdditions = response.tracks.filter((track) => !snapshotIds.has(track.id));
+      setPlaybackQueue((current) => {
+        const existingIds = new Set(current.map((track) => track.id));
+        const additions = response.tracks.filter((track) => !existingIds.has(track.id));
+        return additions.length ? [...current, ...additions] : current;
+      });
+      if (snapshotAdditions.length > 0) {
+        setStatus(
+          `Continuous AutoDJ added ${snapshotAdditions.length.toLocaleString()} upcoming track${snapshotAdditions.length === 1 ? "" : "s"}`,
+        );
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Continuous AutoDJ could not add tracks");
+    } finally {
+      continuousAutoDjInFlightRef.current = false;
+      setContinuousAutoDjBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!continuousAutoDjEnabled || continuousAutoDjBusy || !currentTrack) {
+      return;
+    }
+    const activeIndex = playbackQueue.findIndex((track) => track.id === currentTrack.id);
+    const remaining = activeIndex >= 0 ? playbackQueue.length - activeIndex - 1 : playbackQueue.length;
+    if (remaining <= 3) {
+      void extendContinuousAutoDj();
+    }
+  }, [continuousAutoDjEnabled, continuousAutoDjBusy, currentTrack?.id, playbackQueue.length]);
 
   async function handleAvoidAutoDj(scope: "track" | "artist" | "album" | "genre", track?: Track | null) {
     try {
@@ -1798,7 +1969,6 @@ export default function App() {
     setAutoPlayOnTrackChange(true);
     setCurrentTrack(track);
     rememberRecommendationFeedback(track, "manual_play", 0.7);
-    setStatus(`Playing ${display(track.title, "track")}`);
   }
 
   function handlePlayNext(track: Track) {
@@ -1932,7 +2102,6 @@ export default function App() {
       const updated = await markTrackSkipped(trackId);
       replaceTrackEverywhere(updated);
       void loadHistory();
-      setStatus("Skip saved");
     } catch {
       setStatus("Skip could not be saved.");
     }
@@ -2008,6 +2177,69 @@ export default function App() {
       setStatus(kind === "themes" ? "Opened themes folder" : "Opened source folder");
     } catch {
       setStatus(kind === "themes" ? "Themes live in frontend/src/config/themes" : "Source folder is the current project directory.");
+    }
+  }
+
+  async function handleOpenExternalUrl(url: string) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("open_external_url", { url });
+      return;
+    } catch {
+      const opened = window.open(url, "_blank", "noopener,noreferrer");
+      if (opened) {
+        return;
+      }
+    }
+
+    try {
+      await navigator.clipboard.writeText(url);
+      setStatus("Could not open the link, so I copied it to the clipboard");
+    } catch {
+      setStatus(url);
+    }
+  }
+
+  function handleOpenCurrentTrackFromPlayer(track: Track) {
+    setDetailTrack(track);
+    setLibraryView("tracks");
+    setActivePage("library");
+  }
+
+  function handleOpenCurrentArtistFromPlayer(track: Track) {
+    const artistName = primaryArtistName(track.artist);
+    if (!artistName) {
+      setStatus("This track does not have an artist tag yet");
+      return;
+    }
+    setActivePage("artist");
+  }
+
+  async function handleOpenCurrentAlbumFromPlayer(track: Track) {
+    if (!track.album?.trim()) {
+      setStatus("This track does not have an album tag yet");
+      return;
+    }
+
+    setSearch("");
+    setDebouncedSearch("");
+    setLibraryView("albums");
+    setActivePage("library");
+
+    try {
+      let album = findAlbumForTrack(albums, track);
+      if (!album) {
+        const allAlbums = await fetchAlbums("");
+        setAlbums(allAlbums);
+        album = findAlbumForTrack(allAlbums, track);
+      }
+      if (!album) {
+        setStatus("Could not find that album in the Library view");
+        return;
+      }
+      await handleSelectAlbum(album.id);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not open album");
     }
   }
 
@@ -2138,6 +2370,7 @@ export default function App() {
     trackIds?: number[] | null,
   ) {
     try {
+      setStatus("Previewing MusicBrainz auto-tags...");
       const response = await autoTagMusicBrainz({
         mode,
         track_ids: trackIds?.length ? trackIds : null,
@@ -2163,10 +2396,12 @@ export default function App() {
     saveArtwork: boolean,
     trackIds?: number[] | null,
   ) {
-    if (!window.confirm("Apply MusicBrainz metadata to the selected tracks? File writing follows the current write-tags setting.")) {
+    const action = missingOnly ? "fill missing MusicBrainz metadata" : "replace existing metadata with MusicBrainz matches";
+    if (!window.confirm(`Apply MusicBrainz auto-tags to ${action}? File writing follows the current write-tags setting.`)) {
       return;
     }
     try {
+      setStatus("Applying MusicBrainz auto-tags...");
       const response = await autoTagMusicBrainz({
         mode,
         track_ids: trackIds?.length ? trackIds : null,
@@ -2187,6 +2422,48 @@ export default function App() {
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not apply MusicBrainz auto-tags");
     }
+  }
+
+  async function handleLibraryAutoTagTracks(trackIds: number[], apply: boolean) {
+    const uniqueIds = Array.from(new Set(trackIds));
+    if (!uniqueIds.length) {
+      return;
+    }
+    setFileManagementScopeIds(uniqueIds);
+    setFileManagementFocusToolId("musicBrainz");
+    setActivePage("fileManagement");
+    if (apply) {
+      await handleApplyAutoTag("track", true, true, false, uniqueIds);
+      setFileManagementScopeIds(null);
+    } else {
+      setStatus(`Previewing MusicBrainz tags for ${uniqueIds.length.toLocaleString()} selected track${uniqueIds.length === 1 ? "" : "s"}...`);
+      await handlePreviewAutoTag("track", true, true, uniqueIds);
+    }
+  }
+
+  async function handleLibraryFingerprintTagTracks(trackIds: number[]) {
+    const uniqueIds = Array.from(new Set(trackIds));
+    if (!uniqueIds.length) {
+      return;
+    }
+    setFileManagementScopeIds(uniqueIds);
+    setFileManagementFocusToolId("acousticFingerprints");
+    setActivePage("fileManagement");
+    setStatus(`Fingerprinting ${uniqueIds.length.toLocaleString()} selected track${uniqueIds.length === 1 ? "" : "s"}...`);
+    await handleRunAcousticFingerprintPass(uniqueIds, false, Math.max(uniqueIds.length, 1));
+    setStatus("Building MusicBrainz tag preview from fingerprints...");
+    await handlePreviewAutoTag("track", true, true, uniqueIds);
+  }
+
+  function handleLibraryClapGenreTagTracks(trackIds: number[]) {
+    const uniqueIds = Array.from(new Set(trackIds));
+    if (!uniqueIds.length) {
+      return;
+    }
+    setFileManagementScopeIds(uniqueIds);
+    setFileManagementFocusToolId("clapGenreTags");
+    setActivePage("fileManagement");
+    setStatus(`Ready to preview CLAP genres for ${uniqueIds.length.toLocaleString()} selected track${uniqueIds.length === 1 ? "" : "s"}.`);
   }
 
   async function handlePreviewFileOrganization(
@@ -2647,6 +2924,11 @@ export default function App() {
 
   async function handleRunAcousticFingerprintPass(trackIds: number[] | null, overwrite: boolean, limit: number) {
     try {
+      setStatus(
+        trackIds?.length
+          ? `Analyzing fingerprints for ${trackIds.length.toLocaleString()} track${trackIds.length === 1 ? "" : "s"}...`
+          : "Analyzing acoustic fingerprints...",
+      );
       const response = await runAcousticFingerprintPass({
         track_ids: trackIds?.length ? trackIds : null,
         overwrite,
@@ -2973,6 +3255,13 @@ export default function App() {
   }, [activePage]);
 
   useEffect(() => {
+    setAppContextMenu(null);
+    if (activePage !== "library") {
+      setDetailTrack(null);
+    }
+  }, [activePage]);
+
+  useEffect(() => {
     if (backendStatus === "down") {
       return;
     }
@@ -2999,6 +3288,7 @@ export default function App() {
         ["scrobbling", "page.scrobbling"],
         ["history", "page.history"],
         ["autodj", "page.autodj"],
+        ["sources", "page.sources"],
         ["fileManagement", "page.fileManagement"],
         ["settings", "page.settings"],
       ];
@@ -3036,9 +3326,22 @@ export default function App() {
 
     setIsLyricsLoading(true);
     void fetchLyrics(currentTrack.id)
-      .then((response) => {
+      .then(async (response) => {
         if (!cancelled) {
           setLyrics(response);
+        }
+        const shouldFetchOnlineLyrics =
+          uiPreferences.autoFetchLyrics &&
+          (!lyricsHaveText(response) || (uiPreferences.autoFetchLrcWhenPlainPresent && !response.is_synced));
+        if (!cancelled && shouldFetchOnlineLyrics) {
+          try {
+            const fetched = await fetchLyricsOnline(currentTrack.id);
+            if (!cancelled) {
+              setLyrics(fetched);
+            }
+          } catch {
+            // Missing online lyrics should not interrupt normal local playback or page loading.
+          }
         }
       })
       .catch((error) => {
@@ -3056,7 +3359,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [currentTrack?.id]);
+  }, [currentTrack?.id, uiPreferences.autoFetchLyrics, uiPreferences.autoFetchLrcWhenPlainPresent]);
 
   useEffect(() => {
     if (activePage !== "artist") {
@@ -3066,7 +3369,7 @@ export default function App() {
   }, [activePage, currentTrack?.artist, uiPreferences.enableArtistLookup]);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-ink text-neutral-100" onContextMenu={openAppContextMenu}>
+    <div className="flex h-screen flex-col overflow-hidden bg-ink text-neutral-100" onContextMenu={openAppContextMenu}>
       {uiPreferences.showToasts && status && (
         <div className="fixed right-5 top-5 z-50 max-w-md rounded border border-line bg-panel px-4 py-3 text-sm text-white shadow-xl">
           {status}
@@ -3154,19 +3457,20 @@ export default function App() {
           </button>
         </div>
       )}
-      <Sidebar
-        activePage={activePage}
-        setActivePage={setActivePage}
-        hasDiagnosticsIssue={backendStatus === "down"}
-        hasAnalysisIssue={Boolean(
-          clapStatus &&
-            ((clapStatus.runtime_exists && !clapStatus.installed) ||
-              Object.keys(clapStatus.dependency_errors ?? {}).length > 0),
-        )}
-        coffeeAnimating={coffeeAnimating}
-        onCoffeeClick={handleCoffeeClick}
-      />
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1">
+        <Sidebar
+          activePage={activePage}
+          setActivePage={setActivePage}
+          hasDiagnosticsIssue={backendStatus === "down"}
+          hasAnalysisIssue={Boolean(
+            clapStatus &&
+              ((clapStatus.runtime_exists && !clapStatus.installed) ||
+                Object.keys(clapStatus.dependency_errors ?? {}).length > 0),
+          )}
+          coffeeAnimating={coffeeAnimating}
+          onCoffeeClick={handleCoffeeClick}
+        />
+        <div className="flex min-w-0 flex-1 flex-col">
         <div className="min-h-0 flex flex-1">
           {backendStatus === "down" ? (
             <BackendRecoveryPage
@@ -3222,6 +3526,9 @@ export default function App() {
               onDeleteTrack={handleDeleteTrack}
               onEditTrack={setMetadataEditTrack}
               onBulkMetadata={handleBulkMetadata}
+              onAutoTagTracks={handleLibraryAutoTagTracks}
+              onFingerprintTagTracks={handleLibraryFingerprintTagTracks}
+              onClapGenreTagTracks={handleLibraryClapGenreTagTracks}
               onRequestDeleteTracks={requestDeleteTracks}
               onRemoveTrackFromPlaylist={handleRemoveTrackFromPlaylist}
               onRemoveTracksFromPlaylist={handleRemoveTracksFromPlaylist}
@@ -3319,6 +3626,9 @@ export default function App() {
               onSaveQueue={handleSavePlaybackQueue}
               onRestoreQueue={handleRestorePlaybackQueue}
               canRestoreQueue={queueHistory.length > 0}
+              onOpenCurrentTrack={handleOpenCurrentTrackFromPlayer}
+              onOpenCurrentArtist={handleOpenCurrentArtistFromPlayer}
+              onOpenCurrentAlbum={(track) => void handleOpenCurrentAlbumFromPlayer(track)}
             />
           ) : activePage === "artist" ? (
             <ArtistPage
@@ -3328,11 +3638,20 @@ export default function App() {
               isArtistLoading={isArtistLoading}
               onRefresh={() => void loadArtistInfo(true)}
               onPlayTrack={handlePlayTrack}
+              onOpenExternalUrl={(url) => void handleOpenExternalUrl(url)}
             />
           ) : activePage === "audiobooks" ? (
-            <AudiobooksPage setStatus={setStatus} />
+            <AudiobooksPage
+              setStatus={setStatus}
+              onPlayTrack={handlePlayTrack}
+              onAddToQueue={handleAddToQueue}
+            />
           ) : activePage === "podcasts" ? (
-            <PodcastsPage setStatus={setStatus} />
+            <PodcastsPage
+              setStatus={setStatus}
+              onPlayTrack={handlePlayTrack}
+              onAddToQueue={handleAddToQueue}
+            />
           ) : activePage === "radio" ? (
             <RadioPage setStatus={setStatus} />
           ) : activePage === "scrobbling" ? (
@@ -3351,10 +3670,19 @@ export default function App() {
               setRecommendationDrift={setRecommendationDrift}
               setStatus={setStatus}
               onPlayTrack={handlePlayTrack}
+              onPlayNext={handlePlayNext}
+              onAddToQueue={handleAddToQueue}
+              onUseGeneratedQueue={queueUpcomingPlaybackTracks}
+              onQuickAutoDj={(track) => void handleQuickAutoDj(track)}
+              onRevealTrack={(track) => void handleRevealTrack(track)}
               onAddTracksToPlaylist={handleAddTracksToPlaylist}
               currentTrackId={currentTrack?.id ?? null}
               currentTrack={currentTrack}
               uiPreferences={uiPreferences}
+              continuousAutoDjEnabled={continuousAutoDjEnabled}
+              continuousAutoDjBusy={continuousAutoDjBusy}
+              onContinuousAutoDjChange={handleContinuousAutoDjChange}
+              onContinuousSettingsChange={setContinuousAutoDjSettings}
               avoidRules={autoDjAvoidRules}
               onDeleteAvoidRule={(ruleId) => void handleDeleteAutoDjAvoidRule(ruleId)}
               recommendationProfiles={recommendationProfiles}
@@ -3366,8 +3694,23 @@ export default function App() {
               onDeleteRecommendationProfile={handleDeleteRecommendationProfile}
               onSetDefaultRecommendationProfile={handleSetDefaultRecommendationProfile}
             />
+          ) : activePage === "sources" ? (
+            <SourcesPage
+              folderPath={folderPath}
+              setFolderPath={setFolderPath}
+              libraryFolders={libraryFolders}
+              setLibraryFolders={setLibraryFolders}
+              suggestedMusicPath={settings?.suggested_music_path ?? null}
+              onBrowse={handleBrowseFolder}
+              onScan={handleScan}
+              scanResult={scanResult}
+              scanProgress={scanProgress}
+              isScanning={isScanning}
+            />
           ) : activePage === "fileManagement" ? (
             <FileManagementPage
+              initialFocusToolId={fileManagementFocusToolId}
+              initialTrackScopeIds={fileManagementScopeIds}
               folderPath={folderPath}
               playlists={playlists}
               onClearArtistCache={handleClearArtistCache}
@@ -3430,18 +3773,21 @@ export default function App() {
               reportFile={reportFile}
               onReadReportFile={handleReadReportFile}
               onAdvancedTagLibraryChanged={handleAdvancedTagLibraryChanged}
+              onClearTrackScope={() => setFileManagementScopeIds(null)}
+              onSelectLibraryTarget={(view) => {
+                setLibraryView(view);
+                setActivePage("library");
+                setStatus(
+                  view === "albums"
+                    ? "Choose an album, then select or right-click tracks to send them to tagging tools."
+                    : "Select tracks, then right-click Tagging to send them to file-management tools.",
+                );
+              }}
               setStatus={setStatus}
             />
           ) : activePage === "settings" ? (
             <SettingsPage
               settings={settings}
-              folderPath={folderPath}
-              setFolderPath={setFolderPath}
-              onBrowse={handleBrowseFolder}
-              onScan={handleScan}
-              scanResult={scanResult}
-              scanProgress={scanProgress}
-              isScanning={isScanning}
               backendStatus={backendStatus}
               backendMessage={backendMessage}
               backendCheckedAt={backendCheckedAt}
@@ -3475,6 +3821,8 @@ export default function App() {
               setUiPreferences={setUiPreferences}
               writeRatingsToFiles={writeRatingsToFiles}
               onWriteRatingsToFilesChange={(value) => void handleWriteRatingsToFiles(value)}
+              autoWriteFetchedLyricsSidecars={autoWriteFetchedLyricsSidecars}
+              onAutoWriteFetchedLyricsSidecarsChange={(value) => void handleAutoWriteFetchedLyricsSidecars(value)}
               onBackupDatabase={handleBackupDatabase}
               onCreateSupportBundle={handleCreateSupportBundle}
               supportBundlePath={supportBundlePath}
@@ -3485,36 +3833,41 @@ export default function App() {
             />
           ) : null}
         </div>
-        <PlayerBar
-          currentTrack={currentTrack}
-          queue={playbackQueue}
-          onSelectTrack={handlePlayTrack}
-          onTrackEnded={handleTrackEnded}
-          onTrackSkipped={handleTrackSkipped}
-          onPlaybackTime={setPlaybackTime}
-          onRating={handleRating}
-          autoPlay={autoPlayOnTrackChange}
-          fadeMs={uiPreferences.playerFadeMs}
-          skipThresholdPercent={uiPreferences.skipThresholdPercent}
-          playbackEngine={uiPreferences.playbackEngine}
-          nativeOutputDeviceId={uiPreferences.nativeOutputDeviceId}
-          nativeBufferFrames={uiPreferences.nativeBufferFrames}
-          miniPlayer={uiPreferences.miniPlayer}
-          replayGainMode={uiPreferences.replayGainMode}
-          replayGainPreampDb={uiPreferences.replayGainPreampDb}
-          replayGainPreventClipping={uiPreferences.replayGainPreventClipping}
-          equalizerEnabled={uiPreferences.equalizerEnabled}
-          equalizerBandMode={uiPreferences.equalizerBandMode}
-          equalizerPreampDb={uiPreferences.equalizerPreampDb}
-          equalizerGains={uiPreferences.equalizerGains}
-          dspLimiterEnabled={uiPreferences.dspLimiterEnabled}
-          keyboardShortcuts={uiPreferences.keyboardShortcuts}
-          playbackMode={playbackMode}
-          setPlaybackMode={setPlaybackMode}
-          onOpenMiniPlayer={handleOpenDetachedMiniPlayer}
-          setStatus={setStatus}
-        />
+        </div>
       </div>
+      <PlayerBar
+        currentTrack={currentTrack}
+        queue={playbackQueue}
+        onSelectTrack={handlePlayTrack}
+        onTrackEnded={handleTrackEnded}
+        onTrackSkipped={handleTrackSkipped}
+        onPlaybackTime={setPlaybackTime}
+        onRating={handleRating}
+        autoPlay={autoPlayOnTrackChange}
+        fadeMs={uiPreferences.playerFadeMs}
+        skipThresholdPercent={uiPreferences.skipThresholdPercent}
+        playbackEngine={uiPreferences.playbackEngine}
+        nativeOutputDeviceId={uiPreferences.nativeOutputDeviceId}
+        nativeBufferFrames={uiPreferences.nativeBufferFrames}
+        miniPlayer={uiPreferences.miniPlayer}
+        replayGainMode={uiPreferences.replayGainMode}
+        replayGainPreampDb={uiPreferences.replayGainPreampDb}
+        replayGainPreventClipping={uiPreferences.replayGainPreventClipping}
+        equalizerEnabled={uiPreferences.equalizerEnabled}
+        equalizerBandMode={uiPreferences.equalizerBandMode}
+        equalizerPreampDb={uiPreferences.equalizerPreampDb}
+        equalizerGains={uiPreferences.equalizerGains}
+        dspLimiterEnabled={uiPreferences.dspLimiterEnabled}
+        keyboardShortcuts={uiPreferences.keyboardShortcuts}
+        playbackMode={playbackMode}
+        setPlaybackMode={setPlaybackMode}
+        onOpenMiniPlayer={handleOpenDetachedMiniPlayer}
+        onOpenLyricsView={handleOpenLyricsViewFromPlayer}
+        onOpenCurrentTrack={handleOpenCurrentTrackFromPlayer}
+        onOpenCurrentArtist={handleOpenCurrentArtistFromPlayer}
+        onOpenCurrentAlbum={(track) => void handleOpenCurrentAlbumFromPlayer(track)}
+        setStatus={setStatus}
+      />
     </div>
   );
 }

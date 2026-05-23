@@ -25,10 +25,10 @@ Native playback prepares the next queued file by opening and decoding it ahead o
 - Fade and crossfade duration is controlled by the Player settings. WebView crossfade uses two audio elements; native crossfade uses overlapping rodio players on the same mixer, then stops the old player after the fade. The backend also exposes `/playback/gapless/validate` to inspect adjacent tracks for codec, sample-rate, channel, and sample-count compatibility before treating an album transition as gapless-safe.
 - Volume and mute are stored locally in browser storage.
 - ReplayGain can be applied from embedded track or album gain tags with an optional preamp.
-- Now Playing supports Studio, Theater, and Party layouts, with optional lyrics, queue, album-art backgrounds, and bars/wave/radial visualizers.
+- Now Playing supports Theater, Lyrics, and Party layouts, with optional queue, album-art backgrounds, and bars/wave/radial visualizers.
 - The compact bottom player is a single setting; older saved `playerLayout: "compact"` preferences are still treated as compact mode.
 - The detached mini player communicates with the main app through `BroadcastChannel`, and its always-on-top state plus snap size are persisted.
-- If a file cannot be decoded by WebView2, the player bar can open it in the user's default Windows audio app.
+- If a file cannot be decoded by WebView2, reveal it in Explorer from Library or the track details panel and open it with another local player.
 - Native playback diagnostics are kept in memory for the current app session and capped to the most recent failures.
 
 ## Now Playing And Visualizers

@@ -16,8 +16,8 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 
 ## Library And Maintenance
 
-- `GET /tracks` returns the legacy full track list.
-- `GET /tracks/page` returns paged, sorted tracks for infinite scrolling.
+- `GET /tracks` returns the legacy music track list, excluding audiobook-like and podcast-like rows.
+- `GET /tracks/page` returns paged, sorted music tracks for infinite scrolling, excluding audiobook-like and podcast-like rows.
 - `GET /tracks/{track_id}` returns one track.
 - `PATCH /tracks/{track_id}/metadata` updates editable tags in SQLite, and optionally audio files.
 - `PATCH /tracks/{track_id}/rating` updates a half-star rating in SQLite, and optionally audio files.
@@ -54,6 +54,7 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `GET /library/tools/tag-backups` lists tag backup exports.
 - `POST /library/tools/tag-backups/restore` restores tags from a backup export.
 - `POST /library/tools/autotag` previews or applies MusicBrainz album/track metadata and optional Cover Art Archive sidecar artwork.
+- `POST /library/tools/clap-genre-tags` previews or applies CLAP genre predictions to editable track Genre tags.
 - `POST /library/tools/artwork-collisions` previews or repairs folders where multiple albums share one folder-level cover.
 - `POST /library/tools/organize-files` previews or applies tag-based file moves.
 - `POST /library/tools/organize-files/report` writes a JSON file-organization preview report.
@@ -123,6 +124,7 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `POST /podcasts/subscriptions/{subscription_id}/refresh` fetches a feed and upserts episode rows.
 - `GET /podcasts/episodes` lists podcast episodes, optionally by subscription.
 - `POST /podcasts/episodes/{episode_id}/download` downloads an episode to the subscription or app podcast folder.
+- `POST /podcasts/episodes/{episode_id}/track` adds a downloaded episode to SQLite as a `Podcast` track and returns it for playback.
 - `GET /radio/stations` lists web radio stream bookmarks.
 - `POST /radio/stations` creates or replaces a web radio bookmark by stream URL.
 - `PATCH /radio/stations/{station_id}` updates a web radio bookmark.

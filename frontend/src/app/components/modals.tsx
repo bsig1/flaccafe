@@ -19,6 +19,8 @@ import {
   supportsFileTagWriting,
 } from "../shared";
 
+type EditableMetadataKey = keyof Omit<TrackMetadataUpdate, "write_to_file">;
+
 export function MetadataEditorModal({
   track,
   writeToFiles,
@@ -82,7 +84,7 @@ export function MetadataEditorModal({
   }
 
   async function submit() {
-    await onSave(track.id, previewValues);
+    await onSave(track.id, { ...previewValues, write_to_file: writeToFiles });
   }
 
   return (
@@ -191,7 +193,7 @@ export function BulkMetadataModal({
   onClose: () => void;
   onSave: (metadata: TrackMetadataUpdate) => void | Promise<void>;
 }) {
-  const [enabledFields, setEnabledFields] = useState<Record<keyof TrackMetadataUpdate, boolean>>({
+  const [enabledFields, setEnabledFields] = useState<Record<EditableMetadataKey, boolean>>({
     title: false,
     artist: false,
     album: false,
@@ -201,7 +203,7 @@ export function BulkMetadataModal({
     genre: false,
     year: false,
   });
-  const [values, setValues] = useState<Record<keyof TrackMetadataUpdate, string>>({
+  const [values, setValues] = useState<Record<EditableMetadataKey, string>>({
     title: "",
     artist: "",
     album: "",
@@ -212,7 +214,7 @@ export function BulkMetadataModal({
     year: "",
   });
 
-  const fields: Array<[keyof TrackMetadataUpdate, string, "text" | "number"]> = [
+  const fields: Array<[EditableMetadataKey, string, "text" | "number"]> = [
     ["artist", "Artist", "text"],
     ["album", "Album", "text"],
     ["album_artist", "Album Artist", "text"],

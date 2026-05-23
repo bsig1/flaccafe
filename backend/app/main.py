@@ -70,6 +70,7 @@ from .audio_conversion_jobs import (
 )
 from .audiobooks import (
     add_bookmark as add_audiobook_bookmark,
+    audiobook_where_clause,
     audiobook_sync_export,
     delete_bookmark as delete_audiobook_bookmark,
     list_audiobooks,
@@ -100,8 +101,10 @@ from .playlist import export_m3u
 from .podcasts import (
     delete_subscription as delete_podcast_subscription,
     download_episode,
+    ensure_episode_track as ensure_podcast_episode_track,
     list_episodes as list_podcast_episodes,
     list_subscriptions as list_podcast_subscriptions,
+    podcast_where_clause,
     refresh_subscription as refresh_podcast_subscription,
     upsert_subscription as upsert_podcast_subscription,
 )
@@ -121,8 +124,10 @@ from .recommender import (
     parse_embedding,
     similarity_adjustment,
     text_tokens,
+    track_is_exploratory,
+    track_is_familiar,
 )
-from .scanner import file_state, path_key, read_metadata, scan_folder, upsert_track
+from .scanner import ScanStats, file_state, path_key, read_metadata, scan_folder, upsert_track
 from .scan_jobs import get_scan_job, start_scan_job
 from .scrobbling import (
     import_history_csv as import_scrobble_history_csv,
@@ -191,6 +196,8 @@ from .schemas import (
     ChromaprintInstallRequest,
     ChromaprintInstallResponse,
     ChromaprintStatusResponse,
+    ClapGenreTagRequest,
+    ClapGenreTagResponse,
     ClapInstallProgress,
     ClapInstallRequest,
     ClapInstallStartResponse,
@@ -803,6 +810,54 @@ def get_write_ratings_to_files(conn) -> bool:
     return setting_enabled(get_setting(conn, "write_ratings_to_files"))
 
 
+def get_auto_write_fetched_lyrics_sidecars(conn) -> bool:
+    return setting_enabled(get_setting(conn, "auto_write_fetched_lyrics_sidecars"))
+
+
+def normalized_library_paths(paths: list[str | None]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_path in paths:
+        if not raw_path:
+            continue
+        text = str(raw_path).strip()
+        if not text:
+            continue
+        path = Path(text).expanduser().resolve()
+        key = str(path).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(str(path))
+    return normalized
+
+
+def request_library_paths(request: ScanRequest) -> list[str]:
+    return normalized_library_paths([request.folder_path, *request.folder_paths])
+
+
+def request_saved_library_paths(request: ScanRequest, fallback: list[str]) -> list[str]:
+    return normalized_library_paths(request.save_library_paths) or fallback
+
+
+def stored_library_paths(conn) -> list[str]:
+    raw_paths = get_setting(conn, "library_paths_json")
+    if raw_paths:
+        try:
+            decoded = json.loads(raw_paths)
+            if isinstance(decoded, list):
+                return normalized_library_paths([str(item) for item in decoded if item])
+        except (TypeError, ValueError):
+            pass
+    return normalized_library_paths([get_setting(conn, "library_path")])
+
+
+def save_library_paths(conn, paths: list[str]) -> None:
+    normalized = normalized_library_paths(paths)
+    set_setting(conn, "library_path", normalized[0] if normalized else None)
+    set_setting(conn, "library_paths_json", json.dumps(normalized, ensure_ascii=True))
+
+
 def delete_orphan_albums(conn) -> None:
     conn.execute(
         """
@@ -837,17 +892,42 @@ def ensure_album_for_track(conn, values: dict) -> int | None:
     return None if row is None else int(row["id"])
 
 
-def track_where_clause(search: str) -> tuple[str, list[object]]:
-    if not search.strip():
+def compact_sql_expression(expression: str) -> str:
+    compact = f"lower({expression})"
+    for character in [" ", "-", "_", ".", "'", "\"", "/", "\\", "(", ")", "[", "]", "{", "}", ":", ";", ",", "&", "+"]:
+        escaped = character.replace("'", "''")
+        compact = f"replace({compact}, '{escaped}', '')"
+    return compact
+
+
+def fuzzy_search_terms(search: str) -> list[str]:
+    return [term for term in re.split(r"[\s/\\,;:_()\[\]{}|]+", search.strip().lower()) if term]
+
+
+def fuzzy_where_clause(expression: str, search: str) -> tuple[str, list[object]]:
+    terms = fuzzy_search_terms(search)
+    if not terms:
         return "", []
-    return (
-        """
-        WHERE lower(coalesce(title, '') || ' ' || coalesce(artist, '') || ' ' ||
-                    coalesce(album, '') || ' ' || coalesce(genre, '') || ' ' ||
-                    coalesce(analysis_genre, '')) LIKE ?
-        """,
-        [f"%{search.strip().lower()}%"],
-    )
+    compact_expression = compact_sql_expression(expression)
+    clauses: list[str] = []
+    params: list[object] = []
+    for term in terms[:8]:
+        compact_term = re.sub(r"[^a-z0-9]+", "", term)
+        clauses.append(f"(lower({expression}) LIKE ? OR {compact_expression} LIKE ?)")
+        params.extend([f"%{term}%", f"%{compact_term or term}%"])
+    return f"WHERE {' AND '.join(clauses)}", params
+
+
+def track_where_clause(search: str) -> tuple[str, list[object]]:
+    expression = """coalesce(title, '') || ' ' || coalesce(artist, '') || ' ' ||
+                    coalesce(album, '') || ' ' || coalesce(album_artist, '') || ' ' ||
+                    coalesce(genre, '') || ' ' || coalesce(analysis_genre, '') || ' ' ||
+                    coalesce(path, '')"""
+    search_clause, params = fuzzy_where_clause(expression, search)
+    longform_filter = f"NOT {audiobook_where_clause()} AND NOT {podcast_where_clause()}"
+    if search_clause:
+        return f"{search_clause} AND {longform_filter}", params
+    return f"WHERE {longform_filter}", params
 
 
 def track_order_clause(sort_by: str, sort_direction: str) -> str:
@@ -1186,7 +1266,7 @@ def current_metadata(track: dict) -> dict[str, object | None]:
     return {field: track.get(field) for field in EDITABLE_METADATA_FIELD_ORDER}
 
 
-def apply_track_metadata_update(conn, track_id: int, updates: dict[str, object]) -> dict:
+def apply_track_metadata_update(conn, track_id: int, updates: dict[str, object], write_to_file: bool | None = None) -> dict:
     clean_updates = {key: value for key, value in updates.items() if key in EDITABLE_METADATA_FIELDS}
     row = conn.execute(f"SELECT {TRACK_COLUMNS} FROM tracks WHERE id = ?", (track_id,)).fetchone()
     if row is None:
@@ -1197,7 +1277,8 @@ def apply_track_metadata_update(conn, track_id: int, updates: dict[str, object])
     current = dict(row)
     merged = {**current, **clean_updates}
     file_modified_at = None
-    if get_write_ratings_to_files(conn):
+    should_write_to_file = get_write_ratings_to_files(conn) if write_to_file is None else write_to_file
+    if should_write_to_file:
         try:
             path = Path(current["path"])
             write_track_metadata(path, {field: merged.get(field) for field in EDITABLE_METADATA_FIELDS})
@@ -1231,6 +1312,7 @@ def apply_track_metadata_update(conn, track_id: int, updates: dict[str, object])
             "id": track_id,
         },
     )
+    conn.execute("DELETE FROM track_metadata_cache WHERE path_key = ?", (path_key(Path(str(current["path"]))),))
     delete_orphan_albums(conn)
     return track_response(conn, track_id)
 
@@ -1829,7 +1911,7 @@ def looks_synced(text: str | None) -> bool:
     return "[" in text and "]" in text and any(char.isdigit() for char in text[:40])
 
 
-def embedded_lyrics(path: Path) -> tuple[str, str, bool] | None:
+def embedded_lyrics(path: Path) -> tuple[str, str, bool, str | None] | None:
     try:
         audio = MutagenFile(path)
     except Exception:
@@ -1845,7 +1927,7 @@ def embedded_lyrics(path: Path) -> tuple[str, str, bool] | None:
         for frame in getall("USLT"):
             text = normalize_lyrics(getattr(frame, "text", None))
             if text:
-                return text, "embedded:USLT", False
+                return text, "embedded:USLT", False, None
 
         for frame in getall("SYLT"):
             entries = getattr(frame, "text", None)
@@ -1860,7 +1942,7 @@ def embedded_lyrics(path: Path) -> tuple[str, str, bool] | None:
                             lines.append(normalized)
                 text = normalize_lyrics(lines)
                 if text:
-                    return text, "embedded:SYLT", True
+                    return text, "embedded:SYLT", True, None
 
         # Some taggers store custom lyrics in TXXX frames.
         for frame in getall("TXXX"):
@@ -1869,7 +1951,7 @@ def embedded_lyrics(path: Path) -> tuple[str, str, bool] | None:
                 continue
             text = normalize_lyrics(getattr(frame, "text", None))
             if text:
-                return text, f"embedded:TXXX:{getattr(frame, 'desc', 'lyrics')}", looks_synced(text)
+                return text, f"embedded:TXXX:{getattr(frame, 'desc', 'lyrics')}", looks_synced(text), None
 
     if hasattr(tags, "get"):
         exact_keys = [
@@ -1884,7 +1966,7 @@ def embedded_lyrics(path: Path) -> tuple[str, str, bool] | None:
         for key in exact_keys:
             text = normalize_lyrics(tag_get(tags, key))
             if text:
-                return text, f"embedded:{key}", looks_synced(text)
+                return text, f"embedded:{key}", looks_synced(text), None
 
         for key in tags.keys():
             key_text = str(key)
@@ -1892,12 +1974,12 @@ def embedded_lyrics(path: Path) -> tuple[str, str, bool] | None:
                 continue
             text = normalize_lyrics(tag_get(tags, key_text))
             if text:
-                return text, f"embedded:{key_text}", looks_synced(text)
+                return text, f"embedded:{key_text}", looks_synced(text), None
 
     return None
 
 
-def sidecar_lyrics(path: Path) -> tuple[str, str, bool] | None:
+def sidecar_lyrics(path: Path) -> tuple[str, str, bool, str | None] | None:
     candidates = [
         path.with_suffix(".lrc"),
         path.with_suffix(".txt"),
@@ -1915,15 +1997,33 @@ def sidecar_lyrics(path: Path) -> tuple[str, str, bool] | None:
             continue
         normalized = normalize_lyrics(text)
         if normalized:
-            return normalized, f"sidecar:{candidate.name}", candidate.suffix.lower() == ".lrc" or looks_synced(normalized)
+            return normalized, f"sidecar:{candidate.name}", candidate.suffix.lower() == ".lrc" or looks_synced(normalized), str(candidate)
     return None
 
 
-def database_lyrics(track_id: int) -> tuple[str, str, bool] | None:
+def cached_sidecar_text(path_value: str | None) -> tuple[str, bool] | None:
+    if not path_value:
+        return None
+    path = Path(path_value)
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        text = path.read_text(encoding="latin-1", errors="ignore")
+    except OSError:
+        return None
+    normalized = normalize_lyrics(text)
+    if not normalized:
+        return None
+    return normalized, path.suffix.lower() == ".lrc" or looks_synced(normalized)
+
+
+def database_lyrics(track_id: int) -> tuple[str, str, bool, str | None] | None:
     with connect() as conn:
         row = conn.execute(
             """
-            SELECT lyrics, source, is_synced
+            SELECT lyrics, source, is_synced, sidecar_path
             FROM track_lyrics
             WHERE track_id = ?
             """,
@@ -1931,13 +2031,26 @@ def database_lyrics(track_id: int) -> tuple[str, str, bool] | None:
         ).fetchone()
     if row is None:
         return None
+    source = row["source"] or "database:manual"
+    sidecar_path = row["sidecar_path"]
+    if sidecar_path and str(source).startswith("sidecar-cache"):
+        sidecar = cached_sidecar_text(sidecar_path)
+        if sidecar is not None:
+            text, sidecar_is_synced = sidecar
+            return text, source, sidecar_is_synced, sidecar_path
     text = normalize_lyrics(row["lyrics"])
     if not text:
         return None
-    return text, row["source"] or "database:manual", bool(row["is_synced"])
+    return text, source, bool(row["is_synced"]), sidecar_path
 
 
-def save_database_lyrics(track_id: int, lyrics: str, source: str, is_synced: bool) -> LyricsResponse:
+def save_database_lyrics(
+    track_id: int,
+    lyrics: str,
+    source: str,
+    is_synced: bool,
+    sidecar_path: Path | str | None = None,
+) -> LyricsResponse:
     text = normalize_lyrics(lyrics)
     if not text:
         with connect() as conn:
@@ -1948,18 +2061,25 @@ def save_database_lyrics(track_id: int, lyrics: str, source: str, is_synced: boo
     with connect() as conn:
         conn.execute(
             """
-            INSERT INTO track_lyrics(track_id, lyrics, source, is_synced, updated_at)
-            VALUES(?, ?, ?, ?, datetime('now'))
+            INSERT INTO track_lyrics(track_id, lyrics, source, is_synced, sidecar_path, updated_at)
+            VALUES(?, ?, ?, ?, ?, datetime('now'))
             ON CONFLICT(track_id) DO UPDATE SET
               lyrics = excluded.lyrics,
               source = excluded.source,
               is_synced = excluded.is_synced,
+              sidecar_path = excluded.sidecar_path,
               updated_at = excluded.updated_at
             """,
-            (track_id, text, source, 1 if is_synced else 0),
+            (track_id, text, source, 1 if is_synced else 0, str(sidecar_path) if sidecar_path else None),
         )
         conn.commit()
-    return LyricsResponse(track_id=track_id, lyrics=text, source=source, is_synced=is_synced)
+    return LyricsResponse(
+        track_id=track_id,
+        lyrics=text,
+        source=source,
+        is_synced=is_synced,
+        sidecar_path=str(sidecar_path) if sidecar_path else None,
+    )
 
 
 def lrclib_payload_response(track_id: int, payload: dict) -> LyricsResponse | None:
@@ -1974,6 +2094,29 @@ def lrclib_payload_response(track_id: int, payload: dict) -> LyricsResponse | No
         source="lrclib:synced" if synced else "lrclib:plain",
         is_synced=bool(synced),
     )
+
+
+def lyrics_cache_dir() -> Path:
+    # Keep fetched sidecar lyrics with the app database, not beside the user's audio files.
+    return database_path().parent / "lyrics"
+
+
+def cached_lyrics_filename(track: dict, is_synced: bool) -> str:
+    artist = sanitize_path_component(str(track.get("artist") or "Unknown Artist"))[:60] or "Unknown Artist"
+    title = sanitize_path_component(display_track_title(track))[:80] or "Untitled"
+    extension = ".lrc" if is_synced else ".txt"
+    return f"{int(track['id']):08d} - {artist} - {title}{extension}"
+
+
+def write_cached_lyrics_sidecar(track: dict, lyrics: str, is_synced: bool) -> Path:
+    text = normalize_lyrics(lyrics)
+    if not text:
+        raise ValueError("Lyrics are empty")
+    folder = lyrics_cache_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / cached_lyrics_filename(track, is_synced)
+    path.write_text(text + "\n", encoding="utf-8")
+    return path
 
 
 def lrclib_read_json(url: str, params: dict[str, object]) -> object:
@@ -2041,7 +2184,7 @@ def primary_artist_name(value: str) -> str:
 
 
 def artist_cache_key(artist_name: str) -> str:
-    return f"v2:{primary_artist_name(artist_name).casefold()}"
+    return f"v3:{primary_artist_name(artist_name).casefold()}"
 
 
 def wikipedia_request(params: dict[str, object]) -> dict:
@@ -2078,6 +2221,46 @@ def is_music_summary(summary: str) -> bool:
     ]
     text = summary.casefold()
     return any(term in text for term in music_terms)
+
+
+def normalized_wikipedia_match_text(value: str | None) -> str:
+    text = re.sub(r"\([^)]*\)", " ", value or "")
+    text = text.replace("_", " ").casefold()
+    return re.sub(r"[^a-z0-9]+", " ", text).strip()
+
+
+def wikipedia_artist_page_score(page: dict, artist_name: str) -> float:
+    title = str(page.get("title") or "")
+    summary = str(page.get("extract") or "")
+    if not title or not summary or not is_music_summary(summary):
+        return -1000.0
+
+    query_key = normalized_wikipedia_match_text(artist_name)
+    title_key = normalized_wikipedia_match_text(title)
+    title_base_key = normalized_wikipedia_match_text(re.sub(r"\s*\([^)]*\)\s*$", "", title))
+    summary_text = summary.casefold()
+    title_text = title.casefold()
+    score = 0.0
+
+    if title_key == query_key:
+        score += 140
+    elif title_base_key == query_key:
+        score += 120
+    elif query_key and title_key.startswith(query_key):
+        score += 70
+    elif query_key and query_key in title_key:
+        score += 45
+
+    if summary_text.startswith(artist_name.casefold()):
+        score += 30
+    if any(term in summary_text for term in ("singer", "songwriter", "musician", "band", "rapper", "musical group")):
+        score += 25
+    if any(term in title_text for term in ("discography", "song", "album", "single", "tour", "category:")):
+        score -= 45
+    if "disambiguation" in summary_text or "may refer to" in summary_text:
+        score -= 80
+
+    return score
 
 
 def page_to_artist_info(page: dict, fallback_name: str) -> dict[str, str | None] | None:
@@ -2133,13 +2316,16 @@ def fetch_artist_info_from_wikipedia(artist_name: str) -> dict[str, str | None]:
         artist_name,
     ]
 
+    best_page: dict | None = None
+    best_score = -1000.0
+
     for search_term in search_terms:
         payload = wikipedia_request(
             {
                 "action": "query",
                 "generator": "search",
                 "gsrsearch": search_term,
-                "gsrlimit": 1,
+                "gsrlimit": 5,
                 "prop": "extracts|pageimages|info",
                 "exintro": 1,
                 "explaintext": 1,
@@ -2153,9 +2339,14 @@ def fetch_artist_info_from_wikipedia(artist_name: str) -> dict[str, str | None]:
             },
         )
         pages = payload.get("query", {}).get("pages", [])
-        if not pages:
-            continue
-        info = page_to_artist_info(pages[0], artist_name)
+        for page in pages:
+            score = wikipedia_artist_page_score(page, artist_name)
+            if score > best_score:
+                best_page = page
+                best_score = score
+
+    if best_page and best_score > -1000:
+        info = page_to_artist_info(best_page, artist_name)
         if info:
             return info
 
@@ -2325,12 +2516,16 @@ def build_support_bundle() -> SupportBundleResponse:
 def get_settings() -> SettingsResponse:
     with connect() as conn:
         library_path = get_setting(conn, "library_path")
+        library_paths = stored_library_paths(conn)
         write_ratings_to_files = get_write_ratings_to_files(conn)
+        auto_write_fetched_lyrics_sidecars = get_auto_write_fetched_lyrics_sidecars(conn)
     return SettingsResponse(
-        library_path=library_path,
+        library_path=library_path or (library_paths[0] if library_paths else None),
+        library_paths=library_paths,
         database_path=str(database_path()),
         suggested_music_path=suggested_music_path(),
         write_ratings_to_files=write_ratings_to_files,
+        auto_write_fetched_lyrics_sidecars=auto_write_fetched_lyrics_sidecars,
         extra={"clap": clap_status()},
     )
 
@@ -2340,6 +2535,12 @@ def update_settings(request: SettingsUpdateRequest) -> SettingsResponse:
     with connect() as conn:
         if request.write_ratings_to_files is not None:
             set_setting(conn, "write_ratings_to_files", "1" if request.write_ratings_to_files else "0")
+        if request.auto_write_fetched_lyrics_sidecars is not None:
+            set_setting(
+                conn,
+                "auto_write_fetched_lyrics_sidecars",
+                "1" if request.auto_write_fetched_lyrics_sidecars else "0",
+            )
         conn.commit()
     return get_settings()
 
@@ -2546,7 +2747,7 @@ def update_track_metadata(track_id: int, request: TrackMetadataUpdateRequest) ->
             return track_response(conn, track_id)
 
     with connect() as conn:
-        updated = apply_track_metadata_update(conn, track_id, updates)
+        updated = apply_track_metadata_update(conn, track_id, updates, request.write_to_file)
         conn.commit()
         return updated
 
@@ -3118,6 +3319,18 @@ def download_podcast_episode_route(episode_id: int, request: PodcastDownloadRequ
     if episode is None:
         raise HTTPException(status_code=404, detail="Podcast episode not found")
     return PodcastEpisode(**episode)
+
+
+@app.post("/podcasts/episodes/{episode_id}/track", response_model=Track)
+def ensure_podcast_episode_track_route(episode_id: int) -> dict:
+    try:
+        track_id = ensure_podcast_episode_track(episode_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if track_id is None:
+        raise HTTPException(status_code=404, detail="Podcast episode not found")
+    with connect() as conn:
+        return track_response(conn, track_id)
 
 
 @app.get("/radio/stations", response_model=list[RadioStation])
@@ -5100,6 +5313,92 @@ def auto_tag_musicbrainz(request: AutoTagRequest) -> AutoTagResponse:
     )
 
 
+@app.post("/library/tools/clap-genre-tags", response_model=ClapGenreTagResponse)
+def clap_genre_tags(request: ClapGenreTagRequest) -> ClapGenreTagResponse:
+    params: list[object] = []
+    missing_ids: list[int] = []
+    where_parts = [
+        "analysis_provider = 'clap'",
+        "analysis_genre IS NOT NULL",
+        "trim(analysis_genre) <> ''",
+    ]
+    unique_ids: list[int] = []
+    if request.track_ids:
+        unique_ids = list(dict.fromkeys(int(track_id) for track_id in request.track_ids))
+        placeholders = ",".join("?" for _ in unique_ids)
+        where_parts.append(f"id IN ({placeholders})")
+        params.extend(unique_ids)
+    where_clause = "WHERE " + " AND ".join(where_parts)
+
+    with connect() as conn:
+        rows = rows_to_dicts(
+            conn.execute(
+                f"""
+                SELECT {TRACK_COLUMNS}
+                FROM tracks
+                {where_clause}
+                ORDER BY datetime(date_added) DESC, id DESC
+                LIMIT ?
+                """,
+                (*params, request.limit),
+            )
+        )
+        if unique_ids:
+            found_ids = {int(row["id"]) for row in rows}
+            missing_ids = [track_id for track_id in unique_ids if track_id not in found_ids]
+
+        previews: list[dict[str, object]] = []
+        applied = 0
+        errors: list[str] = []
+        for row in rows:
+            current_genre = str(row.get("genre") or "").strip()
+            proposed_genre = str(row.get("analysis_genre") or "").strip()
+            confidence = row.get("analysis_genre_confidence")
+            confidence_value = float(confidence) if isinstance(confidence, (int, float)) else None
+            changed = bool(
+                proposed_genre
+                and (not request.missing_only or not current_genre)
+                and normalize_token(current_genre) != normalize_token(proposed_genre)
+                and (confidence_value is None or confidence_value >= request.min_confidence)
+            )
+            preview: dict[str, object] = {
+                "track_id": row["id"],
+                "title": row.get("title"),
+                "artist": row.get("artist"),
+                "album": row.get("album"),
+                "current_genre": current_genre or None,
+                "proposed_genre": proposed_genre or None,
+                "confidence": confidence_value,
+                "changed": changed,
+                "applied": False,
+                "error": None,
+            }
+            if request.apply and changed:
+                try:
+                    apply_track_metadata_update(conn, int(row["id"]), {"genre": proposed_genre}, request.write_to_file)
+                    preview["applied"] = True
+                    applied += 1
+                except HTTPException as exc:
+                    message = str(exc.detail)
+                    preview["error"] = message
+                    errors.append(f"{row.get('title') or row.get('path')}: {message}")
+            previews.append(preview)
+
+        conn.commit()
+
+    for missing_id in missing_ids:
+        errors.append(f"Track {missing_id} was not found or has no CLAP genre analysis")
+
+    return ClapGenreTagResponse(
+        total=len(previews),
+        matched=sum(1 for preview in previews if preview.get("proposed_genre") and not preview.get("error")),
+        changed=sum(1 for preview in previews if preview.get("changed")),
+        applied=applied,
+        errors=errors[:100],
+        previews=previews,
+    )
+
+
 @app.post("/library/tools/organize-files", response_model=FileOrganizationResponse)
 def organize_files_from_tags(request: FileOrganizationRequest) -> FileOrganizationResponse:
     with connect() as conn:
@@ -5910,13 +6209,15 @@ def list_albums(
     limit: int = Query(default=5000, ge=1, le=20000),
     offset: int = Query(default=0, ge=0),
 ) -> list[dict]:
-    where_clause = ""
-    params: list[object] = []
-    if search.strip():
-        where_clause = """
-        WHERE lower(coalesce(albums.album, '') || ' ' || coalesce(albums.album_artist, '')) LIKE ?
-        """
-        params.append(f"%{search.strip().lower()}%")
+    where_clause, params = fuzzy_where_clause(
+        "coalesce(albums.album, '') || ' ' || coalesce(albums.album_artist, '') || ' ' || coalesce(albums.year, '')",
+        search,
+    )
+    longform_filter = f"NOT {audiobook_where_clause()} AND NOT {podcast_where_clause()}"
+    if where_clause:
+        where_clause = f"{where_clause} AND {longform_filter}"
+    else:
+        where_clause = f"WHERE {longform_filter}"
 
     with connect() as conn:
         return rows_to_dicts(
@@ -5929,13 +6230,37 @@ def list_albums(
                     albums.year,
                     albums.artwork_path,
                     count(tracks.id) AS track_count,
+                    CASE
+                      WHEN coalesce(album_completion.expected_track_count, 0) > count(tracks.id)
+                      THEN album_completion.expected_track_count
+                      ELSE count(tracks.id)
+                    END AS expected_track_count,
+                    CASE
+                      WHEN coalesce(album_completion.expected_track_count, 0) > count(tracks.id)
+                      THEN album_completion.expected_track_count - count(tracks.id)
+                      ELSE 0
+                    END AS missing_track_count,
                     sum(tracks.duration_seconds) AS duration_seconds,
                     avg(tracks.rating) AS average_rating,
                     min(tracks.id) AS artwork_track_id
                 FROM albums
                 JOIN tracks ON tracks.album_id = albums.id
+                LEFT JOIN (
+                    SELECT album_id, sum(max_track_number) AS expected_track_count
+                    FROM (
+                        SELECT album_id,
+                               coalesce(disc_number, 1) AS disc_key,
+                               max(track_number) AS max_track_number
+                        FROM tracks
+                        WHERE track_number IS NOT NULL AND track_number > 0
+                          AND NOT {audiobook_where_clause()}
+                          AND NOT {podcast_where_clause()}
+                        GROUP BY album_id, coalesce(disc_number, 1)
+                    ) AS disc_max
+                    GROUP BY album_id
+                ) AS album_completion ON album_completion.album_id = albums.id
                 {where_clause}
-                GROUP BY albums.id
+                GROUP BY albums.id, album_completion.expected_track_count
                 ORDER BY lower(coalesce(albums.album_artist, '')) ASC,
                          coalesce(albums.year, 9999) ASC,
                          lower(coalesce(albums.album, '')) ASC
@@ -6343,10 +6668,30 @@ def import_playlist(request: PlaylistImportRequest) -> dict:
     return dict(row)
 
 
+def scan_library_paths(paths: list[str], save_paths: list[str] | None = None) -> ScanStats:
+    if not paths:
+        raise ValueError("Choose at least one music folder")
+    combined = ScanStats(folder_path="; ".join(paths))
+    for folder_path in paths:
+        result = scan_folder(folder_path)
+        combined.scanned_files += result.scanned_files
+        combined.inserted += result.inserted
+        combined.updated += result.updated
+        combined.removed += result.removed
+        combined.skipped += result.skipped
+        combined.errors.extend(result.errors)
+    with connect() as conn:
+        save_library_paths(conn, save_paths or paths)
+        conn.commit()
+    return combined
+
+
 @app.post("/scan", response_model=ScanResult)
 def scan_library(request: ScanRequest) -> ScanResult:
     try:
-        return ScanResult(**scan_folder(request.folder_path).__dict__)
+        paths = request_library_paths(request)
+        result = scan_library_paths(paths, request_saved_library_paths(request, paths))
+        return ScanResult(**result.__dict__, folder_paths=paths)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -6354,10 +6699,14 @@ def scan_library(request: ScanRequest) -> ScanResult:
 @app.post("/scan/start", response_model=ScanStartResponse)
 def start_scan_library(request: ScanRequest) -> dict:
     try:
-        job = start_scan_job(request.folder_path)
+        paths = request_library_paths(request)
+        if not paths:
+            raise ValueError("Choose at least one music folder")
+        job = start_scan_job(paths, save_library_paths=request_saved_library_paths(request, paths))
         return {
             "job_id": job["job_id"],
             "folder_path": job["folder_path"],
+            "folder_paths": job["folder_paths"],
             "status": job["status"],
         }
     except ValueError as exc:
@@ -6412,17 +6761,32 @@ def track_lyrics(track_id: int) -> LyricsResponse:
     if found is None:
         return LyricsResponse(track_id=track_id)
 
-    lyrics, source, is_synced = found
-    return LyricsResponse(track_id=track_id, lyrics=lyrics, source=source, is_synced=is_synced)
+    lyrics, source, is_synced, sidecar_path = found
+    return LyricsResponse(track_id=track_id, lyrics=lyrics, source=source, is_synced=is_synced, sidecar_path=sidecar_path)
 
 
 @app.post("/tracks/{track_id}/lyrics/fetch", response_model=LyricsResponse)
 def fetch_track_lyrics(track_id: int) -> LyricsResponse:
     with connect() as conn:
         row = conn.execute(f"SELECT {TRACK_COLUMNS} FROM tracks WHERE id = ?", (track_id,)).fetchone()
+        auto_write_sidecar = get_auto_write_fetched_lyrics_sidecars(conn)
     if row is None:
         raise HTTPException(status_code=404, detail="Track not found")
-    return lrclib_fetch(dict(row))
+    track = dict(row)
+    response = lrclib_fetch(track)
+    if auto_write_sidecar and response.lyrics:
+        try:
+            sidecar_path = write_cached_lyrics_sidecar(track, response.lyrics, response.is_synced)
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=f"Could not write lyric sidecar: {exc}") from exc
+        return save_database_lyrics(
+            track_id,
+            response.lyrics,
+            f"sidecar-cache:{response.source or 'lrclib'}",
+            response.is_synced,
+            sidecar_path,
+        )
+    return response
 
 
 @app.patch("/tracks/{track_id}/lyrics", response_model=LyricsResponse)
@@ -6637,12 +7001,8 @@ def recommendation_drift(tracks: list[dict]) -> RecommendationDrift:
         return RecommendationDrift()
 
     ratings = [float(track["rating"]) for track in tracks if track.get("rating") is not None]
-    familiar = [
-        track
-        for track in tracks
-        if (track.get("rating") is not None and float(track["rating"]) >= 4.0) or int(track.get("play_count") or 0) > 0
-    ]
-    exploratory = [track for track in tracks if track.get("rating") is None or int(track.get("play_count") or 0) == 0]
+    familiar = [track for track in tracks if track_is_familiar(track)]
+    exploratory = [track for track in tracks if track_is_exploratory(track)]
     unique_artists = {
         token
         for track in tracks

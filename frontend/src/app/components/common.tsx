@@ -10,7 +10,14 @@ import type {
   MouseEvent as ReactMouseEvent,
   ReactNode,
 } from "react";
-import { useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 
 import type {
   DragGhost,
@@ -205,22 +212,105 @@ export function DragGhostPreview({ ghost }: { ghost: DragGhost | null }) {
 
 
 
+const DisclosureAccordionContext = createContext<{
+  openSectionId: string | null;
+  setOpenSectionId: (sectionId: string | null) => void;
+} | null>(null);
+
+export function DisclosureAccordionProvider({
+  openSectionId,
+  onOpenSectionChange,
+  children,
+}: {
+  openSectionId: string | null;
+  onOpenSectionChange: (sectionId: string | null) => void;
+  children: ReactNode;
+}) {
+  const contextValue = useMemo(
+    () => ({
+      openSectionId,
+      setOpenSectionId: onOpenSectionChange,
+    }),
+    [onOpenSectionChange, openSectionId],
+  );
+
+  return (
+    <DisclosureAccordionContext.Provider value={contextValue}>
+      {children}
+    </DisclosureAccordionContext.Provider>
+  );
+}
+
 export function DisclosureSection({
   title,
   description,
   defaultOpen = false,
+  openSignal,
+  accordionId,
+  open: controlledOpen,
+  onOpenChange,
   children,
 }: {
   title: string;
   description?: string;
   defaultOpen?: boolean;
+  openSignal?: unknown;
+  accordionId?: string;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  const accordion = useContext(DisclosureAccordionContext);
+  const accordionOpenSectionId = accordion?.openSectionId;
+  const accordionSetOpenSectionId = accordion?.setOpenSectionId;
+  const sectionId = accordionId ?? title;
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
+  const [defaultOpenApplied, setDefaultOpenApplied] = useState(false);
+  const isPropControlled = controlledOpen !== undefined;
+  const isAccordionControlled = !isPropControlled && Boolean(accordionSetOpenSectionId);
+  const open = isPropControlled
+    ? controlledOpen
+    : isAccordionControlled
+      ? accordionOpenSectionId === sectionId
+      : uncontrolledOpen;
+
+  const setOpen = useCallback(
+    (nextOpen: boolean) => {
+      if (isPropControlled) {
+        onOpenChange?.(nextOpen);
+        return;
+      }
+      if (isAccordionControlled && accordionSetOpenSectionId) {
+        accordionSetOpenSectionId(nextOpen ? sectionId : null);
+        return;
+      }
+      setUncontrolledOpen(nextOpen);
+    },
+    [accordionSetOpenSectionId, isAccordionControlled, isPropControlled, onOpenChange, sectionId],
+  );
+
+  useEffect(() => {
+    if (defaultOpen && !defaultOpenApplied) {
+      setOpen(true);
+      setDefaultOpenApplied(true);
+    }
+  }, [defaultOpen, defaultOpenApplied, setOpen]);
+
+  useEffect(() => {
+    if (openSignal !== undefined && openSignal !== null) {
+      setOpen(true);
+    }
+  }, [openSignal, setOpen]);
 
   return (
-    <details className="group rounded border border-line bg-panel" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 [&::-webkit-details-marker]:hidden">
+    <details className="group rounded border border-line bg-panel" open={open}>
+      <summary
+        className="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 [&::-webkit-details-marker]:hidden"
+        onClick={(event) => {
+          event.preventDefault();
+          setOpen(!open);
+        }}
+      >
         <div className="min-w-0">
           <div className="font-medium text-white">{title}</div>
           {description && <div className="mt-1 truncate text-xs text-muted">{description}</div>}

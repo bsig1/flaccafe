@@ -21,6 +21,7 @@ export function ArtistPage({
   isArtistLoading,
   onRefresh,
   onPlayTrack,
+  onOpenExternalUrl,
 }: {
   currentTrack: Track | null;
   artistInfo: ArtistInfoResponse | null;
@@ -28,6 +29,7 @@ export function ArtistPage({
   isArtistLoading: boolean;
   onRefresh: () => void;
   onPlayTrack: (track: Track, queue: Track[]) => void;
+  onOpenExternalUrl: (url: string) => void;
 }) {
   const artistName = primaryArtistName(currentTrack?.artist) || display(currentTrack?.artist, "");
   const hasImage = Boolean(artistInfo?.image_url);
@@ -83,7 +85,7 @@ export function ArtistPage({
                 <span className="truncate">Top Local Tracks</span>
                 <span className="shrink-0 text-xs font-normal text-muted">{artistTracks.length}</span>
               </div>
-              <div className="max-h-72 overflow-auto">
+              <div>
               {artistTracks.slice(0, 12).map((track) => (
                 <button
                   key={track.id}
@@ -106,15 +108,14 @@ export function ArtistPage({
             <div className="flex min-w-0 items-center gap-3">
               {artistInfo?.source && <span className="truncate text-xs text-muted">{artistInfo.source}</span>}
               {artistInfo?.page_url && (
-                <a
+                <button
                   className="inline-flex items-center gap-1 text-xs text-moss hover:text-white"
-                  href={artistInfo.page_url}
-                  rel="noreferrer"
-                  target="_blank"
+                  type="button"
+                  onClick={() => artistInfo.page_url && onOpenExternalUrl(artistInfo.page_url)}
                 >
                   Open
                   <ExternalLink size={13} />
-                </a>
+                </button>
               )}
             </div>
           </div>

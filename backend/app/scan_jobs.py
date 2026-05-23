@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 from threading import Lock, Thread
 from uuid import uuid4
 
+from .database import connect, set_setting
 from .scanner import ScanStats, scan_folder
 
 
@@ -21,6 +23,8 @@ def iso(value: datetime | None) -> str | None:
 class ScanJob:
     job_id: str
     folder_path: str
+    folder_paths: list[str] = field(default_factory=list)
+    save_library_paths: list[str] = field(default_factory=list)
     status: str = "pending"
     total_files: int = 0
     processed_files: int = 0
@@ -51,6 +55,7 @@ class ScanJob:
         return {
             "job_id": self.job_id,
             "folder_path": self.folder_path,
+            "folder_paths": self.folder_paths,
             "status": self.status,
             "total_files": self.total_files,
             "processed_files": self.processed_files,
@@ -86,6 +91,9 @@ def _copy_stats(job: ScanJob, stats: ScanStats, processed: int, total: int, curr
 
 
 def _run_scan(job_id: str) -> None:
+    completed = ScanStats(folder_path="")
+    completed_total = 0
+
     def update_from_scan(
         stats: ScanStats,
         processed: int,
@@ -96,19 +104,41 @@ def _run_scan(job_id: str) -> None:
         with _lock:
             job = _jobs[job_id]
             job.status = status
-            _copy_stats(job, stats, processed, total, current_path)
+            aggregate = ScanStats(folder_path=job.folder_path)
+            aggregate.scanned_files = completed.scanned_files + stats.scanned_files
+            aggregate.inserted = completed.inserted + stats.inserted
+            aggregate.updated = completed.updated + stats.updated
+            aggregate.removed = completed.removed + stats.removed
+            aggregate.skipped = completed.skipped + stats.skipped
+            aggregate.errors = [*completed.errors, *stats.errors]
+            _copy_stats(job, aggregate, completed_total + processed, completed_total + total, current_path)
 
     with _lock:
         job = _jobs[job_id]
         job.status = "counting"
+        paths = job.folder_paths[:]
 
     try:
-        result = scan_folder(job.folder_path, progress_callback=update_from_scan)
+        for folder_path in paths:
+            result = scan_folder(folder_path, progress_callback=update_from_scan)
+            completed.scanned_files += result.scanned_files
+            completed.inserted += result.inserted
+            completed.updated += result.updated
+            completed.removed += result.removed
+            completed.skipped += result.skipped
+            completed.errors.extend(result.errors)
+            completed_total += result.scanned_files
+        with connect() as conn:
+            saved_paths = job.save_library_paths or paths
+            set_setting(conn, "library_path", saved_paths[0] if saved_paths else None)
+            set_setting(conn, "library_paths_json", json.dumps(saved_paths, ensure_ascii=True))
+            conn.commit()
         with _lock:
             job = _jobs[job_id]
             job.status = "completed"
             job.finished_at = utc_now()
-            _copy_stats(job, result, result.scanned_files, result.scanned_files, None)
+            completed.folder_path = job.folder_path
+            _copy_stats(job, completed, completed.scanned_files, completed.scanned_files, None)
     except Exception as exc:
         with _lock:
             job = _jobs[job_id]
@@ -118,10 +148,24 @@ def _run_scan(job_id: str) -> None:
             job.current_path = None
 
 
-def start_scan_job(folder_path: str) -> dict:
+def start_scan_job(folder_paths: str | list[str], save_library_paths: list[str] | None = None) -> dict:
+    paths = [folder_paths] if isinstance(folder_paths, str) else folder_paths
+    paths = [str(Path(path).expanduser().resolve()) for path in paths if str(path).strip()]
+    if not paths:
+        raise ValueError("Choose at least one music folder")
+    saved_paths = [
+        str(Path(path).expanduser().resolve())
+        for path in (save_library_paths or paths)
+        if str(path).strip()
+    ]
     job_id = uuid4().hex
     with _lock:
-        _jobs[job_id] = ScanJob(job_id=job_id, folder_path=folder_path)
+        _jobs[job_id] = ScanJob(
+            job_id=job_id,
+            folder_path="; ".join(paths),
+            folder_paths=paths,
+            save_library_paths=saved_paths,
+        )
 
     thread = Thread(target=_run_scan, args=(job_id,), daemon=True)
     thread.start()

@@ -3,12 +3,15 @@ import {
   ArrowDown,
   ArrowUp,
   BarChart3,
+  BookOpen,
   CheckCircle2,
   Download,
+  Fingerprint,
   FolderOpen,
   MoreHorizontal,
   Pencil,
   Play,
+  Podcast,
   Plus,
   RefreshCw,
   Save,
@@ -18,6 +21,7 @@ import {
   SkipForward,
   SlidersHorizontal,
   Star,
+  Tag,
   Trash2,
   Upload,
   UserRound,
@@ -32,6 +36,8 @@ import type {
 } from "react";
 import {
   useEffect,
+  useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -106,6 +112,8 @@ import {
   trackGenre,
 } from "../shared";
 
+const COMPLETION_CHUNK_SIZE = 80;
+
 export function LibraryPage({
   tracks,
   totalTracks,
@@ -151,6 +159,9 @@ export function LibraryPage({
   onDeleteTrack,
   onEditTrack,
   onBulkMetadata,
+  onAutoTagTracks,
+  onFingerprintTagTracks,
+  onClapGenreTagTracks,
   onRequestDeleteTracks,
   onRemoveTrackFromPlaylist,
   onRemoveTracksFromPlaylist,
@@ -238,6 +249,9 @@ export function LibraryPage({
   onDeleteTrack: (trackId: number, deleteFile: boolean) => void;
   onEditTrack: (track: Track) => void;
   onBulkMetadata: (trackIds: number[], metadata: TrackMetadataUpdate) => void | Promise<void>;
+  onAutoTagTracks: (trackIds: number[], apply: boolean) => void | Promise<void>;
+  onFingerprintTagTracks: (trackIds: number[]) => void | Promise<void>;
+  onClapGenreTagTracks: (trackIds: number[]) => void | Promise<void>;
   onRequestDeleteTracks: (trackIds: number[], title: string, allowFileDelete?: boolean) => void;
   onRemoveTrackFromPlaylist: (trackId: number) => void;
   onRemoveTracksFromPlaylist: (trackIds: number[]) => void | Promise<void>;
@@ -302,7 +316,14 @@ export function LibraryPage({
   const [inboxRuleValue, setInboxRuleValue] = useState("");
   const [inboxRuleNote, setInboxRuleNote] = useState("");
   const [inboxRuleApplyExisting, setInboxRuleApplyExisting] = useState(false);
+  const [albumMode, setAlbumMode] = useState<"browse" | "completion">("browse");
+  const [completionFilter, setCompletionFilter] = useState<"all" | "incomplete" | "complete">("all");
+  const [visibleCompletionCount, setVisibleCompletionCount] = useState(COMPLETION_CHUNK_SIZE);
+  const [completionOpenAlbumId, setCompletionOpenAlbumId] = useState<number | null>(null);
+  const [completionLoadingAlbumId, setCompletionLoadingAlbumId] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const selectionAnchorId = useRef<number | null>(null);
 
   const visibleColumns = normalizeLibraryColumns(libraryVisibleColumns);
@@ -313,6 +334,58 @@ export function LibraryPage({
   const rowPadding = compactRows ? "px-3 py-2" : "px-3 py-3";
   const activeAlbum = albums.find((album) => album.id === selectedAlbumId) ?? null;
   const activePlaylist = playlists.find((playlist) => playlist.id === selectedPlaylistId) ?? null;
+  const completionQuery = search.trim().toLowerCase();
+  const completionSearchTerms = completionQuery.split(/\s+/).filter(Boolean);
+  const completionMatchesSearch = (...values: Array<string | number | null | undefined>) => {
+    if (completionSearchTerms.length === 0) {
+      return true;
+    }
+    const haystack = values
+      .filter((value) => value !== null && value !== undefined)
+      .map(String)
+      .join(" ")
+      .toLowerCase();
+    const compactHaystack = haystack.replace(/[^a-z0-9]+/g, "");
+    return completionSearchTerms.every((term) => {
+      const compactTerm = term.replace(/[^a-z0-9]+/g, "");
+      return haystack.includes(term) || Boolean(compactTerm && compactHaystack.includes(compactTerm));
+    });
+  };
+  const albumCompletionExpected = (album: AlbumSummary) => Math.max(album.expected_track_count ?? album.track_count, album.track_count);
+  const albumCompletionMissing = (album: AlbumSummary) => Math.max(0, albumCompletionExpected(album) - album.track_count);
+  const completionAlbums = useMemo(
+    () =>
+      albums
+        .filter((album) => albumCompletionMissing(album) > 0)
+        .sort((left, right) => (right.missing_track_count ?? 0) - (left.missing_track_count ?? 0)),
+    [albums],
+  );
+  const visibleCompletionAlbums = useMemo(
+    () =>
+      albums
+        .filter((album) => {
+          const missing = albumCompletionMissing(album);
+          if (completionFilter === "incomplete" && missing === 0) {
+            return false;
+          }
+          if (completionFilter === "complete" && missing > 0) {
+            return false;
+          }
+          return completionMatchesSearch(album.album, album.album_artist, album.year);
+        })
+        .sort((left, right) => {
+          const missingDelta = albumCompletionMissing(right) - albumCompletionMissing(left);
+          if (completionFilter === "all" && missingDelta !== 0) {
+            return missingDelta;
+          }
+          return display(left.album, "Unknown album").localeCompare(display(right.album, "Unknown album"));
+        }),
+    [albums, completionFilter, completionQuery],
+  );
+  const renderedCompletionAlbums = visibleCompletionAlbums.slice(0, visibleCompletionCount);
+  const hasMoreCompletionAlbums = visibleCompletionCount < visibleCompletionAlbums.length;
+  const completeAlbumCount = albums.length - completionAlbums.length;
+  const missingTrackEstimate = completionAlbums.reduce((total, album) => total + (album.missing_track_count ?? 0), 0);
   const viewTracks =
     libraryView === "albums"
       ? selectedAlbumTracks
@@ -341,6 +414,18 @@ export function LibraryPage({
   useEffect(() => {
     setInboxNoteDraft(selectedInboxNote?.note ?? "");
   }, [selectedInboxTrack?.id, selectedInboxNote?.updated_at]);
+
+  useEffect(() => {
+    setVisibleCompletionCount(COMPLETION_CHUNK_SIZE);
+    setCompletionOpenAlbumId(null);
+  }, [completionFilter, completionQuery, albums.length, albumMode]);
+
+  useEffect(() => {
+    if (libraryView === "completion") {
+      setAlbumMode("completion");
+      setLibraryView("albums");
+    }
+  }, [libraryView, setLibraryView]);
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -420,7 +505,26 @@ export function LibraryPage({
   useEffect(() => {
     function handleLibraryShortcut(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+        return;
+      }
       if (target?.closest("input, textarea, select, button, a, [contenteditable='true']")) {
+        return;
+      }
+      if (event.key === "F2") {
+        const editableTrack = selectedTracks[0] ?? detailTrack;
+        if (!editableTrack) {
+          return;
+        }
+        event.preventDefault();
+        if (selectedIds.length > 1) {
+          setBulkMetadataOpen(true);
+        } else {
+          onEditTrack(editableTrack);
+        }
         return;
       }
       if (event.ctrlKey && event.key.toLowerCase() === "e" && selectedIds.length > 0) {
@@ -454,7 +558,7 @@ export function LibraryPage({
 
     window.addEventListener("keydown", handleLibraryShortcut);
     return () => window.removeEventListener("keydown", handleLibraryShortcut);
-  }, [selectedIds, selectedTracks, detailTrack, libraryView, onRequestDeleteTracks]);
+  }, [selectedIds, selectedTracks, detailTrack, libraryView, onEditTrack, onRequestDeleteTracks]);
 
   function handleSort(key: SortKey) {
     setSort((current) => {
@@ -659,6 +763,12 @@ export function LibraryPage({
     setColumnMenu(null);
     setScrollTop(element.scrollTop);
     if (libraryView !== "tracks") {
+      if (libraryView === "albums" && albumMode === "completion") {
+        const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+        if (distanceFromBottom < 640 && hasMoreCompletionAlbums) {
+          setVisibleCompletionCount((current) => Math.min(current + COMPLETION_CHUNK_SIZE, visibleCompletionAlbums.length));
+        }
+      }
       return;
     }
     const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
@@ -691,6 +801,8 @@ export function LibraryPage({
       removable,
       x: placement.x,
       y: placement.y,
+      anchorX: event.clientX,
+      anchorY: event.clientY,
       flipY: placement.flipY,
       submenuLeft: placement.submenuLeft,
     });
@@ -954,13 +1066,24 @@ export function LibraryPage({
     return target instanceof HTMLElement && Boolean(target.closest("button, a, input, textarea, select, summary, details"));
   }
 
+  function handleLibrarySurfaceClick(event: ReactMouseEvent) {
+    const target = event.target as HTMLElement | null;
+    if (!target || target.closest("[data-track-row], button, a, input, textarea, select, summary, details, [role='menu']")) {
+      return;
+    }
+    if (selectedTrackIds.size > 0) {
+      clearSelection();
+    }
+  }
+
   function renderTrackRows(list: Track[], options: { removable?: boolean } = {}) {
     return list.map((track) => (
       <tr
         key={track.id}
+        data-track-row
         className={`cursor-pointer border-b border-line/60 hover:bg-white/[0.035] ${
           detailTrack?.id === track.id ? "bg-white/[0.06]" : selectedTrackIds.has(track.id) ? "bg-white/[0.035]" : ""
-        }`}
+        } select-none`}
         onClick={(event) => {
           if (isInteractiveTrackCellTarget(event.target)) {
             return;
@@ -1003,6 +1126,207 @@ export function LibraryPage({
     ));
   }
 
+  function renderAlbumModeToggle() {
+    return (
+      <div className="grid grid-cols-2 rounded border border-line bg-ink p-1 text-xs">
+        {(
+          [
+            ["browse", "Browse"],
+            ["completion", "Completion"],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            className={`h-8 rounded px-3 transition ${
+              albumMode === id ? "bg-white/10 text-white" : "text-muted hover:text-white"
+            }`}
+            type="button"
+            onClick={() => setAlbumMode(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    );
+  }
+
+  function toggleCompletionAlbum(albumId: number) {
+    if (completionOpenAlbumId === albumId) {
+      setCompletionOpenAlbumId(null);
+      return;
+    }
+    setCompletionOpenAlbumId(albumId);
+    setCompletionLoadingAlbumId(albumId);
+    void Promise.resolve(onSelectAlbum(albumId)).finally(() => {
+      setCompletionLoadingAlbumId((current) => (current === albumId ? null : current));
+    });
+  }
+
+  function renderCompletionView() {
+    return (
+      <div className="min-h-full p-6">
+        <div className="mx-auto grid max-w-6xl gap-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-white">Collection Completion</div>
+              <div className="text-xs text-muted">Estimated from disc and track numbers already in your local files.</div>
+            </div>
+            {renderAlbumModeToggle()}
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className="rounded border border-line bg-panel p-4">
+              <div className="text-xs uppercase text-muted">Complete Albums</div>
+              <div className="mt-2 text-2xl font-semibold text-white">{completeAlbumCount.toLocaleString()}</div>
+            </div>
+            <div className="rounded border border-line bg-panel p-4">
+              <div className="text-xs uppercase text-muted">Incomplete Albums</div>
+              <div className="mt-2 text-2xl font-semibold text-ember">{completionAlbums.length.toLocaleString()}</div>
+            </div>
+            <div className="rounded border border-line bg-panel p-4">
+              <div className="text-xs uppercase text-muted">Estimated Missing Tracks</div>
+              <div className="mt-2 text-2xl font-semibold text-moss">{missingTrackEstimate.toLocaleString()}</div>
+            </div>
+          </div>
+          <div className="rounded border border-line bg-panel">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="text-sm font-semibold text-white">Albums</div>
+                  <div className="grid grid-cols-3 rounded border border-line bg-ink p-1 text-xs">
+                    {(
+                      [
+                        ["all", "All"],
+                        ["incomplete", "Missing"],
+                        ["complete", "Completed"],
+                      ] as const
+                    ).map(([id, label]) => (
+                      <button
+                        key={id}
+                        className={`h-8 rounded px-3 transition ${
+                          completionFilter === id ? "bg-white/10 text-white" : "text-muted hover:text-white"
+                        }`}
+                        type="button"
+                        onClick={() => setCompletionFilter(id)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="mt-1 text-xs text-muted">
+                  Showing {renderedCompletionAlbums.length.toLocaleString()} of {visibleCompletionAlbums.length.toLocaleString()} matching albums
+                  {completionQuery ? ` for "${search.trim()}"` : ""}.
+                </div>
+              </div>
+              <div className="text-xs text-muted">{albums.length.toLocaleString()} total albums</div>
+            </div>
+            <div className="grid divide-y divide-line/60">
+              {renderedCompletionAlbums.map((album) => {
+                const expected = albumCompletionExpected(album);
+                const missing = albumCompletionMissing(album);
+                const progress = expected > 0 ? Math.min(100, (album.track_count / expected) * 100) : 100;
+                const artwork = album.artwork_path || album.artwork_track_id ? albumCoverUrl(album.id) : null;
+                const expanded = completionOpenAlbumId === album.id;
+                const tracksReady = expanded && selectedAlbumId === album.id && completionLoadingAlbumId !== album.id;
+                return (
+                  <div key={album.id} className={expanded ? "bg-white/[0.025]" : ""}>
+                    <button
+                      className="grid w-full gap-3 px-4 py-3 text-left transition hover:bg-white/[0.035] sm:grid-cols-[44px_minmax(0,1fr)_120px]"
+                      type="button"
+                      onClick={() => toggleCompletionAlbum(album.id)}
+                    >
+                      <div className="h-11 w-11 overflow-hidden rounded border border-line bg-ink">
+                        {artwork ? (
+                          <img alt="" className="h-full w-full object-cover" src={artwork} />
+                        ) : (
+                          <div className="grid h-full w-full place-items-center text-moss">
+                            <Album size={18} />
+                          </div>
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="truncate text-sm font-medium text-white">{display(album.album, "Unknown album")}</span>
+                        </div>
+                        <div className="truncate text-xs text-muted">
+                          {display(album.album_artist)}
+                          {album.year ? ` - ${album.year}` : ""}
+                        </div>
+                        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-ink">
+                          <div className="h-full rounded-full bg-moss" style={{ width: `${progress}%` }} />
+                        </div>
+                      </div>
+                      <div className="self-center text-right text-sm tabular-nums">
+                        <div className="font-semibold text-white">
+                          {album.track_count.toLocaleString()}/{expected.toLocaleString()}
+                        </div>
+                        <div className={missing ? "text-xs text-ember" : "text-xs text-moss"}>
+                          {missing ? `${missing.toLocaleString()} missing` : "complete"}
+                        </div>
+                      </div>
+                    </button>
+                    {expanded && (
+                      <div className="border-t border-line/60 bg-ink/55 px-4 py-3">
+                        {tracksReady ? (
+                          <div className="ml-0 grid gap-1 sm:ml-14">
+                            {selectedAlbumTracks.map((track, index) => (
+                              <button
+                                key={`${album.id}-${track.id}-${index}`}
+                                className={`grid grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-3 rounded px-2 py-1.5 text-left text-xs hover:bg-white/[0.035] ${
+                                  currentTrackId === track.id ? "bg-moss/10 text-moss" : ""
+                                }`}
+                                type="button"
+                                title={`Play ${display(track.title, "track")}`}
+                                onClick={() => onPlayTrack(track, selectedAlbumTracks)}
+                                onContextMenu={(event) => openTrackContextMenu(event, track, selectedAlbumTracks)}
+                              >
+                                <span className="text-right tabular-nums text-muted">{track.track_number ?? index + 1}</span>
+                                <div className="min-w-0">
+                                  <div className="truncate font-medium text-neutral-100">{display(track.title, "Untitled")}</div>
+                                  <div className="truncate text-muted">{display(track.artist)}</div>
+                                </div>
+                                <span className="tabular-nums text-muted">{formatDuration(track.duration_seconds)}</span>
+                              </button>
+                            ))}
+                            {selectedAlbumTracks.length === 0 && (
+                              <div className="rounded border border-line/70 bg-panel px-3 py-4 text-center text-xs text-muted">
+                                No tracks are attached to this album yet.
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="ml-0 rounded border border-line/70 bg-panel px-3 py-4 text-center text-xs text-muted sm:ml-14">
+                            Opening album...
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {visibleCompletionAlbums.length === 0 && (
+                <div className="px-4 py-10 text-center text-sm text-muted">
+                  No albums match this completion filter.
+                </div>
+              )}
+              {hasMoreCompletionAlbums && (
+                <div className="px-4 py-4 text-center">
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => setVisibleCompletionCount((current) => Math.min(current + COMPLETION_CHUNK_SIZE, visibleCompletionAlbums.length))}
+                  >
+                    Load more albums
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const contextSelectionTracks =
     contextMenu && selectedTrackIds.has(contextMenu.track.id) ? selectedTracks : contextMenu ? [contextMenu.track] : [];
   const contextSelectionIds = contextSelectionTracks.map((track) => track.id);
@@ -1010,6 +1334,31 @@ export function LibraryPage({
   const contextLabel = contextBulk
     ? `${contextSelectionIds.length.toLocaleString()} selected tracks`
     : display(contextMenu?.track.title, "Selected track");
+
+  useLayoutEffect(() => {
+    if (!contextMenu || !contextMenuRef.current) {
+      return;
+    }
+    const rect = contextMenuRef.current.getBoundingClientRect();
+    const anchorX = contextMenu.anchorX ?? contextMenu.x;
+    const anchorY = contextMenu.anchorY ?? contextMenu.y;
+    const maxX = Math.max(MENU_VIEWPORT_MARGIN, window.innerWidth - rect.width - MENU_VIEWPORT_MARGIN);
+    const maxY = Math.max(MENU_VIEWPORT_MARGIN, window.innerHeight - rect.height - MENU_VIEWPORT_MARGIN);
+    const nextX = Math.min(Math.max(MENU_VIEWPORT_MARGIN, anchorX), maxX);
+    const desiredY = contextMenu.flipY ? anchorY - rect.height : anchorY;
+    const nextY = Math.min(Math.max(MENU_VIEWPORT_MARGIN, desiredY), maxY);
+    if (Math.round(nextX) !== Math.round(contextMenu.x) || Math.round(nextY) !== Math.round(contextMenu.y)) {
+      setContextMenu((current) => (current ? { ...current, x: nextX, y: nextY } : current));
+    }
+  }, [
+    contextMenu?.x,
+    contextMenu?.y,
+    contextMenu?.anchorX,
+    contextMenu?.anchorY,
+    contextMenu?.track.id,
+    contextMenu?.removable,
+    contextSelectionIds.length,
+  ]);
 
   if (showQuickStart) {
     return (
@@ -1045,6 +1394,7 @@ export function LibraryPage({
           <label className="relative block min-w-[12rem] flex-1 sm:flex-none">
             <Search className="pointer-events-none absolute left-3 top-2.5 text-muted" size={16} />
             <input
+              ref={searchInputRef}
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               className="h-9 w-full rounded border border-line bg-panel pl-9 pr-3 text-sm text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2 sm:w-[min(20rem,42vw)]"
@@ -1117,7 +1467,7 @@ export function LibraryPage({
         </div>
       </div>
       <div className="min-h-0 flex flex-1">
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto" onScroll={handleScroll}>
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto" onScroll={handleScroll} onClick={handleLibrarySurfaceClick}>
         {libraryView === "tracks" && (
           <>
             <table className="w-full table-fixed text-left text-sm" style={{ minWidth: tableWidth }}>
@@ -1166,10 +1516,14 @@ export function LibraryPage({
         )}
 
         {libraryView === "albums" && (
+          albumMode === "completion" ? (
+            renderCompletionView()
+          ) : (
           <div className="grid h-full min-h-0 grid-cols-[360px_minmax(0,1fr)]">
             <section className="min-h-0 overflow-auto border-r border-line">
-              <div className="sticky top-0 z-10 border-b border-line bg-ink px-4 py-3 text-xs uppercase text-muted">
-                {albums.length.toLocaleString()} albums
+              <div className="sticky top-0 z-10 grid gap-3 border-b border-line bg-ink px-4 py-3">
+                <div className="text-xs uppercase text-muted">{albums.length.toLocaleString()} albums</div>
+                {renderAlbumModeToggle()}
               </div>
               <div className={albumGrid ? "grid grid-cols-2 gap-3 p-3" : "grid"}>
                 {albums.map((album) => {
@@ -1350,7 +1704,10 @@ export function LibraryPage({
               </table>
             </section>
           </div>
+          )
         )}
+
+        {libraryView === "completion" && renderCompletionView()}
 
         {libraryView === "playlists" && (
           <div className="grid min-h-full grid-cols-[360px_minmax(0,1fr)]">
@@ -2012,7 +2369,8 @@ export function LibraryPage({
       )}
       {contextMenu && (
         <div
-          className="fixed z-50 w-56 overflow-visible rounded border border-line bg-[rgb(var(--color-popover))] py-1 text-sm text-neutral-100 shadow-2xl"
+          ref={contextMenuRef}
+          className="fixed z-50 w-64 overflow-visible rounded border border-line bg-[rgb(var(--color-popover))] py-1 text-sm text-neutral-100 shadow-2xl"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onClick={(event) => event.stopPropagation()}
         >
@@ -2055,7 +2413,7 @@ export function LibraryPage({
             Add To Queue
           </button>
           <button
-            className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10"
+            className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left hover:bg-white/10"
             type="button"
             onClick={() => {
               if (contextBulk) {
@@ -2066,9 +2424,107 @@ export function LibraryPage({
               setContextMenu(null);
             }}
           >
-            <Pencil size={15} />
-            {contextBulk ? "Edit Selected Metadata" : "Edit Metadata"}
+            <span className="inline-flex min-w-0 items-center gap-2">
+              <Pencil size={15} />
+              <span className="truncate">{contextBulk ? "Edit Selected Metadata" : "Edit Metadata"}</span>
+            </span>
+            <span className="rounded border border-line px-1.5 py-0.5 text-[10px] uppercase text-muted">F2</span>
           </button>
+          <div className="group/tagging relative">
+            <button className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left hover:bg-white/10" type="button">
+              <span className="inline-flex items-center gap-2">
+                <Tag size={15} />
+                Tagging
+              </span>
+              <span className="text-muted">{">"}</span>
+            </button>
+            <div
+              className={`invisible absolute z-50 w-56 overflow-hidden rounded border border-line bg-[rgb(var(--color-popover))] py-1 opacity-0 shadow-2xl transition group-hover/tagging:visible group-hover/tagging:opacity-100 ${
+                contextMenu.submenuLeft ? "right-full" : "left-full"
+              } ${contextMenu.flipY ? "bottom-0" : "top-0"}`}
+            >
+              <button
+                className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10"
+                type="button"
+                onClick={() => {
+                  void onAutoTagTracks(contextSelectionIds, false);
+                  setContextMenu(null);
+                }}
+              >
+                <Wand2 size={15} />
+                Preview Auto-Tag
+              </button>
+              <button
+                className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10"
+                type="button"
+                onClick={() => {
+                  void onAutoTagTracks(contextSelectionIds, true);
+                  setContextMenu(null);
+                }}
+              >
+                <CheckCircle2 size={15} />
+                Auto-Tag Missing Fields
+              </button>
+              <button
+                className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10"
+                type="button"
+                onClick={() => {
+                  void onFingerprintTagTracks(contextSelectionIds);
+                  setContextMenu(null);
+                }}
+              >
+                <Fingerprint size={15} />
+                Fingerprint Tag Preview
+              </button>
+              <button
+                className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10"
+                type="button"
+                onClick={() => {
+                  void onClapGenreTagTracks(contextSelectionIds);
+                  setContextMenu(null);
+                }}
+              >
+                <Tag size={15} />
+                Preview CLAP Genres
+              </button>
+              <button
+                className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10"
+                type="button"
+                onClick={() => {
+                  const ids = [...contextSelectionIds];
+                  void (async () => {
+                    await onBulkMetadata(ids, { genre: "Audiobook", write_to_file: writeRatingsToFiles });
+                    if (contextBulk) {
+                      clearSelection();
+                    }
+                    await refreshTracks();
+                  })();
+                  setContextMenu(null);
+                }}
+              >
+                <BookOpen size={15} />
+                Mark as Audiobook
+              </button>
+              <button
+                className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10"
+                type="button"
+                onClick={() => {
+                  const ids = [...contextSelectionIds];
+                  void (async () => {
+                    await onBulkMetadata(ids, { genre: "Podcast", write_to_file: writeRatingsToFiles });
+                    if (contextBulk) {
+                      clearSelection();
+                    }
+                    await refreshTracks();
+                  })();
+                  setContextMenu(null);
+                }}
+              >
+                <Podcast size={15} />
+                Mark as Podcast
+              </button>
+            </div>
+          </div>
           <div className="group/rating relative">
             <button className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left hover:bg-white/10" type="button">
               <span className="inline-flex items-center gap-2">
@@ -2267,15 +2723,18 @@ export function LibraryPage({
           </button>
           <div className="my-1 border-t border-line" />
           <button
-            className="flex w-full items-center gap-2 px-3 py-2 text-left text-ember hover:bg-white/10"
+            className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-ember hover:bg-white/10"
             type="button"
             onClick={() => {
               onRequestDeleteTracks(contextSelectionIds, contextLabel);
               setContextMenu(null);
             }}
           >
-            <Trash2 size={15} />
-            Delete...
+            <span className="inline-flex items-center gap-2">
+              <Trash2 size={15} />
+              Delete...
+            </span>
+            <span className="rounded border border-line px-1.5 py-0.5 text-[10px] uppercase text-muted">Del</span>
           </button>
         </div>
       )}

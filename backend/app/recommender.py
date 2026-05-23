@@ -4,13 +4,16 @@ import json
 import math
 import random
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .database import connect, rows_to_dicts
 from .schemas import AutoDjRequest
 
+
+MAX_DYNAMIC_CANDIDATES = 8000
+RANDOM_TAIL_CANDIDATES = 1200
 
 ARTIST_SPLIT_RE = re.compile(
     r"\s*(?:;|/|,|\+|&|\bfeat\.?\b|\bfeaturing\b|\bwith\b)\s*",
@@ -208,6 +211,10 @@ class Candidate:
     score: float
     reason: str
     breakdown: dict[str, float]
+    artist_keys: set[str] = field(default_factory=set)
+    album_key: str = ""
+    is_unrated: bool = False
+    is_exploratory: bool = False
 
 
 def track_matches_avoid(track: dict[str, Any], avoid_rules: dict[str, set[str]]) -> bool:
@@ -220,6 +227,20 @@ def track_matches_avoid(track: dict[str, Any], avoid_rules: dict[str, set[str]])
     if genre_tokens(track) & avoid_rules.get("genre", set()):
         return True
     return False
+
+
+def track_is_longform(track: dict[str, Any]) -> bool:
+    genre = str(track.get("genre") or "").casefold()
+    path = str(track.get("path") or "").replace("\\", "/").casefold()
+    return (
+        "podcast" in genre
+        or "podcast" in path
+        or "audiobook" in genre
+        or "audio book" in genre
+        or "audiobook" in path
+        or "audio book" in path
+        or "/books/" in path
+    )
 
 
 def weighted_choice(candidates: list[Candidate], temperature: float, rng: random.Random) -> Candidate:
@@ -238,6 +259,19 @@ def weighted_choice(candidates: list[Candidate], temperature: float, rng: random
     return candidates[-1]
 
 
+def shortlist_candidates(candidates: list[Candidate], rng: random.Random) -> list[Candidate]:
+    if len(candidates) <= MAX_DYNAMIC_CANDIDATES:
+        return candidates
+
+    head_count = max(1, MAX_DYNAMIC_CANDIDATES - RANDOM_TAIL_CANDIDATES)
+    head = candidates[:head_count]
+    tail = candidates[head_count:]
+    if not tail:
+        return head
+    sample = rng.sample(tail, min(RANDOM_TAIL_CANDIDATES, len(tail)))
+    return [*head, *sample]
+
+
 def conflicts_with_cooldown(
     track: dict[str, Any],
     recent_artists: list[set[str]],
@@ -250,8 +284,89 @@ def conflicts_with_cooldown(
     return artist_conflict or album_conflict
 
 
+def candidate_conflicts_with_cooldown(
+    candidate: Candidate,
+    recent_artists: list[set[str]],
+    recent_albums: list[str],
+) -> bool:
+    artist_conflict = bool(candidate.artist_keys and any(candidate.artist_keys & recent for recent in recent_artists))
+    album_conflict = bool(candidate.album_key and candidate.album_key in recent_albums)
+    return artist_conflict or album_conflict
+
+
+def track_is_familiar(track: dict[str, Any]) -> bool:
+    rating = track.get("rating")
+    return rating is not None or int(track.get("play_count") or 0) > 0
+
+
 def track_is_exploratory(track: dict[str, Any]) -> bool:
-    return track.get("rating") is None or int(track.get("play_count") or 0) == 0
+    # Exploration should be mutually exclusive with familiar. A rated song
+    # imported from MusicBee may have zero FLAC Cafe plays, but it is still
+    # known to the user rather than a discovery pick.
+    return not track_is_familiar(track) and (track.get("rating") is None or int(track.get("play_count") or 0) == 0)
+
+
+def candidate_from_track(
+    track: dict[str, Any],
+    request: AutoDjRequest,
+    now: datetime,
+    rng: random.Random,
+    seed_track: dict[str, Any] | None,
+) -> Candidate:
+    score, reason, breakdown = score_track(track, request, now, rng, seed_track)
+    return Candidate(
+        track=track,
+        score=score,
+        reason=reason,
+        breakdown=breakdown,
+        artist_keys=artist_tokens(track.get("artist")),
+        album_key=album_token(track.get("album")),
+        is_unrated=track.get("rating") is None,
+        is_exploratory=track_is_exploratory(track),
+    )
+
+
+def adjusted_candidate_for_queue(
+    base: Candidate,
+    queue: list[dict[str, Any]],
+    request: AutoDjRequest,
+    recent_artists: list[set[str]],
+    recent_albums: list[str],
+    apply_cooldown_penalty: bool,
+) -> Candidate:
+    # Most scoring inputs are static for the whole generation request. This
+    # lightweight copy adds only the queue-position-dependent nudges, so large
+    # libraries do not repeatedly parse tags, embeddings, and history data for
+    # every requested queue slot.
+    score = base.score
+    reason = base.reason
+    breakdown = dict(base.breakdown)
+
+    drift_delta, drift_reason = target_drift_adjustment(queue, base.track, request)
+    if drift_delta:
+        score += drift_delta
+        breakdown["targets"] = round(drift_delta, 3)
+        reason += f", {drift_reason}"
+
+    if apply_cooldown_penalty and candidate_conflicts_with_cooldown(
+        base,
+        recent_artists[: request.artist_cooldown],
+        recent_albums[: request.album_cooldown],
+    ):
+        score -= 2.0
+        reason += ", cooldown penalty"
+
+    breakdown["total"] = round(score, 3)
+    return Candidate(
+        track=base.track,
+        score=score,
+        reason=reason,
+        breakdown=breakdown,
+        artist_keys=base.artist_keys,
+        album_key=base.album_key,
+        is_unrated=base.is_unrated,
+        is_exploratory=base.is_exploratory,
+    )
 
 
 def repeat_artist_percent_for_tracks(tracks: list[dict[str, Any]]) -> float:
@@ -419,10 +534,22 @@ def generate_queue(request: AutoDjRequest) -> list[dict[str, Any]]:
     for row in avoid_rows:
         avoid_rules.setdefault(row["scope"], set()).add(row["target_key"])
 
-    remaining = tracks[:]
+    remaining = [track for track in tracks if not track_is_longform(track)]
     remaining = [track for track in remaining if not track_matches_avoid(track, avoid_rules)]
-    if seed_track and len(remaining) > 1:
-        remaining = [track for track in remaining if track["id"] != seed_track["id"]]
+    if request.minimum_rating is not None:
+        rated_remaining = [
+            track
+            for track in remaining
+            if isinstance(track.get("rating"), (int, float)) and float(track["rating"]) >= request.minimum_rating
+        ]
+        if rated_remaining:
+            remaining = rated_remaining
+    remaining_candidates = [
+        candidate_from_track(track, request, now, rng, seed_track)
+        for track in remaining
+    ]
+    remaining_candidates.sort(key=lambda candidate: candidate.score, reverse=True)
+
     queue: list[dict[str, Any]] = []
     recent_artists: list[set[str]] = []
     recent_albums: list[str] = []
@@ -440,7 +567,32 @@ def generate_queue(request: AutoDjRequest) -> list[dict[str, Any]]:
     chosen_unrated = 0
     chosen_exploratory = 0
 
-    while remaining and len(queue) < request.queue_length:
+    if seed_track is not None and request.queue_length > 0:
+        seed_score, seed_reason, seed_breakdown = score_track(seed_track, request, now, rng, seed_track)
+        seed_breakdown["seed"] = 1.0
+        seed_breakdown["total"] = round(seed_score, 3)
+        queue.append(
+            {
+                **seed_track,
+                "score": round(seed_score, 3),
+                "reason": f"seed track, {seed_reason}",
+                "score_breakdown": seed_breakdown,
+            }
+        )
+        remaining = [track for track in remaining if track["id"] != seed_track["id"]]
+        if seed_track.get("rating") is None:
+            chosen_unrated += 1
+        if track_is_exploratory(seed_track):
+            chosen_exploratory += 1
+        recent_artists.insert(0, artist_tokens(seed_track.get("artist")))
+        recent_albums.insert(0, album_token(seed_track.get("album")))
+        remaining_candidates = [
+            candidate
+            for candidate in remaining_candidates
+            if candidate.track["id"] != seed_track["id"]
+        ]
+
+    while remaining_candidates and len(queue) < request.queue_length:
         slots_left = request.queue_length - len(queue)
         unrated_needed = max(0, target_unrated - chosen_unrated)
         must_pick_unrated = unrated_needed >= slots_left
@@ -448,50 +600,44 @@ def generate_queue(request: AutoDjRequest) -> list[dict[str, Any]]:
         must_pick_exploratory = target_exploratory is not None and exploration_needed >= slots_left
 
         pool = [
-            track
-            for track in remaining
-            if (not must_pick_unrated or track.get("rating") is None)
-            and (not must_pick_exploratory or track_is_exploratory(track))
+            candidate
+            for candidate in remaining_candidates
+            if (not must_pick_unrated or candidate.is_unrated)
+            and (not must_pick_exploratory or candidate.is_exploratory)
         ]
         if not pool:
-            pool = remaining
+            pool = remaining_candidates
 
         strict_pool = [
-            track
-            for track in pool
-            if not conflicts_with_cooldown(
-                track,
+            candidate
+            for candidate in pool
+            if not candidate_conflicts_with_cooldown(
+                candidate,
                 recent_artists[: request.artist_cooldown],
                 recent_albums[: request.album_cooldown],
             )
         ]
+        apply_cooldown_penalty = False
         if strict_pool:
             pool = strict_pool
-
-        candidates = [
-            Candidate(track=track, score=score, reason=reason, breakdown=breakdown)
-            for track in pool
-            for score, reason, breakdown in [score_track(track, request, now, rng, seed_track)]
-        ]
-        for candidate in candidates:
-            drift_delta, drift_reason = target_drift_adjustment(queue, candidate.track, request)
-            if drift_delta:
-                candidate.score += drift_delta
-                candidate.breakdown["targets"] = round(drift_delta, 3)
-                candidate.breakdown["total"] = round(candidate.score, 3)
-                candidate.reason += f", {drift_reason}"
-
-        if not strict_pool:
+        else:
             # If the library is tiny or dominated by one artist, do not dead-end
             # the queue. Apply a meaningful penalty instead of hard exclusion.
-            for candidate in candidates:
-                if conflicts_with_cooldown(
-                    candidate.track,
-                    recent_artists[: request.artist_cooldown],
-                    recent_albums[: request.album_cooldown],
-                ):
-                    candidate.score -= 2.0
-                    candidate.reason += ", cooldown penalty"
+            apply_cooldown_penalty = True
+
+        candidates = [
+            adjusted_candidate_for_queue(
+                base=candidate,
+                queue=queue,
+                request=request,
+                recent_artists=recent_artists,
+                recent_albums=recent_albums,
+                apply_cooldown_penalty=apply_cooldown_penalty,
+            )
+            for candidate in shortlist_candidates(pool, rng)
+        ]
+        if not candidates:
+            break
 
         picked = weighted_choice(candidates, request.temperature, rng)
         selected = {
@@ -501,14 +647,18 @@ def generate_queue(request: AutoDjRequest) -> list[dict[str, Any]]:
             "score_breakdown": picked.breakdown,
         }
         queue.append(selected)
-        remaining = [track for track in remaining if track["id"] != picked.track["id"]]
+        remaining_candidates = [
+            candidate
+            for candidate in remaining_candidates
+            if candidate.track["id"] != picked.track["id"]
+        ]
 
-        if picked.track.get("rating") is None:
+        if picked.is_unrated:
             chosen_unrated += 1
-        if track_is_exploratory(picked.track):
+        if picked.is_exploratory:
             chosen_exploratory += 1
-        recent_artists.insert(0, artist_tokens(picked.track.get("artist")))
-        recent_albums.insert(0, album_token(picked.track.get("album")))
+        recent_artists.insert(0, picked.artist_keys)
+        recent_albums.insert(0, picked.album_key)
         recent_artists = recent_artists[: max(1, request.artist_cooldown)]
         recent_albums = recent_albums[: max(1, request.album_cooldown)]
 

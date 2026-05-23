@@ -17,8 +17,8 @@ import type {
   Track,
 } from "../types/api";
 
-export type Page = "library" | "analysis" | "nowPlaying" | "artist" | "history" | "autodj" | "audiobooks" | "podcasts" | "radio" | "scrobbling" | "fileManagement" | "settings";
-export type LibraryView = "tracks" | "albums" | "playlists" | "inbox" | "smart" | "health";
+export type Page = "library" | "analysis" | "nowPlaying" | "artist" | "history" | "autodj" | "audiobooks" | "podcasts" | "radio" | "scrobbling" | "sources" | "fileManagement" | "settings";
+export type LibraryView = "tracks" | "albums" | "playlists" | "completion" | "inbox" | "smart" | "health";
 export type BackendStatus = "unknown" | "ok" | "down" | "restarting";
 export type PlaybackMode = "normal" | "repeatOne" | "repeatQueue" | "stopAfterCurrent";
 export type PlaybackEngine = "webview" | "native";
@@ -29,7 +29,7 @@ export type FontScale = "small" | "default" | "large";
 export type AutoDjExperience = "simple" | "advanced";
 export type ReplayGainMode = "off" | "track" | "album";
 export type EqualizerBandMode = "10" | "15";
-export type NowPlayingLayout = "studio" | "theater" | "party";
+export type NowPlayingLayout = "theater" | "lyrics" | "party";
 export type NowPlayingVisualizerStyle = "bars" | "wave" | "radial" | "off";
 export type NowPlayingBackground = "artwork" | "soft" | "none";
 export type NowPlayingLyricSize = "small" | "medium" | "large";
@@ -44,6 +44,7 @@ export type KeyboardShortcutAction =
   | "page.podcasts"
   | "page.radio"
   | "page.scrobbling"
+  | "page.sources"
   | "page.fileManagement"
   | "page.settings"
   | "playback.playPause"
@@ -132,6 +133,8 @@ export interface TrackContextMenu {
   track: Track;
   x: number;
   y: number;
+  anchorX: number;
+  anchorY: number;
   flipY: boolean;
   submenuLeft: boolean;
   queue: Track[];
@@ -230,6 +233,9 @@ export interface UiPreferences {
   nowPlayingShowLyrics: boolean;
   nowPlayingShowQueue: boolean;
   nowPlayingLyricSize: NowPlayingLyricSize;
+  nowPlayingAutoScrollLyrics: boolean;
+  autoFetchLyrics: boolean;
+  autoFetchLrcWhenPlainPresent: boolean;
   themeAccent: ThemeAccent;
   density: UiDensity;
   fontScale: FontScale;
@@ -260,8 +266,8 @@ export const LIBRARY_PAGE_SIZE = 150;
 export const DEFAULT_FADE_MS = 150;
 export const END_FADE_SECONDS = 1;
 export const QUEUE_HISTORY_LIMIT = 12;
-export const TRACK_CONTEXT_MENU_WIDTH = 224;
-export const TRACK_CONTEXT_MENU_HEIGHT = 560;
+export const TRACK_CONTEXT_MENU_WIDTH = 256;
+export const TRACK_CONTEXT_MENU_HEIGHT = 552;
 export const TRACK_AVOID_SUBMENU_WIDTH = 176;
 export const TRACK_AVOID_SUBMENU_HEIGHT = 138;
 export const APP_CONTEXT_MENU_WIDTH = 220;
@@ -362,6 +368,7 @@ export const defaultKeyboardShortcuts: Record<KeyboardShortcutAction, KeyboardSh
   "page.scrobbling": { key: "8", ctrl: true, alt: false, shift: false },
   "page.history": { key: "9", ctrl: true, alt: false, shift: false },
   "page.autodj": { key: "0", ctrl: true, alt: false, shift: false },
+  "page.sources": { key: "O", ctrl: true, alt: true, shift: false },
   "page.fileManagement": { key: "F", ctrl: true, alt: true, shift: false },
   "page.settings": { key: "S", ctrl: true, alt: true, shift: false },
   "playback.playPause": { key: "Space", ctrl: false, alt: false, shift: false },
@@ -385,6 +392,7 @@ export const keyboardShortcutLabels: Record<KeyboardShortcutAction, string> = {
   "page.scrobbling": "Scrobbling page",
   "page.history": "History page",
   "page.autodj": "AutoDJ page",
+  "page.sources": "Sources page",
   "page.fileManagement": "File Management page",
   "page.settings": "Settings page",
   "playback.playPause": "Play / pause",
@@ -411,6 +419,7 @@ export const keyboardShortcutGroups: Array<{ title: string; actions: KeyboardSho
       "page.scrobbling",
       "page.history",
       "page.autodj",
+      "page.sources",
       "page.fileManagement",
       "page.settings",
     ],
@@ -529,6 +538,7 @@ export const defaultAutoDj: AutoDjSettings = {
   target_unrated_percent: null,
   target_exploration_percent: null,
   max_repeat_artist_percent: null,
+  minimum_rating: null,
   recently_played_cooldown_days: 14,
   seed_track_id: null,
   similarity_weight: 0,
@@ -564,8 +574,16 @@ export function formatDuration(seconds: number | null): string {
     return "--:--";
   }
   const total = Math.round(seconds);
-  const minutes = Math.floor(total / 60);
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
   const remaining = total % 60;
+  if (days > 0) {
+    return `${days}d ${hours}:${minutes.toString().padStart(2, "0")}:${remaining.toString().padStart(2, "0")}`;
+  }
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, "0")}:${remaining.toString().padStart(2, "0")}`;
+  }
   return `${minutes}:${remaining.toString().padStart(2, "0")}`;
 }
 
@@ -574,8 +592,16 @@ export function formatPlaybackTime(seconds: number): string {
     return "0:00";
   }
   const total = Math.round(seconds);
-  const minutes = Math.floor(total / 60);
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
   const remaining = total % 60;
+  if (days > 0) {
+    return `${days}d ${hours}:${minutes.toString().padStart(2, "0")}:${remaining.toString().padStart(2, "0")}`;
+  }
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, "0")}:${remaining.toString().padStart(2, "0")}`;
+  }
   return `${minutes}:${remaining.toString().padStart(2, "0")}`;
 }
 
@@ -1037,9 +1063,9 @@ export function readStoredVolume(): number {
   try {
     const raw = window.localStorage.getItem(storageKeys.playerVolume);
     const parsed = raw === null ? Number.NaN : Number(raw);
-    return Number.isFinite(parsed) ? clampNumber(parsed, 0, 1) : 1;
+    return Number.isFinite(parsed) ? clampNumber(parsed, 0, 1) : 0.5;
   } catch {
-    return 1;
+    return 0.5;
   }
 }
 
@@ -1208,12 +1234,15 @@ export function readUiPreferences(): UiPreferences {
     equalizerPreampDb: 0,
     equalizerGains: normalizeEqualizerGains([], "10"),
     dspLimiterEnabled: true,
-    nowPlayingLayout: "studio",
+    nowPlayingLayout: "theater",
     nowPlayingVisualizerStyle: "bars",
     nowPlayingBackground: "artwork",
     nowPlayingShowLyrics: true,
     nowPlayingShowQueue: true,
     nowPlayingLyricSize: "medium",
+    nowPlayingAutoScrollLyrics: true,
+    autoFetchLyrics: false,
+    autoFetchLrcWhenPlainPresent: false,
     themeAccent: "cafe",
     density: "comfortable",
     fontScale: "default",
@@ -1228,7 +1257,7 @@ export function readUiPreferences(): UiPreferences {
       const parsed = JSON.parse(modern) as Partial<UiPreferences> & { playerLayout?: string };
       // Older builds stored compact mode as playerLayout; keep honoring it while using one setting now.
       const legacyMiniPlayer = parsed.playerLayout === "compact";
-      const validPages: Page[] = ["library", "analysis", "nowPlaying", "artist", "audiobooks", "podcasts", "radio", "scrobbling", "history", "autodj", "fileManagement", "settings"];
+      const validPages: Page[] = ["library", "analysis", "nowPlaying", "artist", "audiobooks", "podcasts", "radio", "scrobbling", "history", "autodj", "sources", "fileManagement", "settings"];
       return {
         ...defaults,
         ...parsed,
@@ -1277,9 +1306,12 @@ export function readUiPreferences(): UiPreferences {
         ),
         dspLimiterEnabled:
           typeof parsed.dspLimiterEnabled === "boolean" ? parsed.dspLimiterEnabled : defaults.dspLimiterEnabled,
-        nowPlayingLayout: ["studio", "theater", "party"].includes(parsed.nowPlayingLayout as NowPlayingLayout)
-          ? (parsed.nowPlayingLayout as NowPlayingLayout)
-          : defaults.nowPlayingLayout,
+        nowPlayingLayout:
+          (parsed.nowPlayingLayout as string | undefined) === "studio"
+            ? "theater"
+            : ["theater", "lyrics", "party"].includes(parsed.nowPlayingLayout as NowPlayingLayout)
+              ? (parsed.nowPlayingLayout as NowPlayingLayout)
+              : defaults.nowPlayingLayout,
         nowPlayingVisualizerStyle: ["bars", "wave", "radial", "off"].includes(
           parsed.nowPlayingVisualizerStyle as NowPlayingVisualizerStyle,
         )
@@ -1295,6 +1327,16 @@ export function readUiPreferences(): UiPreferences {
         nowPlayingLyricSize: ["small", "medium", "large"].includes(parsed.nowPlayingLyricSize as NowPlayingLyricSize)
           ? (parsed.nowPlayingLyricSize as NowPlayingLyricSize)
           : defaults.nowPlayingLyricSize,
+        nowPlayingAutoScrollLyrics:
+          typeof parsed.nowPlayingAutoScrollLyrics === "boolean"
+            ? parsed.nowPlayingAutoScrollLyrics
+            : defaults.nowPlayingAutoScrollLyrics,
+        autoFetchLyrics:
+          typeof parsed.autoFetchLyrics === "boolean" ? parsed.autoFetchLyrics : defaults.autoFetchLyrics,
+        autoFetchLrcWhenPlainPresent:
+          typeof parsed.autoFetchLrcWhenPlainPresent === "boolean"
+            ? parsed.autoFetchLrcWhenPlainPresent
+            : defaults.autoFetchLrcWhenPlainPresent,
         startupPage: validPages.includes(parsed.startupPage as Page) ? (parsed.startupPage as Page) : defaults.startupPage,
         themeAccent: ["cafe", "mint", "rose", "blue"].includes(parsed.themeAccent as ThemeAccent)
           ? (parsed.themeAccent as ThemeAccent)

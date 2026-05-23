@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   defaultKeyboardShortcuts,
+  formatDuration,
+  formatPlaybackTime,
   formatShortcut,
   normalizeEqualizerGains,
   normalizeKeyboardShortcuts,
@@ -54,6 +56,8 @@ describe("UI preferences", () => {
         nowPlayingShowLyrics: false,
         nowPlayingShowQueue: false,
         nowPlayingLyricSize: "large",
+        nowPlayingAutoScrollLyrics: false,
+        autoFetchLrcWhenPlainPresent: true,
       }),
     );
 
@@ -64,6 +68,8 @@ describe("UI preferences", () => {
       nowPlayingShowLyrics: false,
       nowPlayingShowQueue: false,
       nowPlayingLyricSize: "large",
+      nowPlayingAutoScrollLyrics: false,
+      autoFetchLrcWhenPlainPresent: true,
     });
 
     localStorage.setItem(
@@ -77,11 +83,20 @@ describe("UI preferences", () => {
     );
 
     expect(readUiPreferences()).toMatchObject({
-      nowPlayingLayout: "studio",
+      nowPlayingLayout: "theater",
       nowPlayingVisualizerStyle: "bars",
       nowPlayingBackground: "artwork",
       nowPlayingLyricSize: "medium",
     });
+  });
+});
+
+describe("duration formatting", () => {
+  it("uses hours and days for long durations", () => {
+    expect(formatDuration(65)).toBe("1:05");
+    expect(formatDuration(3661)).toBe("1:01:01");
+    expect(formatDuration(90061)).toBe("1d 1:01:01");
+    expect(formatPlaybackTime(3661)).toBe("1:01:01");
   });
 });
 

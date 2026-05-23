@@ -213,8 +213,8 @@ export function AnalysisPage({
               </section>
           )}
 
-          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(360px,0.8fr)]">
-            <section className="rounded border border-line bg-panel p-5">
+          <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(360px,0.8fr)]">
+            <section className="self-start rounded border border-line bg-panel p-5">
               <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-white">
                 <Wand2 size={17} />
                 Run Analysis

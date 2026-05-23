@@ -13,6 +13,7 @@ from urllib import request as urlrequest
 from .config import EXPORT_DIR
 from .database import connect, rows_to_dicts
 from .library_tools import sanitize_path_component
+from .scanner import file_fingerprint, file_modified_at, path_key, read_metadata, upsert_track
 
 
 PODCAST_TIMEOUT_SECONDS = 20
@@ -20,6 +21,17 @@ PODCAST_TIMEOUT_SECONDS = 20
 
 def default_podcast_folder() -> Path:
     return EXPORT_DIR / "podcasts"
+
+
+def podcast_where_clause() -> str:
+    return """
+    (
+      lower(coalesce(tracks.genre, '')) LIKE '%podcast%'
+      OR lower(tracks.path) LIKE '%podcast%'
+      OR lower(tracks.path) LIKE '%\\podcasts\\%'
+      OR lower(tracks.path) LIKE '%/podcasts/%'
+    )
+    """
 
 
 def iso_now() -> str:
@@ -289,6 +301,20 @@ def list_episodes(subscription_id: int | None, limit: int) -> list[dict[str, Any
         )
 
 
+def episode_with_subscription(conn, episode_id: int) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT podcast_episodes.*, podcast_subscriptions.title AS subscription_title,
+               podcast_subscriptions.download_folder AS subscription_download_folder
+        FROM podcast_episodes
+        JOIN podcast_subscriptions ON podcast_subscriptions.id = podcast_episodes.subscription_id
+        WHERE podcast_episodes.id = ?
+        """,
+        (episode_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def episode_extension(audio_url: str | None) -> str:
     if not audio_url:
         return ".mp3"
@@ -297,24 +323,81 @@ def episode_extension(audio_url: str | None) -> str:
     return ext or Path(audio_url.split("?", 1)[0]).suffix or ".mp3"
 
 
+def podcast_track_metadata(path: Path, episode: dict[str, Any]) -> dict[str, Any]:
+    try:
+        metadata = read_metadata(path)
+    except Exception:
+        metadata = {
+            "path": str(path.resolve()),
+            "path_key": path_key(path),
+            "title": episode.get("title") or path.stem,
+            "artist": episode.get("subscription_title"),
+            "album": episode.get("subscription_title"),
+            "album_artist": episode.get("subscription_title"),
+            "track_number": None,
+            "disc_number": None,
+            "genre": "Podcast",
+            "year": None,
+            "duration_seconds": episode.get("duration_seconds"),
+            "bitrate": None,
+            "replaygain_track_gain_db": None,
+            "replaygain_album_gain_db": None,
+            "replaygain_track_peak": None,
+            "replaygain_album_peak": None,
+            "audio_fingerprint": file_fingerprint(path),
+            "rating": None,
+            "file_modified_at": file_modified_at(path),
+        }
+
+    metadata["title"] = metadata.get("title") or episode.get("title") or path.stem
+    metadata["artist"] = metadata.get("artist") or episode.get("subscription_title")
+    metadata["album"] = metadata.get("album") or episode.get("subscription_title")
+    metadata["album_artist"] = metadata.get("album_artist") or episode.get("subscription_title")
+    metadata["genre"] = "Podcast"
+    metadata["duration_seconds"] = metadata.get("duration_seconds") or episode.get("duration_seconds")
+    return metadata
+
+
+def ensure_episode_track(episode_id: int) -> int | None:
+    with connect() as conn:
+        episode = episode_with_subscription(conn, episode_id)
+        if episode is None:
+            return None
+        if episode.get("track_id"):
+            track = conn.execute("SELECT id FROM tracks WHERE id = ?", (episode["track_id"],)).fetchone()
+            if track is not None:
+                return int(track["id"])
+        if not episode.get("local_path"):
+            raise ValueError("Download the episode before adding it to the local collection")
+
+        path = Path(episode["local_path"]).expanduser()
+        if not path.exists() or not path.is_file():
+            raise ValueError("Downloaded podcast file is missing")
+
+        metadata = podcast_track_metadata(path, episode)
+        upsert_track(conn, metadata)
+        row = conn.execute("SELECT id FROM tracks WHERE path_key = ?", (metadata["path_key"],)).fetchone()
+        if row is None:
+            raise ValueError("Could not add podcast episode to the local collection")
+        track_id = int(row["id"])
+        conn.execute(
+            "UPDATE podcast_episodes SET track_id = ?, updated_at = datetime('now') WHERE id = ?",
+            (track_id, episode_id),
+        )
+        conn.commit()
+        return track_id
+
+
 def download_episode(episode_id: int, download_folder: str | None = None) -> dict[str, Any] | None:
     with connect() as conn:
-        row = conn.execute(
-            """
-            SELECT podcast_episodes.*, podcast_subscriptions.title AS subscription_title,
-                   podcast_subscriptions.download_folder AS subscription_download_folder
-            FROM podcast_episodes
-            JOIN podcast_subscriptions ON podcast_subscriptions.id = podcast_episodes.subscription_id
-            WHERE podcast_episodes.id = ?
-            """,
-            (episode_id,),
-        ).fetchone()
-        if row is None:
+        episode = episode_with_subscription(conn, episode_id)
+        if episode is None:
             return None
-        episode = dict(row)
     if not episode.get("audio_url"):
         raise ValueError("Episode has no downloadable audio URL")
     folder = Path(download_folder or episode.get("subscription_download_folder") or default_podcast_folder()).expanduser()
+    resolved_folder = folder.resolve()
+    using_default_folder = resolved_folder == default_podcast_folder().resolve()
     target = folder / sanitize_path_component(episode["subscription_title"]) / f"{sanitize_path_component(episode['title'])}{episode_extension(episode.get('audio_url'))}"
     target.parent.mkdir(parents=True, exist_ok=True)
     req = urlrequest.Request(episode["audio_url"], headers={"User-Agent": "FLAC Cafe/0.2.1 podcast downloader"})
@@ -330,5 +413,7 @@ def download_episode(episode_id: int, download_folder: str | None = None) -> dic
             (str(target), episode_id),
         )
         conn.commit()
-        updated = conn.execute("SELECT * FROM podcast_episodes WHERE id = ?", (episode_id,)).fetchone()
-    return dict(updated) if updated else None
+    if using_default_folder:
+        ensure_episode_track(episode_id)
+    with connect() as conn:
+        return episode_with_subscription(conn, episode_id)

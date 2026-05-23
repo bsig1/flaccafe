@@ -146,6 +146,38 @@ class LibraryWorkflowTests(unittest.TestCase):
             ).fetchone()
         self.assertIsNotNone(row["album_id"])
 
+    def test_metadata_update_can_write_file_when_request_overrides_setting(self) -> None:
+        from backend.app.main import update_track_metadata
+        from backend.app.schemas import TrackMetadataUpdateRequest
+
+        audio_file = self.root / "metadata-override.mp3"
+        audio_file.write_bytes(b"audio")
+        track_id = insert_track(audio_file, title="Old Title")
+        with connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO track_metadata_cache(path_key, path, file_modified_at, file_size, metadata_json)
+                VALUES(?, ?, datetime('now'), ?, '{}')
+                """,
+                (path_key(audio_file), str(audio_file), audio_file.stat().st_size),
+            )
+            conn.commit()
+
+        request = TrackMetadataUpdateRequest(title="New Title", write_to_file=True)
+        with patch("backend.app.main.write_track_metadata") as write_metadata:
+            updated = update_track_metadata(track_id, request)
+
+        write_metadata.assert_called_once()
+        self.assertEqual(write_metadata.call_args.args[0], audio_file)
+        self.assertEqual(write_metadata.call_args.args[1]["title"], "New Title")
+        self.assertEqual(updated["title"], "New Title")
+        with connect() as conn:
+            cache_row = conn.execute(
+                "SELECT path_key FROM track_metadata_cache WHERE path_key = ?",
+                (path_key(audio_file),),
+            ).fetchone()
+        self.assertIsNone(cache_row)
+
     def test_metadata_cache_reuses_unchanged_file_tags(self) -> None:
         audio_file = self.root / "cached.flac"
         audio_file.write_bytes(b"audio")

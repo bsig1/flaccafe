@@ -51,4 +51,6 @@ CLAP output is stored in SQLite only:
 - `analysis_embedding`
 - `analysis_updated_at`
 
-AutoDJ uses CLAP embeddings for seed-track audio similarity when the Similarity slider is above zero. Embedded metadata genre is still used, and audio tags are not modified.
+AutoDJ uses CLAP embeddings for seed-track audio similarity when the Similarity slider is above zero. Embedded metadata genre is still used automatically.
+
+To turn CLAP's predicted genre into editable metadata, use File Management > CLAP Genre Tags. That tool previews the change first and then applies it through the regular metadata writer, so audio files are only modified when file tag writing is enabled in Settings.

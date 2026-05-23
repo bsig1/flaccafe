@@ -100,6 +100,8 @@ export function PlayerSettingsSection({
   onClearNativeDiagnostics,
   codecSupport,
   onRefreshCodecSupport,
+  autoWriteFetchedLyricsSidecars,
+  onAutoWriteFetchedLyricsSidecarsChange,
 }: {
   uiPreferences: UiPreferences;
   setUiPreferences: (updater: (current: UiPreferences) => UiPreferences) => void;
@@ -113,6 +115,8 @@ export function PlayerSettingsSection({
   onClearNativeDiagnostics: () => void | Promise<void>;
   codecSupport: CodecSupportRow[];
   onRefreshCodecSupport: () => void;
+  autoWriteFetchedLyricsSidecars: boolean;
+  onAutoWriteFetchedLyricsSidecarsChange: (value: boolean) => void;
 }) {
   const equalizerFrequencies = equalizerFrequenciesForMode(uiPreferences.equalizerBandMode);
   const equalizerGains = normalizeEqualizerGains(uiPreferences.equalizerGains, uiPreferences.equalizerBandMode);
@@ -158,8 +162,11 @@ export function PlayerSettingsSection({
     }));
   }
 
+  const showNativeSettings = uiPreferences.playbackEngine === "native";
+
   return (
-    <DisclosureSection title="Player" description="Fade, skip tracking, and playback presentation">
+    <>
+    <DisclosureSection title="Playback Engine" description="Output engine, native devices, diagnostics, and codec checks">
       <div className="grid gap-3 text-sm text-neutral-200">
         <label className="grid gap-2 rounded border border-line/70 bg-ink p-3">
           <span className="text-xs uppercase text-muted">Playback Engine</span>
@@ -180,6 +187,7 @@ export function PlayerSettingsSection({
             Native playback uses Rust with rodio/cpal/Symphonia for broader local codec support. WebView remains the safest default while the native engine matures.
           </span>
         </label>
+        {showNativeSettings && (
         <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
           <div className="flex items-center justify-between gap-3">
             <div>
@@ -252,6 +260,8 @@ export function PlayerSettingsSection({
             The selector reports exclusive backends separately from the current shared-mode engine so future WASAPI/ASIO work can be enabled without changing the settings model.
           </div>
         </div>
+        )}
+        {showNativeSettings && (
         <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -324,6 +334,12 @@ export function PlayerSettingsSection({
             )}
           </div>
         </div>
+        )}
+      </div>
+    </DisclosureSection>
+
+    <DisclosureSection title="Mini Player" description="Bottom bar and detached mini-player behavior">
+      <div className="grid gap-3 text-sm text-neutral-200">
         <label className="flex items-center justify-between gap-4">
           <span className="text-muted">Compact bottom player</span>
           <input
@@ -373,6 +389,11 @@ export function PlayerSettingsSection({
             }}
           />
         </div>
+      </div>
+    </DisclosureSection>
+
+    <DisclosureSection title="Now Playing & Lyrics" description="Presentation layout, lyric fetching, LRC cache, and queue panels">
+      <div className="grid gap-3 text-sm text-neutral-200">
         <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
           <div>
             <div className="font-medium text-white">Now Playing screen</div>
@@ -391,8 +412,8 @@ export function PlayerSettingsSection({
                   }))
                 }
               >
-                <option value="studio">Studio</option>
                 <option value="theater">Theater</option>
+                <option value="lyrics">Lyrics</option>
                 <option value="party">Party</option>
               </select>
             </label>
@@ -472,8 +493,55 @@ export function PlayerSettingsSection({
                 }
               />
             </label>
+            <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-panel px-3 py-2">
+              <span className="text-muted">Auto-fetch missing lyrics</span>
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-ember"
+                checked={uiPreferences.autoFetchLyrics}
+                onChange={(event) =>
+                  setUiPreferences((current) => ({ ...current, autoFetchLyrics: event.target.checked }))
+                }
+              />
+            </label>
+            <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-panel px-3 py-2">
+              <span className="text-muted">Fetch synced LRC over plain lyrics</span>
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-ember"
+                checked={uiPreferences.autoFetchLrcWhenPlainPresent}
+                onChange={(event) =>
+                  setUiPreferences((current) => ({ ...current, autoFetchLrcWhenPlainPresent: event.target.checked }))
+                }
+              />
+            </label>
+            <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-panel px-3 py-2">
+              <span className="text-muted">Follow synced lyric</span>
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-moss"
+                checked={uiPreferences.nowPlayingAutoScrollLyrics}
+                onChange={(event) =>
+                  setUiPreferences((current) => ({ ...current, nowPlayingAutoScrollLyrics: event.target.checked }))
+                }
+              />
+            </label>
+            <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-panel px-3 py-2">
+              <span className="text-muted">Cache fetched LRC files</span>
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-ember"
+                checked={autoWriteFetchedLyricsSidecars}
+                onChange={(event) => onAutoWriteFetchedLyricsSidecarsChange(event.target.checked)}
+              />
+            </label>
           </div>
         </div>
+      </div>
+    </DisclosureSection>
+
+    <DisclosureSection title="ReplayGain" description="Loudness normalization and clipping protection">
+      <div className="grid gap-3 text-sm text-neutral-200">
         <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
           <label className="grid gap-2">
             <span className="text-xs uppercase text-muted">ReplayGain / Loudness</span>
@@ -521,6 +589,11 @@ export function PlayerSettingsSection({
             FLAC Cafe reads embedded ReplayGain gain and peak tags during scans and applies gain during playback. Tracks without tags play at normal volume.
           </div>
         </div>
+      </div>
+    </DisclosureSection>
+
+    <DisclosureSection title="Equalizer / DSP" description="10/15-band EQ, presets, preamp, and limiter">
+      <div className="grid gap-3 text-sm text-neutral-200">
         <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -621,6 +694,11 @@ export function PlayerSettingsSection({
             />
           </label>
         </div>
+      </div>
+    </DisclosureSection>
+
+    <DisclosureSection title="Playback Behavior & Codecs" description="Fade, skip threshold, and WebView codec support">
+      <div className="grid gap-3 text-sm text-neutral-200">
         <label className="grid gap-2">
           <span className="text-xs uppercase text-muted">Fade Length {uiPreferences.playerFadeMs}ms</span>
           <input
@@ -688,5 +766,6 @@ export function PlayerSettingsSection({
         </div>
       </div>
     </DisclosureSection>
+    </>
   );
 }

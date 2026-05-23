@@ -1,5 +1,8 @@
 import {
   Download,
+  FolderOpen,
+  ListPlus,
+  Play,
   Plus,
   Podcast,
   RefreshCw,
@@ -15,14 +18,17 @@ import {
 import {
   deletePodcastSubscription,
   downloadPodcastEpisode,
+  ensurePodcastEpisodeTrack,
   fetchPodcastEpisodes,
   fetchPodcastSubscriptions,
+  fetchTrack,
   refreshPodcastSubscription,
   savePodcastSubscription,
 } from "../../lib/api";
 import type {
   PodcastEpisode,
   PodcastSubscription,
+  Track,
 } from "../../types/api";
 
 function formatDate(value: string | null) {
@@ -43,7 +49,15 @@ function formatDuration(seconds: number | null) {
   return `${minutes}:${remaining.toString().padStart(2, "0")}`;
 }
 
-export function PodcastsPage({ setStatus }: { setStatus: (message: string) => void }) {
+export function PodcastsPage({
+  setStatus,
+  onPlayTrack,
+  onAddToQueue,
+}: {
+  setStatus: (message: string) => void;
+  onPlayTrack: (track: Track, queueItems: Track[]) => void;
+  onAddToQueue: (track: Track) => void;
+}) {
   const [subscriptions, setSubscriptions] = useState<PodcastSubscription[]>([]);
   const [episodes, setEpisodes] = useState<PodcastEpisode[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -155,9 +169,63 @@ export function PodcastsPage({ setStatus }: { setStatus: (message: string) => vo
     try {
       const updated = await downloadPodcastEpisode(episode.id, downloadFolder || null);
       setEpisodes((current) => current.map((item) => (item.id === updated.id ? updated : item)));
-      setStatus(`Downloaded ${updated.title}`);
+      setStatus(updated.track_id ? `Downloaded and added ${updated.title}` : `Downloaded ${updated.title}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not download podcast episode");
+    }
+  }
+
+  async function browseDownloadFolder() {
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "Choose podcast download folder",
+      });
+      if (typeof selected === "string") {
+        setDownloadFolder(selected);
+        setStatus("Podcast download folder selected");
+      }
+    } catch {
+      setStatus("Browse is available in the Tauri desktop app. Paste a folder path here in browser mode.");
+    }
+  }
+
+  async function playableEpisodeTrack(episode: PodcastEpisode): Promise<Track | null> {
+    if (episode.track_id) {
+      return fetchTrack(episode.track_id);
+    }
+    if (!episode.local_path) {
+      setStatus("Download the podcast episode before playing it");
+      return null;
+    }
+    const track = await ensurePodcastEpisodeTrack(episode.id);
+    setEpisodes((current) => current.map((item) => (item.id === episode.id ? { ...item, track_id: track.id } : item)));
+    return track;
+  }
+
+  async function playEpisode(episode: PodcastEpisode) {
+    try {
+      const track = await playableEpisodeTrack(episode);
+      if (!track) {
+        return;
+      }
+      onPlayTrack(track, [track]);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not play podcast episode");
+    }
+  }
+
+  async function addEpisodeToQueue(episode: PodcastEpisode) {
+    try {
+      const track = await playableEpisodeTrack(episode);
+      if (!track) {
+        return;
+      }
+      onAddToQueue(track);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not queue podcast episode");
     }
   }
 
@@ -241,11 +309,20 @@ export function PodcastsPage({ setStatus }: { setStatus: (message: string) => vo
                     onChange={(event) => setDownloadFolder(event.target.value)}
                   />
                 </label>
-                <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-panel px-3 py-2 md:self-end">
-                  <span className="text-muted">Auto-download flag</span>
-                  <input type="checkbox" className="h-4 w-4 accent-moss" checked={autoDownload} onChange={(event) => setAutoDownload(event.target.checked)} />
-                </label>
+                <div className="flex flex-wrap gap-2 md:self-end">
+                  <button className="secondary-button h-9" type="button" onClick={() => void browseDownloadFolder()}>
+                    <FolderOpen size={15} />
+                    Browse
+                  </button>
+                  <button className="secondary-button h-9" type="button" onClick={() => setDownloadFolder("")}>
+                    Use Default
+                  </button>
+                </div>
               </div>
+              <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-panel px-3 py-2">
+                <span className="text-muted">Auto-download flag</span>
+                <input type="checkbox" className="h-4 w-4 accent-moss" checked={autoDownload} onChange={(event) => setAutoDownload(event.target.checked)} />
+              </label>
               <div className="flex flex-wrap gap-2">
                 <button className="primary-button" type="button" onClick={() => void saveSubscription()}>
                   <Save size={15} />
@@ -274,10 +351,30 @@ export function PodcastsPage({ setStatus }: { setStatus: (message: string) => vo
                       </div>
                       {episode.local_path && <div className="truncate text-xs text-moss">{episode.local_path}</div>}
                     </div>
-                    <button className="secondary-button h-8 self-center" type="button" disabled={!episode.audio_url} onClick={() => void downloadEpisode(episode)}>
-                      <Download size={14} />
-                      {episode.download_status === "downloaded" ? "Again" : "Download"}
-                    </button>
+                    <div className="flex flex-wrap items-center justify-end gap-2 self-center">
+                      <button
+                        className="secondary-button h-8"
+                        type="button"
+                        disabled={!episode.local_path && !episode.track_id}
+                        onClick={() => void playEpisode(episode)}
+                      >
+                        <Play size={14} />
+                        Play
+                      </button>
+                      <button
+                        className="secondary-button h-8"
+                        type="button"
+                        disabled={!episode.local_path && !episode.track_id}
+                        onClick={() => void addEpisodeToQueue(episode)}
+                      >
+                        <ListPlus size={14} />
+                        Queue
+                      </button>
+                      <button className="secondary-button h-8" type="button" disabled={!episode.audio_url} onClick={() => void downloadEpisode(episode)}>
+                        <Download size={14} />
+                        {episode.download_status === "downloaded" ? "Again" : "Download"}
+                      </button>
+                    </div>
                   </div>
                 ))}
                 {episodes.length === 0 && <div className="py-8 text-center text-sm text-muted">Refresh a feed to list episodes.</div>}

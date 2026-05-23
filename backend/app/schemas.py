@@ -55,6 +55,8 @@ class AlbumSummary(BaseModel):
     year: int | None = None
     artwork_path: str | None = None
     track_count: int = 0
+    expected_track_count: int | None = None
+    missing_track_count: int = 0
     duration_seconds: float | None = None
     average_rating: float | None = None
     artwork_track_id: int | None = None
@@ -194,6 +196,7 @@ class LyricsResponse(BaseModel):
     lyrics: str | None = None
     source: str | None = None
     is_synced: bool = False
+    sidecar_path: str | None = None
 
 
 class LyricsUpdateRequest(BaseModel):
@@ -841,6 +844,37 @@ class AutoTagResponse(BaseModel):
     previews: list[AutoTagPreview] = Field(default_factory=list)
 
 
+class ClapGenreTagRequest(BaseModel):
+    track_ids: list[int] | None = None
+    missing_only: bool = True
+    min_confidence: float = Field(default=0.35, ge=0.0, le=1.0)
+    apply: bool = False
+    write_to_file: bool | None = None
+    limit: int = Field(default=200, ge=1, le=10000)
+
+
+class ClapGenreTagPreview(BaseModel):
+    track_id: int
+    title: str | None = None
+    artist: str | None = None
+    album: str | None = None
+    current_genre: str | None = None
+    proposed_genre: str | None = None
+    confidence: float | None = None
+    changed: bool = False
+    applied: bool = False
+    error: str | None = None
+
+
+class ClapGenreTagResponse(BaseModel):
+    total: int = 0
+    matched: int = 0
+    changed: int = 0
+    applied: int = 0
+    errors: list[str] = Field(default_factory=list)
+    previews: list[ClapGenreTagPreview] = Field(default_factory=list)
+
+
 class DuplicateActionRequest(BaseModel):
     action: Literal["keep_best", "remove_selected", "export_report"]
     track_ids: list[int] = Field(default_factory=list, max_length=10000)
@@ -955,11 +989,14 @@ class ReportFileResponse(BaseModel):
 
 
 class ScanRequest(BaseModel):
-    folder_path: str
+    folder_path: str | None = None
+    folder_paths: list[str] = Field(default_factory=list)
+    save_library_paths: list[str] = Field(default_factory=list)
 
 
 class ScanResult(BaseModel):
     folder_path: str
+    folder_paths: list[str] = Field(default_factory=list)
     scanned_files: int
     inserted: int
     updated: int
@@ -971,12 +1008,14 @@ class ScanResult(BaseModel):
 class ScanStartResponse(BaseModel):
     job_id: str
     folder_path: str
+    folder_paths: list[str] = Field(default_factory=list)
     status: str
 
 
 class ScanProgress(BaseModel):
     job_id: str
     folder_path: str
+    folder_paths: list[str] = Field(default_factory=list)
     status: str
     total_files: int
     processed_files: int
@@ -1414,6 +1453,7 @@ class PodcastEpisode(BaseModel):
     id: int
     subscription_id: int
     subscription_title: str | None = None
+    track_id: int | None = None
     guid: str
     title: str
     description: str | None = None
@@ -1799,6 +1839,7 @@ class TrackMetadataUpdateRequest(BaseModel):
     disc_number: int | None = Field(default=None, ge=1, le=99)
     genre: str | None = Field(default=None, max_length=300)
     year: int | None = Field(default=None, ge=1000, le=9999)
+    write_to_file: bool | None = None
 
     @field_validator("title", "artist", "album", "album_artist", "genre", mode="before")
     @classmethod
@@ -1823,6 +1864,7 @@ class TrackRestoreRequest(BaseModel):
 
 class SettingsUpdateRequest(BaseModel):
     write_ratings_to_files: bool | None = None
+    auto_write_fetched_lyrics_sidecars: bool | None = None
 
 
 class AutoDjRequest(BaseModel):
@@ -1834,6 +1876,7 @@ class AutoDjRequest(BaseModel):
     target_unrated_percent: float | None = Field(default=None, ge=0.0, le=80.0)
     target_exploration_percent: float | None = Field(default=None, ge=0.0, le=100.0)
     max_repeat_artist_percent: float | None = Field(default=None, ge=0.0, le=95.0)
+    minimum_rating: float | None = Field(default=None, ge=0.5, le=5.0)
     recently_played_cooldown_days: int = Field(default=14, ge=0, le=3650)
     seed_track_id: int | None = None
     similarity_weight: float = Field(default=0.0, ge=0.0, le=5.0)
@@ -2033,7 +2076,9 @@ class SupportBundleResponse(BaseModel):
 
 class SettingsResponse(BaseModel):
     library_path: str | None = None
+    library_paths: list[str] = Field(default_factory=list)
     database_path: str
     suggested_music_path: str | None = None
     write_ratings_to_files: bool = False
+    auto_write_fetched_lyrics_sidecars: bool = False
     extra: dict[str, Any] = Field(default_factory=dict)

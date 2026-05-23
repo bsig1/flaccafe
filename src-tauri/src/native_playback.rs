@@ -42,6 +42,7 @@ struct NativePlaybackInner {
     stream_errors: Arc<Mutex<Vec<String>>>,
     diagnostics: Arc<Mutex<Vec<NativePlaybackDiagnostic>>>,
     dsp_settings: Arc<Mutex<NativeDspSettings>>,
+    visualizer: Arc<Mutex<NativeVisualizerState>>,
 }
 
 impl Default for NativePlaybackInner {
@@ -65,6 +66,7 @@ impl Default for NativePlaybackInner {
             stream_errors: Arc::new(Mutex::new(Vec::new())),
             diagnostics: Arc::new(Mutex::new(Vec::new())),
             dsp_settings: Arc::new(Mutex::new(NativeDspSettings::default())),
+            visualizer: Arc::new(Mutex::new(NativeVisualizerState::default())),
         }
     }
 }
@@ -90,6 +92,12 @@ const EQ_PREAMP_MIN_DB: f32 = -12.0;
 const EQ_PREAMP_MAX_DB: f32 = 6.0;
 const DSP_SETTINGS_CHECK_SAMPLES: usize = 2048;
 const DIAGNOSTIC_LIMIT: usize = 50;
+const VISUALIZER_RING_SAMPLES: usize = 4096;
+const VISUALIZER_FLUSH_SAMPLES: usize = 256;
+const VISUALIZER_ANALYSIS_SAMPLES: usize = 2048;
+const VISUALIZER_BINS: usize = 48;
+const VISUALIZER_WAVEFORM_POINTS: usize = 96;
+const VISUALIZER_STALE_MS: u64 = 750;
 
 static NEXT_DIAGNOSTIC_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -270,6 +278,83 @@ pub struct NativeOutputBackend {
     message: String,
 }
 
+#[derive(Debug)]
+struct NativeVisualizerState {
+    samples: Vec<f32>,
+    write_index: usize,
+    filled: bool,
+    sample_rate: u32,
+    last_updated_ms: u64,
+}
+
+impl Default for NativeVisualizerState {
+    fn default() -> Self {
+        Self {
+            samples: Vec::with_capacity(VISUALIZER_RING_SAMPLES),
+            write_index: 0,
+            filled: false,
+            sample_rate: 44_100,
+            last_updated_ms: 0,
+        }
+    }
+}
+
+impl NativeVisualizerState {
+    fn reset(&mut self) {
+        self.samples.clear();
+        self.write_index = 0;
+        self.filled = false;
+        self.last_updated_ms = 0;
+    }
+
+    fn push_samples(&mut self, samples: &[f32], sample_rate: u32) {
+        if samples.is_empty() {
+            return;
+        }
+        self.sample_rate = sample_rate.max(1);
+        for sample in samples {
+            let bounded = if sample.is_finite() {
+                sample.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            };
+            if self.samples.len() < VISUALIZER_RING_SAMPLES {
+                self.samples.push(bounded);
+                self.write_index = self.samples.len() % VISUALIZER_RING_SAMPLES;
+            } else {
+                self.samples[self.write_index] = bounded;
+                self.write_index = (self.write_index + 1) % VISUALIZER_RING_SAMPLES;
+                self.filled = true;
+            }
+        }
+        self.last_updated_ms = now_millis();
+    }
+
+    fn ordered_samples(&self) -> Vec<f32> {
+        if !self.filled || self.samples.len() < VISUALIZER_RING_SAMPLES {
+            return self.samples.clone();
+        }
+        let mut ordered = Vec::with_capacity(self.samples.len());
+        ordered.extend_from_slice(&self.samples[self.write_index..]);
+        ordered.extend_from_slice(&self.samples[..self.write_index]);
+        ordered
+    }
+
+    fn snapshot(&self) -> (Vec<f32>, u32, u64) {
+        (self.ordered_samples(), self.sample_rate, self.last_updated_ms)
+    }
+}
+
+#[derive(Serialize)]
+pub struct NativeVisualizerFrame {
+    is_live: bool,
+    level: f32,
+    peak: f32,
+    frequency_bins: Vec<f32>,
+    waveform: Vec<f32>,
+    timestamp_ms: u64,
+}
+
 impl NativePlaybackInner {
     fn ensure_sink(
         &mut self,
@@ -388,6 +473,9 @@ impl NativePlaybackInner {
         }
         self.current_path = None;
         self.duration_seconds = None;
+        if let Ok(mut visualizer) = self.visualizer.lock() {
+            visualizer.reset();
+        }
     }
 }
 
@@ -414,6 +502,114 @@ fn now_millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
         .unwrap_or(0)
+}
+
+fn native_visualizer_empty_frame(timestamp_ms: u64) -> NativeVisualizerFrame {
+    NativeVisualizerFrame {
+        is_live: false,
+        level: 0.0,
+        peak: 0.0,
+        frequency_bins: Vec::new(),
+        waveform: Vec::new(),
+        timestamp_ms,
+    }
+}
+
+fn goertzel_magnitude(samples: &[f32], sample_rate: f32, frequency: f32) -> f32 {
+    if samples.is_empty() || sample_rate <= 0.0 || frequency <= 0.0 {
+        return 0.0;
+    }
+    let omega = 2.0 * std::f32::consts::PI * frequency / sample_rate;
+    let coefficient = 2.0 * omega.cos();
+    let mut q1 = 0.0_f32;
+    let mut q2 = 0.0_f32;
+    let sample_count = samples.len().max(1) as f32;
+    for (index, sample) in samples.iter().enumerate() {
+        let window = if samples.len() > 1 {
+            0.5 - 0.5
+                * ((2.0 * std::f32::consts::PI * index as f32) / (sample_count - 1.0)).cos()
+        } else {
+            1.0
+        };
+        let q0 = sample * window + coefficient * q1 - q2;
+        q2 = q1;
+        q1 = q0;
+    }
+    let power = q1 * q1 + q2 * q2 - coefficient * q1 * q2;
+    if power.is_finite() && power > 0.0 {
+        power.sqrt() / sample_count
+    } else {
+        0.0
+    }
+}
+
+fn build_native_visualizer_frame(
+    samples: Vec<f32>,
+    sample_rate: u32,
+    last_updated_ms: u64,
+    is_playing: bool,
+) -> NativeVisualizerFrame {
+    let timestamp_ms = now_millis();
+    if !is_playing
+        || samples.len() < 64
+        || last_updated_ms == 0
+        || timestamp_ms.saturating_sub(last_updated_ms) > VISUALIZER_STALE_MS
+    {
+        return native_visualizer_empty_frame(timestamp_ms);
+    }
+
+    let analysis_start = samples.len().saturating_sub(VISUALIZER_ANALYSIS_SAMPLES);
+    let analysis = &samples[analysis_start..];
+    let mut sum_squares = 0.0_f32;
+    let mut peak = 0.0_f32;
+    for sample in analysis {
+        sum_squares += sample * sample;
+        peak = peak.max(sample.abs());
+    }
+    let rms = (sum_squares / analysis.len().max(1) as f32).sqrt();
+    let level = (rms * 2.8).clamp(0.0, 1.0);
+    let peak = peak.clamp(0.0, 1.0);
+
+    let waveform = (0..VISUALIZER_WAVEFORM_POINTS)
+        .map(|index| {
+            let sample_index = ((index as f32 / VISUALIZER_WAVEFORM_POINTS as f32)
+                * analysis.len() as f32)
+                .floor() as usize;
+            analysis
+                .get(sample_index.min(analysis.len().saturating_sub(1)))
+                .copied()
+                .unwrap_or(0.0)
+                .clamp(-1.0, 1.0)
+        })
+        .collect();
+
+    let sample_rate = sample_rate.max(1) as f32;
+    let max_hz = (sample_rate / 2.0).min(16_000.0).max(80.0);
+    let min_hz = 35.0_f32.min(max_hz * 0.5);
+    let log_min = min_hz.ln();
+    let log_max = max_hz.ln();
+    let frequency_bins = (0..VISUALIZER_BINS)
+        .map(|index| {
+            let fraction = if VISUALIZER_BINS > 1 {
+                index as f32 / (VISUALIZER_BINS - 1) as f32
+            } else {
+                0.0
+            };
+            let center_hz = (log_min + (log_max - log_min) * fraction).exp();
+            let magnitude = goertzel_magnitude(analysis, sample_rate, center_hz);
+            let compressed = (1.0 + magnitude * 48.0).ln() / (1.0 + 48.0_f32).ln();
+            compressed.clamp(0.0, 1.0)
+        })
+        .collect();
+
+    NativeVisualizerFrame {
+        is_live: true,
+        level,
+        peak,
+        frequency_bins,
+        waveform,
+        timestamp_ms,
+    }
 }
 
 fn remember_diagnostic(
@@ -803,11 +999,14 @@ where
 {
     input: S,
     settings: Arc<Mutex<NativeDspSettings>>,
+    visualizer: Arc<Mutex<NativeVisualizerState>>,
     active_settings: NormalizedDspSettings,
     coefficients: Vec<BiquadCoefficients>,
     state_by_channel: Vec<Vec<BiquadState>>,
     channel_index: usize,
     check_countdown: usize,
+    visualizer_pending_samples: Vec<f32>,
+    visualizer_frame_sum: f32,
 }
 
 impl<S> NativeDspSource<S>
@@ -817,7 +1016,11 @@ where
     // Rodio pulls interleaved samples from Source, so the EQ keeps one biquad state
     // chain per output channel. That preserves stereo imaging while avoiding a heavier
     // custom mixer or external DSP dependency.
-    fn new(input: S, settings: Arc<Mutex<NativeDspSettings>>) -> Self {
+    fn new(
+        input: S,
+        settings: Arc<Mutex<NativeDspSettings>>,
+        visualizer: Arc<Mutex<NativeVisualizerState>>,
+    ) -> Self {
         let active_settings = settings
             .lock()
             .map(|settings| settings.normalized())
@@ -825,11 +1028,14 @@ where
         let mut source = Self {
             input,
             settings,
+            visualizer,
             active_settings,
             coefficients: Vec::new(),
             state_by_channel: Vec::new(),
             channel_index: 0,
             check_countdown: 0,
+            visualizer_pending_samples: Vec::with_capacity(VISUALIZER_FLUSH_SAMPLES),
+            visualizer_frame_sum: 0.0,
         };
         source.rebuild_filters(true);
         source
@@ -898,6 +1104,7 @@ where
 
     fn process_sample(&mut self, mut sample: f32) -> f32 {
         self.refresh_settings_if_needed();
+        let channels = self.channel_count();
         if self.active_settings.equalizer_enabled {
             sample *= db_to_gain(self.active_settings.equalizer_preamp_db);
             if let Some(channel_state) = self.state_by_channel.get_mut(self.channel_index) {
@@ -910,9 +1117,41 @@ where
         if self.active_settings.limiter_enabled {
             sample = soft_limit(sample);
         }
-        let channels = self.channel_count();
+        self.visualizer_frame_sum += sample;
+        let frame_complete = self.channel_index + 1 >= channels;
         self.channel_index = (self.channel_index + 1) % channels;
+        if frame_complete {
+            let mono = self.visualizer_frame_sum / channels as f32;
+            self.visualizer_frame_sum = 0.0;
+            self.push_visualizer_sample(mono);
+        }
         sample
+    }
+
+    fn push_visualizer_sample(&mut self, sample: f32) {
+        self.visualizer_pending_samples.push(sample);
+        if self.visualizer_pending_samples.len() >= VISUALIZER_FLUSH_SAMPLES {
+            self.flush_visualizer_samples();
+        }
+    }
+
+    fn flush_visualizer_samples(&mut self) {
+        if self.visualizer_pending_samples.is_empty() {
+            return;
+        }
+        if let Ok(mut visualizer) = self.visualizer.lock() {
+            visualizer.push_samples(&self.visualizer_pending_samples, self.input.sample_rate().get());
+        }
+        self.visualizer_pending_samples.clear();
+    }
+}
+
+impl<S> Drop for NativeDspSource<S>
+where
+    S: Source<Item = f32>,
+{
+    fn drop(&mut self) {
+        self.flush_visualizer_samples();
     }
 }
 
@@ -1074,7 +1313,11 @@ pub fn native_play_file(
     let player = Arc::new(Player::connect_new(&mixer));
     let bounded_volume = clamp_volume(volume);
     player.set_volume(bounded_volume);
-    player.append(NativeDspSource::new(decoder, inner.dsp_settings.clone()));
+    player.append(NativeDspSource::new(
+        decoder,
+        inner.dsp_settings.clone(),
+        inner.visualizer.clone(),
+    ));
     seek_player(
         &player,
         start_seconds,
@@ -1137,7 +1380,14 @@ pub fn native_crossfade_to_file(
     let new_player = Arc::new(Player::connect_new(&mixer));
     let target_volume = clamp_volume(volume);
     new_player.set_volume(0.0);
-    new_player.append(NativeDspSource::new(decoder, inner.dsp_settings.clone()));
+    if let Ok(mut visualizer) = inner.visualizer.lock() {
+        visualizer.reset();
+    }
+    new_player.append(NativeDspSource::new(
+        decoder,
+        inner.dsp_settings.clone(),
+        inner.visualizer.clone(),
+    ));
     seek_player(
         &new_player,
         start_seconds,
@@ -1234,6 +1484,9 @@ pub fn native_seek(
                 },
             )
         })?;
+    if let Ok(mut visualizer) = inner.visualizer.lock() {
+        visualizer.reset();
+    }
     Ok(inner.status(None))
 }
 
@@ -1278,6 +1531,33 @@ pub fn native_status(
         .lock()
         .map_err(|_| "Native playback lock poisoned".to_string())?;
     Ok(inner.status(None))
+}
+
+#[tauri::command]
+pub fn native_visualizer_frame(
+    state: State<'_, NativePlaybackState>,
+) -> Result<NativeVisualizerFrame, String> {
+    let inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Native playback lock poisoned".to_string())?;
+    let is_playing = inner
+        .player
+        .as_ref()
+        .map(|player| !player.is_paused() && !player.empty())
+        .unwrap_or(false);
+    let (samples, sample_rate, last_updated_ms) = inner
+        .visualizer
+        .lock()
+        .map(|visualizer| visualizer.snapshot())
+        .unwrap_or_else(|_| (Vec::new(), 44_100, 0));
+    drop(inner);
+    Ok(build_native_visualizer_frame(
+        samples,
+        sample_rate,
+        last_updated_ms,
+        is_playing,
+    ))
 }
 
 #[tauri::command]
@@ -1477,6 +1757,25 @@ mod tests {
         assert!(soft_limit(8.0) <= 1.0);
         assert!(soft_limit(-8.0) >= -1.0);
         assert_eq!(soft_limit(0.5), 0.5);
+    }
+
+    #[test]
+    fn native_visualizer_frame_uses_recent_audio_samples() {
+        let sample_rate = 48_000_u32;
+        let samples: Vec<f32> = (0..VISUALIZER_ANALYSIS_SAMPLES)
+            .map(|index| {
+                let phase = 2.0 * std::f32::consts::PI * 440.0 * index as f32 / sample_rate as f32;
+                phase.sin() * 0.65
+            })
+            .collect();
+
+        let frame = build_native_visualizer_frame(samples, sample_rate, now_millis(), true);
+
+        assert!(frame.is_live);
+        assert!(frame.level > 0.05);
+        assert_eq!(frame.frequency_bins.len(), VISUALIZER_BINS);
+        assert_eq!(frame.waveform.len(), VISUALIZER_WAVEFORM_POINTS);
+        assert!(frame.frequency_bins.iter().any(|value| *value > 0.05));
     }
 
     #[test]

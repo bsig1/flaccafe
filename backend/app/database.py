@@ -163,6 +163,7 @@ CREATE TABLE IF NOT EXISTS track_lyrics (
   lyrics TEXT NOT NULL,
   source TEXT NOT NULL DEFAULT 'database:manual',
   is_synced INTEGER NOT NULL DEFAULT 0,
+  sidecar_path TEXT,
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -278,6 +279,7 @@ CREATE TABLE IF NOT EXISTS podcast_subscriptions (
 CREATE TABLE IF NOT EXISTS podcast_episodes (
   id INTEGER PRIMARY KEY,
   subscription_id INTEGER NOT NULL REFERENCES podcast_subscriptions(id) ON DELETE CASCADE,
+  track_id INTEGER REFERENCES tracks(id) ON DELETE SET NULL,
   guid TEXT NOT NULL,
   title TEXT NOT NULL,
   description TEXT,
@@ -384,6 +386,7 @@ CREATE INDEX IF NOT EXISTS idx_audiobook_bookmarks_track ON audiobook_bookmarks(
 CREATE INDEX IF NOT EXISTS idx_audiobook_chapters_track ON audiobook_chapters(track_id, chapter_index);
 CREATE INDEX IF NOT EXISTS idx_podcast_episodes_subscription ON podcast_episodes(subscription_id, published_at);
 CREATE INDEX IF NOT EXISTS idx_podcast_episodes_status ON podcast_episodes(download_status);
+CREATE INDEX IF NOT EXISTS idx_podcast_episodes_track ON podcast_episodes(track_id);
 CREATE INDEX IF NOT EXISTS idx_radio_stations_name ON radio_stations(lower(name));
 CREATE INDEX IF NOT EXISTS idx_radio_stations_last_played ON radio_stations(last_played_at);
 CREATE INDEX IF NOT EXISTS idx_scrobble_outbox_status ON scrobble_outbox(status, service, created_at);
@@ -416,6 +419,8 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
         active.executescript(SCHEMA)
         migrate_half_star_ratings(active)
         ensure_track_analysis_columns(active)
+        ensure_track_lyrics_columns(active)
+        ensure_podcast_episode_columns(active)
         active.executescript(SCHEMA)
         ensure_inbox_initialized(active)
         active.commit()
@@ -516,6 +521,25 @@ def ensure_track_analysis_columns(conn: sqlite3.Connection) -> None:
     if "batch_id" not in undo_columns:
         conn.execute("ALTER TABLE bulk_action_undo_log ADD COLUMN batch_id TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_bulk_action_undo_log_batch ON bulk_action_undo_log(batch_id)")
+
+
+def ensure_track_lyrics_columns(conn: sqlite3.Connection) -> None:
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(track_lyrics)").fetchall()
+    }
+    if "sidecar_path" not in columns:
+        conn.execute("ALTER TABLE track_lyrics ADD COLUMN sidecar_path TEXT")
+
+
+def ensure_podcast_episode_columns(conn: sqlite3.Connection) -> None:
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(podcast_episodes)").fetchall()
+    }
+    if "track_id" not in columns:
+        conn.execute("ALTER TABLE podcast_episodes ADD COLUMN track_id INTEGER REFERENCES tracks(id) ON DELETE SET NULL")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_podcast_episodes_track ON podcast_episodes(track_id)")
 
 
 def ensure_inbox_initialized(conn: sqlite3.Connection) -> None:

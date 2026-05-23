@@ -47,6 +47,8 @@ import type {
   CdRipStartRequest,
   CdRipStartResponse,
   ClapConfigRequest,
+  ClapGenreTagRequest,
+  ClapGenreTagResponse,
   ClapInstallProgress,
   ClapInstallRequest,
   ClapInstallStartResponse,
@@ -421,6 +423,13 @@ export function autoTagMusicBrainz(requestBody: AutoTagRequest): Promise<AutoTag
   });
 }
 
+export function clapGenreTags(requestBody: ClapGenreTagRequest): Promise<ClapGenreTagResponse> {
+  return request<ClapGenreTagResponse>("/library/tools/clap-genre-tags", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
 export function exportMetadataCsvImportReport(
   requestBody: CsvMetadataImportReportRequest,
 ): Promise<CsvMetadataImportReportResponse> {
@@ -693,6 +702,10 @@ export function downloadPodcastEpisode(episodeId: number, downloadFolder?: strin
     method: "POST",
     body: JSON.stringify({ download_folder: downloadFolder || null }),
   });
+}
+
+export function ensurePodcastEpisodeTrack(episodeId: number): Promise<Track> {
+  return request<Track>(`/podcasts/episodes/${episodeId}/track`, { method: "POST" });
 }
 
 export function fetchRadioStations(): Promise<RadioStation[]> {
@@ -1078,17 +1091,23 @@ export function importPlaylist(playlistPath: string, name?: string): Promise<Pla
   });
 }
 
-export function scanLibrary(folderPath: string): Promise<ScanResult> {
+function scanRequestBody(folderPaths: string | string[], saveLibraryPaths?: string[]) {
+  const paths = (Array.isArray(folderPaths) ? folderPaths : [folderPaths]).map((path) => path.trim()).filter(Boolean);
+  const savedPaths = (saveLibraryPaths ?? paths).map((path) => path.trim()).filter(Boolean);
+  return { folder_path: paths[0] ?? "", folder_paths: paths, save_library_paths: savedPaths };
+}
+
+export function scanLibrary(folderPath: string | string[], saveLibraryPaths?: string[]): Promise<ScanResult> {
   return request<ScanResult>("/scan", {
     method: "POST",
-    body: JSON.stringify({ folder_path: folderPath }),
+    body: JSON.stringify(scanRequestBody(folderPath, saveLibraryPaths)),
   });
 }
 
-export function startScanLibrary(folderPath: string): Promise<ScanStartResponse> {
+export function startScanLibrary(folderPath: string | string[], saveLibraryPaths?: string[]): Promise<ScanStartResponse> {
   return request<ScanStartResponse>("/scan/start", {
     method: "POST",
-    body: JSON.stringify({ folder_path: folderPath }),
+    body: JSON.stringify(scanRequestBody(folderPath, saveLibraryPaths)),
   });
 }
 
