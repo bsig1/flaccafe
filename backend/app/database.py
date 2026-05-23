@@ -304,6 +304,41 @@ CREATE TABLE IF NOT EXISTS radio_stations (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS scrobble_accounts (
+  service TEXT PRIMARY KEY CHECK (service IN ('listenbrainz', 'lastfm')),
+  enabled INTEGER NOT NULL DEFAULT 0,
+  username TEXT,
+  token TEXT,
+  api_key TEXT,
+  api_secret TEXT,
+  session_key TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS scrobble_outbox (
+  id INTEGER PRIMARY KEY,
+  service TEXT NOT NULL CHECK (service IN ('listenbrainz', 'lastfm')),
+  track_id INTEGER REFERENCES tracks(id) ON DELETE SET NULL,
+  event_type TEXT NOT NULL DEFAULT 'played' CHECK (event_type IN ('played', 'loved')),
+  artist TEXT NOT NULL,
+  title TEXT NOT NULL,
+  album TEXT,
+  album_artist TEXT,
+  listened_at INTEGER,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'submitted', 'failed')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  submitted_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS track_loves (
+  track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+  loved INTEGER NOT NULL DEFAULT 1,
+  source TEXT NOT NULL DEFAULT 'local',
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS artwork_cache (
   path_key TEXT PRIMARY KEY,
   path TEXT NOT NULL,
@@ -351,6 +386,8 @@ CREATE INDEX IF NOT EXISTS idx_podcast_episodes_subscription ON podcast_episodes
 CREATE INDEX IF NOT EXISTS idx_podcast_episodes_status ON podcast_episodes(download_status);
 CREATE INDEX IF NOT EXISTS idx_radio_stations_name ON radio_stations(lower(name));
 CREATE INDEX IF NOT EXISTS idx_radio_stations_last_played ON radio_stations(last_played_at);
+CREATE INDEX IF NOT EXISTS idx_scrobble_outbox_status ON scrobble_outbox(status, service, created_at);
+CREATE INDEX IF NOT EXISTS idx_scrobble_outbox_track ON scrobble_outbox(track_id);
 CREATE INDEX IF NOT EXISTS idx_bulk_action_undo_log_batch ON bulk_action_undo_log(batch_id);
 """
 

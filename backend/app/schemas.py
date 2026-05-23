@@ -1461,6 +1461,108 @@ class RadioStation(RadioStationPayload):
     updated_at: str
 
 
+class ScrobbleAccountRequest(BaseModel):
+    enabled: bool = False
+    username: str | None = None
+    token: str | None = None
+    api_key: str | None = None
+    api_secret: str | None = None
+    session_key: str | None = None
+
+
+class ScrobbleAccount(BaseModel):
+    service: Literal["listenbrainz", "lastfm"]
+    enabled: bool = False
+    username: str | None = None
+    token: str | None = None
+    api_key: str | None = None
+    api_secret: str | None = None
+    session_key: str | None = None
+    updated_at: str | None = None
+
+
+class ScrobbleOutboxEntry(BaseModel):
+    id: int
+    service: Literal["listenbrainz", "lastfm"]
+    track_id: int | None = None
+    event_type: Literal["played", "loved"] = "played"
+    artist: str
+    title: str
+    album: str | None = None
+    album_artist: str | None = None
+    listened_at: int | None = None
+    status: str
+    attempts: int = 0
+    last_error: str | None = None
+    created_at: str
+    submitted_at: str | None = None
+
+
+class ScrobbleQueueHistoryRequest(BaseModel):
+    service: Literal["listenbrainz", "lastfm"]
+    limit: int = Field(default=100, ge=1, le=10000)
+
+
+class ScrobbleQueueHistoryResponse(BaseModel):
+    queued: int = 0
+    considered: int = 0
+
+
+class ScrobbleSubmitRequest(BaseModel):
+    service: Literal["listenbrainz", "lastfm"]
+    limit: int = Field(default=50, ge=1, le=500)
+
+
+class ScrobbleSubmitResponse(BaseModel):
+    submitted: int = 0
+    failed: int = 0
+    errors: list[str] = Field(default_factory=list)
+
+
+class TrackLoveRequest(BaseModel):
+    loved: bool = True
+    source: str = "local"
+
+
+class TrackLoveResponse(BaseModel):
+    track_id: int
+    loved: bool
+    source: str
+    updated_at: str
+
+
+class LovedTrack(BaseModel):
+    track_id: int
+    loved: bool
+    source: str
+    updated_at: str
+    title: str | None = None
+    artist: str | None = None
+    album: str | None = None
+
+
+class ScrobbleHistoryImportRequest(BaseModel):
+    csv_path: str
+    apply: bool = False
+    limit: int = Field(default=10000, ge=1, le=100000)
+
+
+class ScrobbleHistoryImportPreview(BaseModel):
+    row: int
+    matched: bool = False
+    track_id: int | None = None
+    artist: str | None = None
+    title: str | None = None
+    changes: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
+
+
+class ScrobbleHistoryImportResponse(BaseModel):
+    total: int = 0
+    updated: int = 0
+    previews: list[ScrobbleHistoryImportPreview] = Field(default_factory=list)
+
+
 class ClapConfigRequest(BaseModel):
     model_id: str | None = Field(default=None, max_length=200)
     cache_dir: str | None = None

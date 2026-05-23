@@ -1216,6 +1216,54 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(deleted.status_code, 200)
         self.assertTrue(deleted.json()["deleted"])
 
+    def test_scrobbling_outbox_loved_tracks_and_history_import(self) -> None:
+        audio_file = self.root / "scrobble.mp3"
+        audio_file.write_bytes(b"audio")
+        track_id = insert_track(audio_file, title="Scrobble Song", artist="Scrobble Artist", album="Scrobble Album")
+        with connect() as conn:
+            conn.execute(
+                "INSERT INTO play_events(track_id, event_type, timestamp) VALUES(?, 'played', '2024-01-01T00:00:00+00:00')",
+                (track_id,),
+            )
+            conn.commit()
+
+        account = self.client.patch(
+            "/scrobbling/accounts/listenbrainz",
+            json={"enabled": True, "token": "token"},
+        )
+        self.assertEqual(account.status_code, 200)
+        self.assertTrue(account.json()["enabled"])
+
+        queued = self.client.post("/scrobbling/outbox/queue-history", json={"service": "listenbrainz", "limit": 20})
+        self.assertEqual(queued.status_code, 200)
+        self.assertEqual(queued.json()["queued"], 1)
+
+        with patch("backend.app.scrobbling.submit_listenbrainz") as submit:
+            submitted = self.client.post("/scrobbling/outbox/submit", json={"service": "listenbrainz", "limit": 20})
+        self.assertEqual(submitted.status_code, 200)
+        self.assertEqual(submitted.json()["submitted"], 1)
+        submit.assert_called_once()
+
+        love = self.client.patch(f"/scrobbling/tracks/{track_id}/love", json={"loved": True})
+        self.assertEqual(love.status_code, 200)
+        self.assertTrue(love.json()["loved"])
+        loved = self.client.get("/scrobbling/loved")
+        self.assertEqual(loved.status_code, 200)
+        self.assertEqual(loved.json()[0]["track_id"], track_id)
+
+        history_csv = self.root / "history.csv"
+        history_csv.write_text("artist,title,play_count,rating,loved\nScrobble Artist,Scrobble Song,7,4.5,true\n", encoding="utf-8")
+        preview = self.client.post("/scrobbling/import-history", json={"csv_path": str(history_csv), "apply": False})
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(preview.json()["total"], 1)
+        applied = self.client.post("/scrobbling/import-history", json={"csv_path": str(history_csv), "apply": True})
+        self.assertEqual(applied.status_code, 200)
+        self.assertEqual(applied.json()["updated"], 1)
+        with connect() as conn:
+            row = conn.execute("SELECT play_count, rating FROM tracks WHERE id = ?", (track_id,)).fetchone()
+        self.assertEqual(row["play_count"], 7)
+        self.assertEqual(row["rating"], 4.5)
+
     def test_duplicate_actions_can_remove_selected_and_export_reports(self) -> None:
         first = self.root / "dup-action-a.mp3"
         second = self.root / "dup-action-b.mp3"

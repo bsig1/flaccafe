@@ -61,6 +61,12 @@ Episode downloads are explicit. FLAC Cafe writes downloaded media into the subsc
 
 The Web Radio page stores stream bookmarks in SQLite and plays them through the WebView audio element. Save the direct stream URL, not just the station homepage. When playback starts, FLAC Cafe records `last_played_at` so favorite streams bubble up naturally.
 
+## Scrobbling
+
+The Scrobbling page keeps ListenBrainz and Last.fm integration behind a local outbox. Queueing history reads local `played` events, stores pending service-specific submissions, and lets you submit or retry when credentials are configured.
+
+ListenBrainz uses a user token and the `/1/submit-listens` API. Last.fm uses the classic API key, shared secret, and session key flow for `track.scrobble`; loved tracks are stored locally and can queue Last.fm `track.love` events. Historical CSV import accepts columns such as `artist`, `title`, `play_count`, `rating`, and `loved`, then previews or applies matching updates to the local library.
+
 ## Regex Tag Cleanup
 
 The File Management page includes a preview-first regex search/replace tool for common text tags: title, artist, album, album artist, and genre. It is useful for cleanup patterns such as removing trailing `feat.` text, normalizing separators, or replacing repeated label suffixes.

@@ -125,6 +125,14 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `PATCH /radio/stations/{station_id}` updates a web radio bookmark.
 - `DELETE /radio/stations/{station_id}` deletes a web radio bookmark.
 - `POST /radio/stations/{station_id}/played` records that a web radio bookmark was started.
+- `GET /scrobbling/accounts` lists ListenBrainz and Last.fm account settings.
+- `PATCH /scrobbling/accounts/{service}` updates a scrobbling account.
+- `GET /scrobbling/outbox` lists queued, submitted, and failed scrobble events.
+- `POST /scrobbling/outbox/queue-history` queues local played events for a service.
+- `POST /scrobbling/outbox/submit` submits queued scrobbles to ListenBrainz or Last.fm.
+- `GET /scrobbling/loved` lists locally loved tracks.
+- `PATCH /scrobbling/tracks/{track_id}/love` toggles local loved-track state and queues Last.fm love sync.
+- `POST /scrobbling/import-history` previews or applies a CSV import of historical play counts, ratings, and loved tracks.
 
 ## Albums, Playlists, And Smart Playlists
 

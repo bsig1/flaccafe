@@ -6,7 +6,6 @@
 - Smoke-test CD ripping on a Windows machine with an optical drive and `cdparanoia` or `cdda2wav` installed in the app tool folder.
 
 ## MusicBee-Inspired Feature Gaps
-- Add Last.fm/ListenBrainz scrobbling, loved-track sync, and optional import of historical play counts/ratings.
 - Add a dedicated WASAPI exclusive-mode or ASIO backend if cpal shared-mode output is not enough for advanced users.
 - Add native queue preloading and sample-accurate gapless transition validation for adjacent album tracks.
 - Add a skin/plugin extension story for advanced users without making the core app harder to maintain.

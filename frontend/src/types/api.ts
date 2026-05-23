@@ -1327,6 +1327,82 @@ export interface RadioStation extends RadioStationPayload {
   updated_at: string;
 }
 
+export type ScrobbleService = "listenbrainz" | "lastfm";
+
+export interface ScrobbleAccountRequest {
+  enabled?: boolean;
+  username?: string | null;
+  token?: string | null;
+  api_key?: string | null;
+  api_secret?: string | null;
+  session_key?: string | null;
+}
+
+export interface ScrobbleAccount extends ScrobbleAccountRequest {
+  service: ScrobbleService;
+  enabled: boolean;
+  updated_at: string | null;
+}
+
+export interface ScrobbleOutboxEntry {
+  id: number;
+  service: ScrobbleService;
+  track_id: number | null;
+  event_type: "played" | "loved";
+  artist: string;
+  title: string;
+  album: string | null;
+  album_artist: string | null;
+  listened_at: number | null;
+  status: string;
+  attempts: number;
+  last_error: string | null;
+  created_at: string;
+  submitted_at: string | null;
+}
+
+export interface ScrobbleQueueHistoryResponse {
+  queued: number;
+  considered: number;
+}
+
+export interface ScrobbleSubmitResponse {
+  submitted: number;
+  failed: number;
+  errors: string[];
+}
+
+export interface TrackLoveResponse {
+  track_id: number;
+  loved: boolean;
+  source: string;
+  updated_at: string;
+}
+
+export interface LovedTrack {
+  track_id: number;
+  loved: boolean;
+  source: string;
+  updated_at: string;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+}
+
+export interface ScrobbleHistoryImportResponse {
+  total: number;
+  updated: number;
+  previews: Array<{
+    row: number;
+    matched: boolean;
+    track_id: number | null;
+    artist?: string | null;
+    title?: string | null;
+    changes: Record<string, unknown>;
+    error?: string | null;
+  }>;
+}
+
 export interface ClapStatusResponse {
   installed: boolean;
   dependencies: Record<string, boolean>;

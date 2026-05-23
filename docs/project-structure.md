@@ -42,6 +42,7 @@ backend/
 │   ├── podcasts.py          optional RSS subscription and episode download helpers
 │   ├── radio.py             web radio bookmark storage and last-played tracking
 │   ├── scan_jobs.py         async scan job tracking
+│   ├── scrobbling.py        ListenBrainz/Last.fm outbox, loved tracks, and history import
 │   ├── analysis_jobs.py     async audio-analysis job tracking
 │   ├── cd_ripping.py        CD drive detection, MusicBrainz lookup, ripping jobs, and playback commands
 │   ├── clap_analysis.py     optional CLAP genre/embedding analysis

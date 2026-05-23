@@ -98,6 +98,15 @@ import type {
   RadioStation,
   RadioStationPayload,
   RecommendationProfile,
+  LovedTrack,
+  ScrobbleAccount,
+  ScrobbleAccountRequest,
+  ScrobbleHistoryImportResponse,
+  ScrobbleOutboxEntry,
+  ScrobbleQueueHistoryResponse,
+  ScrobbleService,
+  ScrobbleSubmitResponse,
+  TrackLoveResponse,
   RecommendationAbChoiceResponse,
   RecommendationAbTestResponse,
   RecommendationProfileComparison,
@@ -698,6 +707,53 @@ export function deleteRadioStation(stationId: number): Promise<{ deleted: boolea
 
 export function markRadioStationPlayed(stationId: number): Promise<RadioStation> {
   return request<RadioStation>(`/radio/stations/${stationId}/played`, { method: "POST" });
+}
+
+export function fetchScrobbleAccounts(): Promise<ScrobbleAccount[]> {
+  return request<ScrobbleAccount[]>("/scrobbling/accounts");
+}
+
+export function saveScrobbleAccount(service: ScrobbleService, requestBody: ScrobbleAccountRequest): Promise<ScrobbleAccount> {
+  return request<ScrobbleAccount>(`/scrobbling/accounts/${service}`, {
+    method: "PATCH",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function fetchScrobbleOutbox(limit = 100): Promise<ScrobbleOutboxEntry[]> {
+  return request<ScrobbleOutboxEntry[]>(`/scrobbling/outbox?limit=${limit}`);
+}
+
+export function queueScrobbleHistory(service: ScrobbleService, limit = 100): Promise<ScrobbleQueueHistoryResponse> {
+  return request<ScrobbleQueueHistoryResponse>("/scrobbling/outbox/queue-history", {
+    method: "POST",
+    body: JSON.stringify({ service, limit }),
+  });
+}
+
+export function submitScrobbleOutbox(service: ScrobbleService, limit = 50): Promise<ScrobbleSubmitResponse> {
+  return request<ScrobbleSubmitResponse>("/scrobbling/outbox/submit", {
+    method: "POST",
+    body: JSON.stringify({ service, limit }),
+  });
+}
+
+export function fetchLovedTracks(limit = 100): Promise<LovedTrack[]> {
+  return request<LovedTrack[]>(`/scrobbling/loved?limit=${limit}`);
+}
+
+export function updateTrackLove(trackId: number, loved: boolean, source = "local"): Promise<TrackLoveResponse> {
+  return request<TrackLoveResponse>(`/scrobbling/tracks/${trackId}/love`, {
+    method: "PATCH",
+    body: JSON.stringify({ loved, source }),
+  });
+}
+
+export function importScrobbleHistory(csvPath: string, apply = false, limit = 10000): Promise<ScrobbleHistoryImportResponse> {
+  return request<ScrobbleHistoryImportResponse>("/scrobbling/import-history", {
+    method: "POST",
+    body: JSON.stringify({ csv_path: csvPath, apply, limit }),
+  });
 }
 
 export function fetchClapStatus(): Promise<ClapStatusResponse> {

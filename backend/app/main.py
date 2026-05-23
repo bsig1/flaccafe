@@ -121,6 +121,16 @@ from .recommender import (
 )
 from .scanner import file_state, path_key, read_metadata, scan_folder, upsert_track
 from .scan_jobs import get_scan_job, start_scan_job
+from .scrobbling import (
+    import_history_csv as import_scrobble_history_csv,
+    list_accounts as list_scrobble_accounts,
+    loved_tracks as list_loved_tracks,
+    outbox as list_scrobble_outbox,
+    queue_history as queue_scrobble_history,
+    save_account as save_scrobble_account,
+    set_loved as set_track_loved,
+    submit_outbox as submit_scrobble_outbox,
+)
 from .schemas import (
     AlbumSummary,
     ArtistInfoResponse,
@@ -272,6 +282,15 @@ from .schemas import (
     ScanProgress,
     ScanResult,
     ScanStartResponse,
+    ScrobbleAccount,
+    ScrobbleAccountRequest,
+    ScrobbleHistoryImportRequest,
+    ScrobbleHistoryImportResponse,
+    ScrobbleOutboxEntry,
+    ScrobbleQueueHistoryRequest,
+    ScrobbleQueueHistoryResponse,
+    ScrobbleSubmitRequest,
+    ScrobbleSubmitResponse,
     SettingsUpdateRequest,
     SettingsResponse,
     SmartPlaylistCreateRequest,
@@ -294,6 +313,9 @@ from .schemas import (
     TagFieldCopySwapPreview,
     TagFieldCopySwapRequest,
     TagFieldCopySwapResponse,
+    LovedTrack,
+    TrackLoveRequest,
+    TrackLoveResponse,
     Track,
     TrackDeleteResponse,
     TrackRestoreRequest,
@@ -3124,6 +3146,57 @@ def mark_radio_played(station_id: int) -> RadioStation:
     if station is None:
         raise HTTPException(status_code=404, detail="Radio station not found")
     return RadioStation(**station)
+
+
+@app.get("/scrobbling/accounts", response_model=list[ScrobbleAccount])
+def get_scrobble_accounts() -> list[ScrobbleAccount]:
+    return [ScrobbleAccount(**account) for account in list_scrobble_accounts()]
+
+
+@app.patch("/scrobbling/accounts/{service}", response_model=ScrobbleAccount)
+def update_scrobble_account(service: str, request: ScrobbleAccountRequest) -> ScrobbleAccount:
+    if service not in {"listenbrainz", "lastfm"}:
+        raise HTTPException(status_code=404, detail="Scrobble service not found")
+    return ScrobbleAccount(**save_scrobble_account(service, request))
+
+
+@app.get("/scrobbling/outbox", response_model=list[ScrobbleOutboxEntry])
+def get_scrobble_outbox(limit: int = Query(default=100, ge=1, le=1000)) -> list[ScrobbleOutboxEntry]:
+    return [ScrobbleOutboxEntry(**entry) for entry in list_scrobble_outbox(limit)]
+
+
+@app.post("/scrobbling/outbox/queue-history", response_model=ScrobbleQueueHistoryResponse)
+def queue_scrobbling_history(request: ScrobbleQueueHistoryRequest) -> ScrobbleQueueHistoryResponse:
+    return ScrobbleQueueHistoryResponse(**queue_scrobble_history(request.service, request.limit))
+
+
+@app.post("/scrobbling/outbox/submit", response_model=ScrobbleSubmitResponse)
+def submit_scrobbling_outbox(request: ScrobbleSubmitRequest) -> ScrobbleSubmitResponse:
+    try:
+        return ScrobbleSubmitResponse(**submit_scrobble_outbox(request.service, request.limit))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/scrobbling/loved", response_model=list[LovedTrack])
+def get_loved_tracks(limit: int = Query(default=100, ge=1, le=1000)) -> list[LovedTrack]:
+    return [LovedTrack(**track) for track in list_loved_tracks(limit)]
+
+
+@app.patch("/scrobbling/tracks/{track_id}/love", response_model=TrackLoveResponse)
+def update_track_love(track_id: int, request: TrackLoveRequest) -> TrackLoveResponse:
+    love = set_track_loved(track_id, request.loved, request.source)
+    if love is None:
+        raise HTTPException(status_code=404, detail="Track not found")
+    return TrackLoveResponse(**love)
+
+
+@app.post("/scrobbling/import-history", response_model=ScrobbleHistoryImportResponse)
+def import_scrobbling_history(request: ScrobbleHistoryImportRequest) -> ScrobbleHistoryImportResponse:
+    try:
+        return ScrobbleHistoryImportResponse(**import_scrobble_history_csv(request.csv_path, request.apply, request.limit))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/library/health", response_model=LibraryHealthResponse)
