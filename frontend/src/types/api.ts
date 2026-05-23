@@ -1465,6 +1465,46 @@ export interface ExtensionListResponse {
   extensions: ExtensionManifest[];
 }
 
+export type LibraryStatsImportSource = "musicbee" | "itunes" | "windows_media_player";
+
+export interface LibraryStatsImportRequest {
+  source: LibraryStatsImportSource;
+  import_path: string;
+  apply?: boolean;
+  missing_only?: boolean;
+  limit?: number;
+}
+
+export interface LibraryStatsImportPreview {
+  row_number: number;
+  source: LibraryStatsImportSource;
+  path: string | null;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  track_id: number | null;
+  matched_by: string | null;
+  imported_rating: number | null;
+  imported_play_count: number | null;
+  imported_last_played_at: string | null;
+  current_rating: number | null;
+  current_play_count: number | null;
+  current_last_played_at: string | null;
+  changed_fields: string[];
+  error: string | null;
+}
+
+export interface LibraryStatsImportResponse {
+  source: LibraryStatsImportSource;
+  import_path: string;
+  total_rows: number;
+  matched: number;
+  changed: number;
+  applied: number;
+  errors: number;
+  previews: LibraryStatsImportPreview[];
+}
+
 export interface ClapStatusResponse {
   installed: boolean;
   dependencies: Record<string, boolean>;

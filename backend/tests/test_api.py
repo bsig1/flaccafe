@@ -3,10 +3,12 @@ from __future__ import annotations
 import csv
 import os
 import json
+import plistlib
 import tempfile
 import time
 import unittest
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -1311,6 +1313,91 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response["extensions"][0]["id"], "flac-cafe.test")
         self.assertTrue(response["extensions"][0]["valid"])
         self.assertEqual(response["extensions"][0]["capabilities"], ["theme-palette"])
+
+    def test_library_stats_importers_preview_and_apply(self) -> None:
+        musicbee_file = self.root / "musicbee.mp3"
+        itunes_file = self.root / "itunes.mp3"
+        wmp_file = self.root / "wmp.mp3"
+        musicbee_file.write_bytes(b"musicbee")
+        itunes_file.write_bytes(b"itunes")
+        wmp_file.write_bytes(b"wmp")
+        musicbee_id = insert_track(musicbee_file, title="MusicBee Song", artist="Import Artist")
+        itunes_id = insert_track(itunes_file, title="iTunes Song", artist="Import Artist")
+        wmp_id = insert_track(wmp_file, title="WMP Song", artist="Import Artist")
+
+        musicbee_csv = self.root / "musicbee.csv"
+        with musicbee_csv.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["Path", "Title", "Artist", "Rating", "Play Count"])
+            writer.writeheader()
+            writer.writerow(
+                {
+                    "Path": str(musicbee_file),
+                    "Title": "MusicBee Song",
+                    "Artist": "Import Artist",
+                    "Rating": "80",
+                    "Play Count": "9",
+                }
+            )
+
+        preview = self.client.post(
+            "/library/importers/stats",
+            json={"source": "musicbee", "import_path": str(musicbee_csv), "apply": False},
+        )
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(preview.json()["matched"], 1)
+        self.assertEqual(preview.json()["changed"], 1)
+
+        itunes_xml = self.root / "itunes.xml"
+        with itunes_xml.open("wb") as handle:
+            plistlib.dump(
+                {
+                    "Tracks": {
+                        "1": {
+                            "Name": "iTunes Song",
+                            "Artist": "Import Artist",
+                            "Location": itunes_file.as_uri(),
+                            "Rating": 100,
+                            "Play Count": 4,
+                            "Play Date UTC": datetime(2024, 1, 2, tzinfo=timezone.utc),
+                        }
+                    }
+                },
+                handle,
+            )
+
+        wmp_xml = self.root / "library.wpl"
+        wmp_xml.write_text(
+            f'<smil><body><seq><media src="{wmp_file}" title="WMP Song" artist="Import Artist" userRating="60" playCount="5" /></seq></body></smil>',
+            encoding="utf-8",
+        )
+
+        for source, import_file in [
+            ("musicbee", musicbee_csv),
+            ("itunes", itunes_xml),
+            ("windows_media_player", wmp_xml),
+        ]:
+            response = self.client.post(
+                "/library/importers/stats",
+                json={"source": source, "import_path": str(import_file), "apply": True},
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["applied"], 1)
+
+        with connect() as conn:
+            rows = {
+                row["id"]: row
+                for row in conn.execute(
+                    "SELECT id, rating, play_count, last_played_at FROM tracks WHERE id IN (?, ?, ?)",
+                    (musicbee_id, itunes_id, wmp_id),
+                )
+            }
+        self.assertEqual(rows[musicbee_id]["rating"], 4.0)
+        self.assertEqual(rows[musicbee_id]["play_count"], 9)
+        self.assertEqual(rows[itunes_id]["rating"], 5.0)
+        self.assertEqual(rows[itunes_id]["play_count"], 4)
+        self.assertTrue(rows[itunes_id]["last_played_at"])
+        self.assertEqual(rows[wmp_id]["rating"], 3.0)
+        self.assertEqual(rows[wmp_id]["play_count"], 5)
 
     def test_duplicate_actions_can_remove_selected_and_export_reports(self) -> None:
         first = self.root / "dup-action-a.mp3"

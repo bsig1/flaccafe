@@ -73,6 +73,7 @@ import {
 } from "./file-management/AudioConversionSection";
 import { CacheUndoLogSection } from "./file-management/CacheUndoLogSection";
 import { CdRipperSection } from "./file-management/CdRipperSection";
+import { LibraryImportersSection } from "./file-management/LibraryImportersSection";
 import { ReportViewerSection } from "./file-management/ReportViewerSection";
 import {
   CSV_IMPORT_FIELDS,
@@ -1843,6 +1844,8 @@ export function FileManagementPage({
             onStart={onStartAudioConversion}
             onCancel={onCancelAudioConversion}
           />
+
+          <LibraryImportersSection setStatus={setStatus} />
 
           <DisclosureSection title="CSV Metadata Import" description="Spreadsheet cleanup with saved mappings, conflict review, and blank-field control">
             <div className="grid gap-4 text-sm text-neutral-200">

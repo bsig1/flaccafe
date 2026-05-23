@@ -133,6 +133,18 @@ The dry-run report button writes a JSON report with every previewed row, skipped
 
 Manual playlist import accepts M3U/M3U8, PLS, XSPF, WPL, and iTunes XML files. Local relative paths are resolved against the playlist file location, `file://` URLs are decoded, and stream URLs are ignored because this app currently focuses on local files.
 
+## Desktop Library Importers
+
+Library > File Management > Library Importers can preview or apply ratings, play counts, and last-played timestamps from other desktop music libraries.
+
+Supported sources:
+
+- MusicBee CSV exports with path/title/artist plus rating/play-count columns.
+- iTunes XML library exports, including `Location`, `Rating`, `Play Count`, and play-date fields.
+- Windows Media Player WPL/XML files when media entries include path plus rating/play-count attributes.
+
+Imports match by normalized path first, then by artist/title. Ratings are normalized to FLAC Cafe's 0.5-5 star scale, including MusicBee/iTunes/WMP 0-100 style ratings. The preview shows matched rows, changed fields, and unmatched rows before anything is applied.
+
 ## Album Artwork
 
 The Albums view can open an artwork manager for the selected album. FLAC Cafe lists sidecar images found near album files, embedded artwork found in album tracks, and optional web results from MusicBrainz/Cover Art Archive. A sidecar image can be selected as the album cover, embedded artwork can be saved as a `cover.jpg`/`cover.png` sidecar, and web artwork can be saved beside the album after review.

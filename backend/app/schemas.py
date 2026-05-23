@@ -1625,6 +1625,44 @@ class ExtensionListResponse(BaseModel):
     extensions: list[ExtensionManifest] = Field(default_factory=list)
 
 
+class LibraryStatsImportRequest(BaseModel):
+    source: str = Field(pattern="^(musicbee|itunes|windows_media_player)$")
+    import_path: str
+    apply: bool = False
+    missing_only: bool = False
+    limit: int = Field(default=10000, ge=1, le=100000)
+
+
+class LibraryStatsImportPreview(BaseModel):
+    row_number: int
+    source: str
+    path: str | None = None
+    title: str | None = None
+    artist: str | None = None
+    album: str | None = None
+    track_id: int | None = None
+    matched_by: str | None = None
+    imported_rating: float | None = None
+    imported_play_count: int | None = None
+    imported_last_played_at: str | None = None
+    current_rating: float | None = None
+    current_play_count: int | None = None
+    current_last_played_at: str | None = None
+    changed_fields: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class LibraryStatsImportResponse(BaseModel):
+    source: str
+    import_path: str
+    total_rows: int = 0
+    matched: int = 0
+    changed: int = 0
+    applied: int = 0
+    errors: int = 0
+    previews: list[LibraryStatsImportPreview] = Field(default_factory=list)
+
+
 class ClapConfigRequest(BaseModel):
     model_id: str | None = Field(default=None, max_length=200)
     cache_dir: str | None = None

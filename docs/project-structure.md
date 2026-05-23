@@ -36,6 +36,7 @@ backend/
 │   ├── extensions.py        skin/plugin manifest discovery and validation
 │   ├── audiobooks.py        long-form resume positions, bookmarks, chapters, and sync exports
 │   ├── inbox.py             Inbox notes and auto-review rule matching
+│   ├── library_importers.py MusicBee/iTunes/WMP rating and play-count imports
 │   ├── library_tools.py     filename-tag inference and file-organization helpers
 │   ├── library_watcher.py   background folder-watch detection and pending-change apply logic
 │   ├── musicbrainz_autotag.py MusicBrainz/Cover Art Archive auto-tag matching

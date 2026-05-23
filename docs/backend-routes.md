@@ -79,6 +79,7 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `POST /library/tools/export-metadata-csv` exports track metadata for spreadsheet cleanup.
 - `POST /library/tools/import-metadata-csv` previews or applies spreadsheet metadata changes.
 - `POST /library/tools/import-metadata-csv/report` writes a JSON dry-run import report.
+- `POST /library/importers/stats` previews or applies MusicBee, iTunes, or Windows Media Player rating/play-count imports.
 - `POST /library/duplicates/action` exports duplicate reports or applies batch duplicate cleanup actions.
 - `POST /library/duplicates/review` fetches arbitrary duplicate-review tracks and recommendation groups.
 - `GET /library/tools/acoustic-fingerprints/setup` checks configured, bundled, and PATH-based `fpcalc` locations.

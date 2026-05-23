@@ -36,6 +36,7 @@ from .extensions import discover_extensions
 from .file_tags import write_custom_tags, write_track_artwork, write_track_lyrics, write_track_metadata, write_track_rating
 from .gapless import gapless_validate
 from . import inbox as inbox_service
+from .library_importers import import_library_stats
 from .library_tools import (
     changed_metadata,
     infer_metadata_from_filename,
@@ -240,6 +241,8 @@ from .schemas import (
     ClapConfigRequest,
     ClapStatusResponse,
     LibraryHealthResponse,
+    LibraryStatsImportRequest,
+    LibraryStatsImportResponse,
     InboxResponse,
     InboxAutoReviewRule,
     InboxAutoReviewRuleApplyResponse,
@@ -3219,6 +3222,21 @@ def list_extensions() -> ExtensionListResponse:
 @app.post("/extensions/reload", response_model=ExtensionListResponse)
 def reload_extensions() -> ExtensionListResponse:
     return ExtensionListResponse(**discover_extensions())
+
+
+@app.post("/library/importers/stats", response_model=LibraryStatsImportResponse)
+def import_external_library_stats(request: LibraryStatsImportRequest) -> LibraryStatsImportResponse:
+    try:
+        result = import_library_stats(
+            source=request.source,
+            import_path=request.import_path,
+            apply=request.apply,
+            missing_only=request.missing_only,
+            limit=request.limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return LibraryStatsImportResponse(**result)
 
 
 @app.get("/library/health", response_model=LibraryHealthResponse)

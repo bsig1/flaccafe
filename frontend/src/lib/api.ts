@@ -82,6 +82,8 @@ import type {
   FilenameTagInferenceRequest,
   FilenameTagInferenceResponse,
   LibraryHealthResponse,
+  LibraryStatsImportRequest,
+  LibraryStatsImportResponse,
   InboxAutoReviewRuleApplyResponse,
   InboxAutoReviewRuleDeleteResponse,
   InboxAutoReviewRuleRequest,
@@ -772,6 +774,13 @@ export function fetchExtensions(): Promise<ExtensionListResponse> {
 
 export function reloadExtensions(): Promise<ExtensionListResponse> {
   return request<ExtensionListResponse>("/extensions/reload", { method: "POST" });
+}
+
+export function importLibraryStats(requestBody: LibraryStatsImportRequest): Promise<LibraryStatsImportResponse> {
+  return request<LibraryStatsImportResponse>("/library/importers/stats", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
 }
 
 export function fetchClapStatus(): Promise<ClapStatusResponse> {

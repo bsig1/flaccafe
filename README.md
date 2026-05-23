@@ -9,7 +9,7 @@ This is still an alpha prototype. Expect sharp edges.
 - Local library scanning with progress, missing-file cleanup, duplicate review, and messy metadata tolerance.
 - SQLite-backed ratings, play history, playlists, smart playlists, lyrics, and recommendation history.
 - Optional metadata and rating writes back to files when the setting is enabled.
-- MusicBee-inspired library tools for filename-to-tag inference, tag-based file organization previews, and cache cleanup.
+- MusicBee-inspired library tools for filename-to-tag inference, tag-based file organization previews, desktop-library stats import, and cache cleanup.
 - Local playback through the Tauri WebView with queue controls, fade/crossfade, sleep timer, lyrics, artist info, and media-key integration.
 - AutoDJ with beginner and advanced controls, temperature sampling, cooldowns, unrated exploration, seed-track similarity, and optional CLAP audio embeddings.
 - Theme and font customization through JSON theme files plus in-app settings.
