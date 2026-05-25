@@ -193,6 +193,7 @@ const VISUALIZER_ANALYSIS_SAMPLES: usize = 2048;
 const VISUALIZER_BINS: usize = 48;
 const VISUALIZER_WAVEFORM_POINTS: usize = 96;
 const VISUALIZER_STALE_MS: u64 = 750;
+const FADE_STOP_PAD_MS: u64 = 80;
 
 static NEXT_DIAGNOSTIC_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -1374,7 +1375,9 @@ fn spawn_stop_after_fade(old_player: Arc<Player>, duration_ms: u64) {
             old_player.stop();
             return;
         }
-        thread::sleep(Duration::from_millis(duration_ms));
+        thread::sleep(Duration::from_millis(
+            duration_ms.saturating_add(FADE_STOP_PAD_MS),
+        ));
         old_player.stop();
     });
 }

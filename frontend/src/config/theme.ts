@@ -1,9 +1,10 @@
 import blueTheme from "./themes/blue.json";
 import cafeTheme from "./themes/cafe.json";
+import comicTheme from "./themes/comic.json";
 import mintTheme from "./themes/mint.json";
 import roseTheme from "./themes/rose.json";
 
-export type ThemeAccent = "cafe" | "mint" | "rose" | "blue";
+export type ThemeAccent = "cafe" | "mint" | "rose" | "blue" | "comic";
 export type FontChoice = "theme" | "system" | "inter" | "serif" | "mono" | "rounded" | "comic";
 
 // Values are RGB triplets because styles.css consumes them as rgb(var(--color-name) / alpha).
@@ -33,13 +34,14 @@ export interface ThemePalette {
 }
 
 // Add new themes here after creating frontend/src/config/themes/<theme>.json.
-export const themeOrder: ThemeAccent[] = ["cafe", "mint", "rose", "blue"];
+export const themeOrder: ThemeAccent[] = ["cafe", "mint", "rose", "blue", "comic"];
 
 export const themeAccentLabels: Record<ThemeAccent, string> = {
   cafe: "FLAC Cafe",
   mint: "Mint",
   rose: "Rose",
   blue: "Blue Note",
+  comic: "Comic Cafe",
 };
 
 export const fontChoiceLabels: Record<FontChoice, string> = {
@@ -66,4 +68,5 @@ export const themeAccentValues: Record<ThemeAccent, ThemePalette> = {
   mint: mintTheme,
   rose: roseTheme,
   blue: blueTheme,
+  comic: comicTheme,
 };

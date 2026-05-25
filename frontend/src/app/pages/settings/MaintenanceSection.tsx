@@ -6,6 +6,7 @@ import {
   Info,
   RefreshCw,
   ShieldCheck,
+  Trash2,
 } from "lucide-react";
 
 import type {
@@ -35,6 +36,7 @@ export function MaintenanceSection({
   onRestartBackend,
   onOpenSourceFolder,
   onBackupDatabase,
+  onResetLocalData,
   onCreateSupportBundle,
   supportBundlePath,
   onCopySupportBundlePath,
@@ -54,6 +56,7 @@ export function MaintenanceSection({
   onRestartBackend: () => void;
   onOpenSourceFolder: () => void;
   onBackupDatabase: () => void;
+  onResetLocalData: () => void;
   onCreateSupportBundle: () => void;
   supportBundlePath: string | null;
   onCopySupportBundlePath: () => void;
@@ -208,6 +211,20 @@ export function MaintenanceSection({
             {supportBundlePath}
           </div>
         )}
+
+        <details className="rounded border border-line/70 bg-ink px-3 py-2 text-xs">
+          <summary className="cursor-pointer text-muted hover:text-white">Advanced maintenance</summary>
+          <div className="mt-3 grid gap-2 rounded border border-ember/30 bg-ember/10 p-3">
+            <div className="font-medium text-ember">Reset local data</div>
+            <p className="text-muted">
+              Backs up and clears the SQLite library database, cached lyrics, and generated cache files. Your music files are not deleted.
+            </p>
+            <button className="secondary-button h-8 w-fit border-ember/50 text-ember" type="button" onClick={onResetLocalData}>
+              <Trash2 size={14} />
+              Reset Local Data
+            </button>
+          </div>
+        </details>
       </div>
     </DisclosureSection>
   );

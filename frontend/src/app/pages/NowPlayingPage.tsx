@@ -59,6 +59,9 @@ import {
   VisualizerFrame,
 } from "../shared";
 
+const QUEUE_VIRTUALIZATION_THRESHOLD = 160;
+const QUEUE_VIRTUALIZATION_OVERSCAN = 10;
+
 export function NowPlayingPage({
   currentTrack,
   lyrics,
@@ -121,6 +124,11 @@ export function NowPlayingPage({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const lyricsScrollRef = useRef<HTMLDivElement | null>(null);
   const activeLyricRef = useRef<HTMLParagraphElement | null>(null);
+  const queueScrollRef = useRef<HTMLDivElement | null>(null);
+  const queueScrollFrameRef = useRef<number | null>(null);
+  const pendingQueueScrollTopRef = useRef(0);
+  const [queueScrollTop, setQueueScrollTop] = useState(0);
+  const [queueViewportHeight, setQueueViewportHeight] = useState(420);
 
   useEffect(() => {
     setArtworkFailed(false);
@@ -206,6 +214,16 @@ export function NowPlayingPage({
   const titleSizeClass = layout === "party" ? "text-2xl md:text-3xl" : isQueueLayout ? "text-lg 2xl:text-2xl" : "text-xl";
   const metadataLinkClass = "max-w-full truncate rounded text-left transition hover:text-moss focus:outline-none focus:ring-2 focus:ring-moss/40";
   const lyricsSaveDisabled = !currentTrack || lyricsBusy || (lyricsTarget === "file" && !writeRatingsToFiles);
+  const queueRowHeight = isQueueLayout ? 62 : 52;
+  const shouldVirtualizeQueue = showQueue && queue.length > QUEUE_VIRTUALIZATION_THRESHOLD;
+  const queueStartIndex = shouldVirtualizeQueue
+    ? Math.max(0, Math.floor(queueScrollTop / queueRowHeight) - QUEUE_VIRTUALIZATION_OVERSCAN)
+    : 0;
+  const queueVisibleCount = Math.ceil(queueViewportHeight / queueRowHeight) + QUEUE_VIRTUALIZATION_OVERSCAN * 2;
+  const queueEndIndex = shouldVirtualizeQueue ? Math.min(queue.length, queueStartIndex + queueVisibleCount) : queue.length;
+  const renderedQueue = shouldVirtualizeQueue ? queue.slice(queueStartIndex, queueEndIndex) : queue;
+  const queueTopSpacerHeight = shouldVirtualizeQueue ? queueStartIndex * queueRowHeight : 0;
+  const queueBottomSpacerHeight = shouldVirtualizeQueue ? Math.max(0, (queue.length - queueEndIndex) * queueRowHeight) : 0;
 
   function openTrackLink(action: (track: Track) => void) {
     if (currentTrack) {
@@ -232,6 +250,46 @@ export function NowPlayingPage({
       window.removeEventListener("keydown", closeQueueContextMenu);
     };
   }, []);
+
+  useEffect(() => {
+    const element = queueScrollRef.current;
+    if (!element) {
+      return undefined;
+    }
+    const updateHeight = () => setQueueViewportHeight(Math.max(180, element.clientHeight || 420));
+    updateHeight();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateHeight);
+      return () => window.removeEventListener("resize", updateHeight);
+    }
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [showQueue, isQueueLayout]);
+
+  useEffect(() => {
+    return () => {
+      if (queueScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(queueScrollFrameRef.current);
+      }
+    };
+  }, []);
+
+  function handleQueueScroll() {
+    const element = queueScrollRef.current;
+    if (!element) {
+      return;
+    }
+    pendingQueueScrollTopRef.current = element.scrollTop;
+    if (queueScrollFrameRef.current !== null) {
+      return;
+    }
+    queueScrollFrameRef.current = window.requestAnimationFrame(() => {
+      queueScrollFrameRef.current = null;
+      const next = pendingQueueScrollTopRef.current;
+      setQueueScrollTop((current) => (Math.abs(current - next) < 4 ? current : next));
+    });
+  }
 
   function openQueueContextMenu(event: ReactMouseEvent, index: number, track: Track) {
     event.preventDefault();
@@ -868,15 +926,17 @@ export function NowPlayingPage({
               </button>
             </div>
           </div>
-          <div className="h-[calc(100%-3rem)] overflow-auto">
-            {queue.map((track, index) => {
+          <div ref={queueScrollRef} className="h-[calc(100%-3rem)] overflow-auto" onScroll={handleQueueScroll}>
+            {queueTopSpacerHeight > 0 && <div aria-hidden="true" style={{ height: queueTopSpacerHeight }} />}
+            {renderedQueue.map((track, renderedIndex) => {
+              const index = queueStartIndex + renderedIndex;
               const active = currentTrack?.id === track.id;
               return (
                 <div
                   key={`${track.id}-${index}`}
                   data-reorder-index={index}
                   onContextMenu={(event) => openQueueContextMenu(event, index, track)}
-                  className={`flex w-full items-center gap-3 border-b border-line/60 text-left transition ${
+                  className={`box-border flex w-full items-center gap-3 border-b border-line/60 text-left transition ${
                     isQueueLayout ? "px-4 py-3 text-sm" : "px-3 py-2 text-sm"
                   } ${
                     active
@@ -887,6 +947,7 @@ export function NowPlayingPage({
                           ? "bg-ember/10"
                           : "hover:bg-white/[0.035]"
                   }`}
+                  style={{ height: queueRowHeight }}
                 >
                   <button
                     className="grid h-7 w-7 shrink-0 cursor-grab place-items-center rounded text-muted hover:bg-white/10 hover:text-white active:cursor-grabbing"
@@ -932,6 +993,7 @@ export function NowPlayingPage({
                 </div>
               );
             })}
+            {queueBottomSpacerHeight > 0 && <div aria-hidden="true" style={{ height: queueBottomSpacerHeight }} />}
             {queue.length === 0 && (
               <div className="grid h-full place-items-center px-4 text-center text-sm text-muted">
                 Queue is empty.

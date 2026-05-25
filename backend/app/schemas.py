@@ -1210,6 +1210,29 @@ class AudioConversionInstallRequest(BaseModel):
     source_url: str | None = None
 
 
+class AudioConversionInstallStartResponse(BaseModel):
+    job_id: str
+    status: str
+
+
+class AudioConversionInstallProgress(BaseModel):
+    job_id: str
+    status: str
+    message: str
+    current_step: int = 0
+    total_steps: int = 3
+    bytes_downloaded: int = 0
+    total_bytes: int | None = None
+    download_url: str | None = None
+    tool_directory: str
+    log: list[str] = Field(default_factory=list)
+    started_at: str | None = None
+    finished_at: str | None = None
+    elapsed_seconds: float = 0.0
+    percent: float = 0.0
+    error: str | None = None
+
+
 class AudioConversionSetupResponse(BaseModel):
     available: bool = False
     configured_path: str | None = None
@@ -1326,6 +1349,8 @@ class CdRipSetupResponse(BaseModel):
     secure_ripping_available: bool = False
     cd_text_available: bool = False
     accuraterip_available: bool = False
+    active_playback_drive_ids: list[str] = Field(default_factory=list)
+    active_rip_drive_ids: list[str] = Field(default_factory=list)
     message: str
     warnings: list[str] = Field(default_factory=list)
 
@@ -2263,6 +2288,18 @@ class ExportResponse(BaseModel):
 
 class BackupResponse(BaseModel):
     backup_path: str
+
+
+class LocalDataResetRequest(BaseModel):
+    confirmation: str
+
+
+class LocalDataResetResponse(BaseModel):
+    reset: bool
+    backup_path: str | None = None
+    database_path: str
+    removed_paths: list[str] = Field(default_factory=list)
+    message: str
 
 
 class DiagnosticItem(BaseModel):

@@ -1594,7 +1594,7 @@ export function readUiPreferences(): UiPreferences {
                 : "never"
               : defaults.cdSidebarMode,
         startupPage: validPages.includes(parsed.startupPage as Page) ? (parsed.startupPage as Page) : defaults.startupPage,
-        themeAccent: ["cafe", "mint", "rose", "blue"].includes(parsed.themeAccent as ThemeAccent)
+        themeAccent: ["cafe", "mint", "rose", "blue", "comic"].includes(parsed.themeAccent as ThemeAccent)
           ? (parsed.themeAccent as ThemeAccent)
           : defaults.themeAccent,
         density: ["comfortable", "compact"].includes(parsed.density as UiDensity)

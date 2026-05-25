@@ -89,6 +89,31 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(diagnostics.status_code, 200)
         self.assertIn("items", diagnostics.json())
 
+    def test_reset_local_data_requires_confirmation_and_keeps_backup(self) -> None:
+        track_id = insert_track(self.root / "song.flac", title="Reset Me")
+        lyrics_dir = self.root / "lyrics"
+        lyrics_dir.mkdir(parents=True, exist_ok=True)
+        (lyrics_dir / f"{track_id}.lrc").write_text("[00:01.00]Reset", encoding="utf-8")
+        with connect() as conn:
+            set_setting(conn, "library_path", str(self.root / "Music"))
+            conn.commit()
+
+        rejected = self.client.post("/settings/reset-local-data", json={"confirmation": "nope"})
+        self.assertEqual(rejected.status_code, 400)
+        with connect() as conn:
+            self.assertEqual(conn.execute("SELECT count(*) FROM tracks").fetchone()[0], 1)
+
+        response = self.client.post("/settings/reset-local-data", json={"confirmation": "RESET"})
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["reset"])
+        self.assertTrue(Path(body["backup_path"]).exists())
+        self.assertTrue(Path(body["database_path"]).exists())
+        self.assertFalse(lyrics_dir.exists())
+        with connect() as conn:
+            self.assertEqual(conn.execute("SELECT count(*) FROM tracks").fetchone()[0], 0)
+            self.assertIsNone(conn.execute("SELECT value FROM settings WHERE key = 'library_path'").fetchone())
+
     def test_settings_can_store_and_clear_acoustid_key_without_returning_secret(self) -> None:
         saved = self.client.patch("/settings", json={"acoustid_api_key": "client-key-123"})
         self.assertEqual(saved.status_code, 200)
@@ -1469,6 +1494,138 @@ class ApiTests(unittest.TestCase):
         self.assertIn("/library/tools/cd-rip/playback/live/audio", body["track"]["audio_url"])
         live_mock.assert_called_once()
 
+    def test_cd_playback_route_returns_clear_error_when_drive_unavailable(self) -> None:
+        with patch("backend.app.main.prepare_cd_live_track", side_effect=FileNotFoundError(2, "Could not open CD drive D:")):
+            response = self.client.post(
+                "/library/tools/cd-rip/playback/play",
+                json={"drive_id": "D:", "track_number": 1},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Could not open CD drive D:", response.json()["detail"])
+        self.assertIn("Refresh CD drives", response.json()["detail"])
+
+    def test_cd_playback_route_blocks_during_active_rip(self) -> None:
+        with (
+            patch(
+                "backend.app.main.active_cd_rip_job_for_drive",
+                return_value={"job_id": "job-1", "drive_id": "D:", "status": "running"},
+            ),
+            patch("backend.app.main.prepare_cd_live_track") as live_mock,
+        ):
+            response = self.client.post(
+                "/library/tools/cd-rip/playback/play",
+                json={"drive_id": "D:", "track_number": 1},
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("CD ripping is active", response.json()["detail"])
+        live_mock.assert_not_called()
+
+    def test_cd_rip_secure_request_allows_native_windows_reader(self) -> None:
+        fake_setup = {
+            "ffmpeg_available": True,
+            "secure_ripping_available": False,
+            "tools": [
+                {"name": "windows_cdda", "available": True},
+                {"name": "cdda2wav", "available": False},
+            ],
+        }
+        with (
+            patch("backend.app.main.cd_rip_setup", return_value=fake_setup),
+            patch("backend.app.main.start_cd_rip_job", return_value={"job_id": "job-1", "status": "pending"}) as start_mock,
+        ):
+            response = self.client.post(
+                "/library/tools/cd-rip/jobs",
+                json={
+                    "drive_id": "D:",
+                    "output_folder": str(self.root / "rips"),
+                    "output_format": "flac",
+                    "track_numbers": [1],
+                    "secure_mode": True,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["job_id"], "job-1")
+        start_mock.assert_called_once()
+
+    def test_cd_rip_start_blocks_duplicate_active_drive_job(self) -> None:
+        fake_setup = {
+            "ffmpeg_available": True,
+            "secure_ripping_available": True,
+            "tools": [{"name": "windows_cdda", "available": True}],
+        }
+        with (
+            patch("backend.app.main.cd_rip_setup", return_value=fake_setup),
+            patch("backend.app.main.active_cd_rip_job_for_drive", return_value={"job_id": "job-1", "drive_id": "D:", "status": "running"}),
+            patch("backend.app.main.start_cd_rip_job") as start_mock,
+        ):
+            response = self.client.post(
+                "/library/tools/cd-rip/jobs",
+                json={
+                    "drive_id": "D:",
+                    "output_folder": str(self.root / "rips"),
+                    "output_format": "wav",
+                    "track_numbers": [1],
+                    "secure_mode": False,
+                },
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("already active", response.json()["detail"])
+        start_mock.assert_not_called()
+
+    def test_cd_rip_start_blocks_live_playback_on_drive(self) -> None:
+        fake_setup = {
+            "ffmpeg_available": True,
+            "secure_ripping_available": True,
+            "tools": [{"name": "windows_cdda", "available": True}],
+        }
+        with (
+            patch("backend.app.main.cd_rip_setup", return_value=fake_setup),
+            patch("backend.app.main.active_cd_rip_job_for_drive", return_value=None),
+            patch("backend.app.main.active_cd_playback_for_drive", return_value=True),
+            patch("backend.app.main.start_cd_rip_job") as start_mock,
+        ):
+            response = self.client.post(
+                "/library/tools/cd-rip/jobs",
+                json={
+                    "drive_id": "D:",
+                    "output_folder": str(self.root / "rips"),
+                    "output_format": "wav",
+                    "track_numbers": [1],
+                    "secure_mode": False,
+                },
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("CD playback is active", response.json()["detail"])
+        start_mock.assert_not_called()
+
+    def test_cd_rip_start_preserves_live_playback_tokens(self) -> None:
+        from backend.app import cd_ripping
+        from types import SimpleNamespace
+
+        cd_ripping.clear_cd_live_stream_tokens()
+        cd_ripping.register_cd_live_stream_token("D:", "playing")
+        request = SimpleNamespace(
+            drive_id="D:",
+            output_folder=str(self.root / "rips"),
+            output_format="wav",
+        )
+        response = {"job_id": ""}
+        try:
+            with patch("backend.app.cd_ripping.Thread") as thread_class:
+                thread_class.return_value.start.return_value = None
+                response = cd_ripping.start_cd_rip_job(request)
+
+            self.assertTrue(cd_ripping.cd_live_stream_is_current("D:", "playing"))
+            self.assertEqual(response["status"], "pending")
+        finally:
+            cd_ripping.clear_cd_live_stream_tokens()
+            cd_ripping._jobs.pop(response["job_id"], None)
+
     def test_cd_live_audio_streams_wav_response(self) -> None:
         with (
             patch("backend.app.main.cd_live_wav_content_length", return_value=47),
@@ -1478,7 +1635,36 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["content-type"], "audio/wav")
+        self.assertNotIn("content-length", response.headers)
         self.assertEqual(response.content, b"RIFFaudio")
+
+    def test_cd_live_tokens_allow_prepared_queue_tracks(self) -> None:
+        from backend.app import cd_ripping
+
+        cd_ripping.clear_cd_live_stream_tokens()
+        try:
+            cd_ripping.register_cd_live_stream_token("D:", "first")
+            cd_ripping.register_cd_live_stream_token("D:", "second")
+
+            self.assertTrue(cd_ripping.cd_live_stream_is_current("D:", "first"))
+            self.assertTrue(cd_ripping.cd_live_stream_is_current("D:", "second"))
+        finally:
+            cd_ripping.clear_cd_live_stream_tokens()
+
+    def test_cd_live_audio_stale_token_returns_short_silent_wav(self) -> None:
+        from backend.app import cd_ripping
+
+        cd_ripping.clear_cd_live_stream_tokens()
+        with patch("backend.app.main.cd_live_wav_content_length", return_value=44):
+            response = self.client.get(
+                "/library/tools/cd-rip/playback/live/audio?drive_id=D%3A&track_number=1&token=stale",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "audio/wav")
+        self.assertNotIn("content-length", response.headers)
+        self.assertEqual(len(response.content), 44)
+        self.assertTrue(response.content.startswith(b"RIFF"))
 
     def test_cd_rip_metadata_uses_musicbrainz_release_tracks(self) -> None:
         search_release = {"id": "release-1", "title": "Lookup Album"}

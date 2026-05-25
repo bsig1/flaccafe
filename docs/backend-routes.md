@@ -12,6 +12,7 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `PATCH /settings` updates user flags such as file tag writing.
 - `POST /settings/library-sources/remove` removes a source folder from saved settings and removes matching tracks from SQLite without deleting audio files.
 - `POST /settings/backup` copies the SQLite database to the export folder.
+- `POST /settings/reset-local-data` backs up and clears the local SQLite database, cached lyrics, and generated cache files without deleting music files.
 - `GET /extensions` lists discovered skin/plugin manifests.
 - `POST /extensions/reload` rescans extension manifest folders.
 
@@ -74,6 +75,8 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `GET /library/tools/audio-conversion/setup` checks configured, bundled, and PATH-based FFmpeg locations.
 - `PATCH /library/tools/audio-conversion/setup` saves or clears a custom FFmpeg path.
 - `POST /library/tools/audio-conversion/install` downloads the Windows FFmpeg essentials ZIP into the local FLAC Cafe tools folder.
+- `POST /library/tools/audio-conversion/install/jobs` starts a background FFmpeg install job with download/extract progress.
+- `GET /library/tools/audio-conversion/install/jobs/{job_id}` returns FFmpeg install progress.
 - `POST /library/tools/audio-conversion/preview` previews audio conversion targets.
 - `POST /library/tools/audio-conversion/jobs` starts an audio conversion job.
 - `GET /library/tools/audio-conversion/jobs/{job_id}` returns audio conversion job progress.

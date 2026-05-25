@@ -133,7 +133,7 @@ input[type="range"].player-progress::-webkit-slider-runnable-track {
   height: 6px;
   border-radius: 999px;
   background:
-    linear-gradient(90deg, rgb(var(--color-ember)) 0 var(--progress, 0%), rgb(var(--color-line)) var(--progress, 0%) 100%);
+    linear-gradient(90deg, rgb(var(--color-ember)) 0 var(--progress-fill, var(--progress, 0%)), rgb(var(--color-line)) var(--progress-fill, var(--progress, 0%)) 100%);
 }
 
 input[type="range"].player-progress::-webkit-slider-thumb {

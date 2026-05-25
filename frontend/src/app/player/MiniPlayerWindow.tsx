@@ -41,7 +41,9 @@ export function MiniPlayerWindow() {
   const [alwaysOnTop, setAlwaysOnTop] = useState(readMiniPlayerAlwaysOnTop);
   const track = snapshot.track;
   const duration = snapshot.duration || track?.duration_seconds || 0;
-  const progressPercent = duration > 0 ? Math.min(100, (snapshot.currentTime / duration) * 100) : 0;
+  const progressRatio = duration > 0 ? Math.max(0, Math.min(1, snapshot.currentTime / duration)) : 0;
+  const progressPercent = progressRatio * 100;
+  const progressFill = progressRatio > 0 ? `calc(${progressPercent}% + ${7 - progressRatio * 14}px)` : "0px";
   const artworkSrc = track ? albumArtworkUrl(track.id) : null;
   const isPodcastTrack = Boolean(track?.genre?.toLowerCase().includes("podcast"));
   const trackArtistLabel = display(track?.artist, isPodcastTrack ? "Podcast" : "Unknown artist");
@@ -176,7 +178,7 @@ export function MiniPlayerWindow() {
               max={Math.max(duration, 0)}
               min={0}
               step={1}
-              style={{ "--progress": `${progressPercent}%` } as CSSProperties}
+              style={{ "--progress": `${progressPercent}%`, "--progress-fill": progressFill } as CSSProperties}
               type="range"
               value={duration > 0 ? Math.min(snapshot.currentTime, duration) : 0}
               onChange={(event) => sendMiniPlayerCommand({ type: "seek", seconds: Number(event.target.value) })}

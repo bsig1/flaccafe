@@ -11,6 +11,7 @@ import {
   RefreshCw,
   Search,
   ShieldCheck,
+  Wrench,
 } from "lucide-react";
 import {
   useEffect,
@@ -63,15 +64,30 @@ function statusTone(ready: boolean) {
   return ready ? "border-moss/40 bg-moss/10 text-moss" : "border-ember/40 bg-ember/10 text-ember";
 }
 
+function normalizeCdDriveId(value: string | null | undefined) {
+  const text = (value ?? "").trim();
+  if (!text) {
+    return "";
+  }
+  const match = text.match(/^([A-Za-z])(?::|\\|\/|$)/) ?? text.match(/^\\\\\.\\([A-Za-z]):?/);
+  return match ? `${match[1].toUpperCase()}:` : text;
+}
+
 export function CdRipperSection({
   defaultTargetFolder,
+  currentCdPlaybackDriveId = null,
+  isCdPlaybackActive = false,
   onBrowseTarget,
+  onOpenOptionalDependencies,
   onPlayPreviewTrack,
   setStatus,
   standalone = false,
 }: {
   defaultTargetFolder: string;
+  currentCdPlaybackDriveId?: string | null;
+  isCdPlaybackActive?: boolean;
   onBrowseTarget: () => Promise<string | null>;
+  onOpenOptionalDependencies?: () => void;
   onPlayPreviewTrack: (track: Track, queue?: Track[]) => void;
   setStatus: (message: string) => void;
   standalone?: boolean;
@@ -106,9 +122,27 @@ export function CdRipperSection({
     [selectedTrackNumbers, tracks],
   );
   const setupWarnings = setup?.warnings ?? [];
+  const ffmpegMissing = setup ? !setup.ffmpeg_available : false;
+  const selectedFormatNeedsFfmpeg = outputFormat !== "wav";
+  const ripBlockedByFfmpeg = ffmpegMissing && selectedFormatNeedsFfmpeg;
+  const selectedNormalizedDriveId = normalizeCdDriveId(selectedDriveId);
+  const currentNormalizedPlaybackDriveId = normalizeCdDriveId(currentCdPlaybackDriveId);
+  const setupPlaybackDriveIds = setup?.active_playback_drive_ids ?? [];
+  const setupRipDriveIds = setup?.active_rip_drive_ids ?? [];
+  const setupPlaybackOnSelectedDrive = setupPlaybackDriveIds.some((driveId) => normalizeCdDriveId(driveId) === selectedNormalizedDriveId);
+  const setupRipOnSelectedDrive = setupRipDriveIds.some((driveId) => normalizeCdDriveId(driveId) === selectedNormalizedDriveId);
+  const currentPlaybackOnSelectedDrive = Boolean(
+    isCdPlaybackActive &&
+      (!currentNormalizedPlaybackDriveId ||
+        !selectedNormalizedDriveId ||
+        currentNormalizedPlaybackDriveId === selectedNormalizedDriveId),
+  );
+  const ripBlockedByPlayback = preparingPlayback || currentPlaybackOnSelectedDrive || setupPlaybackOnSelectedDrive;
+  const playBlockedByRip = activeJob || setupRipOnSelectedDrive;
   const visibleSetupWarnings = setupWarnings.filter(
     (warning) =>
       !warning.includes("native Windows CDDA") &&
+      !warning.includes("FLAC/MP3 encoding requires FFmpeg") &&
       !warning.includes("AccurateRip") &&
       !warning.includes("SHA-256 verification"),
   );
@@ -170,6 +204,12 @@ export function CdRipperSection({
     void loadSetup(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (setup && !setup.secure_ripping_available) {
+      setSecureMode(false);
+    }
+  }, [setup?.secure_ripping_available]);
 
   useEffect(() => {
     if (!defaultTargetFolder) {
@@ -263,6 +303,14 @@ export function CdRipperSection({
       setStatus("Select at least one CD track");
       return;
     }
+    if (ripBlockedByFfmpeg) {
+      setStatus("Install FFmpeg from Optional Dependencies before ripping CDs to FLAC or MP3.");
+      return;
+    }
+    if (ripBlockedByPlayback) {
+      setStatus("Stop CD playback before ripping from this drive.");
+      return;
+    }
     if (!window.confirm(`Rip ${chosenTracks.length} CD track${chosenTracks.length === 1 ? "" : "s"} to ${outputFormat.toUpperCase()}?`)) {
       return;
     }
@@ -286,7 +334,7 @@ export function CdRipperSection({
       setJobId(started.job_id);
       const latest = await fetchCdRipProgress(started.job_id);
       setProgress(latest);
-      setStatus(latest.message ?? "CD rip started");
+      setStatus(latest.message ?? "CD rip started.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not start CD rip");
     }
@@ -315,6 +363,10 @@ export function CdRipperSection({
     }
     if (!chosenTracks.length) {
       setStatus("Select at least one CD track to play");
+      return;
+    }
+    if (playBlockedByRip) {
+      setStatus("Wait for the active CD rip to finish before playing from this drive.");
       return;
     }
     setPreparingPlayback(true);
@@ -400,6 +452,22 @@ export function CdRipperSection({
                 ))}
               </div>
             </details>
+          )}
+          {ffmpegMissing && (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded border border-ember/40 bg-ember/10 px-3 py-2 text-xs">
+              <div className="min-w-0">
+                <div className="font-medium text-ember">FFmpeg is needed for FLAC and MP3 CD ripping.</div>
+                <p className="mt-1 text-muted">
+                  Playback and WAV extraction can still work, but encoded CD rips need FFmpeg installed in FLAC Cafe.
+                </p>
+              </div>
+              {onOpenOptionalDependencies && (
+                <button className="secondary-button h-8 shrink-0" type="button" onClick={onOpenOptionalDependencies}>
+                  <Wrench size={14} />
+                  Optional Dependencies
+                </button>
+              )}
+            </div>
           )}
         </div>
 
@@ -489,11 +557,29 @@ export function CdRipperSection({
                 <Search size={14} />
                 Lookup
               </button>
-              <button className="secondary-button h-8" type="button" disabled={!selectedDriveId || preparingPlayback || !chosenTracks.length} onClick={() => void handlePlayCd()}>
+              <button
+                className="secondary-button h-8"
+                type="button"
+                disabled={!selectedDriveId || preparingPlayback || playBlockedByRip || !chosenTracks.length}
+                title={playBlockedByRip ? "CD playback is disabled while this drive is ripping." : undefined}
+                onClick={() => void handlePlayCd()}
+              >
                 <Play size={14} />
                 {preparingPlayback ? "Preparing" : `Play Selected (${chosenTracks.length.toLocaleString()})`}
               </button>
-              <button className="primary-button h-8" type="button" disabled={activeJob} onClick={() => void handleStartRip()}>
+              <button
+                className="primary-button h-8"
+                type="button"
+                disabled={activeJob || ripBlockedByPlayback || ripBlockedByFfmpeg}
+                title={
+                  ripBlockedByPlayback
+                    ? "Stop CD playback before ripping from this drive."
+                    : ripBlockedByFfmpeg
+                      ? "Install FFmpeg from Optional Dependencies to rip CDs to FLAC or MP3."
+                      : undefined
+                }
+                onClick={() => void handleStartRip()}
+              >
                 <Download size={14} />
                 Rip {chosenTracks.length.toLocaleString()}
               </button>
@@ -522,6 +608,18 @@ export function CdRipperSection({
                 <NumberField label="MP3 Kbps" value={bitrateKbps} min={96} max={320} onChange={setBitrateKbps} />
               )}
             </div>
+            {ripBlockedByFfmpeg && (
+              <div className="rounded border border-ember/40 bg-ember/10 px-3 py-2 text-xs text-muted">
+                <span className="font-medium text-ember">{outputFormat.toUpperCase()} output needs FFmpeg.</span>{" "}
+                Switch to WAV or install FFmpeg from Optional Dependencies.
+              </div>
+            )}
+            {ripBlockedByPlayback && (
+              <div className="rounded border border-ember/40 bg-ember/10 px-3 py-2 text-xs text-muted">
+                <span className="font-medium text-ember">CD playback is active.</span>{" "}
+                Stop playback before ripping from this drive.
+              </div>
+            )}
 
             <details className="rounded border border-line/70 bg-panel px-3 py-2 text-xs">
               <summary className="cursor-pointer text-muted hover:text-white">Rip options</summary>
@@ -530,7 +628,18 @@ export function CdRipperSection({
                 <div className="grid gap-2 sm:grid-cols-3">
                   <label className="flex items-center justify-between gap-2 rounded border border-line/70 bg-ink px-2 py-1.5">
                     <span className="text-muted">Secure</span>
-                    <input type="checkbox" className="h-4 w-4 accent-moss" checked={secureMode} onChange={(event) => setSecureMode(event.target.checked)} />
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-moss disabled:opacity-45"
+                      checked={secureMode}
+                      disabled={!setup?.secure_ripping_available}
+                      title={
+                        setup?.secure_ripping_available
+                          ? "Use secure/paranoia extraction when available."
+                          : "Secure/paranoia tools are not installed; FLAC Cafe will use the native Windows CD reader."
+                      }
+                      onChange={(event) => setSecureMode(event.target.checked)}
+                    />
                   </label>
                   <label className="flex items-center justify-between gap-2 rounded border border-line/70 bg-ink px-2 py-1.5">
                     <span className="text-muted">Verify</span>

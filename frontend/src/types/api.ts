@@ -1146,6 +1146,29 @@ export interface AudioConversionInstallRequest {
   source_url?: string | null;
 }
 
+export interface AudioConversionInstallStartResponse {
+  job_id: string;
+  status: string;
+}
+
+export interface AudioConversionInstallProgress {
+  job_id: string;
+  status: string;
+  message: string;
+  current_step: number;
+  total_steps: number;
+  bytes_downloaded: number;
+  total_bytes: number | null;
+  download_url: string | null;
+  tool_directory: string;
+  log: string[];
+  started_at: string | null;
+  finished_at: string | null;
+  elapsed_seconds: number;
+  percent: number;
+  error: string | null;
+}
+
 export type AudioConversionFormat = "flac" | "mp3" | "m4a" | "opus" | "wav";
 
 export interface AudioConversionRequest {
@@ -1245,6 +1268,8 @@ export interface CdRipSetupResponse {
   secure_ripping_available: boolean;
   cd_text_available: boolean;
   accuraterip_available: boolean;
+  active_playback_drive_ids: string[];
+  active_rip_drive_ids: string[];
   message: string;
   warnings: string[];
 }
@@ -2018,4 +2043,12 @@ export interface ExportResponse {
 
 export interface BackupResponse {
   backup_path: string;
+}
+
+export interface LocalDataResetResponse {
+  reset: boolean;
+  backup_path: string | null;
+  database_path: string;
+  removed_paths: string[];
+  message: string;
 }

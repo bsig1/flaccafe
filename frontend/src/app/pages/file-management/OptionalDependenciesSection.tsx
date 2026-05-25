@@ -15,6 +15,7 @@ import {
 } from "react";
 
 import type {
+  AudioConversionInstallProgress,
   AudioConversionSetupResponse,
   ClapInstallDevice,
   ClapInstallProgress,
@@ -34,6 +35,16 @@ const OPTIONAL_DEPENDENCY_SIZE_HINTS = {
 };
 
 const FFMPEG_SOURCE_URL = "https://www.gyan.dev/ffmpeg/builds/";
+
+function formatBytes(value: number | null | undefined) {
+  if (!value || value <= 0) {
+    return "0 MB";
+  }
+  if (value >= 1_073_741_824) {
+    return `${(value / 1_073_741_824).toFixed(1)} GB`;
+  }
+  return `${(value / 1_048_576).toFixed(1)} MB`;
+}
 
 function dependencyTone(ready: boolean) {
   return ready
@@ -101,6 +112,7 @@ async function revealFolder(path: string | null | undefined, setStatus: (message
 
 export function OptionalDependenciesSection({
   audioConversionSetup,
+  audioConversionInstallProgress,
   clapStatus,
   clapInstallProgress,
   isClapInstalling,
@@ -113,6 +125,7 @@ export function OptionalDependenciesSection({
   setStatus,
 }: {
   audioConversionSetup: AudioConversionSetupResponse | null;
+  audioConversionInstallProgress: AudioConversionInstallProgress | null;
   clapStatus: ClapStatusResponse | null;
   clapInstallProgress: ClapInstallProgress | null;
   isClapInstalling: boolean;
@@ -128,6 +141,8 @@ export function OptionalDependenciesSection({
 
   const clapReady = Boolean(clapStatus?.installed);
   const ffmpegReady = Boolean(audioConversionSetup?.available);
+  const ffmpegInstalling = Boolean(audioConversionInstallProgress && !["completed", "failed"].includes(audioConversionInstallProgress.status));
+  const ffmpegInstallPercent = Math.max(0, Math.min(100, audioConversionInstallProgress?.percent ?? 0));
   const installPercent = Math.max(0, Math.min(100, clapInstallProgress?.percent ?? 0));
 
   async function refreshAll() {
@@ -211,7 +226,7 @@ export function OptionalDependenciesSection({
             </div>
           </DependencyCard>
 
-          <DependencyCard icon={<Wrench size={18} />} title="FFmpeg" status={ffmpegReady ? "Ready" : "Needed"} ready={ffmpegReady}>
+          <DependencyCard icon={<Wrench size={18} />} title="FFmpeg" status={ffmpegInstalling ? "Installing" : ffmpegReady ? "Ready" : "Needed"} ready={ffmpegReady}>
             <p className="text-xs leading-5 text-muted">
               Enables audio conversion, volume tag analysis, playback diagnostics, and FLAC/MP3 encoding for ripped CDs.
             </p>
@@ -220,12 +235,40 @@ export function OptionalDependenciesSection({
               <div className="mt-1 truncate text-muted">{audioConversionSetup?.resolved_path ?? audioConversionSetup?.tool_directory ?? "No local FFmpeg path"}</div>
               {audioConversionSetup?.version && <div className="mt-1 truncate text-muted">{audioConversionSetup.version}</div>}
             </div>
+            {audioConversionInstallProgress && (
+              <div className="mt-3 rounded border border-line/70 bg-panel p-3 text-xs">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <span className="truncate text-neutral-200">{audioConversionInstallProgress.message || "Installing FFmpeg"}</span>
+                  <span className="text-muted">{ffmpegInstallPercent.toFixed(0)}%</span>
+                </div>
+                <div className="h-2 overflow-hidden rounded bg-ink">
+                  <div className="h-full rounded bg-moss transition-all duration-300" style={{ width: `${ffmpegInstallPercent}%` }} />
+                </div>
+                <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-muted">
+                  <span>
+                    Step {audioConversionInstallProgress.current_step.toLocaleString()} / {audioConversionInstallProgress.total_steps.toLocaleString()}
+                  </span>
+                  {audioConversionInstallProgress.total_bytes ? (
+                    <span>
+                      {formatBytes(audioConversionInstallProgress.bytes_downloaded)} / {formatBytes(audioConversionInstallProgress.total_bytes)}
+                    </span>
+                  ) : audioConversionInstallProgress.bytes_downloaded > 0 ? (
+                    <span>{formatBytes(audioConversionInstallProgress.bytes_downloaded)} downloaded</span>
+                  ) : null}
+                </div>
+                {audioConversionInstallProgress.error && (
+                  <div className="mt-2 truncate text-ember" title={audioConversionInstallProgress.error}>
+                    {audioConversionInstallProgress.error}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="mt-3 flex flex-wrap gap-2">
-              <button className="primary-button h-9" type="button" onClick={() => void onInstallAudioConversionFfmpeg()}>
+              <button className="primary-button h-9" type="button" disabled={ffmpegInstalling} onClick={() => void onInstallAudioConversionFfmpeg()}>
                 <Download size={14} />
-                Install FFmpeg
+                {ffmpegInstalling ? "Installing" : "Install FFmpeg"}
               </button>
-              <button className="secondary-button h-9" type="button" onClick={() => void onRefreshAudioConversionSetup()}>
+              <button className="secondary-button h-9" type="button" disabled={ffmpegInstalling} onClick={() => void onRefreshAudioConversionSetup()}>
                 <RefreshCw size={14} />
                 Check
               </button>

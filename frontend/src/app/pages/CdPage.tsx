@@ -4,13 +4,19 @@ import type {
 import { CdRipperSection } from "./file-management/CdRipperSection";
 
 export function CdPage({
+  currentCdPlaybackDriveId,
   defaultTargetFolder,
+  isCdPlaybackActive,
   onBrowseTarget,
+  onOpenOptionalDependencies,
   onPlayPreviewTrack,
   setStatus,
 }: {
+  currentCdPlaybackDriveId?: string | null;
   defaultTargetFolder: string;
+  isCdPlaybackActive: boolean;
   onBrowseTarget: () => Promise<string | null>;
+  onOpenOptionalDependencies: () => void;
   onPlayPreviewTrack: (track: Track, queue?: Track[]) => void;
   setStatus: (message: string) => void;
 }) {
@@ -24,9 +30,12 @@ export function CdPage({
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-5">
         <CdRipperSection
+          currentCdPlaybackDriveId={currentCdPlaybackDriveId}
           defaultTargetFolder={defaultTargetFolder}
+          isCdPlaybackActive={isCdPlaybackActive}
           standalone
           onBrowseTarget={onBrowseTarget}
+          onOpenOptionalDependencies={onOpenOptionalDependencies}
           onPlayPreviewTrack={onPlayPreviewTrack}
           setStatus={setStatus}
         />

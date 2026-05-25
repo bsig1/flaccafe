@@ -56,6 +56,7 @@ import {
   fetchAlbumTracks,
   fetchAlbums,
   fetchArtistInfo,
+  fetchAudioConversionFfmpegInstall,
   fetchArtistLocalTracks,
   fetchArtists,
   fetchAutoDjAvoidRules,
@@ -103,10 +104,12 @@ import {
   reviewInboxTracks,
   restoreTrack,
   resumeClapAudioAnalysis,
+  resetLocalData,
   saveAudioConversionSetup,
   saveRecommendationProfile,
   setDefaultRecommendationProfile,
   startAudioConversion,
+  startAudioConversionFfmpegInstall,
   startClapAudioAnalysis,
   startClapInstall,
   startFolderWatch,
@@ -128,7 +131,6 @@ import {
   fetchChromaprintSetup,
   fetchCdRipSetup,
   fetchDuplicateReview,
-  installAudioConversionFfmpeg,
   readReportFile,
   restoreBulkUndoBatch,
   restoreBulkUndoEntry,
@@ -150,6 +152,7 @@ import type {
   ArtistSummary,
   AudioAnalysisCoverage,
   AudioAnalysisProgress,
+  AudioConversionInstallProgress,
   AudioConversionPreviewResponse,
   AudioConversionProgress,
   AudioConversionSetupResponse,
@@ -401,6 +404,20 @@ function writeStartupLibrarySnapshot(tracks: Track[], total: number) {
   }
 }
 
+function indexedStartupTracks(snapshot: StartupLibrarySnapshot | null) {
+  const cache = new Map<number, Track>();
+  snapshot?.tracks.forEach((track, index) => {
+    cache.set(index, track);
+  });
+  return cache;
+}
+
+function sortedCachedTracks(cache: Map<number, Track>) {
+  return Array.from(cache.entries())
+    .sort(([left], [right]) => left - right)
+    .map(([, track]) => track);
+}
+
 function defaultToolTarget(folderPath: string, folderName: string): string {
   const trimmed = folderPath.trim().replace(/[\\/]+$/, "");
   if (!trimmed) {
@@ -490,6 +507,7 @@ export default function App() {
   const [startupLibrarySnapshot] = useState<StartupLibrarySnapshot | null>(readStartupLibrarySnapshot);
   const [activePage, setActivePage] = useState<Page>(() => readUiPreferences().startupPage);
   const [tracks, setTracks] = useState<Track[]>(() => startupLibrarySnapshot?.tracks ?? []);
+  const [trackIndexCache, setTrackIndexCache] = useState<Map<number, Track>>(() => indexedStartupTracks(startupLibrarySnapshot));
   const [queue, setQueue] = useState<QueueTrack[]>([]);
   const [autoDjAvoidRules, setAutoDjAvoidRules] = useState<AutoDjAvoidRule[]>([]);
   const [recommendationProfiles, setRecommendationProfiles] = useState<RecommendationProfile[]>([]);
@@ -582,6 +600,7 @@ export default function App() {
   const [metadataCsvImportReport, setMetadataCsvImportReport] = useState<CsvMetadataImportReportResponse | null>(null);
   const [deviceSyncPreview, setDeviceSyncPreview] = useState<DeviceSyncResponse | null>(null);
   const [audioConversionSetup, setAudioConversionSetup] = useState<AudioConversionSetupResponse | null>(null);
+  const [audioConversionInstallProgress, setAudioConversionInstallProgress] = useState<AudioConversionInstallProgress | null>(null);
   const [audioConversionPreview, setAudioConversionPreview] = useState<AudioConversionPreviewResponse | null>(null);
   const [audioConversionProgress, setAudioConversionProgress] = useState<AudioConversionProgress | null>(null);
   const [audioConversionJobId, setAudioConversionJobId] = useState<string | null>(null);
@@ -616,7 +635,14 @@ export default function App() {
   const [playbackTime, setPlaybackTime] = useState(0);
   const [restoredPlaybackPosition, setRestoredPlaybackPosition] = useState<number | null>(null);
   const [libraryScrollTop, setLibraryScrollTop] = useState(0);
+  const [libraryArtistScrollTop, setLibraryArtistScrollTop] = useState(0);
+  const [libraryAlbumScrollTop, setLibraryAlbumScrollTop] = useState(0);
+  const [libraryCompletionScrollTop, setLibraryCompletionScrollTop] = useState(0);
+  const [libraryPlaylistScrollTop, setLibraryPlaylistScrollTop] = useState(0);
+  const trackIndexCacheRef = useRef(trackIndexCache);
   const libraryRequestId = useRef(0);
+  const libraryLoadingCountRef = useRef(0);
+  const libraryPageRequestsInFlightRef = useRef<Set<string>>(new Set());
   const undoTimerRef = useRef<number | null>(null);
   const lastSessionWriteKeyRef = useRef<string | null>(null);
   const lastSessionRestoreFinishedRef = useRef(false);
@@ -624,6 +650,7 @@ export default function App() {
   const startupBackgroundHydratedRef = useRef(false);
   const priorityLibraryLoadStartedRef = useRef(false);
   const priorityLibraryQueryKeyRef = useRef<string | null>(null);
+  const libraryCacheQueryKeyRef = useRef<string | null>(startupLibrarySnapshot ? defaultLibraryTrackQueryKey() : null);
   const clapStatusRequestIdRef = useRef(0);
   const lastFolderWatchNotificationIdRef = useRef<string | null>(null);
   const hideFilePaths = uiPreferences.hideFilePaths;
@@ -664,6 +691,45 @@ export default function App() {
       }
     }
     return trackIds.map((trackId) => found.get(trackId)).filter((track): track is Track => Boolean(track));
+  }
+
+  function commitTrackIndexCache(next: Map<number, Track>) {
+    trackIndexCacheRef.current = next;
+    setTrackIndexCache(next);
+    setTracks(sortedCachedTracks(next));
+  }
+
+  function mergeTrackPage(offset: number, pageTracks: Track[], total: number, reset = false) {
+    const next = reset ? new Map<number, Track>() : new Map(trackIndexCacheRef.current);
+    pageTracks.forEach((track, index) => {
+      next.set(offset + index, track);
+    });
+    commitTrackIndexCache(next);
+    setLibraryTotal(total);
+    setHasMoreTracks(next.size < total);
+  }
+
+  function updateCachedTracks(updater: (track: Track) => Track | null) {
+    const next = new Map<number, Track>();
+    for (const [index, track] of trackIndexCacheRef.current.entries()) {
+      const updated = updater(track);
+      if (updated) {
+        next.set(index, updated);
+      }
+    }
+    commitTrackIndexCache(next);
+  }
+
+  function beginLibraryLoad() {
+    libraryLoadingCountRef.current += 1;
+    setIsLibraryLoading(true);
+  }
+
+  function endLibraryLoad() {
+    libraryLoadingCountRef.current = Math.max(0, libraryLoadingCountRef.current - 1);
+    if (libraryLoadingCountRef.current === 0) {
+      setIsLibraryLoading(false);
+    }
   }
 
   async function handleUndoAction() {
@@ -757,26 +823,27 @@ export default function App() {
     return libraryTrackQueryKey(debouncedSearch, debouncedAdvancedTrackSearch, librarySort);
   }
 
-  async function loadTracksPage(reset: boolean): Promise<boolean> {
-    if (isLibraryLoading && !reset) {
+  async function loadTracksPage(reset: boolean, offset = 0, limit = LIBRARY_PAGE_SIZE): Promise<boolean> {
+    const boundedOffset = Math.max(0, offset);
+    const queryKey = currentLibraryTrackQueryKey();
+    const requestKey = `${queryKey}:${boundedOffset}:${limit}`;
+    if (!reset && libraryPageRequestsInFlightRef.current.has(requestKey)) {
       return false;
     }
-    const requestId = ++libraryRequestId.current;
-    const offset = reset ? 0 : tracks.length;
-    const queryKey = currentLibraryTrackQueryKey();
-    const preserveCurrentRows = reset && tracks.length > 0 && queryKey === defaultLibraryTrackQueryKey();
+    const requestId = reset ? ++libraryRequestId.current : libraryRequestId.current;
     if (reset) {
-      if (!preserveCurrentRows) {
-        setTracks([]);
-      }
       setHasMoreTracks(true);
+      libraryPageRequestsInFlightRef.current.clear();
+    } else if (libraryCacheQueryKeyRef.current !== queryKey) {
+      return false;
     }
-    setIsLibraryLoading(true);
+    libraryPageRequestsInFlightRef.current.add(requestKey);
+    beginLibraryLoad();
     try {
       const response = await fetchTrackPage({
         search: debouncedSearch,
-        limit: LIBRARY_PAGE_SIZE,
-        offset,
+        limit,
+        offset: boundedOffset,
         sortBy: librarySort.key,
         sortDirection: librarySort.direction,
         advancedFilters: debouncedAdvancedTrackSearch,
@@ -784,9 +851,8 @@ export default function App() {
       if (requestId !== libraryRequestId.current) {
         return false;
       }
-      setTracks((current) => (reset ? response.tracks : [...current, ...response.tracks]));
-      setLibraryTotal(response.total);
-      setHasMoreTracks(response.offset + response.tracks.length < response.total);
+      libraryCacheQueryKeyRef.current = queryKey;
+      mergeTrackPage(response.offset, response.tracks, response.total, reset);
       if (reset && queryKey === defaultLibraryTrackQueryKey()) {
         writeStartupLibrarySnapshot(response.tracks, response.total);
       }
@@ -797,12 +863,13 @@ export default function App() {
       }
       return false;
     } finally {
+      libraryPageRequestsInFlightRef.current.delete(requestKey);
       if (requestId === libraryRequestId.current) {
-        setIsLibraryLoading(false);
         if (reset) {
           setHasLoadedInitialLibrary(true);
         }
       }
+      endLibraryLoad();
     }
   }
 
@@ -821,9 +888,32 @@ export default function App() {
   }
 
   async function loadMoreTracks() {
-    if (hasMoreTracks) {
-      await loadTracksPage(false);
+    if (!hasMoreTracks || libraryTotal <= 0) {
+      return;
     }
+    const cachedIndexes = Array.from(trackIndexCacheRef.current.keys());
+    const nextOffset = cachedIndexes.length > 0 ? Math.min(libraryTotal, Math.max(...cachedIndexes) + 1) : 0;
+    await loadTracksPage(false, nextOffset, LIBRARY_PAGE_SIZE);
+  }
+
+  async function loadTrackWindow(offset: number, limit = LIBRARY_PAGE_SIZE) {
+    if (libraryTotal <= 0) {
+      return;
+    }
+    const boundedOffset = Math.max(0, Math.min(offset, Math.max(0, libraryTotal - 1)));
+    const boundedLimit = Math.max(1, Math.min(limit, libraryTotal - boundedOffset));
+    const cache = trackIndexCacheRef.current;
+    let missingTrack = false;
+    for (let index = boundedOffset; index < boundedOffset + boundedLimit; index += 1) {
+      if (!cache.has(index)) {
+        missingTrack = true;
+        break;
+      }
+    }
+    if (!missingTrack) {
+      return;
+    }
+    await loadTracksPage(false, boundedOffset, boundedLimit);
   }
 
   async function loadAlbums() {
@@ -1827,15 +1917,15 @@ export default function App() {
 
   async function handleRating(trackId: number, rating: number | null) {
     const previous = tracks;
-    setTracks((current) =>
-      current.map((track) => (track.id === trackId ? { ...track, rating } : track)),
-    );
+    const previousCache = new Map(trackIndexCacheRef.current);
+    updateCachedTracks((track) => (track.id === trackId ? { ...track, rating } : track));
     try {
       const updated = await updateTrackRating(trackId, rating);
       replaceTrackEverywhere(updated);
       setStatus("Rating saved");
     } catch (error) {
       setTracks(previous);
+      commitTrackIndexCache(previousCache);
       setStatus(error instanceof Error ? error.message : "Rating failed");
     }
   }
@@ -1870,7 +1960,7 @@ export default function App() {
 
   function replaceTrackEverywhere(updated: Track) {
     const replace = (track: Track) => (track.id === updated.id ? updated : track);
-    setTracks((current) => current.map(replace));
+    updateCachedTracks(replace);
     setSelectedAlbumTracks((current) => current.map(replace));
     setSelectedArtistTracks((current) => current.map(replace));
     setSelectedPlaylistTracks((current) => current.map(replace));
@@ -1884,7 +1974,7 @@ export default function App() {
 
   function removeTrackEverywhere(trackId: number) {
     const remove = (track: Track) => track.id !== trackId;
-    setTracks((current) => current.filter(remove));
+    updateCachedTracks((track) => (remove(track) ? track : null));
     setSelectedAlbumTracks((current) => current.filter(remove));
     setSelectedArtistTracks((current) => current.filter(remove));
     setSelectedPlaylistTracks((current) => current.filter(remove));
@@ -2540,9 +2630,12 @@ export default function App() {
     commitPlayTrack(track, queueItems, options);
   }
 
-  function handleCommitExternalTrackRequest(request: { id: number; track: Track; queue: Track[] }) {
+  function handleCommitExternalTrackRequest(
+    request: { id: number; track: Track; queue: Track[] },
+    options?: { suppressExitRecord?: boolean },
+  ) {
     setExternalTrackRequest((current) => (current?.id === request.id ? null : current));
-    commitPlayTrack(request.track, request.queue);
+    commitPlayTrack(request.track, request.queue, options);
   }
 
   function handlePlayCdPreviewTrack(track: Track, queueItems: Track[] = [track]) {
@@ -2749,6 +2842,52 @@ export default function App() {
       setStatus(`Database backed up to ${response.backup_path}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Database backup failed");
+    }
+  }
+
+  function clearFrontendLocalData() {
+    try {
+      const explicitKeys = new Set([
+        ...Object.values(storageKeys),
+        ...Object.values(legacyStorageKeys),
+        "flac-cafe-sidebar-order",
+        "flacCafeFilenameTagPresets",
+        "flacCafeCsvImportProfiles",
+      ]);
+      for (const key of Object.keys(window.localStorage)) {
+        if (
+          explicitKeys.has(key) ||
+          key.startsWith("flac-cafe-") ||
+          key.startsWith("local-autodj-") ||
+          key.startsWith("flacCafe")
+        ) {
+          window.localStorage.removeItem(key);
+        }
+      }
+    } catch {
+      // Resetting SQLite is the important part; browser storage can be unavailable.
+    }
+  }
+
+  async function handleResetLocalData() {
+    const first = window.confirm(
+      "Reset FLAC Cafe local data?\n\nThis backs up and clears the SQLite library database, cached lyrics, and generated cache files. Music files, exports, tools, models, and logs are not deleted.",
+    );
+    if (!first) {
+      return;
+    }
+    const confirmation = window.prompt("Type RESET to confirm local data reset.");
+    if (confirmation !== "RESET") {
+      setStatus("Local data reset canceled");
+      return;
+    }
+    try {
+      const response = await resetLocalData(confirmation);
+      clearFrontendLocalData();
+      setStatus(response.backup_path ? `Local data reset. Backup: ${response.backup_path}` : response.message);
+      window.setTimeout(() => window.location.reload(), 700);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not reset local data");
     }
   }
 
@@ -3112,6 +3251,13 @@ export default function App() {
     setStatus(`File Management target set to ${uniqueIds.length.toLocaleString()} selected track${uniqueIds.length === 1 ? "" : "s"}.`);
   }
 
+  function handleOpenOptionalDependencies() {
+    setFileManagementScopeIds(null);
+    setFileManagementFocusToolId("optionalDependencies");
+    setActivePage("fileManagement");
+    setStatus("Open Optional Dependencies to install or check FFmpeg.");
+  }
+
   async function handlePreviewFileOrganization(
     template: string,
     baseFolder?: string | null,
@@ -3271,10 +3417,25 @@ export default function App() {
       return;
     }
     try {
-      setStatus("Downloading FFmpeg...");
-      const response = await installAudioConversionFfmpeg();
-      setAudioConversionSetup(response);
-      setStatus(response.message);
+      setAudioConversionInstallProgress(null);
+      setStatus("Starting FFmpeg install...");
+      const started = await startAudioConversionFfmpegInstall();
+      let latest: AudioConversionInstallProgress | null = null;
+      do {
+        latest = await fetchAudioConversionFfmpegInstall(started.job_id);
+        setAudioConversionInstallProgress(latest);
+        if (["completed", "failed"].includes(latest.status)) {
+          break;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 600));
+      } while (latest.status !== "completed" && latest.status !== "failed");
+
+      await loadAudioConversionSetup();
+      if (latest.status === "completed") {
+        setStatus(latest.message || "FFmpeg was installed for FLAC Cafe.");
+      } else {
+        setStatus(latest.error || latest.message || "Could not install FFmpeg");
+      }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not install FFmpeg");
     }
@@ -4032,6 +4193,9 @@ export default function App() {
       priorityLibraryQueryKeyRef.current = null;
       return;
     }
+    if (libraryCacheQueryKeyRef.current === currentQueryKey && trackIndexCacheRef.current.size > 0) {
+      return;
+    }
     void refreshTracks();
   }, [backendStatus, activePage, libraryView, debouncedSearch, debouncedAdvancedTrackSearch, librarySort]);
 
@@ -4283,6 +4447,32 @@ export default function App() {
         Object.keys(clapStatus.dependency_errors ?? {}).length > 0),
   );
   const cdDriveDetected = Boolean(cdRipSetup?.drives.length);
+  const cdDriveIdFromTrack = (track: Track | null | undefined) => {
+    if (!track) {
+      return null;
+    }
+    const pathMatch = track.path?.match(/^cdda:\/\/([^/]+)/);
+    if (pathMatch?.[1]) {
+      return decodeURIComponent(pathMatch[1]);
+    }
+    if (!track.audio_url?.includes("/library/tools/cd-rip/playback/")) {
+      return null;
+    }
+    try {
+      const parsed = new URL(track.audio_url);
+      return parsed.searchParams.get("drive_id");
+    } catch {
+      return null;
+    }
+  };
+  const cdTrackLooksActive = (track: Track | null | undefined) =>
+    Boolean(track?.path?.startsWith("cdda://") || track?.audio_url?.includes("/library/tools/cd-rip/playback/"));
+  const currentCdPlaybackDriveId = cdDriveIdFromTrack(currentTrack) ?? cdDriveIdFromTrack(externalTrackRequest?.track);
+  const isCdPlaybackActive = Boolean(
+    currentCdPlaybackDriveId ||
+      cdTrackLooksActive(currentTrack) ||
+      cdTrackLooksActive(externalTrackRequest?.track),
+  );
   const showCdPage =
     uiPreferences.cdSidebarMode === "always" ||
     (uiPreferences.cdSidebarMode === "drive" && cdDriveDetected);
@@ -4409,6 +4599,7 @@ export default function App() {
           ) : activePage === "library" ? (
             <LibraryPage
               tracks={tracks}
+              trackIndexCache={trackIndexCache}
               totalTracks={libraryTotal}
               albums={albums}
               artists={artists}
@@ -4434,12 +4625,21 @@ export default function App() {
               refreshTracks={refreshTracks}
               refreshAlbums={loadAlbums}
               loadMoreTracks={loadMoreTracks}
+              loadTrackWindow={loadTrackWindow}
               isLoading={isLibraryLoading}
               hasMoreTracks={hasMoreTracks}
               sort={librarySort}
               setSort={setLibrarySort}
               scrollTop={libraryScrollTop}
               setScrollTop={setLibraryScrollTop}
+              artistScrollTop={libraryArtistScrollTop}
+              setArtistScrollTop={setLibraryArtistScrollTop}
+              albumScrollTop={libraryAlbumScrollTop}
+              setAlbumScrollTop={setLibraryAlbumScrollTop}
+              completionScrollTop={libraryCompletionScrollTop}
+              setCompletionScrollTop={setLibraryCompletionScrollTop}
+              playlistScrollTop={libraryPlaylistScrollTop}
+              setPlaylistScrollTop={setLibraryPlaylistScrollTop}
               onRating={handleRating}
               onBulkRating={handleBulkRating}
               onPlayTrack={handlePlayTrack}
@@ -4493,7 +4693,12 @@ export default function App() {
               setTargetPlaylistId={setTargetPlaylistId}
               setNewPlaylistName={setNewPlaylistName}
               setImportPlaylistPath={setImportPlaylistPath}
-              showQuickStart={hasLoadedInitialLibrary && libraryTotal === 0 && !quickStartDismissed}
+              showQuickStart={
+                hasLoadedInitialLibrary &&
+                !quickStartDismissed &&
+                currentLibraryTrackQueryKey() === defaultLibraryTrackQueryKey() &&
+                (libraryStats?.total_tracks ?? libraryTotal) === 0
+              }
               isScanning={isScanning}
               suggestedMusicPath={settings?.suggested_music_path}
               onChooseMusicFolder={() => void handleChooseMusicFolderAndScan()}
@@ -4596,8 +4801,11 @@ export default function App() {
             <ScrobblingPage setStatus={setStatus} onOpenApiKeysSettings={openApiKeysSettings} />
           ) : activePage === "cd" ? (
             <CdPage
+              currentCdPlaybackDriveId={currentCdPlaybackDriveId}
               defaultTargetFolder={defaultCdRipTarget(folderPath)}
+              isCdPlaybackActive={isCdPlaybackActive}
               onBrowseTarget={handleBrowseCdRipTarget}
+              onOpenOptionalDependencies={handleOpenOptionalDependencies}
               onPlayPreviewTrack={handlePlayCdPreviewTrack}
               setStatus={setStatus}
             />
@@ -4685,6 +4893,7 @@ export default function App() {
               deviceSyncPreview={deviceSyncPreview}
               onDeviceSync={handleDeviceSync}
               audioConversionSetup={audioConversionSetup}
+              audioConversionInstallProgress={audioConversionInstallProgress}
               audioConversionPreview={audioConversionPreview}
               audioConversionProgress={audioConversionProgress}
               onRefreshAudioConversionSetup={loadAudioConversionSetup}
@@ -4692,6 +4901,8 @@ export default function App() {
               onInstallAudioConversionFfmpeg={handleInstallAudioConversionFfmpeg}
               onBrowseAudioConversionTarget={handleBrowseAudioConversionTarget}
               onBrowseCdRipTarget={handleBrowseCdRipTarget}
+              currentCdPlaybackDriveId={currentCdPlaybackDriveId}
+              isCdPlaybackActive={isCdPlaybackActive}
               onPlayCdPreviewTrack={handlePlayCdPreviewTrack}
               onPreviewAudioConversion={handlePreviewAudioConversion}
               onStartAudioConversion={handleStartAudioConversion}
@@ -4766,6 +4977,7 @@ export default function App() {
               onLastFmApiCredentialsChange={(apiKey, apiSecret) => void handleLastFmApiCredentialsChange(apiKey, apiSecret)}
               setStatus={setStatus}
               onBackupDatabase={handleBackupDatabase}
+              onResetLocalData={handleResetLocalData}
               onCreateSupportBundle={handleCreateSupportBundle}
               supportBundlePath={supportBundlePath}
               onCopySupportBundlePath={handleCopySupportBundlePath}

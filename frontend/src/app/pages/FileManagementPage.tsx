@@ -23,6 +23,7 @@ import {
 
 import type {
   AcousticFingerprintResponse,
+  AudioConversionInstallProgress,
   AudioConversionPreviewResponse,
   AudioConversionProgress,
   AudioConversionSetupResponse,
@@ -156,6 +157,7 @@ export function FileManagementPage({
   deviceSyncPreview,
   onDeviceSync,
   audioConversionSetup,
+  audioConversionInstallProgress,
   audioConversionPreview,
   audioConversionProgress,
   onRefreshAudioConversionSetup,
@@ -163,6 +165,8 @@ export function FileManagementPage({
   onInstallAudioConversionFfmpeg,
   onBrowseAudioConversionTarget,
   onBrowseCdRipTarget,
+  currentCdPlaybackDriveId,
+  isCdPlaybackActive,
   onPlayCdPreviewTrack,
   onPreviewAudioConversion,
   onStartAudioConversion,
@@ -264,6 +268,7 @@ export function FileManagementPage({
     },
   ) => void | Promise<void>;
   audioConversionSetup: AudioConversionSetupResponse | null;
+  audioConversionInstallProgress: AudioConversionInstallProgress | null;
   audioConversionPreview: AudioConversionPreviewResponse | null;
   audioConversionProgress: AudioConversionProgress | null;
   onRefreshAudioConversionSetup: () => void | Promise<void>;
@@ -271,6 +276,8 @@ export function FileManagementPage({
   onInstallAudioConversionFfmpeg: () => void | Promise<void>;
   onBrowseAudioConversionTarget: () => Promise<string | null>;
   onBrowseCdRipTarget: () => Promise<string | null>;
+  currentCdPlaybackDriveId?: string | null;
+  isCdPlaybackActive?: boolean;
   onPlayCdPreviewTrack: (track: Track, queue?: Track[]) => void;
   onPreviewAudioConversion: (targetFolder: string, options: AudioConversionOptions) => void | Promise<void>;
   onStartAudioConversion: (targetFolder: string, options: AudioConversionOptions) => void | Promise<void>;
@@ -1050,6 +1057,7 @@ export function FileManagementPage({
           {showTool("optionalDependencies") && (
             <OptionalDependenciesSection
               audioConversionSetup={audioConversionSetup}
+              audioConversionInstallProgress={audioConversionInstallProgress}
               clapStatus={clapStatus}
               clapInstallProgress={clapInstallProgress}
               isClapInstalling={isClapInstalling}
@@ -2148,8 +2156,11 @@ export function FileManagementPage({
 
           {showTool("cdRipper") && (
           <CdRipperSection
+            currentCdPlaybackDriveId={currentCdPlaybackDriveId}
             defaultTargetFolder={defaultCdRipTarget(folderPath)}
+            isCdPlaybackActive={isCdPlaybackActive}
             onBrowseTarget={onBrowseCdRipTarget}
+            onOpenOptionalDependencies={openOptionalDependenciesSection}
             onPlayPreviewTrack={onPlayCdPreviewTrack}
             setStatus={setStatus}
           />

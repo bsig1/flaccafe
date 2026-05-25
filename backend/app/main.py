@@ -22,7 +22,7 @@ from threading import Thread
 from urllib import error as urlerror
 from urllib import parse, request as urlrequest
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from mutagen import File as MutagenFile
@@ -66,12 +66,12 @@ from .musicbrainz_autotag import (
 from .audio_conversion_jobs import (
     cancel_audio_conversion_job,
     conversion_preview,
-    ffmpeg_tool_dir,
     ffmpeg_status,
     get_audio_conversion_job,
     resolve_ffmpeg_path,
     start_audio_conversion_job,
 )
+from .ffmpeg_install_jobs import get_ffmpeg_install_job, start_ffmpeg_install_job
 from .audiobooks import (
     add_bookmark as add_audiobook_bookmark,
     audiobook_where_clause,
@@ -84,6 +84,8 @@ from .audiobooks import (
     upsert_audiobook_progress,
 )
 from .cd_ripping import (
+    active_cd_playback_for_drive,
+    active_cd_rip_job_for_drive,
     cancel_cd_rip_job,
     cd_live_wav_content_length,
     cd_live_wav_stream,
@@ -156,7 +158,9 @@ from .schemas import (
     AudioAnalysisProgress,
     AudioAnalysisStartRequest,
     AudioAnalysisStartResponse,
+    AudioConversionInstallProgress,
     AudioConversionInstallRequest,
+    AudioConversionInstallStartResponse,
     AudioConversionPreviewResponse,
     AudioConversionProgress,
     AudioConversionRequest,
@@ -188,6 +192,8 @@ from .schemas import (
     AutoTagRequest,
     AutoTagResponse,
     BackupResponse,
+    LocalDataResetRequest,
+    LocalDataResetResponse,
     CacheClearRequest,
     CacheClearResponse,
     AcousticFingerprintRequest,
@@ -447,8 +453,6 @@ TRACK_COLUMNS = """
 """
 
 TRACK_FIELD_NAMES = [field.strip() for field in TRACK_COLUMNS.replace("\n", " ").split(",") if field.strip()]
-
-FFMPEG_WINDOWS_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 
 TRACK_JOIN_COLUMNS = """
     tracks.id AS id, tracks.path AS path, tracks.title AS title,
@@ -3363,6 +3367,73 @@ def backup_database() -> BackupResponse:
     return BackupResponse(backup_path=str(target))
 
 
+def reset_database_in_place(db_path: Path) -> None:
+    with connect(db_path) as conn:
+        table_rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+        conn.execute("PRAGMA foreign_keys = OFF")
+        for row in table_rows:
+            table_name = str(row["name"]).replace('"', '""')
+            conn.execute(f'DELETE FROM "{table_name}"')
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("VACUUM")
+
+
+@app.post("/settings/reset-local-data", response_model=LocalDataResetResponse)
+def reset_local_data(request: LocalDataResetRequest) -> LocalDataResetResponse:
+    if request.confirmation.strip().upper() != "RESET":
+        raise HTTPException(status_code=400, detail="Type RESET to confirm local data reset.")
+
+    source = database_path()
+    backup_path: str | None = None
+    removed_paths: list[str] = []
+    if source.exists():
+        EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        target = EXPORT_DIR / f"flac-cafe-reset-backup-{stamp}.sqlite"
+        try:
+            shutil.copy2(source, target)
+            backup_path = str(target)
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=f"Could not back up database before reset: {exc}") from exc
+
+    for path in [source, Path(f"{source}-wal"), Path(f"{source}-shm")]:
+        try:
+            if path.exists():
+                path.unlink()
+                removed_paths.append(str(path))
+        except OSError:
+            reset_database_in_place(source)
+            removed_paths.append(f"{source} (cleared in place)")
+            break
+
+    folders_to_remove = [source.parent / "lyrics"]
+    try:
+        if source.resolve(strict=False).is_relative_to(APP_STORAGE_ROOT.resolve(strict=False)):
+            folders_to_remove.append(APP_STORAGE_ROOT / "cache")
+    except OSError:
+        pass
+
+    for folder in folders_to_remove:
+        try:
+            if folder.exists():
+                shutil.rmtree(folder)
+                removed_paths.append(str(folder))
+        except OSError:
+            continue
+
+    init_db()
+    return LocalDataResetResponse(
+        reset=True,
+        backup_path=backup_path,
+        database_path=str(source),
+        removed_paths=removed_paths,
+        message="Local FLAC Cafe data was reset. Music files, exports, tools, models, and logs were left in place.",
+    )
+
+
 @app.get("/tracks", response_model=list[Track])
 def list_tracks(
     search: str = "",
@@ -4160,48 +4231,30 @@ def update_audio_conversion_setup(request: AudioConversionSetupRequest) -> Audio
 
 @app.post("/library/tools/audio-conversion/install", response_model=AudioConversionSetupResponse)
 def install_audio_conversion_ffmpeg(request: AudioConversionInstallRequest) -> AudioConversionSetupResponse:
-    if os.name != "nt":
-        with connect() as conn:
-            status = ffmpeg_status(conn)
-        status["message"] = "Guided FFmpeg install is currently Windows-only. Save an ffmpeg path instead."
-        status["errors"].append("Unsupported platform for the bundled Windows FFmpeg package.")
-        return AudioConversionSetupResponse(**status)
+    job = start_ffmpeg_install_job(request.source_url)
+    while job["status"] not in {"completed", "failed"}:
+        time.sleep(0.25)
+        job = get_ffmpeg_install_job(job["job_id"]) or job
+    with connect() as conn:
+        status = ffmpeg_status(conn)
+    status["message"] = job.get("message") or status["message"]
+    if job.get("error"):
+        status["errors"].append(str(job["error"]))
+    return AudioConversionSetupResponse(**status)
 
-    source_url = request.source_url or FFMPEG_WINDOWS_URL
-    tool_dir = ffmpeg_tool_dir()
-    archive_path = tool_dir / "ffmpeg-release-essentials.zip"
-    tool_dir.mkdir(parents=True, exist_ok=True)
 
-    try:
-        api_request = urlrequest.Request(source_url, headers={"User-Agent": "FLAC-Cafe"})
-        with urlrequest.urlopen(api_request, timeout=180) as response:
-            archive_path.write_bytes(response.read())
+@app.post("/library/tools/audio-conversion/install/jobs", response_model=AudioConversionInstallStartResponse)
+def start_audio_conversion_ffmpeg_install(request: AudioConversionInstallRequest) -> AudioConversionInstallStartResponse:
+    job = start_ffmpeg_install_job(request.source_url)
+    return AudioConversionInstallStartResponse(job_id=job["job_id"], status=job["status"])
 
-        with zipfile.ZipFile(archive_path) as archive:
-            members_by_name = {Path(name).name.lower(): name for name in archive.namelist()}
-            if "ffmpeg.exe" not in members_by_name:
-                raise OSError("Downloaded archive did not contain ffmpeg.exe")
-            for executable in ["ffmpeg.exe", "ffprobe.exe", "ffplay.exe"]:
-                member = members_by_name.get(executable)
-                if member:
-                    with archive.open(member) as source, (tool_dir / executable).open("wb") as target:
-                        shutil.copyfileobj(source, target)
 
-        archive_path.unlink(missing_ok=True)
-        ffmpeg_path = tool_dir / "ffmpeg.exe"
-        with connect() as conn:
-            set_setting(conn, "ffmpeg_path", str(ffmpeg_path.resolve()))
-            conn.commit()
-            status = ffmpeg_status(conn)
-        status["message"] = "FFmpeg was installed for FLAC Cafe."
-        return AudioConversionSetupResponse(**status)
-    except (OSError, zipfile.BadZipFile, TimeoutError, urlerror.URLError) as exc:
-        archive_path.unlink(missing_ok=True)
-        with connect() as conn:
-            status = ffmpeg_status(conn)
-        status["message"] = "Could not install FFmpeg automatically."
-        status["errors"].append(f"{exc} Source: {source_url}")
-        return AudioConversionSetupResponse(**status)
+@app.get("/library/tools/audio-conversion/install/jobs/{job_id}", response_model=AudioConversionInstallProgress)
+def get_audio_conversion_ffmpeg_install(job_id: str) -> dict:
+    job = get_ffmpeg_install_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="FFmpeg install job not found")
+    return job
 
 
 @app.post("/library/tools/audio-conversion/preview", response_model=AudioConversionPreviewResponse)
@@ -4248,12 +4301,27 @@ def get_cd_rip_metadata(request: CdRipMetadataRequest) -> CdRipMetadataResponse:
 @app.post("/library/tools/cd-rip/jobs", response_model=CdRipStartResponse)
 def start_cd_rip(request: CdRipStartRequest) -> CdRipStartResponse:
     setup = cd_rip_setup()
+    native_ripping_available = any(
+        tool.get("name") == "windows_cdda" and tool.get("available")
+        for tool in setup.get("tools", [])
+    )
     if request.output_format != "wav" and not setup["ffmpeg_available"]:
         raise HTTPException(status_code=400, detail="FFmpeg is required to encode ripped CD audio to FLAC or MP3.")
-    if request.secure_mode and not setup["secure_ripping_available"]:
+    if request.secure_mode and not (setup["secure_ripping_available"] or native_ripping_available):
         raise HTTPException(status_code=400, detail="Secure CD ripping requires cdparanoia, cdda2wav, or icedax.")
-    if not request.secure_mode and not (setup["secure_ripping_available"] or setup["ffmpeg_available"]):
+    if not request.secure_mode and not (setup["secure_ripping_available"] or setup["ffmpeg_available"] or native_ripping_available):
         raise HTTPException(status_code=400, detail="No compatible CD ripping tool was found.")
+    active_rip = active_cd_rip_job_for_drive(request.drive_id)
+    if active_rip is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"CD ripping is already active on {request.drive_id}. Cancel or wait for that rip before starting another.",
+        )
+    if active_cd_playback_for_drive(request.drive_id):
+        raise HTTPException(
+            status_code=409,
+            detail=f"CD playback is active on {request.drive_id}. Stop playback before ripping from this drive.",
+        )
     job = start_cd_rip_job(request)
     return CdRipStartResponse(job_id=job["job_id"], status=job["status"])
 
@@ -4276,31 +4344,52 @@ def cancel_cd_rip(job_id: str) -> dict:
 
 @app.post("/library/tools/cd-rip/playback/play", response_model=CdPlaybackResponse)
 def play_cd_track_route(request: CdPlaybackRequest) -> CdPlaybackResponse:
+    active_rip = active_cd_rip_job_for_drive(request.drive_id)
+    if active_rip is not None:
+        drive = request.drive_id or active_rip.get("drive_id") or "the selected drive"
+        raise HTTPException(
+            status_code=409,
+            detail=f"CD ripping is active on {drive}. Cancel or wait for the rip before playing from this drive.",
+        )
     try:
         return CdPlaybackResponse(**prepare_cd_live_track(request))
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        drive = request.drive_id or "the selected drive"
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not open CD drive {drive}. Refresh CD drives, reinsert the disc, or choose another detected CD drive. {exc}",
+        ) from exc
 
 
 @app.head("/library/tools/cd-rip/playback/live/audio")
 @app.get("/library/tools/cd-rip/playback/live/audio")
 def stream_cd_live_audio(
+    request: Request,
     drive_id: str = Query(..., min_length=1),
     track_number: int = Query(..., ge=1, le=999),
     token: str | None = Query(default=None),
-) -> StreamingResponse:
+) -> Response:
     try:
-        content_length = cd_live_wav_content_length(drive_id, track_number)
-        stream = cd_live_wav_stream(drive_id, track_number, token)
+        cd_live_wav_content_length(drive_id, track_number)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except OSError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if request.method == "HEAD":
+        return Response(
+            media_type="audio/wav",
+            headers={
+                "Cache-Control": "no-store",
+                "Accept-Ranges": "none",
+            },
+        )
+    stream = cd_live_wav_stream(drive_id, track_number, token)
     return StreamingResponse(
         stream,
         media_type="audio/wav",
         headers={
-            "Content-Length": str(content_length),
             "Cache-Control": "no-store",
             "Accept-Ranges": "none",
         },

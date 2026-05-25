@@ -11,7 +11,9 @@ import type {
   AudioAnalysisProgress,
   AudioAnalysisStartRequest,
   AudioAnalysisStartResponse,
+  AudioConversionInstallProgress,
   AudioConversionInstallRequest,
+  AudioConversionInstallStartResponse,
   AudioConversionPreviewResponse,
   AudioConversionProgress,
   AudioConversionRequest,
@@ -88,6 +90,7 @@ import type {
   FilenameTagInferenceResponse,
   LibraryHealthResponse,
   LibrarySourceRemoveResponse,
+  LocalDataResetResponse,
   LibraryStatsImportRequest,
   LibraryStatsImportResponse,
   InboxAutoReviewRuleApplyResponse,
@@ -261,6 +264,13 @@ export function createSupportBundle(): Promise<SupportBundleResponse> {
 
 export function backupDatabase(): Promise<BackupResponse> {
   return request<BackupResponse>("/settings/backup", { method: "POST" });
+}
+
+export function resetLocalData(confirmation: string): Promise<LocalDataResetResponse> {
+  return request<LocalDataResetResponse>("/settings/reset-local-data", {
+    method: "POST",
+    body: JSON.stringify({ confirmation }),
+  });
 }
 
 export function updateSettings(settings: SettingsUpdateRequest): Promise<SettingsResponse> {
@@ -643,6 +653,19 @@ export function installAudioConversionFfmpeg(
     method: "POST",
     body: JSON.stringify(requestBody),
   });
+}
+
+export function startAudioConversionFfmpegInstall(
+  requestBody: AudioConversionInstallRequest = {},
+): Promise<AudioConversionInstallStartResponse> {
+  return request<AudioConversionInstallStartResponse>("/library/tools/audio-conversion/install/jobs", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
+export function fetchAudioConversionFfmpegInstall(jobId: string): Promise<AudioConversionInstallProgress> {
+  return request<AudioConversionInstallProgress>(`/library/tools/audio-conversion/install/jobs/${jobId}`);
 }
 
 export function previewAudioConversion(requestBody: AudioConversionRequest): Promise<AudioConversionPreviewResponse> {

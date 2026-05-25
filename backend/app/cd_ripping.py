@@ -39,8 +39,9 @@ CDDA_SECTOR_SIZE = 2352
 CD_RAW_READ_OFFSET_SECTOR_SIZE = 2048
 WINDOWS_CDDA_READ_SECTORS = 16
 WINDOWS_CDDA_STREAM_READ_SECTORS = CD_FRAMES_PER_SECOND
-ACTIVE_CD_STREAM_TOKENS: dict[str, str] = {}
+ACTIVE_CD_STREAM_TOKENS: dict[str, set[str]] = {}
 ACTIVE_CD_STREAM_LOCK = Lock()
+MAX_ACTIVE_CD_STREAM_TOKENS_PER_DRIVE = 100
 
 IOCTL_CDROM_READ_TOC = 0x00024000
 IOCTL_CDROM_RAW_READ = 0x0002403E
@@ -197,7 +198,7 @@ def powershell_cd_drives() -> list[dict]:
 
 
 def root_from_drive_id(drive_id: str) -> Path | None:
-    text = drive_id.strip()
+    text = normalize_cd_drive_id(drive_id) or ""
     if not text:
         return None
     if re.fullmatch(r"[A-Za-z]:", text):
@@ -236,7 +237,7 @@ def detect_cd_drives() -> list[dict]:
     drives: list[dict] = []
     if os.name == "nt":
         for item in powershell_cd_drives():
-            drive_id = str(item.get("Drive") or "").strip()
+            drive_id = normalize_cd_drive_id(str(item.get("Drive") or "")) or ""
             if not drive_id:
                 continue
             tracks = cda_tracks_for_drive(drive_id)
@@ -297,6 +298,8 @@ def cd_rip_setup() -> dict:
         "secure_ripping_available": secure_available,
         "cd_text_available": cd_text_supported(tools),
         "accuraterip_available": accuraterip_supported(tools),
+        "active_playback_drive_ids": active_cd_playback_drive_ids(),
+        "active_rip_drive_ids": active_cd_rip_drive_ids(),
         "message": (
             "CD ripping tools are ready."
             if (secure_available or native_available) and ffmpeg_path is not None
@@ -537,10 +540,11 @@ def windows_device_path(drive_id: str) -> str:
     text = drive_id.strip()
     if text.startswith("\\\\.\\"):
         return text
-    match = re.match(r"^([A-Za-z]):", text)
+    normalized = normalize_cd_drive_id(text) or text
+    match = re.match(r"^([A-Za-z]):", normalized)
     if match:
         return f"\\\\.\\{match.group(1).upper()}:"
-    return text
+    return normalized
 
 
 def msf_to_lba(address: object) -> int:
@@ -767,46 +771,110 @@ def cd_live_track_duration_seconds(drive_id: str, track_number: int) -> float:
     return total_sectors / CD_FRAMES_PER_SECOND
 
 
+def silent_wav_stream() -> Iterator[bytes]:
+    yield wav_header(0)
+
+
+def register_cd_live_stream_token(drive_id: str, token: str) -> None:
+    normalized = normalize_cd_drive_id(drive_id) or drive_id
+    with ACTIVE_CD_STREAM_LOCK:
+        tokens = ACTIVE_CD_STREAM_TOKENS.setdefault(normalized, set())
+        tokens.add(token)
+        if len(tokens) > MAX_ACTIVE_CD_STREAM_TOKENS_PER_DRIVE:
+            for stale_token in list(tokens)[: len(tokens) - MAX_ACTIVE_CD_STREAM_TOKENS_PER_DRIVE]:
+                tokens.discard(stale_token)
+
+
+def unregister_cd_live_stream_token(drive_id: str, token: str | None) -> None:
+    if not token:
+        return
+    normalized = normalize_cd_drive_id(drive_id) or drive_id
+    with ACTIVE_CD_STREAM_LOCK:
+        tokens = ACTIVE_CD_STREAM_TOKENS.get(normalized)
+        if tokens is None:
+            return
+        tokens.discard(token)
+        if not tokens:
+            ACTIVE_CD_STREAM_TOKENS.pop(normalized, None)
+
+
+def clear_cd_live_stream_tokens(drive_id: str | None = None) -> None:
+    with ACTIVE_CD_STREAM_LOCK:
+        if drive_id is None:
+            ACTIVE_CD_STREAM_TOKENS.clear()
+            return
+        normalized = normalize_cd_drive_id(drive_id) or drive_id
+        ACTIVE_CD_STREAM_TOKENS.pop(normalized, None)
+
+
 def cd_live_stream_is_current(drive_id: str, token: str | None) -> bool:
     if not token:
         return True
+    normalized = normalize_cd_drive_id(drive_id) or drive_id
     with ACTIVE_CD_STREAM_LOCK:
-        return ACTIVE_CD_STREAM_TOKENS.get(drive_id) == token
+        return token in ACTIVE_CD_STREAM_TOKENS.get(normalized, set())
+
+
+def active_cd_playback_drive_ids() -> list[str]:
+    with ACTIVE_CD_STREAM_LOCK:
+        return sorted(drive_id for drive_id, tokens in ACTIVE_CD_STREAM_TOKENS.items() if tokens)
+
+
+def active_cd_playback_for_drive(drive_id: str | None) -> bool:
+    normalized = normalize_cd_drive_id(drive_id) if drive_id else None
+    with ACTIVE_CD_STREAM_LOCK:
+        if normalized is None:
+            return any(tokens for tokens in ACTIVE_CD_STREAM_TOKENS.values())
+        return bool(ACTIVE_CD_STREAM_TOKENS.get(normalized))
 
 
 def cd_live_wav_stream(drive_id: str, track_number: int, token: str | None = None) -> Iterator[bytes]:
-    kernel32, handle = open_windows_cd_handle(drive_id)
     try:
-        start_lba, total_sectors = windows_track_bounds(handle, track_number)
-        yield wav_header(total_sectors * CDDA_SECTOR_SIZE)
-        current_lba = start_lba
-        remaining = total_sectors
-        while remaining > 0:
-            if not cd_live_stream_is_current(drive_id, token):
-                return
-            sectors = min(WINDOWS_CDDA_STREAM_READ_SECTORS, remaining)
+        if token and not cd_live_stream_is_current(drive_id, token):
+            yield from silent_wav_stream()
+            return
+        try:
+            kernel32, handle = open_windows_cd_handle(drive_id)
+        except OSError:
+            yield from silent_wav_stream()
+            return
+        try:
             try:
-                data = windows_raw_read_cdda(handle, current_lba, sectors)
-                expected_size = sectors * CDDA_SECTOR_SIZE
+                start_lba, total_sectors = windows_track_bounds(handle, track_number)
+            except (OSError, RuntimeError):
+                yield from silent_wav_stream()
+                return
+            yield wav_header(total_sectors * CDDA_SECTOR_SIZE)
+            current_lba = start_lba
+            remaining = total_sectors
+            while remaining > 0:
                 if not cd_live_stream_is_current(drive_id, token):
                     return
-                yield data if len(data) >= expected_size else data + (b"\x00" * (expected_size - len(data)))
-            except OSError:
-                # Live playback should keep time even when a marginal sector fails.
-                # Retry at single-sector granularity and replace unreadable sectors with silence
-                # instead of aborting the stream and jumping to the next queued CD track.
-                for offset in range(sectors):
+                sectors = min(WINDOWS_CDDA_STREAM_READ_SECTORS, remaining)
+                try:
+                    data = windows_raw_read_cdda(handle, current_lba, sectors)
+                    expected_size = sectors * CDDA_SECTOR_SIZE
                     if not cd_live_stream_is_current(drive_id, token):
                         return
-                    try:
-                        data = windows_raw_read_cdda(handle, current_lba + offset, 1)
-                        yield data if len(data) >= CDDA_SECTOR_SIZE else data + (b"\x00" * (CDDA_SECTOR_SIZE - len(data)))
-                    except OSError:
-                        yield b"\x00" * CDDA_SECTOR_SIZE
-            current_lba += sectors
-            remaining -= sectors
+                    yield data if len(data) >= expected_size else data + (b"\x00" * (expected_size - len(data)))
+                except OSError:
+                    # Live playback should keep time even when a marginal sector fails.
+                    # Retry at single-sector granularity and replace unreadable sectors with silence
+                    # instead of aborting the stream and jumping to the next queued CD track.
+                    for offset in range(sectors):
+                        if not cd_live_stream_is_current(drive_id, token):
+                            return
+                        try:
+                            data = windows_raw_read_cdda(handle, current_lba + offset, 1)
+                            yield data if len(data) >= CDDA_SECTOR_SIZE else data + (b"\x00" * (CDDA_SECTOR_SIZE - len(data)))
+                        except OSError:
+                            yield b"\x00" * CDDA_SECTOR_SIZE
+                current_lba += sectors
+                remaining -= sectors
+        finally:
+            kernel32.CloseHandle(handle)
     finally:
-        kernel32.CloseHandle(handle)
+        unregister_cd_live_stream_token(drive_id, token)
 
 
 def rip_wav_command(ripper: dict, drive_id: str, track_number: int, wav_path: Path, secure_mode: bool) -> list[str]:
@@ -964,6 +1032,27 @@ class CdRipJob:
 
 _jobs: dict[str, CdRipJob] = {}
 _lock = Lock()
+CD_RIP_TERMINAL_STATUSES = {"completed", "failed", "canceled"}
+
+
+def active_cd_rip_job_for_drive(drive_id: str | None) -> dict | None:
+    normalized = normalize_cd_drive_id(drive_id) if drive_id else None
+    with _lock:
+        for job in _jobs.values():
+            if job.status in CD_RIP_TERMINAL_STATUSES:
+                continue
+            if normalized is None or normalize_cd_drive_id(job.drive_id) == normalized:
+                return job.snapshot()
+    return None
+
+
+def active_cd_rip_drive_ids() -> list[str]:
+    with _lock:
+        return sorted(
+            normalize_cd_drive_id(job.drive_id) or job.drive_id
+            for job in _jobs.values()
+            if job.status not in CD_RIP_TERMINAL_STATUSES
+        )
 
 
 def _run_cd_rip_job(job_id: str, request: object) -> None:
@@ -1072,12 +1161,13 @@ def _run_cd_rip_job(job_id: str, request: object) -> None:
 
 
 def start_cd_rip_job(request: object) -> dict:
+    drive_id = str(getattr(request, "drive_id")).strip()
     output_folder = Path(getattr(request, "output_folder")).expanduser()
     job_id = uuid4().hex
     with _lock:
         _jobs[job_id] = CdRipJob(
             job_id=job_id,
-            drive_id=str(getattr(request, "drive_id")),
+            drive_id=drive_id,
             output_folder=str(output_folder),
             output_format=getattr(request, "output_format"),
         )
@@ -1150,7 +1240,7 @@ def preview_track_id(preview_id: str) -> int:
 
 
 def prepare_cd_live_track(request: object) -> dict:
-    drive_id = str(getattr(request, "drive_id", None) or "").strip()
+    drive_id = normalize_cd_drive_id(str(getattr(request, "drive_id", None) or "")) or ""
     if not drive_id:
         raise RuntimeError("Choose a CD drive first.")
     track_number = int(getattr(request, "track_number", 1))
@@ -1165,8 +1255,7 @@ def prepare_cd_live_track(request: object) -> dict:
     album = track.get("album") or getattr(request, "album_title", None)
     album_artist = track.get("album_artist") or getattr(request, "album_artist", None) or artist
     live_id = uuid4().hex
-    with ACTIVE_CD_STREAM_LOCK:
-        ACTIVE_CD_STREAM_TOKENS[drive_id] = live_id
+    register_cd_live_stream_token(drive_id, live_id)
     query = urlencode({"drive_id": drive_id, "track_number": track_number, "token": live_id})
 
     return {
@@ -1249,7 +1338,10 @@ def normalize_cd_drive_id(drive_id: str | None) -> str | None:
     text = drive_id.strip()
     if not text:
         return None
-    match = re.match(r"^([A-Za-z]):", text)
+    device_match = re.match(r"^\\\\\.\\([A-Za-z]):?", text)
+    if device_match:
+        return f"{device_match.group(1).upper()}:"
+    match = re.match(r"^([A-Za-z])(?::|\\|/|$)", text)
     if match:
         return f"{match.group(1).upper()}:"
     return text
@@ -1290,7 +1382,9 @@ def play_cd_track(track_number: int, drive_id: str | None = None) -> dict:
     return {"status": "playing", "track_number": track_number, "message": f"Playing CD track {track_number}."}
 
 
-def stop_cd_playback() -> dict:
-    mci_command_ignoring_closed("stop flac_cafe_cd")
-    mci_command_ignoring_closed("close flac_cafe_cd")
+def stop_cd_playback(drive_id: str | None = None) -> dict:
+    if os.name == "nt":
+        mci_command_ignoring_closed("stop flac_cafe_cd")
+        mci_command_ignoring_closed("close flac_cafe_cd")
+    clear_cd_live_stream_tokens(drive_id)
     return {"status": "stopped", "track_number": None, "message": "CD playback stopped."}

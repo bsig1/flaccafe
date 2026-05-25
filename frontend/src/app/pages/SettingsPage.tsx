@@ -95,6 +95,7 @@ export function SettingsPage({
   onLastFmApiCredentialsChange,
   setStatus,
   onBackupDatabase,
+  onResetLocalData,
   onCreateSupportBundle,
   supportBundlePath,
   onCopySupportBundlePath,
@@ -126,6 +127,7 @@ export function SettingsPage({
   onLastFmApiCredentialsChange: (apiKey: string | null, apiSecret: string | null) => void | Promise<void>;
   setStatus: (message: string) => void;
   onBackupDatabase: () => void;
+  onResetLocalData: () => void;
   onCreateSupportBundle: () => void;
   supportBundlePath: string | null;
   onCopySupportBundlePath: () => void;
@@ -157,7 +159,7 @@ export function SettingsPage({
     showSettingsSection("api keys online metadata lastfm last.fm scrobbling acoustid acoustic fingerprint musicbrainz lookup autotag"),
     showSettingsSection("keyboard shortcuts hotkeys local playback controls media keys"),
     showSettingsSection("player playback audio output lyrics autofetch lrc sidecar cache follow equalizer replaygain fade skip codec native webview"),
-    showSettingsSection("maintenance backend diagnostics database support bundle source folder logs cache"),
+    showSettingsSection("maintenance backend diagnostics database support bundle source folder logs cache reset local data"),
     showSettingsSection("extensions skins plugins themes manifest customization"),
   ].filter(Boolean).length;
   const backendStatusClass =
@@ -711,7 +713,7 @@ export function SettingsPage({
           />
           )}
 
-          {showSettingsSection("maintenance backend diagnostics database support bundle source folder logs cache") && (
+          {showSettingsSection("maintenance backend diagnostics database support bundle source folder logs cache reset local data") && (
           <MaintenanceSection
             backendStatus={backendStatus}
             backendStatusClass={backendStatusClass}
@@ -727,6 +729,7 @@ export function SettingsPage({
             onRestartBackend={onRestartBackend}
             onOpenSourceFolder={onOpenSourceFolder}
             onBackupDatabase={onBackupDatabase}
+            onResetLocalData={onResetLocalData}
             onCreateSupportBundle={onCreateSupportBundle}
             supportBundlePath={supportBundlePath}
             onCopySupportBundlePath={onCopySupportBundlePath}

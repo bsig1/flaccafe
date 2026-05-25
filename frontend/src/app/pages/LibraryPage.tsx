@@ -35,6 +35,7 @@ import type {
   CSSProperties,
   DragEvent as ReactDragEvent,
   MouseEvent as ReactMouseEvent,
+  MutableRefObject,
   UIEvent as ReactUIEvent,
 } from "react";
 import {
@@ -94,6 +95,7 @@ import {
   LibraryColumnDefinition,
   LibraryColumnKey,
   LibraryView,
+  LIBRARY_PAGE_SIZE,
   MENU_VIEWPORT_MARGIN,
   MetadataColumnKey,
   SortKey,
@@ -122,9 +124,14 @@ import {
   trackGenre,
 } from "../shared";
 
-const COMPLETION_CHUNK_SIZE = 80;
-const ALBUM_BROWSE_CHUNK_SIZE = 96;
-const ARTIST_CHUNK_SIZE = 120;
+const COLLECTION_VIRTUAL_OVERSCAN = 8;
+const COMPLETION_COLLAPSED_ROW_HEIGHT = 92;
+const COMPLETION_EXPANDED_ROW_ESTIMATE = 360;
+const ARTIST_ROW_HEIGHT = 68;
+const ALBUM_LIST_ROW_HEIGHT = 68;
+const ALBUM_GRID_ROW_HEIGHT = 236;
+const PLAYLIST_ROW_HEIGHT = 66;
+const PLAYLIST_TOOLBAR_HEIGHT = 118;
 const TRACK_CONTEXT_ROW_HEIGHT = 36;
 const TRACK_CONTEXT_HEADER_HEIGHT = 34;
 const TRACK_CONTEXT_DIVIDER_HEIGHT = 9;
@@ -133,6 +140,8 @@ const TRACK_RATING_SUBMENU_HEIGHT = 218;
 const TRACK_RATING_SUBMENU_WIDTH = 192;
 const TRACK_PLAYLIST_SUBMENU_WIDTH = 240;
 const TRACK_SUBMENU_CLOSE_DELAY_MS = 700;
+const TRACK_VIRTUALIZATION_THRESHOLD = 260;
+const TRACK_VIRTUALIZATION_OVERSCAN = 18;
 type ContextSubmenuKey = "tagging" | "rating" | "avoid" | "playlist";
 
 function albumYearsLabel(album: AlbumSummary): string {
@@ -175,8 +184,68 @@ function artistMetaLabel(artist: ArtistSummary): string {
     .join(" - ");
 }
 
+function virtualCollectionWindow(
+  itemCount: number,
+  scrollTop: number,
+  viewportHeight: number,
+  rowHeight: number,
+  columns = 1,
+) {
+  const safeColumns = Math.max(1, columns);
+  const rowCount = Math.ceil(itemCount / safeColumns);
+  const visibleRows = Math.ceil(Math.max(1, viewportHeight) / rowHeight) + COLLECTION_VIRTUAL_OVERSCAN * 2;
+  const maxStartRow = Math.max(0, rowCount - visibleRows);
+  const startRow = Math.min(Math.max(0, Math.floor(scrollTop / rowHeight) - COLLECTION_VIRTUAL_OVERSCAN), maxStartRow);
+  const endRow = Math.min(rowCount, startRow + visibleRows);
+  const startIndex = startRow * safeColumns;
+  const endIndex = Math.min(itemCount, endRow * safeColumns);
+  return {
+    startIndex,
+    endIndex,
+    topSpacerHeight: startRow * rowHeight,
+    bottomSpacerHeight: Math.max(0, (rowCount - endRow) * rowHeight),
+  };
+}
+
+function virtualVariableCollectionWindow<T>(
+  items: T[],
+  scrollTop: number,
+  viewportHeight: number,
+  rowHeight: (item: T) => number,
+) {
+  const heights = items.map((item) => Math.max(1, rowHeight(item)));
+  const offsets: number[] = [];
+  let totalHeight = 0;
+  for (const height of heights) {
+    offsets.push(totalHeight);
+    totalHeight += height;
+  }
+
+  const startTarget = Math.max(0, scrollTop);
+  const endTarget = startTarget + Math.max(1, viewportHeight);
+  let firstVisibleIndex = offsets.findIndex((offset, index) => offset + heights[index] >= startTarget);
+  if (firstVisibleIndex < 0) {
+    firstVisibleIndex = Math.max(0, items.length - COLLECTION_VIRTUAL_OVERSCAN);
+  }
+  const startIndex = Math.max(0, firstVisibleIndex - COLLECTION_VIRTUAL_OVERSCAN);
+  let endIndex = startIndex;
+  while (endIndex < items.length && offsets[endIndex] <= endTarget) {
+    endIndex += 1;
+  }
+  endIndex = Math.min(items.length, endIndex + COLLECTION_VIRTUAL_OVERSCAN);
+
+  return {
+    startIndex,
+    endIndex,
+    topSpacerHeight: offsets[startIndex] ?? 0,
+    bottomSpacerHeight: Math.max(0, totalHeight - (offsets[endIndex] ?? totalHeight)),
+    totalHeight,
+  };
+}
+
 export function LibraryPage({
   tracks,
+  trackIndexCache,
   totalTracks,
   albums,
   artists,
@@ -202,12 +271,21 @@ export function LibraryPage({
   refreshTracks,
   refreshAlbums,
   loadMoreTracks,
+  loadTrackWindow,
   isLoading,
   hasMoreTracks,
   sort,
   setSort,
   scrollTop,
   setScrollTop,
+  artistScrollTop,
+  setArtistScrollTop,
+  albumScrollTop,
+  setAlbumScrollTop,
+  completionScrollTop,
+  setCompletionScrollTop,
+  playlistScrollTop,
+  setPlaylistScrollTop,
   onRating,
   onBulkRating,
   onPlayTrack,
@@ -270,6 +348,7 @@ export function LibraryPage({
   onOpenSettings,
 }: {
   tracks: Track[];
+  trackIndexCache: Map<number, Track>;
   totalTracks: number;
   albums: AlbumSummary[];
   artists: ArtistSummary[];
@@ -295,12 +374,21 @@ export function LibraryPage({
   refreshTracks: () => void | Promise<void>;
   refreshAlbums: () => void | Promise<void>;
   loadMoreTracks: () => void | Promise<void>;
+  loadTrackWindow: (offset: number, limit?: number) => void | Promise<void>;
   isLoading: boolean;
   hasMoreTracks: boolean;
   sort: SortState;
   setSort: (updater: (current: SortState) => SortState) => void;
   scrollTop: number;
   setScrollTop: (value: number) => void;
+  artistScrollTop: number;
+  setArtistScrollTop: (value: number) => void;
+  albumScrollTop: number;
+  setAlbumScrollTop: (value: number) => void;
+  completionScrollTop: number;
+  setCompletionScrollTop: (value: number) => void;
+  playlistScrollTop: number;
+  setPlaylistScrollTop: (value: number) => void;
   onRating: (trackId: number, rating: number | null) => void;
   onBulkRating: (trackIds: number[], rating: number | null) => void | Promise<void>;
   onPlayTrack: (track: Track, queue: Track[]) => void;
@@ -387,10 +475,11 @@ export function LibraryPage({
   const [inboxRuleNote, setInboxRuleNote] = useState("");
   const [inboxRuleApplyExisting, setInboxRuleApplyExisting] = useState(false);
   const [albumMode, setAlbumMode] = useState<"browse" | "completion">("browse");
-  const [visibleAlbumBrowseCount, setVisibleAlbumBrowseCount] = useState(ALBUM_BROWSE_CHUNK_SIZE);
-  const [visibleArtistCount, setVisibleArtistCount] = useState(ARTIST_CHUNK_SIZE);
+  const [artistPaneHeight, setArtistPaneHeight] = useState(720);
+  const [albumPaneHeight, setAlbumPaneHeight] = useState(720);
+  const [playlistPaneHeight, setPlaylistPaneHeight] = useState(720);
   const [completionFilter, setCompletionFilter] = useState<"all" | "incomplete" | "complete">("all");
-  const [visibleCompletionCount, setVisibleCompletionCount] = useState(COMPLETION_CHUNK_SIZE);
+  const [completionHeightVersion, setCompletionHeightVersion] = useState(0);
   const [completionOpenAlbumId, setCompletionOpenAlbumId] = useState<number | null>(null);
   const [completionLoadingAlbumId, setCompletionLoadingAlbumId] = useState<number | null>(null);
   const [completionLookupAlbumId, setCompletionLookupAlbumId] = useState<number | null>(null);
@@ -404,7 +493,26 @@ export function LibraryPage({
     etaSeconds: number | null;
   } | null>(null);
   const [showAdvancedSearch, setShowAdvancedSearch] = useState(false);
+  const [virtualScrollTop, setVirtualScrollTop] = useState(scrollTop);
+  const [trackViewportHeight, setTrackViewportHeight] = useState(720);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const scrollRenderFrameRef = useRef<number | null>(null);
+  const pendingRenderScrollTopRef = useRef(scrollTop);
+  const scrollSaveTimerRef = useRef<number | null>(null);
+  const pendingScrollTopRef = useRef(scrollTop);
+  const lastSavedScrollTopRef = useRef(scrollTop);
+  const trackPageLoadInFlightRef = useRef(false);
+  const restoringTrackScrollRef = useRef(false);
+  const restoreScrollTargetRef = useRef(scrollTop);
+  const restoreScrollFrameRef = useRef<number | null>(null);
+  const suppressScrollSaveRef = useRef(false);
+  const lastTrackCountRef = useRef(tracks.length);
+  const artistListRef = useRef<HTMLElement | null>(null);
+  const albumListRef = useRef<HTMLElement | null>(null);
+  const completionListRef = useRef<HTMLDivElement | null>(null);
+  const completionRowHeightsRef = useRef<Map<number, number>>(new Map());
+  const completionRowObserversRef = useRef<Map<number, ResizeObserver>>(new Map());
+  const playlistListRef = useRef<HTMLElement | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const contextSubmenuCloseTimer = useRef<number | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -421,8 +529,25 @@ export function LibraryPage({
     }
     return typeof value === "boolean" ? value : Boolean(String(value ?? "").trim());
   }).length;
+  const trackSearchActive = Boolean(search.trim()) || advancedSearchActiveCount > 0;
+  const libraryHasAnyTracks = (libraryStats?.total_tracks ?? (trackSearchActive ? Math.max(totalTracks, tracks.length, 1) : totalTracks)) > 0;
   const tableWidth = librarySelectionColumnWidth + columnWidths.play + visibleColumnDefs.reduce((total, column) => total + columnWidths[column.key], 0);
   const rowPadding = compactRows ? "px-3 py-2" : "px-3 py-3";
+  const trackRowHeight = compactRows ? 49 : 57;
+  const loadedTrackCount = trackIndexCache.size;
+  const shouldVirtualizeTrackRows = libraryView === "tracks" && totalTracks > TRACK_VIRTUALIZATION_THRESHOLD;
+  const maxVirtualScrollTop = Math.max(0, totalTracks * trackRowHeight - trackViewportHeight);
+  const effectiveVirtualScrollTop = Math.min(virtualScrollTop, maxVirtualScrollTop);
+  const virtualTrackStartIndex = shouldVirtualizeTrackRows
+    ? Math.max(0, Math.floor(effectiveVirtualScrollTop / trackRowHeight) - TRACK_VIRTUALIZATION_OVERSCAN)
+    : 0;
+  const virtualTrackVisibleCount = Math.ceil(trackViewportHeight / trackRowHeight) + TRACK_VIRTUALIZATION_OVERSCAN * 2;
+  const virtualTrackEndIndex = shouldVirtualizeTrackRows
+    ? Math.min(totalTracks, virtualTrackStartIndex + virtualTrackVisibleCount)
+    : tracks.length;
+  const renderedTrackList = shouldVirtualizeTrackRows ? tracks.slice(virtualTrackStartIndex, virtualTrackEndIndex) : tracks;
+  const virtualTopSpacerHeight = shouldVirtualizeTrackRows ? virtualTrackStartIndex * trackRowHeight : 0;
+  const virtualBottomSpacerHeight = shouldVirtualizeTrackRows ? Math.max(0, (totalTracks - virtualTrackEndIndex) * trackRowHeight) : 0;
   const advancedSearchInputClass = "h-9 rounded border border-line bg-panel px-3 text-sm text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2";
   const activeAlbum = albums.find((album) => album.id === selectedAlbumId) ?? null;
   const activeArtist = artists.find((artist) => artist.name === selectedArtistName) ?? null;
@@ -475,12 +600,33 @@ export function LibraryPage({
         }),
     [albums, completionFilter, completionQuery],
   );
-  const renderedCompletionAlbums = visibleCompletionAlbums.slice(0, visibleCompletionCount);
-  const hasMoreCompletionAlbums = visibleCompletionCount < visibleCompletionAlbums.length;
-  const renderedBrowseAlbums = albums.slice(0, visibleAlbumBrowseCount);
-  const renderedArtists = artists.slice(0, visibleArtistCount);
-  const hasMoreBrowseAlbums = visibleAlbumBrowseCount < albums.length;
-  const hasMoreArtists = visibleArtistCount < artists.length;
+  const completionListScrollTop = Math.max(0, completionScrollTop - (completionListRef.current?.offsetTop ?? 0));
+  const completionWindow = useMemo(
+    () =>
+      virtualVariableCollectionWindow(
+        visibleCompletionAlbums,
+        completionListScrollTop,
+        trackViewportHeight,
+        (album) =>
+          completionRowHeightsRef.current.get(album.id) ??
+          (completionOpenAlbumId === album.id ? COMPLETION_EXPANDED_ROW_ESTIMATE : COMPLETION_COLLAPSED_ROW_HEIGHT),
+      ),
+    [completionHeightVersion, completionListScrollTop, completionOpenAlbumId, trackViewportHeight, visibleCompletionAlbums],
+  );
+  const renderedCompletionAlbums = visibleCompletionAlbums.slice(completionWindow.startIndex, completionWindow.endIndex);
+  const artistWindow = virtualCollectionWindow(artists.length, artistScrollTop, artistPaneHeight, ARTIST_ROW_HEIGHT);
+  const renderedArtists = artists.slice(artistWindow.startIndex, artistWindow.endIndex);
+  const albumGridColumns = albumGrid ? 2 : 1;
+  const albumBrowseRowHeight = albumGrid ? ALBUM_GRID_ROW_HEIGHT : ALBUM_LIST_ROW_HEIGHT;
+  const albumWindow = virtualCollectionWindow(albums.length, albumScrollTop, albumPaneHeight, albumBrowseRowHeight, albumGridColumns);
+  const renderedBrowseAlbums = albums.slice(albumWindow.startIndex, albumWindow.endIndex);
+  const playlistWindow = virtualCollectionWindow(
+    playlists.length,
+    Math.max(0, playlistScrollTop - PLAYLIST_TOOLBAR_HEIGHT),
+    playlistPaneHeight,
+    PLAYLIST_ROW_HEIGHT,
+  );
+  const renderedPlaylists = playlists.slice(playlistWindow.startIndex, playlistWindow.endIndex);
   const completeAlbumCount = albums.length - completionAlbums.length;
   const missingTrackEstimate = completionAlbums.reduce((total, album) => total + (album.missing_track_count ?? 0), 0);
   const advancedSelectionKey = useMemo(() => JSON.stringify(advancedTrackSearch), [advancedTrackSearch]);
@@ -505,7 +651,7 @@ export function LibraryPage({
               ? `${(inbox?.total_new ?? 0).toLocaleString()} new inbox track${inbox?.total_new === 1 ? "" : "s"}`
               : libraryView === "health"
                 ? "Library health tools"
-                : `${tracks.length.toLocaleString()} of ${totalTracks.toLocaleString()} tracks loaded`;
+                : `${loadedTrackCount.toLocaleString()} of ${totalTracks.toLocaleString()} tracks cached`;
   const viewTracks =
     libraryView === "albums"
       ? selectedAlbumTracks
@@ -565,37 +711,8 @@ export function LibraryPage({
   }, [selectedInboxTrack?.id, selectedInboxNote?.updated_at]);
 
   useEffect(() => {
-    setVisibleCompletionCount(COMPLETION_CHUNK_SIZE);
     setCompletionOpenAlbumId(null);
   }, [completionFilter, completionQuery, albums.length, albumMode]);
-
-  useEffect(() => {
-    setVisibleAlbumBrowseCount(ALBUM_BROWSE_CHUNK_SIZE);
-  }, [albums.length, search, albumGrid]);
-
-  useEffect(() => {
-    setVisibleArtistCount(ARTIST_CHUNK_SIZE);
-  }, [artists.length, search]);
-
-  useEffect(() => {
-    if (!selectedAlbumId) {
-      return;
-    }
-    const selectedIndex = albums.findIndex((album) => album.id === selectedAlbumId);
-    if (selectedIndex >= visibleAlbumBrowseCount) {
-      setVisibleAlbumBrowseCount(Math.min(albums.length, selectedIndex + ALBUM_BROWSE_CHUNK_SIZE));
-    }
-  }, [albums, selectedAlbumId, visibleAlbumBrowseCount]);
-
-  useEffect(() => {
-    if (!selectedArtistName) {
-      return;
-    }
-    const selectedIndex = artists.findIndex((artist) => artist.name === selectedArtistName);
-    if (selectedIndex >= visibleArtistCount) {
-      setVisibleArtistCount(Math.min(artists.length, selectedIndex + ARTIST_CHUNK_SIZE));
-    }
-  }, [artists, selectedArtistName, visibleArtistCount]);
 
   useEffect(() => {
     if (libraryView === "completion") {
@@ -604,15 +721,322 @@ export function LibraryPage({
     }
   }, [libraryView, setLibraryView]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = scrollRef.current;
     if (!element) {
       return;
     }
-    const frame = window.requestAnimationFrame(() => {
-      element.scrollTop = scrollTop;
+    if (libraryView !== "tracks") {
+      restoringTrackScrollRef.current = false;
+      suppressScrollSaveRef.current = true;
+      const nextScrollTop = libraryView === "albums" && albumMode === "completion" ? completionScrollTop : 0;
+      element.scrollTop = nextScrollTop;
+      pendingRenderScrollTopRef.current = nextScrollTop;
+      setVirtualScrollTop(nextScrollTop);
+      if (restoreScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(restoreScrollFrameRef.current);
+      }
+      restoreScrollFrameRef.current = window.requestAnimationFrame(() => {
+        restoreScrollFrameRef.current = null;
+        suppressScrollSaveRef.current = false;
+      });
+      return;
+    }
+    restoreScrollTargetRef.current = scrollTop;
+    restoringTrackScrollRef.current = libraryView === "tracks" && scrollTop > 0;
+    pendingScrollTopRef.current = scrollTop;
+    lastSavedScrollTopRef.current = scrollTop;
+    const reachedTarget = applyScrollRestore(element, scrollTop);
+    if (reachedTarget) {
+      restoringTrackScrollRef.current = false;
+    }
+  }, [albumMode, libraryView]);
+
+  useLayoutEffect(() => {
+    if (libraryView !== "tracks") {
+      lastTrackCountRef.current = tracks.length;
+      return;
+    }
+    const element = scrollRef.current;
+    if (!element) {
+      return;
+    }
+    const targetScrollTop = restoreScrollTargetRef.current;
+    const reachableScrollTop = getReachableScrollTop(element);
+    const trackCountShrank = tracks.length < lastTrackCountRef.current;
+    lastTrackCountRef.current = tracks.length;
+    if (trackCountShrank && targetScrollTop > reachableScrollTop + 4 && hasMoreTracks) {
+      restoringTrackScrollRef.current = true;
+    }
+    if (!restoringTrackScrollRef.current) {
+      return;
+    }
+    const reachedTarget = applyScrollRestore(element, targetScrollTop);
+    if (reachedTarget || !hasMoreTracks) {
+      restoringTrackScrollRef.current = false;
+      pendingScrollTopRef.current = element.scrollTop;
+      lastSavedScrollTopRef.current = element.scrollTop;
+    }
+  }, [hasMoreTracks, libraryView, totalTracks, tracks.length, trackViewportHeight]);
+
+  useEffect(() => {
+    if (!restoringTrackScrollRef.current || libraryView !== "tracks" || isLoading || !hasMoreTracks) {
+      return;
+    }
+    const element = scrollRef.current;
+    if (!element || trackPageLoadInFlightRef.current) {
+      return;
+    }
+    const reachableScrollTop = getReachableScrollTop(element);
+    if (restoreScrollTargetRef.current <= reachableScrollTop + 4) {
+      return;
+    }
+    trackPageLoadInFlightRef.current = true;
+    void Promise.resolve(loadMoreTracks()).finally(() => {
+      trackPageLoadInFlightRef.current = false;
     });
-    return () => window.cancelAnimationFrame(frame);
+  }, [hasMoreTracks, isLoading, libraryView, loadMoreTracks, totalTracks, tracks.length, trackViewportHeight]);
+
+  useEffect(() => {
+    if (libraryView !== "tracks" || !shouldVirtualizeTrackRows || totalTracks <= 0) {
+      return;
+    }
+    const firstPrefetchIndex = Math.max(0, virtualTrackStartIndex - LIBRARY_PAGE_SIZE);
+    const lastPrefetchIndex = Math.min(totalTracks - 1, virtualTrackEndIndex + LIBRARY_PAGE_SIZE);
+    const firstPageOffset = Math.floor(firstPrefetchIndex / LIBRARY_PAGE_SIZE) * LIBRARY_PAGE_SIZE;
+    const lastPageOffset = Math.floor(lastPrefetchIndex / LIBRARY_PAGE_SIZE) * LIBRARY_PAGE_SIZE;
+    for (let offset = firstPageOffset; offset <= lastPageOffset; offset += LIBRARY_PAGE_SIZE) {
+      const pageEnd = Math.min(totalTracks, offset + LIBRARY_PAGE_SIZE);
+      let hasMissingRows = false;
+      for (let index = offset; index < pageEnd; index += 1) {
+        if (!trackIndexCache.has(index)) {
+          hasMissingRows = true;
+          break;
+        }
+      }
+      if (hasMissingRows) {
+        void loadTrackWindow(offset, pageEnd - offset);
+      }
+    }
+  }, [
+    libraryView,
+    loadTrackWindow,
+    shouldVirtualizeTrackRows,
+    totalTracks,
+    trackIndexCache,
+    virtualTrackEndIndex,
+    virtualTrackStartIndex,
+  ]);
+
+  useLayoutEffect(() => {
+    const element = scrollRef.current;
+    if (!element) {
+      return undefined;
+    }
+    const updateHeight = () => setTrackViewportHeight(Math.max(240, element.clientHeight || 720));
+    updateHeight();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateHeight);
+      return () => window.removeEventListener("resize", updateHeight);
+    }
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  useLayoutEffect(() => {
+    const paneConfigs: Array<[MutableRefObject<HTMLElement | null>, (height: number) => void]> = [
+      [artistListRef, setArtistPaneHeight],
+      [albumListRef, setAlbumPaneHeight],
+      [playlistListRef, setPlaylistPaneHeight],
+    ];
+    const cleanups = paneConfigs.map(([ref, setHeight]) => {
+      const element = ref.current;
+      if (!element) {
+        return () => undefined;
+      }
+      const updateHeight = () => setHeight(Math.max(240, element.clientHeight || 720));
+      updateHeight();
+      if (typeof ResizeObserver === "undefined") {
+        window.addEventListener("resize", updateHeight);
+        return () => window.removeEventListener("resize", updateHeight);
+      }
+      const observer = new ResizeObserver(updateHeight);
+      observer.observe(element);
+      return () => observer.disconnect();
+    });
+    return () => cleanups.forEach((cleanup) => cleanup());
+  }, [libraryView, albumMode]);
+
+  useLayoutEffect(() => {
+    if (libraryView !== "artists" || !artistListRef.current) {
+      return;
+    }
+    artistListRef.current.scrollTop = artistScrollTop;
+  }, [artists.length, artistScrollTop, libraryView]);
+
+  useLayoutEffect(() => {
+    if (libraryView !== "albums" || albumMode !== "browse" || !albumListRef.current) {
+      return;
+    }
+    albumListRef.current.scrollTop = albumScrollTop;
+  }, [albumMode, albumScrollTop, albums.length, libraryView]);
+
+  useLayoutEffect(() => {
+    if (libraryView !== "playlists" || !playlistListRef.current) {
+      return;
+    }
+    playlistListRef.current.scrollTop = playlistScrollTop;
+  }, [libraryView, playlistScrollTop, playlists.length]);
+
+  useEffect(() => {
+    return () => {
+      for (const observer of completionRowObserversRef.current.values()) {
+        observer.disconnect();
+      }
+      completionRowObserversRef.current.clear();
+    };
+  }, []);
+
+  function getReachableScrollTop(element: HTMLElement) {
+    return Math.max(0, element.scrollHeight - element.clientHeight);
+  }
+
+  function applyScrollRestore(element: HTMLElement, targetScrollTop: number) {
+    const reachableScrollTop = getReachableScrollTop(element);
+    const nextScrollTop = Math.min(targetScrollTop, reachableScrollTop);
+    suppressScrollSaveRef.current = true;
+    element.scrollTop = nextScrollTop;
+    pendingRenderScrollTopRef.current = nextScrollTop;
+    setVirtualScrollTop((current) => (Math.abs(current - nextScrollTop) < 4 ? current : nextScrollTop));
+    if (restoreScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(restoreScrollFrameRef.current);
+    }
+    restoreScrollFrameRef.current = window.requestAnimationFrame(() => {
+      restoreScrollFrameRef.current = null;
+      suppressScrollSaveRef.current = false;
+    });
+    return targetScrollTop <= reachableScrollTop + 4;
+  }
+
+  function cancelScrollRestoreForUserInput() {
+    if (!restoringTrackScrollRef.current) {
+      return;
+    }
+    restoringTrackScrollRef.current = false;
+    const element = scrollRef.current;
+    if (!element) {
+      return;
+    }
+    pendingScrollTopRef.current = element.scrollTop;
+    scheduleScrollPositionSave(element.scrollTop);
+  }
+
+  function scrollCollectionPaneToTop(ref: MutableRefObject<HTMLElement | null>, saveScrollTop: (value: number) => void) {
+    saveScrollTop(0);
+    ref.current?.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function renderPaneTopButton(
+    visible: boolean,
+    label: string,
+    ref: MutableRefObject<HTMLElement | null>,
+    saveScrollTop: (value: number) => void,
+  ) {
+    if (!visible) {
+      return null;
+    }
+    return (
+      <button
+        className="sticky bottom-3 z-20 ml-auto mr-3 grid h-8 w-8 place-items-center rounded-full border border-line bg-panel/95 text-muted shadow-lg shadow-black/20 transition hover:border-moss/60 hover:text-white"
+        type="button"
+        title={label}
+        onClick={() => scrollCollectionPaneToTop(ref, saveScrollTop)}
+      >
+        <ArrowUp size={15} />
+      </button>
+    );
+  }
+
+  function updateCompletionRowHeight(albumId: number, height: number) {
+    const previous = completionRowHeightsRef.current.get(albumId);
+    if (previous !== undefined && Math.abs(previous - height) < 2) {
+      return;
+    }
+    completionRowHeightsRef.current.set(albumId, height);
+    setCompletionHeightVersion((current) => current + 1);
+  }
+
+  function setCompletionRowElement(albumId: number, element: HTMLDivElement | null) {
+    const existingObserver = completionRowObserversRef.current.get(albumId);
+    if (existingObserver) {
+      existingObserver.disconnect();
+      completionRowObserversRef.current.delete(albumId);
+    }
+    if (!element) {
+      return;
+    }
+
+    const measure = () => updateCompletionRowHeight(albumId, element.getBoundingClientRect().height);
+    measure();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    completionRowObserversRef.current.set(albumId, observer);
+  }
+
+  function scheduleVirtualScrollUpdate(nextScrollTop: number) {
+    pendingRenderScrollTopRef.current = nextScrollTop;
+    if (scrollRenderFrameRef.current !== null) {
+      return;
+    }
+    scrollRenderFrameRef.current = window.requestAnimationFrame(() => {
+      scrollRenderFrameRef.current = null;
+      const next = pendingRenderScrollTopRef.current;
+      setVirtualScrollTop((current) => (Math.abs(current - next) < 4 ? current : next));
+    });
+  }
+
+  function flushScrollPositionSave() {
+    const nextScrollTop = pendingScrollTopRef.current;
+    if (nextScrollTop === lastSavedScrollTopRef.current) {
+      return;
+    }
+    lastSavedScrollTopRef.current = nextScrollTop;
+    setScrollTop(nextScrollTop);
+  }
+
+  function scheduleScrollPositionSave(nextScrollTop: number) {
+    restoreScrollTargetRef.current = nextScrollTop;
+    pendingScrollTopRef.current = nextScrollTop;
+    if (scrollSaveTimerRef.current !== null) {
+      window.clearTimeout(scrollSaveTimerRef.current);
+    }
+    // Persist the restore point after scrolling settles so wheel/touchpad movement stays on the compositor path.
+    scrollSaveTimerRef.current = window.setTimeout(() => {
+      scrollSaveTimerRef.current = null;
+      flushScrollPositionSave();
+    }, 160);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (scrollRenderFrameRef.current !== null) {
+        window.cancelAnimationFrame(scrollRenderFrameRef.current);
+        scrollRenderFrameRef.current = null;
+      }
+      if (scrollSaveTimerRef.current !== null) {
+        window.clearTimeout(scrollSaveTimerRef.current);
+        scrollSaveTimerRef.current = null;
+      }
+      if (restoreScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(restoreScrollFrameRef.current);
+        restoreScrollFrameRef.current = null;
+      }
+      flushScrollPositionSave();
+    };
   }, []);
 
   useEffect(() => {
@@ -996,32 +1420,37 @@ export function LibraryPage({
 
   function handleScroll(event: ReactUIEvent<HTMLDivElement>) {
     const element = event.currentTarget;
-    setContextMenu(null);
-    setColumnMenu(null);
-    setScrollTop(element.scrollTop);
+    if (contextMenu) {
+      setContextMenu(null);
+    }
+    if (columnMenu) {
+      setColumnMenu(null);
+    }
+    if (libraryView === "tracks") {
+      scheduleVirtualScrollUpdate(element.scrollTop);
+    }
+    if (libraryView === "albums" && albumMode === "completion" && !suppressScrollSaveRef.current) {
+      setCompletionScrollTop(element.scrollTop);
+    }
+    if (libraryView === "tracks" && !suppressScrollSaveRef.current && !restoringTrackScrollRef.current) {
+      scheduleScrollPositionSave(element.scrollTop);
+    }
     if (libraryView !== "tracks") {
-      if (libraryView === "albums" && albumMode === "completion") {
-        const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-        if (distanceFromBottom < 640 && hasMoreCompletionAlbums) {
-          setVisibleCompletionCount((current) => Math.min(current + COMPLETION_CHUNK_SIZE, visibleCompletionAlbums.length));
-        }
-      }
       return;
     }
     const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-    if (distanceFromBottom < 520 && hasMoreTracks && !isLoading) {
-      void loadMoreTracks();
-    }
-  }
-
-  function handleLazyPanelScroll(event: ReactUIEvent<HTMLElement>, hasMore: boolean, loadMore: () => void) {
-    if (!hasMore) {
-      return;
-    }
-    const element = event.currentTarget;
-    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-    if (distanceFromBottom < 520) {
-      loadMore();
+    if (
+      !shouldVirtualizeTrackRows &&
+      distanceFromBottom < 520 &&
+      hasMoreTracks &&
+      !isLoading &&
+      !trackPageLoadInFlightRef.current &&
+      !restoringTrackScrollRef.current
+    ) {
+      trackPageLoadInFlightRef.current = true;
+      void Promise.resolve(loadMoreTracks()).finally(() => {
+        trackPageLoadInFlightRef.current = false;
+      });
     }
   }
 
@@ -1324,11 +1753,12 @@ export function LibraryPage({
     }
   }
 
-  function renderTrackRows(list: Track[], options: { removable?: boolean } = {}) {
-    return list.map((track) => (
+  function renderTrackRow(track: Track, interactionList: Track[], removable = false) {
+    return (
       <tr
         key={track.id}
         data-track-row
+        style={{ height: trackRowHeight }}
         className={`cursor-pointer border-b border-line/60 hover:bg-white/[0.035] ${
           detailTrack?.id === track.id ? "bg-white/[0.06]" : selectedTrackIds.has(track.id) ? "bg-white/[0.035]" : ""
         } select-none`}
@@ -1336,16 +1766,16 @@ export function LibraryPage({
           if (isInteractiveTrackCellTarget(event.target)) {
             return;
           }
-          selectTrackLikeWindows(event, track, list);
+          selectTrackLikeWindows(event, track, interactionList);
         }}
         onDoubleClick={(event) => {
           if (isInteractiveTrackCellTarget(event.target)) {
             return;
           }
           event.preventDefault();
-          onPlayTrack(track, list);
+          onPlayTrack(track, interactionList);
         }}
-        onContextMenu={(event) => openTrackContextMenu(event, track, list, Boolean(options.removable))}
+        onContextMenu={(event) => openTrackContextMenu(event, track, interactionList, removable)}
       >
         <td className={rowPadding}>
           <input
@@ -1365,7 +1795,7 @@ export function LibraryPage({
               type="button"
               onClick={(event) => {
                 event.stopPropagation();
-                onPlayTrack(track, list);
+                onPlayTrack(track, interactionList);
               }}
             >
               {currentTrackId === track.id ? <Volume2 size={15} /> : <Play size={15} />}
@@ -1378,7 +1808,42 @@ export function LibraryPage({
           </td>
         ))}
       </tr>
-    ));
+    );
+  }
+
+  function renderTrackPlaceholderRow(index: number) {
+    return (
+      <tr key={`track-placeholder-${index}`} aria-hidden="true" style={{ height: trackRowHeight }} className="border-b border-line/40">
+        <td className={rowPadding}>
+          <div className="h-4 w-4 rounded border border-line/70 bg-white/[0.025]" />
+        </td>
+        <td className={rowPadding}>
+          <div className="mx-auto h-8 w-8 rounded border border-line/70 bg-white/[0.025]" />
+        </td>
+        {visibleColumnDefs.map((column, columnIndex) => (
+          <td key={column.key} className={rowPadding}>
+            <div
+              className="h-3 rounded bg-white/[0.045]"
+              style={{ width: columnIndex === 0 ? "72%" : column.align === "right" ? "44%" : "56%" }}
+            />
+          </td>
+        ))}
+      </tr>
+    );
+  }
+
+  function renderVirtualTrackRows() {
+    const rows = [];
+    for (let index = virtualTrackStartIndex; index < virtualTrackEndIndex; index += 1) {
+      const track = trackIndexCache.get(index);
+      rows.push(track ? renderTrackRow(track, tracks) : renderTrackPlaceholderRow(index));
+    }
+    return rows;
+  }
+
+  function renderTrackRows(list: Track[], options: { removable?: boolean; interactionList?: Track[] } = {}) {
+    const interactionList = options.interactionList ?? list;
+    return list.map((track) => renderTrackRow(track, interactionList, Boolean(options.removable)));
   }
 
   function renderAlbumModeToggle() {
@@ -1610,7 +2075,7 @@ export function LibraryPage({
                   </div>
                 </div>
                 <div className="mt-1 text-xs text-muted">
-                  Showing {renderedCompletionAlbums.length.toLocaleString()} of {visibleCompletionAlbums.length.toLocaleString()} matching albums
+                  Showing {visibleCompletionAlbums.length.toLocaleString()} matching albums
                   {completionQuery ? ` for "${search.trim()}"` : ""}.
                 </div>
               </div>
@@ -1664,7 +2129,10 @@ export function LibraryPage({
                 </div>
               </div>
             )}
-            <div className="grid divide-y divide-line/60">
+            <div ref={completionListRef} className="grid divide-y divide-line/60">
+              {completionWindow.topSpacerHeight > 0 && (
+                <div aria-hidden="true" style={{ height: completionWindow.topSpacerHeight }} />
+              )}
               {renderedCompletionAlbums.map((album) => {
                 const expected = albumCompletionExpected(album);
                 const missing = albumCompletionMissing(album);
@@ -1675,7 +2143,11 @@ export function LibraryPage({
                 const lookupMessage = completionLookupMessages[album.id];
                 const queriedTrackCount = album.completion_expected_track_count;
                 return (
-                  <div key={album.id} className={expanded ? "bg-white/[0.025]" : ""}>
+                  <div
+                    key={album.id}
+                    ref={(element) => setCompletionRowElement(album.id, element)}
+                    className={expanded ? "bg-white/[0.025]" : ""}
+                  >
                     <button
                       className="grid w-full gap-3 px-4 py-3 text-left transition hover:bg-white/[0.035] sm:grid-cols-[44px_minmax(0,1fr)_120px]"
                       type="button"
@@ -1769,24 +2241,17 @@ export function LibraryPage({
                   </div>
                 );
               })}
+              {completionWindow.bottomSpacerHeight > 0 && (
+                <div aria-hidden="true" style={{ height: completionWindow.bottomSpacerHeight }} />
+              )}
               {visibleCompletionAlbums.length === 0 && (
                 <div className="px-4 py-10 text-center text-sm text-muted">
                   No albums match this completion filter.
                 </div>
               )}
-              {hasMoreCompletionAlbums && (
-                <div className="px-4 py-4 text-center">
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={() => setVisibleCompletionCount((current) => Math.min(current + COMPLETION_CHUNK_SIZE, visibleCompletionAlbums.length))}
-                  >
-                    Load more albums
-                  </button>
-                </div>
-              )}
             </div>
           </div>
+          {renderPaneTopButton(completionScrollTop > 160, "Back to top", scrollRef, setCompletionScrollTop)}
         </div>
       </div>
     );
@@ -2116,7 +2581,15 @@ export function LibraryPage({
         </div>
       </div>
       <div className="min-h-0 min-w-0 flex flex-1">
-      <div ref={scrollRef} className="min-h-0 min-w-0 flex-1 overflow-auto" onScroll={handleScroll} onClick={handleLibrarySurfaceClick}>
+      <div
+        ref={scrollRef}
+        className="min-h-0 min-w-0 flex-1 overflow-auto"
+        style={{ overflowAnchor: "none" } as CSSProperties}
+        onScroll={handleScroll}
+        onPointerDown={cancelScrollRestoreForUserInput}
+        onWheel={cancelScrollRestoreForUserInput}
+        onClick={handleLibrarySurfaceClick}
+      >
         {libraryView === "tracks" && (
           <>
             <table className="w-full table-fixed text-left text-sm" style={{ minWidth: tableWidth }}>
@@ -2130,21 +2603,60 @@ export function LibraryPage({
               <thead className="sticky top-0 z-10 border-b border-line bg-ink text-xs uppercase text-muted">
                 {renderTableHeader(true)}
               </thead>
-              <tbody>{renderTrackRows(tracks)}</tbody>
+              <tbody>
+                {virtualTopSpacerHeight > 0 && (
+                  <tr aria-hidden="true">
+                    <td colSpan={visibleColumnDefs.length + 2} style={{ height: virtualTopSpacerHeight, padding: 0, border: 0 }} />
+                  </tr>
+                )}
+                {shouldVirtualizeTrackRows ? renderVirtualTrackRows() : renderTrackRows(renderedTrackList, { interactionList: tracks })}
+                {virtualBottomSpacerHeight > 0 && (
+                  <tr aria-hidden="true">
+                    <td colSpan={visibleColumnDefs.length + 2} style={{ height: virtualBottomSpacerHeight, padding: 0, border: 0 }} />
+                  </tr>
+                )}
+              </tbody>
             </table>
             {isLoading && (
               <div className="border-t border-line/60 px-6 py-4 text-center text-sm text-muted">
                 Loading tracks...
               </div>
             )}
-            {!isLoading && hasMoreTracks && tracks.length > 0 && (
+            {!shouldVirtualizeTrackRows && !isLoading && hasMoreTracks && tracks.length > 0 && (
               <div className="border-t border-line/60 px-6 py-4 text-center">
                 <button className="secondary-button" type="button" onClick={loadMoreTracks}>
                   Load more
                 </button>
               </div>
             )}
-            {tracks.length === 0 && !isLoading && (
+            {totalTracks === 0 && tracks.length === 0 && !isLoading && trackSearchActive && (
+              <div className="grid h-full place-items-center px-6 text-center">
+                <div className="max-w-md">
+                  <div className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded border border-line bg-panel text-moss">
+                    <Search size={24} />
+                  </div>
+                  <div className="text-base font-semibold text-white">No matching tracks</div>
+                  <div className="mt-2 text-sm text-muted">
+                    Try a different search term, clear advanced filters, or broaden the current view.
+                  </div>
+                  <div className="mt-4 flex flex-wrap justify-center gap-2">
+                    {search && (
+                      <button className="secondary-button h-10" type="button" onClick={() => setSearch("")}>
+                        <X size={16} />
+                        Clear Search
+                      </button>
+                    )}
+                    {advancedSearchActiveCount > 0 && (
+                      <button className="secondary-button h-10" type="button" onClick={clearAdvancedTrackSearch}>
+                        <SlidersHorizontal size={16} />
+                        Clear Filters
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+            {totalTracks === 0 && tracks.length === 0 && !isLoading && !trackSearchActive && !libraryHasAnyTracks && (
               <div className="grid h-full place-items-center px-6 text-center">
                 <div className="max-w-md">
                   <div className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded border border-line bg-panel text-moss">
@@ -2184,14 +2696,12 @@ export function LibraryPage({
         {libraryView === "artists" && (
           <div className="grid h-full min-h-0 min-w-0 grid-cols-[minmax(220px,290px)_minmax(0,1fr)] min-[1280px]:grid-cols-[minmax(240px,320px)_minmax(0,1fr)]">
             <section
+              ref={artistListRef}
               className="min-h-0 overflow-auto border-r border-line"
-              onScroll={(event) =>
-                handleLazyPanelScroll(event, hasMoreArtists, () =>
-                  setVisibleArtistCount((current) => Math.min(current + ARTIST_CHUNK_SIZE, artists.length)),
-                )
-              }
+              onScroll={(event) => setArtistScrollTop(event.currentTarget.scrollTop)}
             >
               <div className="grid">
+                {artistWindow.topSpacerHeight > 0 && <div aria-hidden="true" style={{ height: artistWindow.topSpacerHeight }} />}
                 {renderedArtists.map((artist) => {
                   const active = artist.name === selectedArtistName;
                   const artwork = artist.artwork_track_id ? albumArtworkUrl(artist.artwork_track_id) : null;
@@ -2201,6 +2711,7 @@ export function LibraryPage({
                       className={`grid grid-cols-[44px_minmax(0,1fr)] items-center gap-3 border-b border-line/60 px-4 py-3 text-left transition ${
                         active ? "bg-white/10" : "hover:bg-white/[0.035]"
                       }`}
+                      style={{ height: ARTIST_ROW_HEIGHT }}
                       type="button"
                       onClick={() => onSelectArtist(artist.name)}
                       onDoubleClick={() => void onPlayArtist(artist.name)}
@@ -2221,23 +2732,14 @@ export function LibraryPage({
                     </button>
                   );
                 })}
-                {hasMoreArtists && (
-                  <div className="px-4 py-4 text-center">
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      onClick={() => setVisibleArtistCount((current) => Math.min(current + ARTIST_CHUNK_SIZE, artists.length))}
-                    >
-                      Load more artists
-                    </button>
-                  </div>
-                )}
+                {artistWindow.bottomSpacerHeight > 0 && <div aria-hidden="true" style={{ height: artistWindow.bottomSpacerHeight }} />}
                 {artists.length === 0 && (
                   <div className="px-4 py-10 text-center text-sm text-muted">
                     {search.trim() ? "No artists match the current search." : "No artists found in the current library."}
                   </div>
                 )}
               </div>
+              {renderPaneTopButton(artistScrollTop > 120, "Back to top", artistListRef, setArtistScrollTop)}
             </section>
             <section className="min-h-0 min-w-0 overflow-auto">
               <table className="w-full table-fixed text-left text-sm" style={{ minWidth: tableWidth }}>
@@ -2268,14 +2770,18 @@ export function LibraryPage({
           ) : (
           <div className="grid h-full min-h-0 min-w-0 grid-cols-[minmax(240px,320px)_minmax(0,1fr)]">
             <section
+              ref={albumListRef}
               className="min-h-0 overflow-auto border-r border-line"
-              onScroll={(event) =>
-                handleLazyPanelScroll(event, hasMoreBrowseAlbums, () =>
-                  setVisibleAlbumBrowseCount((current) => Math.min(current + ALBUM_BROWSE_CHUNK_SIZE, albums.length)),
-                )
-              }
+              onScroll={(event) => setAlbumScrollTop(event.currentTarget.scrollTop)}
             >
               <div className={albumGrid ? "grid grid-cols-2 gap-3 p-3" : "grid"}>
+                {albumWindow.topSpacerHeight > 0 && (
+                  <div
+                    aria-hidden="true"
+                    className={albumGrid ? "col-span-full" : undefined}
+                    style={{ height: albumWindow.topSpacerHeight }}
+                  />
+                )}
                 {renderedBrowseAlbums.map((album) => {
                   const active = album.id === selectedAlbumId;
                   const artwork = album.artwork_path || album.artwork_track_id ? albumCoverUrl(album.id) : null;
@@ -2291,6 +2797,7 @@ export function LibraryPage({
                               active ? "bg-white/10" : "hover:bg-white/[0.035]"
                             }`
                       }
+                      style={albumGrid ? { minHeight: ALBUM_GRID_ROW_HEIGHT - 24 } : { height: ALBUM_LIST_ROW_HEIGHT }}
                       type="button"
                       onClick={() => onSelectAlbum(album.id)}
                       onDoubleClick={() => void onPlayAlbum(album.id)}
@@ -2324,16 +2831,12 @@ export function LibraryPage({
                     </button>
                   );
                 })}
-                {hasMoreBrowseAlbums && (
-                  <div className={albumGrid ? "col-span-full px-3 py-4 text-center" : "px-4 py-4 text-center"}>
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      onClick={() => setVisibleAlbumBrowseCount((current) => Math.min(current + ALBUM_BROWSE_CHUNK_SIZE, albums.length))}
-                    >
-                      Load more albums
-                    </button>
-                  </div>
+                {albumWindow.bottomSpacerHeight > 0 && (
+                  <div
+                    aria-hidden="true"
+                    className={albumGrid ? "col-span-full" : undefined}
+                    style={{ height: albumWindow.bottomSpacerHeight }}
+                  />
                 )}
                 {albums.length === 0 && (
                   <div className="col-span-full px-3 py-10 text-center text-sm text-muted">
@@ -2341,6 +2844,7 @@ export function LibraryPage({
                   </div>
                 )}
               </div>
+              {renderPaneTopButton(albumScrollTop > 120, "Back to top", albumListRef, setAlbumScrollTop)}
             </section>
             <section className="min-h-0 min-w-0 overflow-auto">
               {activeAlbum && isAlbumArtworkOpen && (
@@ -2462,7 +2966,11 @@ export function LibraryPage({
 
         {libraryView === "playlists" && (
           <div className="grid h-full min-h-0 min-w-0 grid-cols-[minmax(240px,320px)_minmax(0,1fr)]">
-            <section className="min-h-0 overflow-auto border-r border-line">
+            <section
+              ref={playlistListRef}
+              className="min-h-0 overflow-auto border-r border-line"
+              onScroll={(event) => setPlaylistScrollTop(event.currentTarget.scrollTop)}
+            >
               <div className="sticky top-0 z-10 border-b border-line bg-ink p-3">
                 <div className="flex gap-2">
                   <input
@@ -2488,7 +2996,8 @@ export function LibraryPage({
                 </div>
               </div>
               <div className="grid">
-                {playlists.map((playlist) => {
+                {playlistWindow.topSpacerHeight > 0 && <div aria-hidden="true" style={{ height: playlistWindow.topSpacerHeight }} />}
+                {renderedPlaylists.map((playlist) => {
                   const active = playlist.id === selectedPlaylistId;
                   return (
                     <button
@@ -2496,6 +3005,7 @@ export function LibraryPage({
                       className={`grid gap-1 border-b border-line/60 px-4 py-3 text-left transition ${
                         active ? "bg-white/10" : "hover:bg-white/[0.035]"
                       }`}
+                      style={{ height: PLAYLIST_ROW_HEIGHT }}
                       type="button"
                       onClick={() => onSelectPlaylist(playlist.id)}
                     >
@@ -2506,12 +3016,14 @@ export function LibraryPage({
                     </button>
                   );
                 })}
+                {playlistWindow.bottomSpacerHeight > 0 && <div aria-hidden="true" style={{ height: playlistWindow.bottomSpacerHeight }} />}
                 {playlists.length === 0 && (
                   <div className="px-4 py-10 text-center text-sm text-muted">
                     Create a playlist or import M3U, PLS, XSPF, WPL, or iTunes XML.
                   </div>
                 )}
               </div>
+              {renderPaneTopButton(playlistScrollTop > PLAYLIST_TOOLBAR_HEIGHT + 80, "Back to top", playlistListRef, setPlaylistScrollTop)}
             </section>
             <section className="min-h-0 min-w-0 overflow-auto">
               <div className="sticky top-0 z-10 grid min-h-12 min-w-0 gap-2 border-b border-line bg-ink px-4 py-2 min-[1180px]:grid-cols-[minmax(0,1fr)_auto] min-[1180px]:items-center">

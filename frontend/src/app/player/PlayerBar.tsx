@@ -91,6 +91,8 @@ type ExternalTrackRequest = {
   queue: Track[];
 };
 
+const WEB_HANDOFF_FADE_MS = 90;
+
 export function PlayerBar({
   currentTrack,
   currentRadioStation,
@@ -138,7 +140,7 @@ export function PlayerBar({
   queue: Track[];
   externalTrackRequest: ExternalTrackRequest | null;
   onSelectTrack: (track: Track, queue: Track[], options?: { suppressExitRecord?: boolean }) => void;
-  onCommitExternalTrackRequest: (request: ExternalTrackRequest) => void;
+  onCommitExternalTrackRequest: (request: ExternalTrackRequest, options?: { suppressExitRecord?: boolean }) => void;
   onTrackEnded: (trackId: number) => Promise<void>;
   onTrackSkipped: (trackId: number) => Promise<void>;
   onPlaybackTime: (seconds: number) => void;
@@ -196,7 +198,10 @@ export function PlayerBar({
   const visualizerLastEmitRef = useRef(0);
   const endFadeTrackRef = useRef<number | null>(null);
   const crossfadeTrackRef = useRef<number | null>(null);
+  const crossfadeSourceRef = useRef<HTMLAudioElement | null>(null);
+  const handoffSourceGainRef = useRef<GainNode | null>(null);
   const handoffRef = useRef<{ trackId: number; currentTime: number } | null>(null);
+  const handoffSourceRef = useRef<HTMLAudioElement | null>(null);
   const pendingResumePositionRef = useRef<number | null>(null);
   const nativeLoadedTrackIdRef = useRef<number | null>(null);
   const nativeEndedTrackIdRef = useRef<number | null>(null);
@@ -204,6 +209,7 @@ export function PlayerBar({
   const handledExternalTrackRequestRef = useRef<number | null>(null);
   const activeSourceKeyRef = useRef("empty");
   const suppressWebPlaybackErrorsUntilRef = useRef(0);
+  const suppressWebPauseUntilRef = useRef(0);
   const smtcActionRef = useRef<(payload: SmtcButtonPayload) => void>(() => {});
   const miniPlayerChannelRef = useRef<BroadcastChannel | null>(null);
   const miniPlayerCommandRef = useRef<(command: MiniPlayerCommand) => void>(() => {});
@@ -234,7 +240,9 @@ export function PlayerBar({
         : null;
   const canPreloadNextTrack = Boolean(preloadedNextTrack && !preloadedNextTrack.is_preview && !preloadedNextTrack.audio_url);
   const effectiveDuration = isRadioSource ? 0 : duration || currentTrack?.duration_seconds || 0;
-  const progressPercent = effectiveDuration > 0 ? Math.min(100, (currentTime / effectiveDuration) * 100) : 0;
+  const progressRatio = effectiveDuration > 0 ? clampNumber(currentTime / effectiveDuration, 0, 1) : 0;
+  const progressPercent = progressRatio * 100;
+  const progressFill = progressRatio > 0 ? `calc(${progressPercent}% + ${7 - progressRatio * 14}px)` : "0px";
   const smtcPositionSecond = Math.floor(currentTime);
   const trackSwitchFadeMs = Math.max(0, fadeMs);
   function replayGainForTrack(track: Track | null) {
@@ -251,6 +259,8 @@ export function PlayerBar({
   const outputVolume = muted ? 0 : clampNumber(volume, 0, 1);
   const radioSubtitle = currentRadioStation ? display(currentRadioStation.genre, "Live web radio") : null;
   const trackAudioSourceUrl = (track: Track) => track.audio_url ?? audioUrl(track.id);
+  const trackNeedsWebPlayback = (track: Track | null) =>
+    Boolean(track?.audio_url || track?.is_preview || track?.path?.startsWith("cdda://"));
   const webAudioSourceUrl = currentRadioStation?.stream_url ?? (currentTrack ? trackAudioSourceUrl(currentTrack) : null);
   const webAudioKey = currentRadioStation ? `radio-${currentRadioStation.id}` : currentTrack ? `track-${currentTrack.id}-${currentTrack.audio_url ?? ""}` : "empty";
   const visualizerTrackId = currentTrack?.id ?? (currentRadioStation ? -currentRadioStation.id : null);
@@ -410,7 +420,9 @@ export function PlayerBar({
     }
     const input = dspInputRef.current;
     connectMediaElementSource(audioRef.current, currentSourceRef, currentSourceElementRef, currentSourceGainRef, input, outputVolume);
-    connectMediaElementSource(nextAudioRef.current, nextSourceRef, nextSourceElementRef, nextSourceGainRef, input, 0);
+    if (!handoffSourceRef.current) {
+      connectMediaElementSource(nextAudioRef.current, nextSourceRef, nextSourceElementRef, nextSourceGainRef, input, 0);
+    }
     if (dspModeRef.current !== equalizerBandMode || dspLimiterRef.current !== dspLimiterEnabled || !dspPreampRef.current) {
       rebuildDspTail(context, input);
     }
@@ -486,6 +498,92 @@ export function PlayerBar({
       element.volume = 1;
     }
     return true;
+  }
+
+  function rampHtmlAudioVolume(
+    element: HTMLAudioElement,
+    startVolume: number,
+    targetVolume: number,
+    durationMs: number,
+    afterFade?: () => void,
+  ) {
+    const clampedStart = clampNumber(startVolume, 0, 1);
+    const clampedTarget = clampNumber(targetVolume, 0, 1);
+    if (durationMs <= 0) {
+      element.volume = clampedTarget;
+      afterFade?.();
+      return;
+    }
+    const startedAt = window.performance.now();
+    element.volume = clampedStart;
+    const step = () => {
+      const elapsed = window.performance.now() - startedAt;
+      const progress = Math.min(1, elapsed / durationMs);
+      const eased = smoothFadeProgress(progress);
+      element.volume = clampedStart + (clampedTarget - clampedStart) * eased;
+      if (progress >= 1) {
+        element.volume = clampedTarget;
+        afterFade?.();
+        return;
+      }
+      window.requestAnimationFrame(step);
+    };
+    window.requestAnimationFrame(step);
+  }
+
+  function rampWebGainNode(
+    element: HTMLAudioElement,
+    gainNode: GainNode | null,
+    startVolume: number,
+    targetVolume: number,
+    durationMs: number,
+    afterFade?: () => void,
+  ) {
+    const clampedStart = clampNumber(startVolume, 0, 1);
+    const clampedTarget = clampNumber(targetVolume, 0, 1);
+    if (!gainNode) {
+      rampHtmlAudioVolume(element, clampedStart, clampedTarget, durationMs, afterFade);
+      return;
+    }
+
+    const context = gainNode.context;
+    const now = context.currentTime;
+    holdAudioParam(gainNode.gain, now);
+    element.volume = 1;
+    if (durationMs <= 0) {
+      gainNode.gain.setValueAtTime(clampedTarget, now);
+      afterFade?.();
+      return;
+    }
+
+    const durationSeconds = Math.max(0.001, durationMs / 1000);
+    gainNode.gain.setValueAtTime(clampedStart, now);
+    gainNode.gain.setValueCurveAtTime(smoothFadeCurve(clampedStart, clampedTarget), now, durationSeconds);
+    window.setTimeout(() => {
+      const finishedAt = context.currentTime;
+      gainNode.gain.cancelScheduledValues(finishedAt);
+      gainNode.gain.setValueAtTime(clampedTarget, finishedAt);
+      afterFade?.();
+    }, durationMs + 25);
+  }
+
+  function finishWebHandoffToMain(audio: HTMLAudioElement, handoffSource: HTMLAudioElement | null) {
+    rampWebGainNode(audio, currentSourceGainRef.current, 0, outputVolume, WEB_HANDOFF_FADE_MS);
+    if (!handoffSource || handoffSource === audio) {
+      handoffSourceRef.current = null;
+      handoffSourceGainRef.current = null;
+      return;
+    }
+    const handoffGain = handoffSourceGainRef.current ?? nextSourceGainRef.current;
+    rampWebGainNode(handoffSource, handoffGain, outputVolume, 0, WEB_HANDOFF_FADE_MS, () => {
+      handoffSource.pause();
+      if (handoffSource !== audioRef.current) {
+        setWebSourceGain(handoffSource, nextSourceGainRef, 0);
+      }
+      handoffSourceRef.current = null;
+      handoffSourceGainRef.current = null;
+      ensureWebAudioGraph();
+    });
   }
 
   function fadeWebSourceGain(
@@ -770,6 +868,12 @@ export function PlayerBar({
       window.clearInterval(crossfadeTimerRef.current);
       crossfadeTimerRef.current = null;
     }
+    const crossfadeSource = crossfadeSourceRef.current;
+    if (crossfadeSource && crossfadeSource !== audioRef.current) {
+      crossfadeSource.pause();
+      setWebSourceGain(crossfadeSource, nextSourceGainRef, 0);
+    }
+    crossfadeSourceRef.current = null;
     cancelWebSourceGainAutomation(currentSourceGainRef);
     cancelWebSourceGainAutomation(nextSourceGainRef);
   }
@@ -900,9 +1004,14 @@ export function PlayerBar({
     }
   }
 
-  async function startNativeCrossfade(nextTrack: Track, recordCompletion = true) {
-    if (!currentTrack || crossfadeTrackRef.current === currentTrack.id) {
-      return;
+  async function startNativeCrossfade(
+    nextTrack: Track,
+    recordCompletion = true,
+    nextQueue: Track[] = queue,
+    commitSelection = true,
+  ): Promise<boolean> {
+    if (!currentTrack || trackNeedsWebPlayback(nextTrack) || crossfadeTrackRef.current === currentTrack.id) {
+      return false;
     }
     crossfadeTrackRef.current = currentTrack.id;
     cancelNativeFade();
@@ -925,10 +1034,14 @@ export function PlayerBar({
       if (recordCompletion) {
         void onTrackEnded(currentTrack.id);
       }
-      onSelectTrack(nextTrack, queue, { suppressExitRecord: true });
+      if (commitSelection) {
+        onSelectTrack(nextTrack, nextQueue, { suppressExitRecord: true });
+      }
+      return true;
     } catch (error) {
       crossfadeTrackRef.current = null;
       setStatus(error instanceof Error ? error.message : "Native crossfade could not start.");
+      return false;
     }
   }
 
@@ -953,17 +1066,53 @@ export function PlayerBar({
     }
   }
 
-  async function startCrossfade(nextTrack: Track) {
+  function createWebCrossfadeElement(track: Track) {
+    const audio = document.createElement("audio");
+    audio.crossOrigin = "anonymous";
+    audio.preload = "auto";
+    audio.src = trackAudioSourceUrl(track);
+    audio.load();
+    return audio;
+  }
+
+  function webCrossfadeSourceFor(track: Track) {
+    return preloadedNextTrack?.id === track.id && nextAudioRef.current
+      ? nextAudioRef.current
+      : createWebCrossfadeElement(track);
+  }
+
+  async function startCrossfade(
+    nextTrack: Track,
+    options: {
+      nextQueue?: Track[];
+      recordCompletion?: boolean;
+      commitSelection?: boolean;
+      onCommit?: () => void;
+      sourceElement?: HTMLAudioElement | null;
+    } = {},
+  ): Promise<boolean> {
+    const {
+      nextQueue = queue,
+      recordCompletion = true,
+      commitSelection = true,
+      onCommit,
+      sourceElement = nextAudioRef.current,
+    } = options;
     const currentAudio = audioRef.current;
-    const nextAudio = nextAudioRef.current;
+    const nextAudio = sourceElement;
     if (!currentTrack || !currentAudio || !nextAudio || currentAudio.paused || crossfadeTrackRef.current === currentTrack.id) {
-      return;
+      return false;
     }
 
     crossfadeTrackRef.current = currentTrack.id;
     cancelFade();
     cancelCrossfade();
+    crossfadeSourceRef.current = nextAudio;
     ensureWebAudioGraph();
+    if (nextAudio !== nextAudioRef.current && dspInputRef.current) {
+      connectMediaElementSource(nextAudio, nextSourceRef, nextSourceElementRef, nextSourceGainRef, dspInputRef.current, 0);
+      updateDspSettings();
+    }
     setWebSourceGain(currentAudio, currentSourceGainRef, outputVolume);
     setWebSourceGain(nextAudio, nextSourceGainRef, 0);
 
@@ -973,8 +1122,36 @@ export function PlayerBar({
       await nextAudio.play();
     } catch {
       crossfadeTrackRef.current = null;
-      return;
+      return false;
     }
+
+    const finishCrossfade = () => {
+      handoffRef.current = { trackId: nextTrack.id, currentTime: nextAudio.currentTime };
+      suppressWebPauseUntilRef.current = window.performance.now() + 1200;
+      currentAudio.pause();
+      setIsPlaying(true);
+      setWebSourceGain(currentAudio, currentSourceGainRef, outputVolume);
+      if (recordCompletion) {
+        void onTrackEnded(currentTrack.id);
+      }
+      handoffSourceRef.current = nextAudio;
+      if (onCommit) {
+        onCommit();
+      } else if (commitSelection) {
+        onSelectTrack(nextTrack, nextQueue, { suppressExitRecord: true });
+      }
+      window.setTimeout(() => {
+        if (handoffSourceRef.current === nextAudio && nextAudio !== audioRef.current) {
+          rampWebGainNode(nextAudio, handoffSourceGainRef.current ?? nextSourceGainRef.current, outputVolume, 0, WEB_HANDOFF_FADE_MS, () => {
+            nextAudio.pause();
+            setWebSourceGain(nextAudio, nextSourceGainRef, 0);
+          });
+          handoffSourceGainRef.current = null;
+          handoffSourceRef.current = null;
+        }
+      }, 1200);
+      crossfadeSourceRef.current = null;
+    };
 
     const durationMs = Math.max(120, fadeMs);
     const currentGain = currentSourceGainRef.current;
@@ -1002,13 +1179,10 @@ export function PlayerBar({
         nextGain.gain.cancelScheduledValues(finishedAt);
         currentGain.gain.setValueAtTime(0, finishedAt);
         nextGain.gain.setValueAtTime(outputVolume, finishedAt);
-        handoffRef.current = { trackId: nextTrack.id, currentTime: nextAudio.currentTime };
-        currentAudio.pause();
-        setWebSourceGain(currentAudio, currentSourceGainRef, outputVolume);
-        void onTrackEnded(currentTrack.id);
-        onSelectTrack(nextTrack, queue, { suppressExitRecord: true });
+        handoffSourceGainRef.current = nextGain;
+        finishCrossfade();
       }, durationMs + 25);
-      return;
+      return true;
     }
 
     setWebSourceGain(currentAudio, currentSourceGainRef, 1);
@@ -1024,14 +1198,16 @@ export function PlayerBar({
       nextAudio.volume = Math.min(outputVolume, outputVolume * eased);
 
       if (progress >= 1) {
-        cancelCrossfade();
-        handoffRef.current = { trackId: nextTrack.id, currentTime: nextAudio.currentTime };
-        currentAudio.pause();
+        if (crossfadeTimerRef.current !== null) {
+          window.clearInterval(crossfadeTimerRef.current);
+          crossfadeTimerRef.current = null;
+        }
         currentAudio.volume = outputVolume;
-        void onTrackEnded(currentTrack.id);
-        onSelectTrack(nextTrack, queue, { suppressExitRecord: true });
+        handoffSourceGainRef.current = null;
+        finishCrossfade();
       }
     }, 16);
+    return true;
   }
 
   async function playWithFade() {
@@ -1104,7 +1280,8 @@ export function PlayerBar({
     }
 
     handledExternalTrackRequestRef.current = externalTrackRequest.id;
-    const commitTrackRequest = () => onCommitExternalTrackRequest(externalTrackRequest);
+    const commitTrackRequest = (options?: { suppressExitRecord?: boolean }) =>
+      onCommitExternalTrackRequest(externalTrackRequest, options);
 
     cancelCrossfade();
     crossfadeTrackRef.current = null;
@@ -1128,6 +1305,26 @@ export function PlayerBar({
     }
 
     if (useNativePlayback) {
+      if (trackNeedsWebPlayback(externalTrackRequest.track)) {
+        void recordCurrentTrackExit();
+        fadeNativeVolume(0, trackSwitchFadeMs, () => {
+          void nativeStop().finally(() => commitTrackRequest({ suppressExitRecord: true }));
+        });
+        return;
+      }
+      if (isPlaying && trackSwitchFadeMs > 0) {
+        void recordCurrentTrackExit();
+        void startNativeCrossfade(externalTrackRequest.track, false, externalTrackRequest.queue, false).then((started) => {
+          if (started) {
+            commitTrackRequest({ suppressExitRecord: true });
+            return;
+          }
+          fadeNativeVolume(0, trackSwitchFadeMs, () => {
+            void nativeStop().finally(() => commitTrackRequest({ suppressExitRecord: true }));
+          });
+        });
+        return;
+      }
       fadeNativeVolume(0, trackSwitchFadeMs, () => {
         void nativeStop().finally(commitTrackRequest);
       });
@@ -1140,15 +1337,27 @@ export function PlayerBar({
       return;
     }
 
-    fadeVolume(0, trackSwitchFadeMs, () => {
-      audio.pause();
-      try {
-        audio.currentTime = 0;
-      } catch {
-        // Some codecs do not permit seeking during teardown.
+    void recordCurrentTrackExit();
+    void startCrossfade(externalTrackRequest.track, {
+      nextQueue: externalTrackRequest.queue,
+      recordCompletion: false,
+      sourceElement: webCrossfadeSourceFor(externalTrackRequest.track),
+      onCommit: () => commitTrackRequest({ suppressExitRecord: true }),
+    }).then((started) => {
+      if (started) {
+        return;
       }
-      commitTrackRequest();
+      fadeVolume(0, trackSwitchFadeMs, () => {
+        audio.pause();
+        try {
+          audio.currentTime = 0;
+        } catch {
+          // Some codecs do not permit seeking during teardown.
+        }
+        commitTrackRequest({ suppressExitRecord: true });
+      });
     });
+    return;
   }, [externalTrackRequest?.id]);
 
   useEffect(() => {
@@ -1198,12 +1407,16 @@ export function PlayerBar({
     const handoff = handoffRef.current;
     if (handoff?.trackId === currentTrack.id) {
       handoffRef.current = null;
+      const handoffSource = handoffSourceRef.current;
       audio.currentTime = handoff.currentTime;
       ensureWebAudioGraph();
-      setWebSourceGain(audio, currentSourceGainRef, outputVolume);
+      setWebSourceGain(audio, currentSourceGainRef, 0);
       void resumeWebAudioGraph()
         .then(() => audio.play())
-        .then(() => setIsPlaying(true))
+        .then(() => {
+          setIsPlaying(true);
+          finishWebHandoffToMain(audio, handoffSource);
+        })
         .catch(() => {
           setStatus("Playback could not continue after crossfade.");
         });
@@ -1426,6 +1639,14 @@ export function PlayerBar({
         return;
       }
       if (useNativePlayback) {
+        if (trackNeedsWebPlayback(nextTrack)) {
+          fadeNativeVolume(0, trackSwitchFadeMs, () => {
+            void nativeStop().finally(() => {
+              onSelectTrack(nextTrack, queue, { suppressExitRecord: true });
+            });
+          });
+          return;
+        }
         if (isPlaying && fadeMs > 0) {
           void startNativeCrossfade(nextTrack, false);
           return;
@@ -1438,6 +1659,27 @@ export function PlayerBar({
         return;
       }
       if (audio && !audio.paused) {
+        if (trackSwitchFadeMs > 0) {
+          void startCrossfade(nextTrack, {
+            nextQueue: queue,
+            recordCompletion: false,
+            sourceElement: webCrossfadeSourceFor(nextTrack),
+          }).then((started) => {
+            if (started) {
+              return;
+            }
+            fadeVolume(0, trackSwitchFadeMs, () => {
+              audio.pause();
+              try {
+                audio.currentTime = 0;
+              } catch {
+                // Some codecs do not permit seeking during teardown.
+              }
+              onSelectTrack(nextTrack, queue, { suppressExitRecord: true });
+            });
+          });
+          return;
+        }
         fadeVolume(0, trackSwitchFadeMs, () => {
           audio.pause();
           try {
@@ -1526,7 +1768,7 @@ export function PlayerBar({
     const endedAt = audioRef.current?.currentTime ?? currentTime;
     if (isCdPreviewTrack && effectiveDuration > 15 && endedAt < effectiveDuration - 8) {
       setIsPlaying(false);
-      setStatus("CD playback stopped early. Press play to retry this track.");
+      setStatus("CD playback stopped early. Use the play button in the player bar to retry, or refresh the CD page if the disc changed.");
       return;
     }
     await onTrackEnded(currentTrack.id);
@@ -1965,8 +2207,15 @@ export function PlayerBar({
             src={webAudioSourceUrl}
             onLoadedMetadata={syncDuration}
             onTimeUpdate={handleTimeUpdate}
-            onPlay={() => setIsPlaying(true)}
-            onPause={() => setIsPlaying(false)}
+            onPlay={() => {
+              setIsPlaying(true);
+            }}
+            onPause={() => {
+              if (window.performance.now() < suppressWebPauseUntilRef.current) {
+                return;
+              }
+              setIsPlaying(false);
+            }}
             onCanPlay={() => {
               syncDuration();
             }}
@@ -2034,7 +2283,7 @@ export function PlayerBar({
               max={Math.max(effectiveDuration, 0)}
               min={0}
               step={1}
-              style={{ "--progress": `${progressPercent}%` } as CSSProperties}
+              style={{ "--progress": `${progressPercent}%`, "--progress-fill": progressFill } as CSSProperties}
               type="range"
               value={effectiveDuration > 0 ? Math.min(currentTime, effectiveDuration) : 0}
               onChange={handleSeek}
