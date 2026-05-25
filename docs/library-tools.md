@@ -4,13 +4,15 @@ FLAC Cafe keeps risky library maintenance behind preview-first tools. These tool
 
 ## File Management Navigation
 
-The File Management page groups tools into Tags, Files, Devices, Import, and Maintenance categories. Use the search box to narrow the page by tool name, description, or common task keywords such as `duplicates`, `MusicBee`, `artwork`, or `ffmpeg`.
+The File Management page groups tools into Setup, Tags, Files, Devices, Import, and Maintenance categories. Use the search box to narrow the page by tool name, description, or common task keywords such as `duplicates`, `MusicBee`, `artwork`, or `ffmpeg`.
 
 Most tools remain preview-first. Filtering the page only changes what is visible; it does not reset staged previews or selected track scopes.
 
 ## Right-Click Tagging
 
-The Library track context menu includes a Tagging submenu. It supports the full metadata editor plus quick setters for genre, artist, album, album artist, and year. When multiple tracks are selected, the quick setters apply to the selection using the same SQLite/file-writing behavior as bulk metadata edits.
+The Library track context menu includes a Tagging submenu for actions that affect metadata or classification. It links to the full metadata editor, MusicBrainz auto-tagging, acoustic fingerprint tagging, database-to-file tag sync, volume-tag tools, and the Mark as Audiobook/Podcast actions. Basic field edits live in the editor instead of separate one-field menu items, which keeps the right-click menu smaller.
+
+When multiple tracks are selected, tagging actions use the current selection. SQLite is always updated first; audio files are only changed by tools that explicitly write files or by metadata edits when the file-writing setting is enabled.
 
 ## Filename Tag Inference
 
@@ -129,9 +131,9 @@ The CD Ripper panel on the File Management page detects local CD drives, checks 
 
 Secure extraction is tool-backed. Windows builds bundle a small cdrtools folder with `cdda2wav.exe` for CD extraction and CD-Text; custom `cdparanoia.exe`, `cdda2wav.exe`, or `icedax.exe` paths on `PATH` are still detected. FLAC and MP3 encoding use the same optional FFmpeg setup as Audio Conversion. If an AccurateRip-capable tool is installed, FLAC Cafe reports that capability; current rip jobs always write local SHA-256 verification hashes so a rip has an audit trail even when official AccurateRip database matching is unavailable.
 
-The Optional Dependencies page shows bundled cdrtools status and can install FFmpeg for encoding. AccurateRip-capable helpers are still detected when present, but are not bundled by FLAC Cafe.
+The Optional Dependencies page focuses on installable extras such as FFmpeg and ML runtimes. Chromaprint and the small Windows CD helper tools are bundled with the app and documented in `THIRD_PARTY_NOTICES.md` instead of being presented as user-installed dependencies. AccurateRip-capable helpers are still detected when present, but are not bundled by FLAC Cafe.
 
-CD playback uses Windows CD audio control for quick track checks. It is intentionally separate from the local-file player and does not add ripped tracks to the library until the output folder is scanned.
+CD playback prepares selected CD tracks as live WAV streams and sends them through the normal player bar. It does not add ripped tracks to the library until the output folder is scanned.
 
 ## CSV Metadata Cleanup
 

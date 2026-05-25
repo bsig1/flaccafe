@@ -25,17 +25,23 @@ Native playback prepares the next queued file by opening and decoding it ahead o
 - Fade and crossfade duration is controlled by the Player settings. WebView crossfade uses two audio elements; native crossfade uses overlapping rodio players on the same mixer, then stops the old player after the fade. The backend also exposes `/playback/gapless/validate` to inspect adjacent tracks for codec, sample-rate, channel, and sample-count compatibility before treating an album transition as gapless-safe.
 - Volume and mute are stored locally in browser storage.
 - ReplayGain can be applied from embedded track or album gain tags with an optional preamp.
-- Now Playing supports Theater, Lyrics, and Party layouts, with optional queue, album-art backgrounds, and bars/wave/radial visualizers.
+- Now Playing supports Queue, Lyrics, and Party layouts, with optional lyrics/queue panels and bars/wave/radial visualizers.
 - The compact bottom player is a single setting; older saved `playerLayout: "compact"` preferences are still treated as compact mode.
-- The detached mini player communicates with the main app through `BroadcastChannel`, and its always-on-top state plus snap size are persisted.
+- The detached mini player communicates with the main app through `BroadcastChannel`, uses a narrow fixed layout, and can reopen the main app window.
 - If a file cannot be decoded by WebView2, reveal it in Explorer from Library or the track details panel and open it with another local player.
 - Native playback diagnostics are kept in memory for the current app session and capped to the most recent failures.
 
 ## Now Playing And Visualizers
 
-Settings > Player controls the default Now Playing layout, visualizer style, background, lyric size, and whether the lyrics or queue panels are shown. The Now Playing header also exposes quick switches for layout, visualizer style, lyrics, queue, and fullscreen.
+Settings > Player controls the default Now Playing layout, visualizer style, lyric size, and whether the lyrics or queue panels are shown. The Now Playing header also exposes quick switches for layout, visualizer style, lyrics, queue, and fullscreen.
 
-The visualizer reads live Web Audio analyzer data when the WebView engine is active. Native playback does not currently expose decoded PCM frames to the frontend, so the visualizer falls back to a playback-reactive ambient animation for that engine.
+The visualizer reads live Web Audio analyzer data when the WebView engine is active. Native playback exposes sampled PCM-level frames through the Tauri bridge, so the visualizer can respond to native output too. If no live frame is available, the component falls back to a gentle playback-reactive animation instead of going blank.
+
+## CD Playback
+
+The CD page appears according to the Settings > Sources CD sidebar visibility preference. When a drive is available, selected CD tracks can be prepared as a live WAV stream and played through the normal player bar. The first start can take a moment because the backend has to open the optical drive and begin streaming audio.
+
+CD ripping still lives in File Management. Ripped files are not added to the normal music library until their output folder is scanned.
 
 ## ReplayGain
 

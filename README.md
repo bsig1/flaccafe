@@ -1,20 +1,22 @@
 # FLAC Cafe
 
-FLAC Cafe is an open-source, Windows-first desktop app for local music collections. It is built to prove a better local AutoDJ: scan downloaded files, keep ratings and play history in SQLite, analyze similarity when optional ML is installed, and generate useful queues without becoming a full MusicBee replacement overnight.
+FLAC Cafe is an open-source, Windows-first desktop app for local music collections. It is built around a better local AutoDJ: scan downloaded files, keep ratings and play history in SQLite, analyze similarity when optional ML is installed, and generate useful queues without depending on a streaming service.
 
-This is still an alpha prototype. Expect sharp edges.
+This is a beta prototype. The core app is usable, but release builds still need broad real-library testing.
 
 ## What Works
 
 - Local library scanning with progress, missing-file cleanup, duplicate review, and messy metadata tolerance.
-- SQLite-backed ratings, play history, playlists, smart playlists, lyrics, and recommendation history.
+- SQLite-backed ratings, play history, playlists, lyrics, recommendation history, podcasts, audiobooks, and web radio bookmarks.
 - Optional metadata and rating writes back to files when the setting is enabled.
-- MusicBee-inspired library tools for filename-to-tag inference, tag-based file organization previews, desktop-library stats import, and cache cleanup.
-- Local playback through the Tauri WebView with queue controls, fade/crossfade, sleep timer, lyrics, artist info, and media-key integration.
+- MusicBee-inspired library tools for filename-to-tag inference, MusicBrainz auto-tagging, acoustic fingerprints, volume tags, tag backups, CSV cleanup, file organization previews, desktop-library stats import, and cache cleanup.
+- Local playback through the Tauri WebView or experimental native Rust engine, with queue controls, fade/crossfade, sleep timer, lyrics, visualizers, artist info, and media-key integration.
 - AutoDJ with beginner and advanced controls, temperature sampling, cooldowns, unrated exploration, seed-track similarity, and optional CLAP audio embeddings.
+- Album, artist, playlist, audiobook, podcast, radio, source-folder, history, and file-management views.
+- Optional CD detection, live CD preview/playback, MusicBrainz disc lookup, and FLAC/MP3/WAV ripping workflows.
 - Theme and font customization through JSON theme files plus in-app settings.
 - Manifest-based extension and skin discovery for advanced customization experiments.
-- MSI packaging helpers for Windows.
+- MSI packaging helpers for Windows, including bundled Chromaprint and CD helper tools.
 
 ## Stack
 
@@ -30,9 +32,10 @@ The MVP uses FastAPI because it keeps the music logic in Python, keeps React foc
 ```text
 backend/       Python API, SQLite, scanner, recommender, library tools
 frontend/      React/TypeScript UI, typed API clients, themes, player surfaces
-src-tauri/     Tauri v2 shell, backend launcher, native commands, Windows media controls
+src-tauri/     Tauri v2 shell, backend launcher, native commands, Windows media controls, native playback
 scripts/       Windows dev, test, validation, packaging, and runtime helpers
 docs/          maintainer guides, feature docs, release docs, and project structure
+extensions/    sample extension/skin manifests
 ```
 
 For the detailed tree, ownership notes, and ignored/generated directories, see [Project Structure](docs/project-structure.md).
@@ -101,6 +104,8 @@ cargo check
 ```powershell
 npm run package:msi
 ```
+
+The Windows MSI product version must be numeric, so beta builds use a numeric Windows product version such as `0.5.0` and a release/installer label such as `0.5.0-beta`.
 
 Before publishing, follow [docs/release-checklist.md](docs/release-checklist.md).
 

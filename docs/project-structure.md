@@ -14,11 +14,13 @@ FLAC Cafe is split by runtime boundary first, then by responsibility. The import
 ├── docs/             Maintainer and user-facing project documentation
 ├── .github/          Issue templates and CI workflow
 ├── index.html        Vite HTML entry point
+├── vite.config.ts    Vite config shared by dev/build/test entry points
 ├── package.json      Node scripts and frontend/Tauri toolchain dependencies
 ├── tailwind.config.js
 ├── postcss.config.js
 ├── README.md
 ├── CONTRIBUTING.md
+├── THIRD_PARTY_NOTICES.md
 ├── TODO.md
 └── LICENSE
 ```
@@ -33,6 +35,7 @@ backend/
 │   ├── database.py          SQLite schema setup and migration helpers
 │   ├── scanner.py           recursive library scanning and mutagen metadata reads
 │   ├── file_tags.py         opt-in metadata, rating, and lyric writes to audio files
+│   ├── volume_tags.py       ReplayGain-style volume tag preview/write helpers
 │   ├── extensions.py        skin/plugin manifest discovery and validation
 │   ├── audiobooks.py        long-form resume positions, bookmarks, chapters, and sync exports
 │   ├── inbox.py             Inbox notes and auto-review rule matching
@@ -55,11 +58,16 @@ backend/
 │   └── config.py            storage paths and runtime configuration
 ├── tests/
 │   ├── test_api.py
-│   └── test_library_workflows.py
+│   ├── test_library_workflows.py
+│   └── test_volume_tags.py
+├── cache/                   local derived preview/cache files; ignored by git
 ├── data/                    local dev database lives here; only `.gitkeep` is tracked
 ├── exports/                 generated playlists/reports/backups; only `.gitkeep` is tracked
 ├── models/
 │   └── clap/.gitkeep        local model cache placeholder
+├── tools/                   bundled small helper tools plus runtime-managed optional tools
+│   ├── chromaprint/         bundled `fpcalc` docs/status placeholder
+│   └── cd-rip/              bundled Windows CD helper tools and license notes
 ├── desktop_backend.py       packaged backend executable entry point
 ├── requirements.txt         base Python dependencies
 └── requirements-clap.txt    optional CLAP/Torch-side dependencies
@@ -80,6 +88,9 @@ frontend/
 │   │   ├── shared.test.ts
 │   │   ├── components/      reusable app-specific UI pieces and modals
 │   │   ├── pages/           page-sized surfaces, with per-page section folders for larger tools
+│   │   │   ├── file-management/ File Management sections and navigator
+│   │   │   ├── settings/        Settings sections
+│   │   │   └── sources/         Source-folder and folder-watch sections
 │   │   └── player/          bottom player and detached mini-player window
 │   ├── config/
 │   │   ├── theme.ts         theme/font registry
@@ -88,6 +99,7 @@ frontend/
 │   │   ├── api.ts           typed FastAPI client boundary
 │   │   ├── nativePlayback.ts Tauri bridge for experimental Rust playback
 │   │   ├── tauriMedia.ts    Windows media-control bridge
+│   │   ├── externalLinks.ts Tauri/browser external-link opener
 │   │   └── uiInteractions.ts framework-light UI helpers
 │   ├── test/
 │   │   └── setup.ts         Vitest setup
@@ -176,6 +188,7 @@ frontend/dist/
 src-tauri/target/
 backend/data/*
 backend/exports/*
+backend/cache/*
 backend/logs/
 backend/models/*
 build-backend*/
@@ -184,7 +197,7 @@ dist-backend*/
 *.msi
 ```
 
-The `.gitkeep` files under `backend/data/`, `backend/exports/`, and `backend/models/clap/` preserve useful empty directories in fresh clones while keeping databases, reports, playlists, backups, logs, models, and installer artifacts out of git.
+The `.gitkeep` files under `backend/data/`, `backend/exports/`, and `backend/models/clap/` preserve useful empty directories in fresh clones while keeping databases, reports, playlists, backups, generated CD previews, logs, models, and installer artifacts out of git.
 
 ## Where New Work Usually Goes
 

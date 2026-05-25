@@ -24,6 +24,8 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `PATCH /tracks/{track_id}/rating` updates a half-star rating in SQLite, and optionally audio files.
 - `DELETE /tracks/{track_id}` removes a track from the library and can optionally delete the file.
 - `POST /tracks/delete` removes many tracks in one request, using batched SQLite deletes and optional file deletion.
+- `POST /tracks/sync-metadata` rereads selected audio files and updates SQLite from file tags.
+- `POST /tracks/write-metadata-to-files` previews or applies SQLite metadata/rating values back into supported audio files.
 - `POST /tracks/restore` rescans a previously removed file back into the library.
 - `GET /library/stats` returns dashboard counts.
 - `GET /library/health` returns missing files, duplicate groups, missing metadata, and unrated tracks.
@@ -58,6 +60,7 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `POST /library/tools/autotag` previews or applies MusicBrainz album/track metadata and optional Cover Art Archive sidecar artwork.
 - `POST /library/tools/clap-genre-tags` previews or applies CLAP genre predictions to editable track Genre tags.
 - `POST /library/tools/volume-tags` previews or applies FFmpeg-analyzed ReplayGain-style volume tags.
+- `POST /library/tools/write-metadata-to-files` previews or applies SQLite metadata/rating values back into supported audio files.
 - `POST /library/tools/artwork-collisions` previews or repairs folders where multiple albums share one folder-level cover.
 - `POST /library/tools/organize-files` previews or applies tag-based file moves.
 - `POST /library/tools/organize-files/report` writes a JSON file-organization preview report.
@@ -79,7 +82,9 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `POST /library/tools/cd-rip/jobs` starts a background CD ripping job to FLAC, MP3, or WAV.
 - `GET /library/tools/cd-rip/jobs/{job_id}` returns CD ripping progress and verification hashes.
 - `POST /library/tools/cd-rip/jobs/{job_id}/cancel` cancels a CD ripping job after the current track finishes.
-- `POST /library/tools/cd-rip/playback/play` starts Windows CD audio playback for a selected track.
+- `POST /library/tools/cd-rip/playback/play` prepares selected CD tracks for playback through the main player.
+- `HEAD /library/tools/cd-rip/playback/live/audio` checks the live CD WAV stream headers.
+- `GET /library/tools/cd-rip/playback/live/audio` streams a selected CD track as live WAV audio.
 - `POST /library/tools/cd-rip/playback/stop` stops Windows CD audio playback.
 - `POST /library/tools/export-metadata-csv` exports track metadata for spreadsheet cleanup.
 - `POST /library/tools/import-metadata-csv` previews or applies spreadsheet metadata changes.
@@ -106,6 +111,7 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `GET /tracks/{track_id}/lyrics` returns embedded/database lyrics.
 - `POST /tracks/{track_id}/lyrics/fetch` attempts online lyric lookup.
 - `PATCH /tracks/{track_id}/lyrics` updates database lyrics or writes embedded lyrics when requested.
+- `GET /artists` lists local artist summaries for the Library artist view.
 - `GET /artists/info` fetches cached artist biography data.
 - `DELETE /artists/cache` clears artist biography cache.
 - `GET /artists/local-tracks` returns local tracks for an artist.
@@ -148,7 +154,7 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `POST /scrobbling/import-history` previews or applies a CSV import of historical play counts, ratings, and loved tracks.
 - `POST /playback/gapless/validate` inspects adjacent tracks for codec/output metadata compatibility before gapless playback claims.
 
-## Albums, Playlists, And Smart Playlists
+## Albums, Playlists, And Legacy Smart Rules
 
 - `GET /albums` lists album summaries.
 - `POST /albums/{album_id}/completion-lookup` queries MusicBrainz for an album's expected track count and stores it for completion estimates.
@@ -166,9 +172,9 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `PATCH /playlists/{playlist_id}/tracks/{track_id}/move` moves a track up or down.
 - `POST /playlists/{playlist_id}/export` writes an M3U playlist.
 - `POST /playlists/import` imports M3U/M3U8, PLS, XSPF, WPL, and iTunes XML playlists.
-- `GET /smart-playlists/presets` lists built-in rules.
-- `GET /smart-playlists` lists saved smart playlists.
-- `POST /smart-playlists` saves a smart playlist.
+- `GET /smart-playlists/presets` lists built-in rule presets retained for compatibility.
+- `GET /smart-playlists` lists saved smart-rule playlists.
+- `POST /smart-playlists` saves a smart-rule playlist.
 - `DELETE /smart-playlists/{smart_playlist_id}` deletes one.
 - `POST /smart-playlists/preview` previews a rule.
 - `GET /smart-playlists/{smart_playlist_id}/tracks` materializes a saved rule.
