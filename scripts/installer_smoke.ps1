@@ -3,6 +3,7 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 $ConfigPath = Join-Path $Root "src-tauri\tauri.conf.json"
 $BuildScript = Join-Path $Root "scripts\build_msi.ps1"
+$SidecarBuildScript = Join-Path $Root "scripts\build_backend_sidecar.ps1"
 $Config = Get-Content $ConfigPath -Raw | ConvertFrom-Json
 
 if ($Config.productName -ne "FLAC Cafe") {
@@ -27,9 +28,20 @@ foreach ($Icon in $Config.bundle.icon) {
 }
 
 $BuildText = Get-Content $BuildScript -Raw
-foreach ($Needle in @("--noconsole", "--exclude-module torch", "--exclude-module transformers", "--exclude-module librosa")) {
-    if (-not $BuildText.Contains($Needle)) {
-        throw "MSI build script is missing expected packaging guard: $Needle"
+if (-not $BuildText.Contains("build_backend_sidecar.ps1")) {
+    throw "MSI build script does not call the backend sidecar builder."
+}
+
+$SidecarBuildText = Get-Content $SidecarBuildScript -Raw
+foreach ($Needle in @('"--noconsole"', '"--exclude-module", "torch"', '"--exclude-module", "transformers"', '"--exclude-module", "librosa"')) {
+    if (-not $SidecarBuildText.Contains($Needle)) {
+        throw "Backend sidecar build script is missing expected packaging guard: $Needle"
+    }
+}
+
+foreach ($Needle in @('"--onefile"', '"--name", "flaccafe-backend"', '"--distpath", "dist-backend"')) {
+    if (-not $SidecarBuildText.Contains($Needle)) {
+        throw "Backend sidecar build script is missing expected output setting: $Needle"
     }
 }
 
