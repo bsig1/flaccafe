@@ -15,9 +15,10 @@ npm run build
 powershell -ExecutionPolicy Bypass -File scripts\installer_smoke.ps1
 ```
 
-Run the Tauri Rust check separately:
+Run the Tauri Rust check separately. Tauri validates bundled resources during `cargo check`, so build the Python sidecar first on a fresh clone or CI runner:
 
 ```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build_backend_sidecar.ps1
 Set-Location src-tauri
 cargo check
 ```

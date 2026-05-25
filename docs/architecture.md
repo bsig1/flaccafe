@@ -66,6 +66,7 @@ src-tauri/
 scripts/
   dev.ps1                 Windows-friendly dev server runner
   run_backend.ps1         backend-only runner
+  build_backend_sidecar.ps1 packaged Python backend resource builder
   build_msi.ps1           MSI packaging helper
   test_backend.ps1        backend test helper
 ```

@@ -161,47 +161,7 @@ Push-Location $Root
 try {
     $BuildStarted = Get-Date
 
-    & $Python -m PyInstaller --noconfirm --clean `
-        --name flaccafe-backend `
-        --onefile `
-        --noconsole `
-        --distpath dist-backend `
-        --workpath build-backend `
-        --specpath build-backend `
-        --hidden-import timeit `
-        --hidden-import aifc `
-        --hidden-import audioop `
-        --hidden-import cProfile `
-        --hidden-import bdb `
-        --hidden-import cmd `
-        --hidden-import code `
-        --hidden-import codeop `
-        --hidden-import ctypes.util `
-        --hidden-import doctest `
-        --hidden-import filecmp `
-        --hidden-import fileinput `
-        --hidden-import pdb `
-        --hidden-import profile `
-        --hidden-import pstats `
-        --hidden-import pickletools `
-        --hidden-import sndhdr `
-        --hidden-import sunau `
-        --hidden-import wave `
-        --exclude-module torch `
-        --exclude-module transformers `
-        --exclude-module librosa `
-        --exclude-module soundfile `
-        --exclude-module scipy `
-        --exclude-module sklearn `
-        --exclude-module numba `
-        --exclude-module llvmlite `
-        --exclude-module numpy `
-        --exclude-module pandas `
-        --exclude-module matplotlib `
-        backend\desktop_backend.py
-    if ($LASTEXITCODE -ne 0) {
-        throw "PyInstaller failed with exit code $LASTEXITCODE."
-    }
+    & (Join-Path $Root "scripts\build_backend_sidecar.ps1") -Clean
 
     & npm.cmd run tauri -- build --bundles msi
     if ($LASTEXITCODE -ne 0) {
