@@ -22,6 +22,8 @@ Start here when you need the maintainer or user docs without hunting through the
 - [Testing](testing.md): frontend, backend, browser, and package-oriented checks.
 - [Release Checklist](release-checklist.md): MSI release validation.
 - [Release Documentation Checklist](release-documentation-checklist.md): docs updates before publishing.
+- [Third-Party Notices](../THIRD_PARTY_NOTICES.md): bundled binary disclosures and source links.
+- [Security Policy](../SECURITY.md): vulnerability reporting and security-sensitive areas.
 
 ## Release Notes
 

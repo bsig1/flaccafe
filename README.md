@@ -1,8 +1,17 @@
 # FLAC Cafe
 
+[![CI](https://github.com/bsig1/flaccafe/actions/workflows/ci.yml/badge.svg)](https://github.com/bsig1/flaccafe/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/bsig1/flaccafe?include_prereleases&label=latest)](https://github.com/bsig1/flaccafe/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D4.svg)](https://github.com/bsig1/flaccafe/releases)
+
 FLAC Cafe is an open-source, Windows-first desktop app for local music collections. It is built around a better local AutoDJ: scan downloaded files, keep ratings and play history in SQLite, analyze similarity when optional ML is installed, and generate useful queues without depending on a streaming service.
 
-This is a beta prototype. The core app is usable, but release builds still need broad real-library testing.
+This is beta software. The core app is usable, but release builds still need broad real-library testing.
+
+## Download
+
+Windows beta installers are published on the [GitHub Releases page](https://github.com/bsig1/flaccafe/releases). The app is designed for local files first; no streaming account is required.
 
 ## What Works
 
@@ -107,7 +116,7 @@ npm run package:msi
 
 The Windows MSI product version must be numeric, so beta builds use a numeric Windows product version such as `0.5.0` and a release/installer label such as `0.5.0-beta`.
 
-Before publishing, follow [docs/release-checklist.md](docs/release-checklist.md).
+Before publishing, follow [docs/release-checklist.md](docs/release-checklist.md). Public beta releases should use a versioned tag such as `v0.5.0-beta` and be marked as a prerelease on GitHub.
 
 ## More Docs
 

@@ -91,7 +91,12 @@ function Write-ReleaseNotes {
     New-Item -ItemType Directory -Force -Path $NotesDir | Out-Null
     $NotesPath = Join-Path $NotesDir ("v{0}.md" -f $ReleaseLabel)
     $BuiltLine = "- Built: $((Get-Date).ToString("yyyy-MM-dd HH:mm:ss zzz"))"
-    $InstallerLine = "- Installer: $($Msi.FullName)"
+    $InstallerPath = $Msi.FullName
+    if ($InstallerPath.StartsWith($Root, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $InstallerPath = $InstallerPath.Substring($Root.Length).TrimStart("\", "/")
+    }
+    $InstallerPath = $InstallerPath -replace "\\", "/"
+    $InstallerLine = "- Installer: ``$InstallerPath``"
     $SizeLine = "- Size: $([math]::Round($Msi.Length / 1MB, 2)) MB"
     $ProductVersionLine = "- Windows MSI product version: $($Config.version)"
 

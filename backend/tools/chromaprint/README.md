@@ -7,3 +7,5 @@
 - Version checked in: `fpcalc version 1.6.0`
 
 See `THIRD_PARTY_NOTICES.md` at the repository root for the redistribution note.
+
+When updating this binary, record the upstream release URL and checked-in version in `THIRD_PARTY_NOTICES.md`.
