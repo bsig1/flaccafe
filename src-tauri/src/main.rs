@@ -431,6 +431,7 @@ fn main() {
             native_playback::native_seek,
             native_playback::native_set_dsp,
             native_playback::native_set_volume,
+            native_playback::native_fade_volume,
             native_playback::native_status,
             native_playback::native_visualizer_frame,
             native_playback::native_diagnostics,

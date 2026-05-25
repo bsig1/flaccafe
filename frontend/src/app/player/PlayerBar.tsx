@@ -31,6 +31,7 @@ import {
 } from "../../lib/api";
 import {
   nativeCrossfadeToFile,
+  nativeFadeVolume as nativeFadeVolumeCommand,
   nativePause,
   nativePlayFile,
   nativePrepareNextFile,
@@ -178,6 +179,8 @@ export function PlayerBar({
   const currentSourceElementRef = useRef<HTMLAudioElement | null>(null);
   const nextSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
   const nextSourceElementRef = useRef<HTMLAudioElement | null>(null);
+  const currentSourceGainRef = useRef<GainNode | null>(null);
+  const nextSourceGainRef = useRef<GainNode | null>(null);
   const dspInputRef = useRef<GainNode | null>(null);
   const dspNormalizationRef = useRef<GainNode | null>(null);
   const dspPreampRef = useRef<GainNode | null>(null);
@@ -234,14 +237,18 @@ export function PlayerBar({
   const progressPercent = effectiveDuration > 0 ? Math.min(100, (currentTime / effectiveDuration) * 100) : 0;
   const smtcPositionSecond = Math.floor(currentTime);
   const trackSwitchFadeMs = Math.max(0, fadeMs);
-  const replayGain = replayGainMultiplier(
-    currentTrack,
-    replayGainMode,
-    replayGainPreampDb,
-    replayGainPreventClipping,
-    replayGainTargetVolumePercent,
-  );
-  const outputVolume = muted ? 0 : clampNumber(volume * (useNativePlayback ? replayGain : 1), 0, useNativePlayback ? 1.5 : 1);
+  function replayGainForTrack(track: Track | null) {
+    return replayGainMultiplier(
+      track,
+      replayGainMode,
+      replayGainPreampDb,
+      replayGainPreventClipping,
+      replayGainTargetVolumePercent,
+    );
+  }
+
+  const replayGain = replayGainForTrack(currentTrack);
+  const outputVolume = muted ? 0 : clampNumber(volume, 0, 1);
   const radioSubtitle = currentRadioStation ? display(currentRadioStation.genre, "Live web radio") : null;
   const trackAudioSourceUrl = (track: Track) => track.audio_url ?? audioUrl(track.id);
   const webAudioSourceUrl = currentRadioStation?.stream_url ?? (currentTrack ? trackAudioSourceUrl(currentTrack) : null);
@@ -249,14 +256,19 @@ export function PlayerBar({
   const visualizerTrackId = currentTrack?.id ?? (currentRadioStation ? -currentRadioStation.id : null);
   activeSourceKeyRef.current = activeSourceKey;
 
-  function currentNativeDspSettings(): NativeDspSettings {
+  function nativeDspSettingsForTrack(track: Track | null): NativeDspSettings {
     return {
+      normalizationGain: replayGainForTrack(track),
       equalizerEnabled,
       equalizerBandMode,
       equalizerPreampDb,
       equalizerGains: normalizeEqualizerGains(equalizerGains, equalizerBandMode),
       limiterEnabled: dspLimiterEnabled,
     };
+  }
+
+  function currentNativeDspSettings(): NativeDspSettings {
+    return nativeDspSettingsForTrack(currentTrack);
   }
 
   function disconnectAudioNode(node: AudioNode | null) {
@@ -283,29 +295,48 @@ export function PlayerBar({
     element: HTMLAudioElement | null,
     sourceRef: MutableRefObject<MediaElementAudioSourceNode | null>,
     elementRef: MutableRefObject<HTMLAudioElement | null>,
+    gainRef: MutableRefObject<GainNode | null>,
     input: GainNode,
+    initialGain: number,
   ) {
     if (!element) {
       disconnectAudioNode(sourceRef.current);
+      disconnectAudioNode(gainRef.current);
       sourceRef.current = null;
       elementRef.current = null;
-      return;
+      gainRef.current = null;
+      return false;
     }
-    if (elementRef.current === element && sourceRef.current) {
-      return;
+    if (
+      elementRef.current === element &&
+      sourceRef.current &&
+      gainRef.current &&
+      gainRef.current.context === input.context
+    ) {
+      return true;
     }
     disconnectAudioNode(sourceRef.current);
+    disconnectAudioNode(gainRef.current);
     try {
       const context = input.context as AudioContext;
       const source = context.createMediaElementSource(element);
-      source.connect(input);
+      const sourceGain = context.createGain();
+      sourceGain.gain.value = clampNumber(initialGain, 0, 1);
+      source.connect(sourceGain);
+      sourceGain.connect(input);
       sourceRef.current = source;
       elementRef.current = element;
+      gainRef.current = sourceGain;
+      element.volume = 1;
+      return true;
     } catch {
       // A browser can reject media-element source creation in preview mode.
       // Direct audio playback still works; it just bypasses the EQ chain.
       sourceRef.current = null;
       elementRef.current = element;
+      gainRef.current = null;
+      element.volume = clampNumber(initialGain, 0, 1);
+      return false;
     }
   }
 
@@ -378,8 +409,8 @@ export function PlayerBar({
       dspLimiterRef.current = null;
     }
     const input = dspInputRef.current;
-    connectMediaElementSource(audioRef.current, currentSourceRef, currentSourceElementRef, input);
-    connectMediaElementSource(nextAudioRef.current, nextSourceRef, nextSourceElementRef, input);
+    connectMediaElementSource(audioRef.current, currentSourceRef, currentSourceElementRef, currentSourceGainRef, input, outputVolume);
+    connectMediaElementSource(nextAudioRef.current, nextSourceRef, nextSourceElementRef, nextSourceGainRef, input, 0);
     if (dspModeRef.current !== equalizerBandMode || dspLimiterRef.current !== dspLimiterEnabled || !dspPreampRef.current) {
       rebuildDspTail(context, input);
     }
@@ -425,6 +456,94 @@ export function PlayerBar({
     });
   }
 
+  function holdAudioParam(param: AudioParam, atTime: number) {
+    try {
+      param.cancelAndHoldAtTime(atTime);
+    } catch {
+      const currentValue = param.value;
+      param.cancelScheduledValues(atTime);
+      param.setValueAtTime(currentValue, atTime);
+    }
+  }
+
+  function setWebSourceGain(
+    element: HTMLAudioElement | null,
+    gainRef: MutableRefObject<GainNode | null>,
+    value: number,
+  ) {
+    const clamped = clampNumber(value, 0, 1);
+    const sourceGain = gainRef.current;
+    if (!sourceGain) {
+      if (element) {
+        element.volume = clamped;
+      }
+      return false;
+    }
+    const now = sourceGain.context.currentTime;
+    holdAudioParam(sourceGain.gain, now);
+    sourceGain.gain.setValueAtTime(clamped, now);
+    if (element) {
+      element.volume = 1;
+    }
+    return true;
+  }
+
+  function fadeWebSourceGain(
+    element: HTMLAudioElement,
+    gainRef: MutableRefObject<GainNode | null>,
+    targetVolume: number,
+    durationMs: number,
+    afterFade?: () => void,
+  ) {
+    const sourceGain = gainRef.current;
+    if (!sourceGain) {
+      return false;
+    }
+
+    cancelFade();
+    const clampedTarget = clampNumber(targetVolume, 0, 1);
+    const context = sourceGain.context;
+    const now = context.currentTime;
+    holdAudioParam(sourceGain.gain, now);
+    const startVolume = clampNumber(sourceGain.gain.value, 0, 1);
+    element.volume = 1;
+    if (durationMs <= 0) {
+      sourceGain.gain.setValueAtTime(clampedTarget, now);
+      afterFade?.();
+      return true;
+    }
+
+    const durationSeconds = Math.max(0.001, durationMs / 1000);
+    const curve = smoothFadeCurve(startVolume, clampedTarget);
+    sourceGain.gain.setValueCurveAtTime(curve, now, durationSeconds);
+    fadeTimerRef.current = window.setTimeout(() => {
+      fadeTimerRef.current = null;
+      const finishedAt = context.currentTime;
+      sourceGain.gain.cancelScheduledValues(finishedAt);
+      sourceGain.gain.setValueAtTime(clampedTarget, finishedAt);
+      afterFade?.();
+    }, durationMs + 25);
+    return true;
+  }
+
+  function smoothFadeCurve(startVolume: number, targetVolume: number) {
+    const curve = new Float32Array(64);
+    for (let index = 0; index < curve.length; index += 1) {
+      const progress = index / (curve.length - 1);
+      const eased = smoothFadeProgress(progress);
+      curve[index] = startVolume + (targetVolume - startVolume) * eased;
+    }
+    return curve;
+  }
+
+  function cancelWebSourceGainAutomation(gainRef: MutableRefObject<GainNode | null>) {
+    const sourceGain = gainRef.current;
+    if (!sourceGain) {
+      return;
+    }
+    holdAudioParam(sourceGain.gain, sourceGain.context.currentTime);
+  }
+
   function cancelVisualizerLoop() {
     if (visualizerFrameRef.current !== null) {
       window.cancelAnimationFrame(visualizerFrameRef.current);
@@ -460,12 +579,8 @@ export function PlayerBar({
       return;
     }
     if (fadeTimerRef.current === null && crossfadeTimerRef.current === null) {
-      if (audioRef.current) {
-        audioRef.current.volume = outputVolume;
-      }
-      if (nextAudioRef.current) {
-        nextAudioRef.current.volume = 0;
-      }
+      setWebSourceGain(audioRef.current, currentSourceGainRef, outputVolume);
+      setWebSourceGain(nextAudioRef.current, nextSourceGainRef, 0);
     }
   }, [volume, muted, outputVolume, useNativePlayback]);
 
@@ -543,6 +658,7 @@ export function PlayerBar({
     equalizerPreampDb,
     equalizerGains,
     dspLimiterEnabled,
+    replayGain,
   ]);
 
   useEffect(() => {
@@ -639,11 +755,12 @@ export function PlayerBar({
       window.clearInterval(fadeTimerRef.current);
       fadeTimerRef.current = null;
     }
+    cancelWebSourceGainAutomation(currentSourceGainRef);
   }
 
   function cancelNativeFade() {
     if (nativeFadeTimerRef.current !== null) {
-      window.clearInterval(nativeFadeTimerRef.current);
+      window.clearTimeout(nativeFadeTimerRef.current);
       nativeFadeTimerRef.current = null;
     }
   }
@@ -653,6 +770,13 @@ export function PlayerBar({
       window.clearInterval(crossfadeTimerRef.current);
       crossfadeTimerRef.current = null;
     }
+    cancelWebSourceGainAutomation(currentSourceGainRef);
+    cancelWebSourceGainAutomation(nextSourceGainRef);
+  }
+
+  function smoothFadeProgress(progress: number) {
+    const bounded = clampNumber(progress, 0, 1);
+    return bounded * bounded * (3 - 2 * bounded);
   }
 
   function hardStopWebAudioElement(element: HTMLAudioElement | null) {
@@ -698,6 +822,9 @@ export function PlayerBar({
       afterFade?.();
       return;
     }
+    if (fadeWebSourceGain(audio, currentSourceGainRef, targetVolume, durationMs, afterFade)) {
+      return;
+    }
     cancelFade();
     const clampedTarget = Math.max(0, Math.min(1, targetVolume));
     const startVolume = audio.volume;
@@ -710,7 +837,8 @@ export function PlayerBar({
     fadeTimerRef.current = window.setInterval(() => {
       const elapsed = window.performance.now() - startedAt;
       const progress = Math.min(1, elapsed / durationMs);
-      audio.volume = startVolume + (clampedTarget - startVolume) * progress;
+      const eased = smoothFadeProgress(progress);
+      audio.volume = startVolume + (clampedTarget - startVolume) * eased;
       if (progress >= 1) {
         cancelFade();
         afterFade?.();
@@ -725,20 +853,20 @@ export function PlayerBar({
       void nativeSetVolume(clampedTarget).finally(() => afterFade?.());
       return;
     }
-    const startVolume = startVolumeOverride ?? (muted ? 0 : outputVolume);
-    const startedAt = window.performance.now();
-    nativeFadeTimerRef.current = window.setInterval(() => {
-      const elapsed = window.performance.now() - startedAt;
-      const progress = Math.min(1, elapsed / durationMs);
-      const nextVolume = startVolume + (clampedTarget - startVolume) * progress;
-      void nativeSetVolume(nextVolume).catch(() => {
+    const prepareFade =
+      typeof startVolumeOverride === "number"
+        ? nativeSetVolume(clampNumber(startVolumeOverride, 0, 1.5))
+        : Promise.resolve();
+    void prepareFade
+      .then(() => nativeFadeVolumeCommand(clampedTarget, durationMs))
+      .catch(() => nativeSetVolume(clampedTarget))
+      .catch(() => {
         // Keep the UI responsive even if the native engine is unavailable.
       });
-      if (progress >= 1) {
-        cancelNativeFade();
-        afterFade?.();
-      }
-    }, 16);
+    nativeFadeTimerRef.current = window.setTimeout(() => {
+      nativeFadeTimerRef.current = null;
+      afterFade?.();
+    }, durationMs + 25);
   }
 
   async function startNativeTrack(track: Track, startSeconds = 0) {
@@ -785,7 +913,7 @@ export function PlayerBar({
         durationMs: Math.max(0, fadeMs),
         deviceId: nativeOutputDeviceId,
         bufferFrames: nativeBufferFrames,
-        dspSettings: currentNativeDspSettings(),
+        dspSettings: nativeDspSettingsForTrack(nextTrack),
       });
       nativeLoadedTrackIdRef.current = nextTrack.id;
       nativeEndedTrackIdRef.current = null;
@@ -835,10 +963,12 @@ export function PlayerBar({
     crossfadeTrackRef.current = currentTrack.id;
     cancelFade();
     cancelCrossfade();
+    ensureWebAudioGraph();
+    setWebSourceGain(currentAudio, currentSourceGainRef, outputVolume);
+    setWebSourceGain(nextAudio, nextSourceGainRef, 0);
 
     try {
       nextAudio.currentTime = 0;
-      nextAudio.volume = 0;
       await resumeWebAudioGraph();
       await nextAudio.play();
     } catch {
@@ -847,12 +977,51 @@ export function PlayerBar({
     }
 
     const durationMs = Math.max(120, fadeMs);
+    const currentGain = currentSourceGainRef.current;
+    const nextGain = nextSourceGainRef.current;
+    if (currentGain && nextGain && currentGain.context === nextGain.context) {
+      const context = currentGain.context;
+      const now = context.currentTime;
+      holdAudioParam(currentGain.gain, now);
+      holdAudioParam(nextGain.gain, now);
+      const durationSeconds = Math.max(0.001, durationMs / 1000);
+      currentGain.gain.setValueCurveAtTime(
+        smoothFadeCurve(clampNumber(currentGain.gain.value, 0, 1), 0),
+        now,
+        durationSeconds,
+      );
+      nextGain.gain.setValueCurveAtTime(
+        smoothFadeCurve(clampNumber(nextGain.gain.value, 0, 1), outputVolume),
+        now,
+        durationSeconds,
+      );
+      crossfadeTimerRef.current = window.setTimeout(() => {
+        crossfadeTimerRef.current = null;
+        const finishedAt = context.currentTime;
+        currentGain.gain.cancelScheduledValues(finishedAt);
+        nextGain.gain.cancelScheduledValues(finishedAt);
+        currentGain.gain.setValueAtTime(0, finishedAt);
+        nextGain.gain.setValueAtTime(outputVolume, finishedAt);
+        handoffRef.current = { trackId: nextTrack.id, currentTime: nextAudio.currentTime };
+        currentAudio.pause();
+        setWebSourceGain(currentAudio, currentSourceGainRef, outputVolume);
+        void onTrackEnded(currentTrack.id);
+        onSelectTrack(nextTrack, queue, { suppressExitRecord: true });
+      }, durationMs + 25);
+      return;
+    }
+
+    setWebSourceGain(currentAudio, currentSourceGainRef, 1);
+    setWebSourceGain(nextAudio, nextSourceGainRef, 1);
+    currentAudio.volume = outputVolume;
+    nextAudio.volume = 0;
     const startedAt = window.performance.now();
     crossfadeTimerRef.current = window.setInterval(() => {
       const elapsed = window.performance.now() - startedAt;
       const progress = Math.min(1, elapsed / durationMs);
-      currentAudio.volume = Math.max(0, outputVolume * (1 - progress));
-      nextAudio.volume = Math.min(outputVolume, outputVolume * progress);
+      const eased = smoothFadeProgress(progress);
+      currentAudio.volume = Math.max(0, outputVolume * (1 - eased));
+      nextAudio.volume = Math.min(outputVolume, outputVolume * eased);
 
       if (progress >= 1) {
         cancelCrossfade();
@@ -879,7 +1048,8 @@ export function PlayerBar({
     if (pendingResumePositionRef.current !== null && audio.currentTime < 1) {
       applyPendingResumeToAudio();
     }
-    audio.volume = 0;
+    ensureWebAudioGraph();
+    setWebSourceGain(audio, currentSourceGainRef, 0);
     try {
       await resumeWebAudioGraph();
       await audio.play();
@@ -892,7 +1062,7 @@ export function PlayerBar({
       if (isStaleAttempt || isSuppressedTeardownError || isIntentionalCdAbort) {
         return;
       }
-      audio.volume = outputVolume;
+      setWebSourceGain(audio, currentSourceGainRef, outputVolume);
       if (audio.error) {
         setStatus(isRadioSource ? "Radio stream could not be loaded." : "Audio source failed to load. Restart the app if the backend was updated recently.");
         return;
@@ -911,7 +1081,6 @@ export function PlayerBar({
         void nativePause()
           .then(() => {
             setIsPlaying(false);
-            return nativeSetVolume(outputVolume);
           })
           .catch((error) => {
             setStatus(error instanceof Error ? error.message : "Native playback could not pause.");
@@ -925,7 +1094,6 @@ export function PlayerBar({
     }
     fadeVolume(0, fadeMs, () => {
       audio.pause();
-      audio.volume = outputVolume;
       setIsPlaying(false);
     });
   }
@@ -1031,7 +1199,8 @@ export function PlayerBar({
     if (handoff?.trackId === currentTrack.id) {
       handoffRef.current = null;
       audio.currentTime = handoff.currentTime;
-      audio.volume = outputVolume;
+      ensureWebAudioGraph();
+      setWebSourceGain(audio, currentSourceGainRef, outputVolume);
       void resumeWebAudioGraph()
         .then(() => audio.play())
         .then(() => setIsPlaying(true))

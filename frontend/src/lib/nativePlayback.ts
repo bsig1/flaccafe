@@ -68,6 +68,7 @@ export interface NativeAudioDevice {
 }
 
 export interface NativeDspSettings {
+  normalizationGain: number;
   equalizerEnabled: boolean;
   equalizerBandMode: "10" | "15";
   equalizerPreampDb: number;
@@ -166,6 +167,10 @@ export function nativeSeek(seconds: number): Promise<NativePlaybackStatus> {
 
 export function nativeSetVolume(volume: number): Promise<NativePlaybackStatus> {
   return invokeNative<NativePlaybackStatus>("native_set_volume", { volume });
+}
+
+export function nativeFadeVolume(volume: number, durationMs: number): Promise<NativePlaybackStatus> {
+  return invokeNative<NativePlaybackStatus>("native_fade_volume", { volume, durationMs });
 }
 
 export function nativeSetDsp(dspSettings: NativeDspSettings): Promise<NativePlaybackStatus> {

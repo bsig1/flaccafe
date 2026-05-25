@@ -5,7 +5,7 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rodio::{
     cpal::{
@@ -25,8 +25,8 @@ pub struct NativePlaybackState {
 
 struct NativePlaybackInner {
     sink: Option<MixerDeviceSink>,
-    player: Option<Arc<Player>>,
-    fading_player: Option<Arc<Player>>,
+    player: Option<NativePlaybackHandle>,
+    fading_player: Option<NativePlaybackHandle>,
     current_path: Option<String>,
     duration_seconds: Option<f64>,
     volume: f32,
@@ -43,6 +43,92 @@ struct NativePlaybackInner {
     diagnostics: Arc<Mutex<Vec<NativePlaybackDiagnostic>>>,
     dsp_settings: Arc<Mutex<NativeDspSettings>>,
     visualizer: Arc<Mutex<NativeVisualizerState>>,
+}
+
+#[derive(Clone)]
+struct NativePlaybackHandle {
+    player: Arc<Player>,
+    gain: NativeGainControl,
+}
+
+#[derive(Clone)]
+struct NativeGainControl {
+    state: Arc<Mutex<NativeGainState>>,
+}
+
+struct NativeGainState {
+    current_gain: f32,
+    start_gain: f32,
+    target_gain: f32,
+    fade_total_frames: u64,
+    fade_elapsed_frames: u64,
+}
+
+impl NativeGainControl {
+    fn new(volume: f32) -> Self {
+        let bounded = clamp_volume(volume);
+        Self {
+            state: Arc::new(Mutex::new(NativeGainState {
+                current_gain: bounded,
+                start_gain: bounded,
+                target_gain: bounded,
+                fade_total_frames: 0,
+                fade_elapsed_frames: 0,
+            })),
+        }
+    }
+
+    fn set_immediate(&self, volume: f32) {
+        let bounded = clamp_volume(volume);
+        if let Ok(mut state) = self.state.lock() {
+            state.current_gain = bounded;
+            state.start_gain = bounded;
+            state.target_gain = bounded;
+            state.fade_total_frames = 0;
+            state.fade_elapsed_frames = 0;
+        }
+    }
+
+    fn fade_to(&self, volume: f32, duration: Duration, sample_rate: u32) {
+        let bounded = clamp_volume(volume);
+        let frames = fade_frame_count(duration, sample_rate);
+        if let Ok(mut state) = self.state.lock() {
+            if frames == 0 {
+                state.current_gain = bounded;
+                state.start_gain = bounded;
+                state.target_gain = bounded;
+                state.fade_total_frames = 0;
+                state.fade_elapsed_frames = 0;
+                return;
+            }
+            state.start_gain = state.current_gain;
+            state.target_gain = bounded;
+            state.fade_total_frames = frames;
+            state.fade_elapsed_frames = 0;
+        }
+    }
+
+    fn next_frame_gain(&self) -> f32 {
+        let Ok(mut state) = self.state.lock() else {
+            return 1.0;
+        };
+        if state.fade_total_frames == 0 {
+            return state.current_gain;
+        }
+        let progress = ((state.fade_elapsed_frames + 1) as f32 / state.fade_total_frames as f32)
+            .clamp(0.0, 1.0);
+        let eased = smooth_fade_progress(progress);
+        let gain = state.start_gain + (state.target_gain - state.start_gain) * eased;
+        state.current_gain = gain;
+        state.fade_elapsed_frames += 1;
+        if state.fade_elapsed_frames >= state.fade_total_frames {
+            state.current_gain = state.target_gain;
+            state.start_gain = state.target_gain;
+            state.fade_total_frames = 0;
+            state.fade_elapsed_frames = 0;
+        }
+        gain
+    }
 }
 
 impl Default for NativePlaybackInner {
@@ -79,6 +165,15 @@ fn clamp_volume(volume: f32) -> f32 {
     }
 }
 
+fn fade_frame_count(duration: Duration, sample_rate: u32) -> u64 {
+    if duration.is_zero() || sample_rate == 0 {
+        return 0;
+    }
+    (duration.as_secs_f64() * sample_rate as f64)
+        .round()
+        .clamp(0.0, u64::MAX as f64) as u64
+}
+
 const EQ_FREQUENCIES_10: [f32; 10] = [
     31.0, 62.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0,
 ];
@@ -104,6 +199,8 @@ static NEXT_DIAGNOSTIC_ID: AtomicU64 = AtomicU64::new(1);
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeDspSettings {
+    #[serde(default = "default_normalization_gain")]
+    normalization_gain: f32,
     #[serde(default)]
     equalizer_enabled: bool,
     #[serde(default = "default_equalizer_band_mode")]
@@ -119,6 +216,7 @@ pub struct NativeDspSettings {
 impl Default for NativeDspSettings {
     fn default() -> Self {
         Self {
+            normalization_gain: default_normalization_gain(),
             equalizer_enabled: false,
             equalizer_band_mode: default_equalizer_band_mode(),
             equalizer_preamp_db: 0.0,
@@ -132,12 +230,17 @@ fn default_equalizer_band_mode() -> String {
     "10".to_string()
 }
 
+fn default_normalization_gain() -> f32 {
+    1.0
+}
+
 fn default_limiter_enabled() -> bool {
     true
 }
 
 #[derive(Clone, Debug, PartialEq)]
 struct NormalizedDspSettings {
+    normalization_gain: f32,
     equalizer_enabled: bool,
     frequencies: Vec<f32>,
     equalizer_preamp_db: f32,
@@ -161,6 +264,7 @@ impl NativeDspSettings {
             ));
         }
         NormalizedDspSettings {
+            normalization_gain: clamp_gain(self.normalization_gain),
             equalizer_enabled: self.equalizer_enabled,
             frequencies,
             equalizer_preamp_db: clamp_db(
@@ -179,6 +283,14 @@ fn clamp_db(value: f32, min: f32, max: f32) -> f32 {
         value.clamp(min, max)
     } else {
         0.0
+    }
+}
+
+fn clamp_gain(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(0.0, 1.5)
+    } else {
+        1.0
     }
 }
 
@@ -399,17 +511,17 @@ impl NativePlaybackInner {
         let position_seconds = self
             .player
             .as_ref()
-            .map(|player| player.get_pos().as_secs_f64())
+            .map(|handle| handle.player.get_pos().as_secs_f64())
             .unwrap_or(0.0);
         let is_paused = self
             .player
             .as_ref()
-            .map(|player| player.is_paused())
+            .map(|handle| handle.player.is_paused())
             .unwrap_or(false);
         let ended = self
             .player
             .as_ref()
-            .map(|player| player.empty() && self.current_path.is_some())
+            .map(|handle| handle.player.empty() && self.current_path.is_some())
             .unwrap_or(false);
         NativePlaybackStatus {
             available: self.sink.is_some(),
@@ -469,11 +581,11 @@ impl NativePlaybackInner {
     }
 
     fn stop(&mut self) {
-        if let Some(player) = self.player.take() {
-            player.stop();
+        if let Some(handle) = self.player.take() {
+            handle.player.stop();
         }
-        if let Some(player) = self.fading_player.take() {
-            player.stop();
+        if let Some(handle) = self.fading_player.take() {
+            handle.player.stop();
         }
         self.current_path = None;
         self.duration_seconds = None;
@@ -1002,12 +1114,14 @@ where
 {
     input: S,
     settings: Arc<Mutex<NativeDspSettings>>,
+    gain_control: NativeGainControl,
     visualizer: Arc<Mutex<NativeVisualizerState>>,
     active_settings: NormalizedDspSettings,
     coefficients: Vec<BiquadCoefficients>,
     state_by_channel: Vec<Vec<BiquadState>>,
     channel_index: usize,
     check_countdown: usize,
+    output_gain: f32,
     visualizer_pending_samples: Vec<f32>,
     visualizer_frame_sum: f32,
 }
@@ -1022,6 +1136,7 @@ where
     fn new(
         input: S,
         settings: Arc<Mutex<NativeDspSettings>>,
+        gain_control: NativeGainControl,
         visualizer: Arc<Mutex<NativeVisualizerState>>,
     ) -> Self {
         let active_settings = settings
@@ -1031,12 +1146,14 @@ where
         let mut source = Self {
             input,
             settings,
+            gain_control,
             visualizer,
             active_settings,
             coefficients: Vec::new(),
             state_by_channel: Vec::new(),
             channel_index: 0,
             check_countdown: 0,
+            output_gain: 1.0,
             visualizer_pending_samples: Vec::with_capacity(VISUALIZER_FLUSH_SAMPLES),
             visualizer_frame_sum: 0.0,
         };
@@ -1108,6 +1225,10 @@ where
     fn process_sample(&mut self, mut sample: f32) -> f32 {
         self.refresh_settings_if_needed();
         let channels = self.channel_count();
+        if self.channel_index == 0 {
+            self.output_gain = self.gain_control.next_frame_gain();
+        }
+        sample *= self.active_settings.normalization_gain;
         if self.active_settings.equalizer_enabled {
             sample *= db_to_gain(self.active_settings.equalizer_preamp_db);
             if let Some(channel_state) = self.state_by_channel.get_mut(self.channel_index) {
@@ -1120,6 +1241,7 @@ where
         if self.active_settings.limiter_enabled {
             sample = soft_limit(sample);
         }
+        sample *= self.output_gain;
         self.visualizer_frame_sum += sample;
         let frame_complete = self.channel_index + 1 >= channels;
         self.channel_index = (self.channel_index + 1) % channels;
@@ -1246,30 +1368,20 @@ fn seek_player(
     Ok(())
 }
 
-fn spawn_crossfade(
-    old_player: Arc<Player>,
-    new_player: Arc<Player>,
-    target_volume: f32,
-    duration_ms: u64,
-) {
+fn spawn_stop_after_fade(old_player: Arc<Player>, duration_ms: u64) {
     thread::spawn(move || {
         if duration_ms == 0 {
             old_player.stop();
-            new_player.set_volume(target_volume);
             return;
         }
-        let started = Instant::now();
-        let duration = Duration::from_millis(duration_ms);
-        while started.elapsed() < duration {
-            let progress =
-                (started.elapsed().as_secs_f32() / duration.as_secs_f32()).clamp(0.0, 1.0);
-            old_player.set_volume(target_volume * (1.0 - progress));
-            new_player.set_volume(target_volume * progress);
-            thread::sleep(Duration::from_millis(16));
-        }
+        thread::sleep(Duration::from_millis(duration_ms));
         old_player.stop();
-        new_player.set_volume(target_volume);
     });
+}
+
+fn smooth_fade_progress(progress: f32) -> f32 {
+    let bounded = progress.clamp(0.0, 1.0);
+    bounded * bounded * (3.0 - 2.0 * bounded)
 }
 
 #[tauri::command]
@@ -1318,10 +1430,12 @@ pub fn native_play_file(
         .clone();
     let player = Arc::new(Player::connect_new(&mixer));
     let bounded_volume = clamp_volume(volume);
-    player.set_volume(bounded_volume);
+    player.set_volume(1.0);
+    let gain = NativeGainControl::new(bounded_volume);
     player.append(NativeDspSource::new(
         decoder,
         inner.dsp_settings.clone(),
+        gain.clone(),
         inner.visualizer.clone(),
     ));
     seek_player(
@@ -1332,7 +1446,7 @@ pub fn native_play_file(
     )?;
     player.play();
 
-    inner.player = Some(player);
+    inner.player = Some(NativePlaybackHandle { player, gain });
     inner.current_path = Some(path);
     inner.duration_seconds = duration_seconds;
     inner.volume = bounded_volume;
@@ -1385,13 +1499,22 @@ pub fn native_crossfade_to_file(
         .clone();
     let new_player = Arc::new(Player::connect_new(&mixer));
     let target_volume = clamp_volume(volume);
-    new_player.set_volume(0.0);
+    new_player.set_volume(1.0);
+    let bounded_duration = duration_ms.min(20_000);
+    let fade_duration = Duration::from_millis(bounded_duration);
+    let sample_rate = inner.sample_rate.unwrap_or(48_000);
+    let new_gain = NativeGainControl::new(if bounded_duration > 0 {
+        0.0
+    } else {
+        target_volume
+    });
     if let Ok(mut visualizer) = inner.visualizer.lock() {
         visualizer.reset();
     }
     new_player.append(NativeDspSource::new(
         decoder,
         inner.dsp_settings.clone(),
+        new_gain.clone(),
         inner.visualizer.clone(),
     ));
     seek_player(
@@ -1402,18 +1525,23 @@ pub fn native_crossfade_to_file(
     )?;
     new_player.play();
 
-    let old_player = inner.player.replace(new_player.clone());
-    inner.fading_player = old_player.clone();
+    let new_handle = NativePlaybackHandle {
+        player: new_player.clone(),
+        gain: new_gain.clone(),
+    };
+    let old_handle = inner.player.replace(new_handle);
+    inner.fading_player = old_handle.clone();
     inner.current_path = Some(path);
     inner.duration_seconds = duration_seconds;
     inner.volume = target_volume;
     let status = inner.status(None);
 
-    if let Some(old_player) = old_player {
-        let bounded_duration = duration_ms.min(20_000);
-        spawn_crossfade(old_player, new_player, target_volume, bounded_duration);
+    if let Some(old_handle) = old_handle {
+        old_handle.gain.fade_to(0.0, fade_duration, sample_rate);
+        new_gain.fade_to(target_volume, fade_duration, sample_rate);
+        spawn_stop_after_fade(old_handle.player, bounded_duration);
     } else {
-        new_player.set_volume(target_volume);
+        new_gain.set_immediate(target_volume);
     }
     Ok(status)
 }
@@ -1430,7 +1558,7 @@ pub fn native_resume(
         .player
         .as_ref()
         .ok_or_else(|| "No native track is loaded".to_string())?;
-    player.play();
+    player.player.play();
     Ok(inner.status(None))
 }
 
@@ -1444,7 +1572,7 @@ pub fn native_pause(state: State<'_, NativePlaybackState>) -> Result<NativePlayb
         .player
         .as_ref()
         .ok_or_else(|| "No native track is loaded".to_string())?;
-    player.pause();
+    player.player.pause();
     Ok(inner.status(None))
 }
 
@@ -1477,6 +1605,7 @@ pub fn native_seek(
         0.0
     };
     player
+        .player
         .try_seek(Duration::from_secs_f64(bounded_seconds))
         .map_err(|error| {
             diagnostic_error(
@@ -1506,8 +1635,31 @@ pub fn native_set_volume(
         .lock()
         .map_err(|_| "Native playback lock poisoned".to_string())?;
     let bounded = clamp_volume(volume);
-    if let Some(player) = &inner.player {
-        player.set_volume(bounded);
+    if let Some(handle) = &inner.player {
+        handle.gain.set_immediate(bounded);
+    }
+    inner.volume = bounded;
+    Ok(inner.status(None))
+}
+
+#[tauri::command]
+pub fn native_fade_volume(
+    state: State<'_, NativePlaybackState>,
+    volume: f32,
+    duration_ms: u64,
+) -> Result<NativePlaybackStatus, String> {
+    let mut inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Native playback lock poisoned".to_string())?;
+    let bounded = clamp_volume(volume);
+    let sample_rate = inner.sample_rate.unwrap_or(48_000);
+    if let Some(handle) = &inner.player {
+        handle.gain.fade_to(
+            bounded,
+            Duration::from_millis(duration_ms.min(20_000)),
+            sample_rate,
+        );
     }
     inner.volume = bounded;
     Ok(inner.status(None))
@@ -1550,7 +1702,7 @@ pub fn native_visualizer_frame(
     let is_playing = inner
         .player
         .as_ref()
-        .map(|player| !player.is_paused() && !player.empty())
+        .map(|handle| !handle.player.is_paused() && !handle.player.empty())
         .unwrap_or(false);
     let (samples, sample_rate, last_updated_ms) = inner
         .visualizer
@@ -1724,6 +1876,7 @@ mod tests {
     #[test]
     fn native_dsp_settings_normalize_band_count_and_gain_limits() {
         let settings = NativeDspSettings {
+            normalization_gain: 2.0,
             equalizer_enabled: true,
             equalizer_band_mode: "15".to_string(),
             equalizer_preamp_db: 30.0,
@@ -1734,6 +1887,7 @@ mod tests {
         let normalized = settings.normalized();
 
         assert_eq!(normalized.frequencies.len(), 15);
+        assert_eq!(normalized.normalization_gain, 1.5);
         assert_eq!(normalized.equalizer_gains.len(), 15);
         assert_eq!(normalized.equalizer_gains[0], EQ_GAIN_MAX_DB);
         assert_eq!(normalized.equalizer_gains[1], EQ_GAIN_MIN_DB);
@@ -1763,6 +1917,16 @@ mod tests {
         assert!(soft_limit(8.0) <= 1.0);
         assert!(soft_limit(-8.0) >= -1.0);
         assert_eq!(soft_limit(0.5), 0.5);
+    }
+
+    #[test]
+    fn native_fade_progress_eases_without_overshoot() {
+        assert_eq!(smooth_fade_progress(-1.0), 0.0);
+        assert_eq!(smooth_fade_progress(0.0), 0.0);
+        assert_eq!(smooth_fade_progress(1.0), 1.0);
+        assert_eq!(smooth_fade_progress(2.0), 1.0);
+        assert!(smooth_fade_progress(0.25) < 0.25);
+        assert!(smooth_fade_progress(0.75) > 0.75);
     }
 
     #[test]
