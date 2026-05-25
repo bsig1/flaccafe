@@ -41,6 +41,66 @@ fn explorer_compatible_path(path: &std::path::Path) -> String {
     }
 }
 
+#[cfg(windows)]
+fn explorer_args_for_target(target: &std::path::Path, select_file: bool) -> Vec<String> {
+    let explorer_path = explorer_compatible_path(target);
+    if select_file {
+        // Explorer is picky about /select quoting; split the selector and path so
+        // paths with spaces do not fall back to the default Documents folder.
+        vec!["/select,".to_string(), explorer_path]
+    } else {
+        vec![explorer_path]
+    }
+}
+
+#[cfg(windows)]
+fn chrome_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Ok(path) = std::env::var("CHROME") {
+        candidates.push(PathBuf::from(path));
+    }
+    if let Ok(program_files) = std::env::var("ProgramFiles") {
+        candidates.push(PathBuf::from(program_files).join(r"Google\Chrome\Application\chrome.exe"));
+    }
+    if let Ok(program_files_x86) = std::env::var("ProgramFiles(x86)") {
+        candidates.push(PathBuf::from(program_files_x86).join(r"Google\Chrome\Application\chrome.exe"));
+    }
+    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        candidates.push(PathBuf::from(local_app_data).join(r"Google\Chrome\Application\chrome.exe"));
+    }
+
+    candidates
+}
+
+#[cfg(windows)]
+fn open_url_in_chrome(url: &str) -> bool {
+    for chrome in chrome_candidates() {
+        if !chrome.exists() {
+            continue;
+        }
+        if Command::new(chrome)
+            .arg(url)
+            .creation_flags(0x08000000)
+            .spawn()
+            .is_ok()
+        {
+            return true;
+        }
+    }
+
+    if Command::new("chrome.exe")
+        .arg(url)
+        .creation_flags(0x08000000)
+        .spawn()
+        .is_ok()
+    {
+        return true;
+    }
+
+    false
+}
+
 #[cfg(not(debug_assertions))]
 fn backend_addr() -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], 8765))
@@ -118,6 +178,12 @@ fn stop_backend_processes_on_port() {
 mod tests {
     use super::parse_backend_listener_pids;
 
+    #[cfg(windows)]
+    use super::{explorer_args_for_target, explorer_compatible_path};
+
+    #[cfg(windows)]
+    use std::path::Path;
+
     #[test]
     fn parses_backend_listener_pids_once() {
         let output = r#"
@@ -135,6 +201,35 @@ mod tests {
         let output = "TCP 127.0.0.1:8765 0.0.0.0:0 LISTENING 1111";
 
         assert!(parse_backend_listener_pids(output, "1111").is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn strips_extended_windows_path_prefixes_for_explorer() {
+        assert_eq!(
+            explorer_compatible_path(Path::new(r"\\?\C:\Music\Album\track.flac")),
+            r"C:\Music\Album\track.flac"
+        );
+        assert_eq!(
+            explorer_compatible_path(Path::new(r"\\?\UNC\server\share\track.flac")),
+            r"\\server\share\track.flac"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn builds_explorer_select_args_without_embedded_quotes() {
+        assert_eq!(
+            explorer_args_for_target(Path::new(r"C:\Music Folder\track one.flac"), true),
+            vec![
+                "/select,".to_string(),
+                r"C:\Music Folder\track one.flac".to_string()
+            ]
+        );
+        assert_eq!(
+            explorer_args_for_target(Path::new(r"C:\Music Folder"), false),
+            vec![r"C:\Music Folder".to_string()]
+        );
     }
 }
 
@@ -226,12 +321,9 @@ fn reveal_in_file_explorer(path: String) -> Result<(), String> {
 
     #[cfg(windows)]
     {
-        let explorer_path = explorer_compatible_path(&target);
         let mut command = Command::new("explorer.exe");
-        if target.is_file() {
-            command.arg(format!("/select,\"{}\"", explorer_path));
-        } else {
-            command.arg(explorer_path);
+        for arg in explorer_args_for_target(&target, target.is_file()) {
+            command.arg(arg);
         }
         command
             .creation_flags(0x08000000)
@@ -259,6 +351,10 @@ fn open_external_url(url: String) -> Result<(), String> {
 
     #[cfg(windows)]
     {
+        if open_url_in_chrome(trimmed) {
+            return Ok(());
+        }
+
         Command::new("rundll32.exe")
             .args(["url.dll,FileProtocolHandler", trimmed])
             .creation_flags(0x08000000)

@@ -147,5 +147,14 @@ export function reportSummary(value: unknown): string {
 }
 
 export function canRestoreUndo(actionType: string): boolean {
-  return ["csv_metadata_import", "file_organization", "track_remove", "advanced_tag_edit", "tag_backup_restore"].includes(actionType);
+  return [
+    "csv_metadata_import",
+    "regex_metadata_replace",
+    "musicbrainz_auto_tag",
+    "file_organization",
+    "track_remove",
+    "advanced_tag_edit",
+    "tag_backup_restore",
+    "sqlite_file_tag_write",
+  ].includes(actionType);
 }

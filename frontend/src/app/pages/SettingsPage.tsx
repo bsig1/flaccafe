@@ -4,13 +4,15 @@ import {
 } from "react";
 
 import {
+  Disc3,
   EyeOff,
+  ExternalLink,
+  Fingerprint,
   FolderOpen,
-  RefreshCw,
+  KeyRound,
+  Podcast,
   Search,
-  ShieldCheck,
   Star,
-  Wand2,
   X,
 } from "lucide-react";
 
@@ -35,24 +37,27 @@ import type {
   NativePlaybackDiagnosticsResponse,
 } from "../../lib/nativePlayback";
 import type {
-  AudioAnalysisProgress,
-  ClapStatusResponse,
   LogTailResponse,
   SettingsResponse,
   StartupDiagnosticsResponse,
 } from "../../types/api";
 import {
+  openExternalUrl,
+} from "../../lib/externalLinks";
+import {
   DisclosureAccordionProvider,
   DisclosureSection,
-  NumberField,
 } from "../components/common";
 import {
   BackendStatus,
   FontScale,
   Page,
+  RememberedDeleteChoice,
   UiDensity,
   UiPreferences,
-  formatTime,
+  clearRememberedDeleteChoice,
+  readRememberedDeleteChoice,
+  writeRememberedDeleteChoice,
 } from "../shared";
 import { KeyboardShortcutsSection } from "./settings/KeyboardShortcutsSection";
 import { ExtensionsSection } from "./settings/ExtensionsSection";
@@ -62,8 +67,13 @@ import {
   detectCodecSupport,
 } from "./settings/PlayerSettingsSection";
 
+const LASTFM_API_URL = "https://www.last.fm/api";
+const ACOUSTID_API_KEY_URL = "https://acoustid.org/api-key";
+
 export function SettingsPage({
   settings,
+  focusSectionId,
+  onFocusSectionConsumed,
   backendStatus,
   backendMessage,
   backendCheckedAt,
@@ -73,24 +83,6 @@ export function SettingsPage({
   onRunStartupDiagnostics,
   onOpenBackendLog,
   onRestartBackend,
-  clapStatus,
-  clapModelId,
-  setClapModelId,
-  clapCacheDir,
-  setClapCacheDir,
-  clapMaxDuration,
-  setClapMaxDuration,
-  audioAnalysisProgress,
-  audioAnalysisLimit,
-  setAudioAnalysisLimit,
-  audioAnalysisOverwrite,
-  setAudioAnalysisOverwrite,
-  audioAnalysisOnlyMissing,
-  setAudioAnalysisOnlyMissing,
-  isAudioAnalyzing,
-  onSaveClapConfig,
-  onRefreshClapStatus,
-  onAnalyzeAudio,
   hideFilePaths,
   setHideFilePaths,
   uiPreferences,
@@ -99,6 +91,9 @@ export function SettingsPage({
   onWriteRatingsToFilesChange,
   autoWriteFetchedLyricsSidecars,
   onAutoWriteFetchedLyricsSidecarsChange,
+  onAcoustIdApiKeyChange,
+  onLastFmApiCredentialsChange,
+  setStatus,
   onBackupDatabase,
   onCreateSupportBundle,
   supportBundlePath,
@@ -108,6 +103,8 @@ export function SettingsPage({
   onClearArtistCache,
 }: {
   settings: SettingsResponse | null;
+  focusSectionId?: string | null;
+  onFocusSectionConsumed?: () => void;
   backendStatus: BackendStatus;
   backendMessage: string;
   backendCheckedAt: string | null;
@@ -117,24 +114,6 @@ export function SettingsPage({
   onRunStartupDiagnostics: () => void;
   onOpenBackendLog: () => void;
   onRestartBackend: () => void;
-  clapStatus: ClapStatusResponse | null;
-  clapModelId: string;
-  setClapModelId: (value: string) => void;
-  clapCacheDir: string;
-  setClapCacheDir: (value: string) => void;
-  clapMaxDuration: number;
-  setClapMaxDuration: (value: number) => void;
-  audioAnalysisProgress: AudioAnalysisProgress | null;
-  audioAnalysisLimit: number;
-  setAudioAnalysisLimit: (value: number) => void;
-  audioAnalysisOverwrite: boolean;
-  setAudioAnalysisOverwrite: (value: boolean) => void;
-  audioAnalysisOnlyMissing: boolean;
-  setAudioAnalysisOnlyMissing: (value: boolean) => void;
-  isAudioAnalyzing: boolean;
-  onSaveClapConfig: () => void;
-  onRefreshClapStatus: () => void;
-  onAnalyzeAudio: () => void;
   hideFilePaths: boolean;
   setHideFilePaths: (value: boolean) => void;
   uiPreferences: UiPreferences;
@@ -143,6 +122,9 @@ export function SettingsPage({
   onWriteRatingsToFilesChange: (value: boolean) => void;
   autoWriteFetchedLyricsSidecars: boolean;
   onAutoWriteFetchedLyricsSidecarsChange: (value: boolean) => void;
+  onAcoustIdApiKeyChange: (apiKey: string | null) => void | Promise<void>;
+  onLastFmApiCredentialsChange: (apiKey: string | null, apiSecret: string | null) => void | Promise<void>;
+  setStatus: (message: string) => void;
   onBackupDatabase: () => void;
   onCreateSupportBundle: () => void;
   supportBundlePath: string | null;
@@ -159,19 +141,24 @@ export function SettingsPage({
   const [nativeDiagnosticsMessage, setNativeDiagnosticsMessage] = useState<string | null>(null);
   const [settingsSearch, setSettingsSearch] = useState("");
   const [openSettingsSection, setOpenSettingsSection] = useState<string | null>(null);
-  const audioProgressPercent = Math.max(0, Math.min(100, audioAnalysisProgress?.percent ?? 0));
-  const clapReady = Boolean(clapStatus?.installed);
+  const [acoustIdApiKeyDraft, setAcoustIdApiKeyDraft] = useState("");
+  const [isSavingAcoustIdKey, setIsSavingAcoustIdKey] = useState(false);
+  const [lastFmApiKeyDraft, setLastFmApiKeyDraft] = useState("");
+  const [lastFmApiSecretDraft, setLastFmApiSecretDraft] = useState("");
+  const [isSavingLastFmCredentials, setIsSavingLastFmCredentials] = useState(false);
+  const [rememberedDeleteChoice, setRememberedDeleteChoice] = useState<RememberedDeleteChoice | "ask">(
+    () => readRememberedDeleteChoice() ?? "ask",
+  );
   const settingsQuery = settingsSearch.trim().toLowerCase();
   const showSettingsSection = (...keywords: string[]) =>
     !settingsQuery || keywords.join(" ").toLowerCase().includes(settingsQuery);
-  const visibleSettingsSections = [
-    showSettingsSection("library preferences display ratings metadata startup theme font density"),
+  const visibleSettingsGroups = [
+    showSettingsSection("library preferences display ratings metadata startup theme font density podcasts file paths delete recycle remember"),
+    showSettingsSection("api keys online metadata lastfm last.fm scrobbling acoustid acoustic fingerprint musicbrainz lookup autotag"),
     showSettingsSection("keyboard shortcuts hotkeys local playback controls media keys"),
-    showSettingsSection("extensions skins plugins themes manifest customization"),
-    showSettingsSection("autodj defaults queue length temperature similarity recommendations"),
-    showSettingsSection("clap audio analysis model genre similarity machine learning"),
-    showSettingsSection("player playback audio output mini player now playing lyrics autofetch lrc sidecar cache follow equalizer replaygain fade skip visualizer"),
+    showSettingsSection("player playback audio output lyrics autofetch lrc sidecar cache follow equalizer replaygain fade skip codec native webview"),
     showSettingsSection("maintenance backend diagnostics database support bundle source folder logs cache"),
+    showSettingsSection("extensions skins plugins themes manifest customization"),
   ].filter(Boolean).length;
   const backendStatusClass =
     backendStatus === "ok"
@@ -180,11 +167,35 @@ export function SettingsPage({
         ? "border-red-400/40 bg-red-500/10 text-red-300"
         : "border-line bg-ink text-muted";
 
+  function updateRememberedDeleteChoice(choice: RememberedDeleteChoice | "ask") {
+    setRememberedDeleteChoice(choice);
+    if (choice === "ask") {
+      clearRememberedDeleteChoice();
+      setStatus("Delete actions will ask each time.");
+      return;
+    }
+    writeRememberedDeleteChoice(choice);
+    setStatus(
+      choice === "file"
+        ? "Delete actions will remember file deletion."
+        : "Delete actions will remember library-only removal.",
+    );
+  }
+
   useEffect(() => {
     void refreshNativeDevices();
     void refreshNativeBackends();
     void refreshNativePlaybackDiagnostics();
   }, []);
+
+  useEffect(() => {
+    if (!focusSectionId) {
+      return;
+    }
+    setSettingsSearch("");
+    setOpenSettingsSection(focusSectionId);
+    onFocusSectionConsumed?.();
+  }, [focusSectionId, onFocusSectionConsumed]);
 
   async function refreshNativeBackends() {
     try {
@@ -234,6 +245,57 @@ export function SettingsPage({
     }
   }
 
+  async function saveAcoustIdApiKey() {
+    const key = acoustIdApiKeyDraft.trim();
+    if (!key) {
+      return;
+    }
+    setIsSavingAcoustIdKey(true);
+    try {
+      await onAcoustIdApiKeyChange(key);
+      setAcoustIdApiKeyDraft("");
+    } finally {
+      setIsSavingAcoustIdKey(false);
+    }
+  }
+
+  async function clearAcoustIdApiKey() {
+    setIsSavingAcoustIdKey(true);
+    try {
+      await onAcoustIdApiKeyChange(null);
+      setAcoustIdApiKeyDraft("");
+    } finally {
+      setIsSavingAcoustIdKey(false);
+    }
+  }
+
+  async function saveLastFmCredentials() {
+    const apiKey = lastFmApiKeyDraft.trim();
+    const apiSecret = lastFmApiSecretDraft.trim();
+    if (!apiKey || !apiSecret) {
+      return;
+    }
+    setIsSavingLastFmCredentials(true);
+    try {
+      await onLastFmApiCredentialsChange(apiKey, apiSecret);
+      setLastFmApiKeyDraft("");
+      setLastFmApiSecretDraft("");
+    } finally {
+      setIsSavingLastFmCredentials(false);
+    }
+  }
+
+  async function clearLastFmCredentials() {
+    setIsSavingLastFmCredentials(true);
+    try {
+      await onLastFmApiCredentialsChange(null, null);
+      setLastFmApiKeyDraft("");
+      setLastFmApiSecretDraft("");
+    } finally {
+      setIsSavingLastFmCredentials(false);
+    }
+  }
+
   return (
     <main className="flex min-w-0 flex-1 flex-col">
       <header className="flex h-16 items-center justify-between border-b border-line px-6">
@@ -248,7 +310,7 @@ export function SettingsPage({
           {startupDiagnostics && (
             <span
               className={`rounded border px-2 py-1 text-xs uppercase ${
-                startupDiagnostics.ok ? "border-moss/40 bg-moss/10 text-moss" : "border-ember/50 bg-ember/10 text-ember"
+                startupDiagnostics.ok ? "border-moss/40 bg-moss/10 text-moss" : "border-yellow-400/40 bg-yellow-400/10 text-yellow-100"
               }`}
             >
               self-check {startupDiagnostics.ok ? "ok" : "review"}
@@ -282,19 +344,16 @@ export function SettingsPage({
                   <X size={14} />
                 </button>
               )}
-              <span className="shrink-0 text-xs text-muted">
-                {visibleSettingsSections} section{visibleSettingsSections === 1 ? "" : "s"}
-              </span>
             </div>
           </label>
 
-          {visibleSettingsSections === 0 && (
+          {visibleSettingsGroups === 0 && (
             <div className="rounded border border-dashed border-line bg-panel px-4 py-8 text-center text-sm text-muted">
               No settings match that search.
             </div>
           )}
 
-          {showSettingsSection("library preferences display ratings metadata startup theme font density") && (
+          {showSettingsSection("library preferences display ratings metadata startup theme font density podcasts file paths delete recycle remember") && (
           <DisclosureSection title="Library Preferences" description="Display, rating storage, and startup behavior">
             <div className="grid gap-3 text-sm text-neutral-200">
               <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-ink p-3">
@@ -315,6 +374,48 @@ export function SettingsPage({
 
               <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-ink p-3">
                 <div className="flex min-w-0 items-center gap-3">
+                  <Podcast className="shrink-0 text-muted" size={18} />
+                  <div className="min-w-0">
+                    <div className="font-medium text-white">Hide podcast file paths</div>
+                    <div className="text-xs text-muted">Keeps downloaded episode paths out of the Podcasts page.</div>
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 shrink-0 accent-moss"
+                  checked={!uiPreferences.showPodcastFilePaths}
+                  onChange={(event) =>
+                    setUiPreferences((current) => ({ ...current, showPodcastFilePaths: !event.target.checked }))
+                  }
+                />
+              </label>
+
+              <div className="flex items-center justify-between gap-4 rounded border border-line/70 bg-ink p-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <Disc3 className="shrink-0 text-muted" size={18} />
+                  <div className="min-w-0">
+                    <div className="font-medium text-white">CD sidebar tab</div>
+                    <div className="text-xs text-muted">Controls when CD playback and ripping appears in the sidebar.</div>
+                  </div>
+                </div>
+                <select
+                  className="h-9 shrink-0 rounded border border-line bg-panel px-3 text-sm text-white outline-none ring-moss/40 focus:ring-2"
+                  value={uiPreferences.cdSidebarMode}
+                  onChange={(event) =>
+                    setUiPreferences((current) => ({
+                      ...current,
+                      cdSidebarMode: event.target.value as UiPreferences["cdSidebarMode"],
+                    }))
+                  }
+                >
+                  <option value="never">Never</option>
+                  <option value="drive">When CD drive is detected</option>
+                  <option value="always">Always</option>
+                </select>
+              </div>
+
+              <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-ink p-3">
+                <div className="flex min-w-0 items-center gap-3">
                   <Star className="shrink-0 text-ember" size={18} />
                   <div className="min-w-0">
                     <div className="font-medium text-white">Write ratings and metadata to audio files</div>
@@ -331,23 +432,28 @@ export function SettingsPage({
                 />
               </label>
 
+              <div className="flex items-center justify-between gap-4 rounded border border-line/70 bg-ink p-3">
+                <div className="min-w-0">
+                  <div className="font-medium text-white">Remembered delete action</div>
+                  <div className="text-xs text-muted">
+                    File deletes are sent to the Windows Recycle Bin when possible.
+                  </div>
+                </div>
+                <select
+                  className="h-9 shrink-0 rounded border border-line bg-panel px-3 text-sm text-white outline-none ring-moss/40 focus:ring-2"
+                  value={rememberedDeleteChoice}
+                  onChange={(event) =>
+                    updateRememberedDeleteChoice(event.target.value as RememberedDeleteChoice | "ask")
+                  }
+                >
+                  <option value="ask">Ask each time</option>
+                  <option value="library">Remove from library only</option>
+                  <option value="file">Delete file too</option>
+                </select>
+              </div>
+
               <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
                 <div className="font-medium text-white">Library layout</div>
-                <label className="flex items-center justify-between gap-4">
-                  <span className="text-muted">Compact rows</span>
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4 accent-moss"
-                    checked={uiPreferences.compactLibraryRows}
-                    onChange={(event) =>
-                      setUiPreferences((current) => ({
-                        ...current,
-                        compactLibraryRows: event.target.checked,
-                        density: event.target.checked ? "compact" : "comfortable",
-                      }))
-                    }
-                  />
-                </label>
                 <label className="flex items-center justify-between gap-4">
                   <span className="text-muted">Album cover grid</span>
                   <input
@@ -372,6 +478,7 @@ export function SettingsPage({
                     <option value="analysis">Analysis</option>
                     <option value="nowPlaying">Now Playing</option>
                     <option value="artist">Artist</option>
+                    <option value="cd">CD</option>
                     <option value="history">History</option>
                     <option value="autodj">AutoDJ</option>
                     <option value="settings">Settings</option>
@@ -456,6 +563,128 @@ export function SettingsPage({
           </DisclosureSection>
           )}
 
+          {showSettingsSection("api keys online metadata lastfm last.fm scrobbling acoustid acoustic fingerprint musicbrainz lookup autotag") && (
+          <DisclosureSection accordionId="apiKeys" title="API Keys" description="Bring-your-own keys for online metadata and scrobbling">
+            <div className="grid gap-3 text-sm text-neutral-200">
+              <div className="rounded border border-line/70 bg-ink p-3">
+                <div className="flex items-start gap-3">
+                  <Fingerprint className="mt-0.5 shrink-0 text-muted" size={18} />
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium text-white">AcoustID client API key</div>
+                    <div className="text-xs text-muted">
+                      Optional. When configured, Individual Track Auto-Tag can identify songs from Chromaprint fingerprints before using text search.
+                    </div>
+                    <button
+                      className="mt-2 inline-flex items-center gap-1 text-xs text-moss hover:text-white"
+                      type="button"
+                      onClick={() => void openExternalUrl(ACOUSTID_API_KEY_URL, setStatus)}
+                    >
+                      Get an AcoustID key
+                      <ExternalLink size={12} />
+                    </button>
+                    <div className={`mt-2 text-xs ${settings?.acoustid_api_key_configured ? "text-moss" : "text-muted"}`}>
+                      {settings?.acoustid_api_key_configured ? "AcoustID lookup is configured." : "No AcoustID key saved."}
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto_auto]">
+                  <input
+                    className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
+                    type="password"
+                    value={acoustIdApiKeyDraft}
+                    placeholder={settings?.acoustid_api_key_configured ? "Paste a new key to replace the saved one" : "Paste AcoustID client API key"}
+                    onChange={(event) => setAcoustIdApiKeyDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        void saveAcoustIdApiKey();
+                      }
+                    }}
+                  />
+                  <button
+                    className="secondary-button h-9"
+                    type="button"
+                    disabled={!acoustIdApiKeyDraft.trim() || isSavingAcoustIdKey}
+                    onClick={() => void saveAcoustIdApiKey()}
+                  >
+                    Save Key
+                  </button>
+                  <button
+                    className="secondary-button h-9"
+                    type="button"
+                    disabled={!settings?.acoustid_api_key_configured || isSavingAcoustIdKey}
+                    onClick={() => void clearAcoustIdApiKey()}
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+
+              <div className="rounded border border-line/70 bg-ink p-3">
+                <div className="flex items-start gap-3">
+                  <KeyRound className="mt-0.5 shrink-0 text-muted" size={18} />
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium text-white">Last.fm API key and shared secret</div>
+                    <div className="text-xs text-muted">
+                      Optional. Last.fm browser login and scrobbling need your own API account credentials.
+                    </div>
+                    <button
+                      className="mt-2 inline-flex items-center gap-1 text-xs text-moss hover:text-white"
+                      type="button"
+                      onClick={() => void openExternalUrl(LASTFM_API_URL, setStatus)}
+                    >
+                      Open Last.fm API page
+                      <ExternalLink size={12} />
+                    </button>
+                    <div className={`mt-2 text-xs ${settings?.lastfm_api_credentials_configured ? "text-moss" : "text-muted"}`}>
+                      {settings?.lastfm_api_credentials_configured
+                        ? `Last.fm credentials configured${settings.lastfm_api_credentials_source ? ` (${settings.lastfm_api_credentials_source})` : ""}.`
+                        : "No Last.fm API credentials saved."}
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <input
+                    className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
+                    value={lastFmApiKeyDraft}
+                    placeholder={settings?.lastfm_api_credentials_configured ? "Paste a new Last.fm API key" : "Last.fm API key"}
+                    onChange={(event) => setLastFmApiKeyDraft(event.target.value)}
+                  />
+                  <input
+                    className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
+                    type="password"
+                    value={lastFmApiSecretDraft}
+                    placeholder={settings?.lastfm_api_credentials_configured ? "Paste a new shared secret" : "Last.fm shared secret"}
+                    onChange={(event) => setLastFmApiSecretDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        void saveLastFmCredentials();
+                      }
+                    }}
+                  />
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    className="secondary-button h-9"
+                    type="button"
+                    disabled={!lastFmApiKeyDraft.trim() || !lastFmApiSecretDraft.trim() || isSavingLastFmCredentials}
+                    onClick={() => void saveLastFmCredentials()}
+                  >
+                    Save Last.fm Keys
+                  </button>
+                  <button
+                    className="secondary-button h-9"
+                    type="button"
+                    disabled={!settings?.lastfm_api_credentials_configured || isSavingLastFmCredentials}
+                    onClick={() => void clearLastFmCredentials()}
+                  >
+                    Clear Saved
+                  </button>
+                </div>
+              </div>
+            </div>
+          </DisclosureSection>
+          )}
+
           {showSettingsSection("keyboard shortcuts hotkeys local playback controls media keys") && (
           <KeyboardShortcutsSection
             uiPreferences={uiPreferences}
@@ -463,185 +692,7 @@ export function SettingsPage({
           />
           )}
 
-          {showSettingsSection("extensions skins plugins themes manifest customization") && <ExtensionsSection />}
-
-          {showSettingsSection("autodj defaults queue length temperature similarity recommendations") && (
-          <DisclosureSection title="AutoDJ Defaults" description="Queue size, temperature, and similarity bias">
-            <div className="grid gap-4 text-sm text-neutral-200">
-            <NumberField
-              label="Default Queue Length"
-              min={1}
-              max={200}
-              value={uiPreferences.defaultQueueLength}
-              onChange={(value) =>
-                setUiPreferences((current) => ({ ...current, defaultQueueLength: value }))
-              }
-            />
-            <label className="grid gap-2">
-              <span className="text-xs uppercase text-muted">
-                Default Temperature {uiPreferences.defaultTemperature.toFixed(2)}
-              </span>
-              <input
-                type="range"
-                min={0.1}
-                max={2.5}
-                step={0.05}
-                value={uiPreferences.defaultTemperature}
-                onChange={(event) =>
-                  setUiPreferences((current) => ({ ...current, defaultTemperature: Number(event.target.value) }))
-                }
-                className="accent-moss"
-              />
-            </label>
-            <label className="grid gap-2">
-              <span className="text-xs uppercase text-muted">
-                Similarity Bias {uiPreferences.similarityWeight.toFixed(1)}
-              </span>
-              <input
-                type="range"
-                min={0}
-                max={4}
-                step={0.1}
-                value={uiPreferences.similarityWeight}
-                onChange={(event) =>
-                  setUiPreferences((current) => ({ ...current, similarityWeight: Number(event.target.value) }))
-                }
-                className="accent-ember"
-              />
-            </label>
-            </div>
-          </DisclosureSection>
-          )}
-
-          {showSettingsSection("clap audio analysis model genre similarity machine learning") && (
-          <DisclosureSection title="CLAP Audio Analysis" description={clapStatus?.message ?? "Optional genre and similarity analysis"}>
-            <div className="grid gap-4 text-sm text-neutral-200">
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <div className={`mt-1 truncate text-xs ${clapReady ? "text-moss" : "text-muted"}`}>
-                  {clapStatus?.message ?? "Checking CLAP"}
-                </div>
-                {clapStatus?.runtime_managed && (
-                  <div className="mt-1 truncate text-xs text-muted" title={clapStatus.runtime_dir ?? undefined}>
-                    Runtime {clapStatus.runtime_device ?? "not installed"} - {clapStatus.runtime_dir}
-                  </div>
-                )}
-              </div>
-              <button className="icon-button" type="button" title="Refresh CLAP status" onClick={onRefreshClapStatus}>
-                <RefreshCw size={16} />
-              </button>
-            </div>
-
-            <label className="grid gap-2">
-              <span className="text-xs uppercase text-muted">Model ID</span>
-              <input
-                className="h-9 rounded border border-line bg-ink px-3 text-white outline-none ring-moss/40 focus:ring-2"
-                value={clapModelId}
-                onChange={(event) => setClapModelId(event.target.value)}
-              />
-            </label>
-            <label className="grid gap-2">
-              <span className="text-xs uppercase text-muted">Model Cache Directory</span>
-              <input
-                className="h-9 rounded border border-line bg-ink px-3 text-white outline-none ring-moss/40 focus:ring-2"
-                value={clapCacheDir}
-                onChange={(event) => setClapCacheDir(event.target.value)}
-              />
-            </label>
-            <label className="grid gap-2">
-              <span className="text-xs uppercase text-muted">Seconds Analyzed Per Track</span>
-              <input
-                type="range"
-                min={10}
-                max={90}
-                step={5}
-                value={clapMaxDuration}
-                onChange={(event) => setClapMaxDuration(Number(event.target.value))}
-                className="accent-ember"
-              />
-              <span className="text-xs text-muted">{clapMaxDuration.toFixed(0)} seconds from the start of each file</span>
-            </label>
-
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <NumberField
-                label="Analysis Limit"
-                min={0}
-                max={100000}
-                value={audioAnalysisLimit}
-                onChange={setAudioAnalysisLimit}
-              />
-              <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-ink px-3 py-2">
-                <span className="text-muted">Only missing</span>
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 accent-moss"
-                  checked={audioAnalysisOnlyMissing}
-                  onChange={(event) => setAudioAnalysisOnlyMissing(event.target.checked)}
-                />
-              </label>
-              <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-ink px-3 py-2">
-                <span className="text-muted">Overwrite</span>
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 accent-ember"
-                  checked={audioAnalysisOverwrite}
-                  onChange={(event) => setAudioAnalysisOverwrite(event.target.checked)}
-                />
-              </label>
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              <button className="secondary-button" type="button" onClick={onSaveClapConfig}>
-                <ShieldCheck size={15} />
-                Save CLAP
-              </button>
-              <button
-                className="primary-button"
-                type="button"
-                disabled={!clapReady || isAudioAnalyzing}
-                onClick={onAnalyzeAudio}
-              >
-                <Wand2 size={15} />
-                {isAudioAnalyzing ? "Analyzing" : "Analyze Audio"}
-              </button>
-            </div>
-
-            {audioAnalysisProgress && (
-              <div className="rounded border border-line/70 bg-ink p-3">
-                <div className="mb-2 flex items-center justify-between text-xs text-muted">
-                  <span>
-                    {audioAnalysisProgress.processed_tracks.toLocaleString()} of{" "}
-                    {audioAnalysisProgress.total_tracks.toLocaleString()} tracks
-                  </span>
-                  <span>ETA {formatTime(audioAnalysisProgress.eta_seconds)}</span>
-                </div>
-                <div className="h-2 overflow-hidden rounded bg-panel">
-                  <div className="h-full rounded bg-ember transition-all duration-300" style={{ width: `${audioProgressPercent}%` }} />
-                </div>
-                <div className="mt-2 grid grid-cols-3 gap-3 text-center text-xs">
-                  <div>
-                    <div className="font-semibold text-moss">{audioAnalysisProgress.analyzed}</div>
-                    <div className="text-muted">Analyzed</div>
-                  </div>
-                  <div>
-                    <div className="font-semibold text-red-300">{audioAnalysisProgress.skipped}</div>
-                    <div className="text-muted">Skipped</div>
-                  </div>
-                  <div>
-                    <div className="font-semibold text-white">{audioProgressPercent.toFixed(0)}%</div>
-                    <div className="text-muted">Progress</div>
-                  </div>
-                </div>
-                {audioAnalysisProgress.current_track && (
-                  <div className="mt-2 truncate text-xs text-muted">{audioAnalysisProgress.current_track}</div>
-                )}
-              </div>
-            )}
-            </div>
-          </DisclosureSection>
-          )}
-
-          {showSettingsSection("player playback audio output mini player now playing lyrics autofetch lrc sidecar cache follow equalizer replaygain fade skip visualizer") && (
+          {showSettingsSection("player playback audio output lyrics autofetch lrc sidecar cache follow equalizer replaygain fade skip codec native webview") && (
           <PlayerSettingsSection
             uiPreferences={uiPreferences}
             setUiPreferences={setUiPreferences}
@@ -682,6 +733,8 @@ export function SettingsPage({
             onClearArtistCache={onClearArtistCache}
           />
           )}
+
+          {showSettingsSection("extensions skins plugins themes manifest customization") && <ExtensionsSection />}
         </div>
         </DisclosureAccordionProvider>
       </section>

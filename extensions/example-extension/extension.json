@@ -1,0 +1,12 @@
+{
+  "id": "flac-cafe.example-extension",
+  "name": "Example Metadata Extension",
+  "version": "0.1.0",
+  "kind": "integration",
+  "description": "A non-executable sample package showing how a future metadata provider could advertise itself to FLAC Cafe.",
+  "author": "FLAC Cafe contributors",
+  "homepage": "https://github.com/",
+  "entry": "provider.json",
+  "capabilities": ["metadata-provider", "album-artwork-search", "artist-info"],
+  "permissions": ["network:metadata.example.invalid"]
+}

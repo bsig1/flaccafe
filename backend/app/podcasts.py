@@ -30,6 +30,15 @@ def podcast_where_clause() -> str:
       OR lower(tracks.path) LIKE '%podcast%'
       OR lower(tracks.path) LIKE '%\\podcasts\\%'
       OR lower(tracks.path) LIKE '%/podcasts/%'
+      OR EXISTS (
+        SELECT 1
+        FROM podcast_episodes
+        WHERE podcast_episodes.track_id = tracks.id
+           OR (
+             podcast_episodes.local_path IS NOT NULL
+             AND lower(podcast_episodes.local_path) = lower(tracks.path)
+           )
+      )
     )
     """
 
@@ -101,7 +110,7 @@ def parse_date(value: str | None) -> str | None:
 
 
 def fetch_feed(feed_url: str) -> bytes:
-    req = urlrequest.Request(feed_url, headers={"User-Agent": "FLAC Cafe/0.2.1 podcast module"})
+    req = urlrequest.Request(feed_url, headers={"User-Agent": "FLAC Cafe/0.4.0 podcast module"})
     with urlrequest.urlopen(req, timeout=PODCAST_TIMEOUT_SECONDS) as response:
         return response.read()
 
@@ -133,11 +142,30 @@ def parse_feed(payload: bytes, feed_url: str) -> dict[str, Any]:
 
 
 def row_to_subscription(row: dict[str, Any]) -> dict[str, Any]:
+    base_folder = Path(row.get("download_folder") or default_podcast_folder()).expanduser()
+    podcast_folder = base_folder / sanitize_path_component(str(row.get("title") or "Podcast"))
     return {
         **row,
         "auto_download": bool(row["auto_download"]),
         "episode_count": int(row.get("episode_count") or 0),
         "downloaded_count": int(row.get("downloaded_count") or 0),
+        "effective_download_folder": str(podcast_folder.resolve()),
+    }
+
+
+def subscription_download_folder(subscription_id: int, create: bool = False) -> dict[str, Any] | None:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM podcast_subscriptions WHERE id = ?", (subscription_id,)).fetchone()
+    if row is None:
+        return None
+    subscription = row_to_subscription(dict(row))
+    folder = Path(subscription["effective_download_folder"]).expanduser()
+    existed = folder.exists()
+    if create:
+        folder.mkdir(parents=True, exist_ok=True)
+    return {
+        "path": str(folder.resolve()),
+        "created": create and not existed,
     }
 
 
@@ -216,11 +244,44 @@ def upsert_subscription(request: object, subscription_id: int | None = None) -> 
     return row_to_subscription(dict(row)) if row else None
 
 
-def delete_subscription(subscription_id: int) -> bool:
+def delete_subscription(subscription_id: int, delete_files: bool = False) -> dict[str, Any]:
     with connect() as conn:
+        rows = rows_to_dicts(
+            conn.execute(
+                """
+                SELECT id, local_path, track_id
+                FROM podcast_episodes
+                WHERE subscription_id = ?
+                """,
+                (subscription_id,),
+            )
+        )
+        if not rows and conn.execute("SELECT id FROM podcast_subscriptions WHERE id = ?", (subscription_id,)).fetchone() is None:
+            return {"deleted": False, "deleted_files": 0, "missing_files": 0, "removed_tracks": 0}
+        deleted_files = 0
+        missing_files = 0
+        removed_tracks = 0
+        if delete_files:
+            for row in rows:
+                local_path = row.get("local_path")
+                if local_path:
+                    path = Path(local_path).expanduser()
+                    if path.exists() and path.is_file():
+                        path.unlink()
+                        deleted_files += 1
+                    else:
+                        missing_files += 1
+                if row.get("track_id"):
+                    conn.execute("DELETE FROM tracks WHERE id = ?", (row["track_id"],))
+                    removed_tracks += 1
         cursor = conn.execute("DELETE FROM podcast_subscriptions WHERE id = ?", (subscription_id,))
         conn.commit()
-        return cursor.rowcount > 0
+        return {
+            "deleted": cursor.rowcount > 0,
+            "deleted_files": deleted_files,
+            "missing_files": missing_files,
+            "removed_tracks": removed_tracks,
+        }
 
 
 def refresh_subscription(subscription_id: int) -> dict[str, Any] | None:
@@ -332,8 +393,8 @@ def podcast_track_metadata(path: Path, episode: dict[str, Any]) -> dict[str, Any
             "path_key": path_key(path),
             "title": episode.get("title") or path.stem,
             "artist": episode.get("subscription_title"),
-            "album": episode.get("subscription_title"),
-            "album_artist": episode.get("subscription_title"),
+            "album": None,
+            "album_artist": None,
             "track_number": None,
             "disc_number": None,
             "genre": "Podcast",
@@ -351,8 +412,8 @@ def podcast_track_metadata(path: Path, episode: dict[str, Any]) -> dict[str, Any
 
     metadata["title"] = metadata.get("title") or episode.get("title") or path.stem
     metadata["artist"] = metadata.get("artist") or episode.get("subscription_title")
-    metadata["album"] = metadata.get("album") or episode.get("subscription_title")
-    metadata["album_artist"] = metadata.get("album_artist") or episode.get("subscription_title")
+    metadata["album"] = None
+    metadata["album_artist"] = None
     metadata["genre"] = "Podcast"
     metadata["duration_seconds"] = metadata.get("duration_seconds") or episode.get("duration_seconds")
     return metadata
@@ -400,7 +461,7 @@ def download_episode(episode_id: int, download_folder: str | None = None) -> dic
     using_default_folder = resolved_folder == default_podcast_folder().resolve()
     target = folder / sanitize_path_component(episode["subscription_title"]) / f"{sanitize_path_component(episode['title'])}{episode_extension(episode.get('audio_url'))}"
     target.parent.mkdir(parents=True, exist_ok=True)
-    req = urlrequest.Request(episode["audio_url"], headers={"User-Agent": "FLAC Cafe/0.2.1 podcast downloader"})
+    req = urlrequest.Request(episode["audio_url"], headers={"User-Agent": "FLAC Cafe/0.4.0 podcast downloader"})
     with urlrequest.urlopen(req, timeout=PODCAST_TIMEOUT_SECONDS) as response, target.open("wb") as handle:
         shutil.copyfileobj(response, handle)
     with connect() as conn:
@@ -417,3 +478,48 @@ def download_episode(episode_id: int, download_folder: str | None = None) -> dic
         ensure_episode_track(episode_id)
     with connect() as conn:
         return episode_with_subscription(conn, episode_id)
+
+
+def delete_episode_download(episode_id: int) -> dict[str, Any] | None:
+    with connect() as conn:
+        episode = episode_with_subscription(conn, episode_id)
+        if episode is None:
+            return None
+
+    local_path = episode.get("local_path")
+    deleted_file = False
+    missing_file = False
+    if local_path:
+        path = Path(local_path).expanduser()
+        if path.exists():
+            if not path.is_file():
+                raise ValueError("Podcast download path is not a file")
+            path.unlink()
+            deleted_file = True
+        else:
+            missing_file = True
+
+    track_id = episode.get("track_id")
+    with connect() as conn:
+        if track_id:
+            conn.execute("DELETE FROM tracks WHERE id = ?", (track_id,))
+        conn.execute(
+            """
+            UPDATE podcast_episodes
+            SET local_path = NULL,
+                download_status = 'remote',
+                downloaded_at = NULL,
+                track_id = NULL,
+                updated_at = datetime('now')
+            WHERE id = ?
+            """,
+            (episode_id,),
+        )
+        conn.commit()
+        updated = episode_with_subscription(conn, episode_id)
+    return {
+        "episode": updated,
+        "deleted_file": deleted_file,
+        "missing_file": missing_file,
+        "removed_track": bool(track_id),
+    }

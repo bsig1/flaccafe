@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from .config import APP_STORAGE_ROOT
 from .database import connect, get_setting, rows_to_dicts
+from .file_tags import read_track_artwork, write_track_artwork
 
 
 TRACK_SELECT_COLUMNS = """
@@ -249,11 +250,8 @@ def ffmpeg_command(ffmpeg_path: Path, source: Path, target: Path, request: objec
         str(source),
         "-map",
         "0:a:0",
+        "-vn",
     ]
-    if getattr(request, "copy_artwork") and getattr(request, "output_format") != "wav":
-        command.extend(["-map", "0:v?", "-c:v", "copy"])
-    else:
-        command.append("-vn")
     command.extend(["-map_metadata", "0" if getattr(request, "copy_tags") else "-1"])
     if getattr(request, "normalize_volume"):
         command.extend(["-af", "loudnorm=I=-16:TP=-1.5:LRA=11"])
@@ -263,6 +261,17 @@ def ffmpeg_command(ffmpeg_path: Path, source: Path, target: Path, request: objec
         command.extend(["-ar", str(sample_rate)])
     command.append(str(target))
     return command
+
+
+def copy_converted_artwork(source: Path, target: Path, request: object) -> str | None:
+    if not getattr(request, "copy_artwork") or getattr(request, "output_format") == "wav":
+        return None
+    artwork = read_track_artwork(source)
+    if artwork is None:
+        return None
+    data, media_type = artwork
+    write_track_artwork(target, data, media_type)
+    return "embedded"
 
 
 def run_ffmpeg_command(command: list[str]) -> None:
@@ -383,6 +392,11 @@ def _run_conversion_job(job_id: str, request: object) -> None:
                     continue
                 target.parent.mkdir(parents=True, exist_ok=True)
                 run_ffmpeg_command(ffmpeg_command(ffmpeg_path, source, target, request))
+                try:
+                    copy_converted_artwork(source, target, request)
+                except Exception as exc:
+                    with _lock:
+                        _jobs[job_id].errors.append(f"{source.name}: converted, but artwork copy failed: {exc}")
                 with _lock:
                     _jobs[job_id].converted += 1
             except Exception as exc:

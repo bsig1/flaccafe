@@ -45,33 +45,54 @@ export function ExtensionsSection() {
     }
   }
 
-  async function openExtensionsFolder() {
-    if (!extensions?.user_extensions_dir) {
+  async function revealFolder(path: string | null | undefined, fallbackMessage: string) {
+    if (!path) {
       return;
     }
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("reveal_in_file_explorer", { path: extensions.user_extensions_dir });
-      setMessage("Opened extensions folder");
+      await invoke("reveal_in_file_explorer", { path });
+      setMessage(fallbackMessage);
     } catch {
-      setMessage(extensions.user_extensions_dir);
+      setMessage(path);
     }
   }
+
+  const bundledExamplesDir = extensions?.search_directories.find((directory) => directory !== extensions.user_extensions_dir) ?? null;
 
   return (
     <DisclosureSection title="Extensions And Skins" description="Manifest discovery for advanced customization">
       <div className="grid gap-3 text-sm text-neutral-200">
         <div className="flex flex-wrap items-center justify-between gap-3 rounded border border-line/70 bg-ink p-3">
           <div className="min-w-0">
-            <div className="font-medium text-white">Extension folder</div>
+            <div className="font-medium text-white">Personal extension folder</div>
             <div className="mt-1 truncate text-xs text-muted" title={extensions?.user_extensions_dir}>
               {extensions?.user_extensions_dir ?? "Resolving local extension folder"}
             </div>
+            {bundledExamplesDir && (
+              <div className="mt-1 truncate text-xs text-muted" title={bundledExamplesDir}>
+                Bundled examples: {bundledExamplesDir}
+              </div>
+            )}
           </div>
           <div className="flex flex-wrap gap-2">
-            <button className="secondary-button" type="button" onClick={openExtensionsFolder} disabled={!extensions}>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => void revealFolder(extensions?.user_extensions_dir, "Opened personal extensions folder")}
+              disabled={!extensions}
+            >
               <FolderOpen size={15} />
-              Show Folder
+              Show Personal
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => void revealFolder(bundledExamplesDir, "Opened bundled examples folder")}
+              disabled={!bundledExamplesDir}
+            >
+              <FolderOpen size={15} />
+              Show Examples
             </button>
             <button className="secondary-button" type="button" onClick={() => void loadExtensions(true)}>
               <RefreshCw size={15} />

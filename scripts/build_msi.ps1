@@ -53,13 +53,43 @@ function Invoke-WixLinkWithoutIce {
     return Get-Item $MsiPath
 }
 
+function Get-ReleaseLabel {
+    $Config = Get-Content (Join-Path $Root "src-tauri\tauri.conf.json") -Raw | ConvertFrom-Json
+    try {
+        $Package = Get-Content (Join-Path $Root "package.json") -Raw | ConvertFrom-Json
+        if ($Package.version) {
+            return [string]$Package.version
+        }
+    }
+    catch {
+        return [string]$Config.version
+    }
+    return [string]$Config.version
+}
+
+function Copy-MsiWithReleaseLabel {
+    param([System.IO.FileInfo]$Msi)
+
+    $Config = Get-Content (Join-Path $Root "src-tauri\tauri.conf.json") -Raw | ConvertFrom-Json
+    $ReleaseLabel = Get-ReleaseLabel
+    if ($ReleaseLabel -eq $Config.version) {
+        return $Msi
+    }
+
+    $BundleDir = Join-Path $Root "src-tauri\target\release\bundle\msi"
+    $LabeledPath = Join-Path $BundleDir ("{0}_{1}_x64_en-US.msi" -f $Config.productName, $ReleaseLabel)
+    Copy-Item -LiteralPath $Msi.FullName -Destination $LabeledPath -Force
+    return Get-Item $LabeledPath
+}
+
 function Write-ReleaseNotes {
     param([System.IO.FileInfo]$Msi)
 
     $Config = Get-Content (Join-Path $Root "src-tauri\tauri.conf.json") -Raw | ConvertFrom-Json
+    $ReleaseLabel = Get-ReleaseLabel
     $NotesDir = Join-Path $Root "docs\release-notes"
     New-Item -ItemType Directory -Force -Path $NotesDir | Out-Null
-    $NotesPath = Join-Path $NotesDir ("v{0}.md" -f $Config.version)
+    $NotesPath = Join-Path $NotesDir ("v{0}.md" -f $ReleaseLabel)
 
     $Changes = @()
     try {
@@ -104,12 +134,15 @@ function Write-ReleaseNotes {
     }
 
     $ReleaseNotes = @(
-        "# FLAC Cafe $($Config.version)"
+        "# FLAC Cafe $ReleaseLabel"
         ""
         "- Built: $((Get-Date).ToString("yyyy-MM-dd HH:mm:ss zzz"))"
         "- Installer: $($Msi.FullName)"
         "- Size: $([math]::Round($Msi.Length / 1MB, 2)) MB"
     )
+    if ($ReleaseLabel -ne $Config.version) {
+        $ReleaseNotes += "- Windows MSI product version: $($Config.version)"
+    }
     foreach ($GroupName in $Groups.Keys) {
         if ($Groups[$GroupName].Count -eq 0) {
             continue
@@ -184,8 +217,9 @@ try {
         throw "MSI build completed without producing a fresh .msi file."
     }
 
-    Write-Host "MSI ready: $($Msi.FullName)"
-    Write-ReleaseNotes -Msi $Msi
+    $ReleaseMsi = Copy-MsiWithReleaseLabel -Msi $Msi
+    Write-Host "MSI ready: $($ReleaseMsi.FullName)"
+    Write-ReleaseNotes -Msi $ReleaseMsi
 }
 finally {
     Pop-Location

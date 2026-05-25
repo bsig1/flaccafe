@@ -32,6 +32,8 @@ export interface Track {
   last_skipped_at: string | null;
   date_added: string;
   file_modified_at: string | null;
+  audio_url?: string | null;
+  is_preview?: boolean;
 }
 
 export interface QueueTrack extends Track {
@@ -45,6 +47,24 @@ export interface TrackPage {
   total: number;
   limit: number;
   offset: number;
+}
+
+export type AdvancedTrackRatingState = "any" | "rated" | "unrated";
+
+export interface AdvancedTrackSearchFilters {
+  artist?: string;
+  album?: string;
+  genre?: string;
+  path?: string;
+  extension?: string;
+  rating_state?: AdvancedTrackRatingState;
+  min_rating?: string;
+  max_rating?: string;
+  year_from?: string;
+  year_to?: string;
+  min_duration?: string;
+  max_duration?: string;
+  missing_metadata?: boolean;
 }
 
 export interface TrackMetadataUpdate {
@@ -64,6 +84,9 @@ export interface AlbumSummary {
   album: string | null;
   album_artist: string | null;
   year: number | null;
+  years?: number[];
+  album_ids?: number[];
+  edition_count?: number;
   artwork_path?: string | null;
   track_count: number;
   expected_track_count?: number | null;
@@ -71,6 +94,36 @@ export interface AlbumSummary {
   duration_seconds: number | null;
   average_rating: number | null;
   artwork_track_id: number | null;
+  completion_expected_track_count?: number | null;
+  completion_source?: string | null;
+  completion_release_id?: string | null;
+  completion_release_title?: string | null;
+  completion_checked_at?: string | null;
+}
+
+export interface ArtistSummary {
+  name: string;
+  track_count: number;
+  album_count: number;
+  duration_seconds: number | null;
+  average_rating: number | null;
+  play_count: number;
+  skip_count: number;
+  first_year: number | null;
+  last_year: number | null;
+  artwork_track_id: number | null;
+}
+
+export interface AlbumCompletionLookupResponse {
+  album_id: number;
+  expected_track_count: number | null;
+  missing_track_count: number;
+  source: string | null;
+  release_id: string | null;
+  release_title: string | null;
+  confidence: number;
+  checked_at: string | null;
+  error?: string | null;
 }
 
 export interface AlbumArtworkCandidate {
@@ -170,6 +223,26 @@ export interface PlayEventEntry {
   timestamp: string;
   metadata: Record<string, unknown>;
   track: Track | null;
+}
+
+export interface HistoryTrackStat {
+  track: Track;
+  play_count: number;
+  skip_count: number;
+  listened_seconds: number;
+}
+
+export interface HistoryStatsResponse {
+  total_play_count: number;
+  total_skip_count: number;
+  total_play_events: number;
+  total_skip_events: number;
+  total_rated_events: number;
+  unique_played_tracks: number;
+  unique_skipped_tracks: number;
+  total_listened_seconds: number;
+  top_played: HistoryTrackStat[];
+  top_skipped: HistoryTrackStat[];
 }
 
 export interface DuplicateGroup {
@@ -709,6 +782,8 @@ export interface AutoTagRequest {
   missing_only?: boolean;
   include_artwork?: boolean;
   save_artwork?: boolean;
+  fingerprint_only?: boolean;
+  write_to_file?: boolean | null;
   apply?: boolean;
   limit?: number;
   candidate_limit?: number;
@@ -775,6 +850,47 @@ export interface ClapGenreTagResponse {
   previews: ClapGenreTagPreview[];
 }
 
+export interface VolumeTagRequest {
+  track_ids?: number[] | null;
+  mode?: "analyze" | "manual";
+  apply?: boolean;
+  write_to_file?: boolean | null;
+  limit?: number;
+  manual_track_gain_db?: number | null;
+  manual_track_peak?: number | null;
+  manual_album_gain_db?: number | null;
+  manual_album_peak?: number | null;
+}
+
+export interface VolumeTagPreview {
+  track_id: number;
+  path: string;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  current_track_gain_db: number | null;
+  proposed_track_gain_db: number | null;
+  current_track_peak: number | null;
+  proposed_track_peak: number | null;
+  current_album_gain_db: number | null;
+  proposed_album_gain_db: number | null;
+  current_album_peak: number | null;
+  proposed_album_peak: number | null;
+  changed: boolean;
+  applied: boolean;
+  error: string | null;
+}
+
+export interface VolumeTagResponse {
+  total: number;
+  changed: number;
+  applied: number;
+  errors: string[];
+  previews: VolumeTagPreview[];
+  ffmpeg_path: string | null;
+  checked_paths: string[];
+}
+
 export interface DuplicateActionRequest {
   action: "keep_best" | "remove_selected" | "export_report";
   track_ids?: number[];
@@ -819,18 +935,6 @@ export interface ChromaprintStatusResponse {
   errors: string[];
 }
 
-export interface ChromaprintInstallRequest {
-  source_url?: string | null;
-}
-
-export interface ChromaprintInstallResponse {
-  installed: boolean;
-  fpcalc_path: string | null;
-  source_url: string;
-  message: string;
-  errors: string[];
-}
-
 export interface AcousticFingerprintRequest {
   track_ids?: number[] | null;
   overwrite?: boolean;
@@ -842,6 +946,7 @@ export interface AcousticFingerprintResponse {
   processed: number;
   updated: number;
   skipped: number;
+  skipped_reasons?: string[];
   errors: string[];
 }
 
@@ -1030,6 +1135,10 @@ export interface AudioConversionSetupResponse {
 
 export interface AudioConversionSetupRequest {
   ffmpeg_path?: string | null;
+}
+
+export interface AudioConversionInstallRequest {
+  source_url?: string | null;
 }
 
 export type AudioConversionFormat = "flac" | "mp3" | "m4a" | "opus" | "wav";
@@ -1228,6 +1337,7 @@ export interface CdPlaybackResponse {
   status: string;
   track_number: number | null;
   message: string;
+  track: Track | null;
 }
 
 export interface AudiobookTrack {
@@ -1319,11 +1429,24 @@ export interface PodcastSubscription {
   description: string | null;
   auto_download: boolean;
   download_folder: string | null;
+  effective_download_folder: string | null;
   last_checked_at: string | null;
   episode_count: number;
   downloaded_count: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface PodcastSubscriptionDeleteResponse {
+  deleted: boolean;
+  deleted_files: number;
+  missing_files: number;
+  removed_tracks: number;
+}
+
+export interface PodcastFolderResponse {
+  path: string;
+  created: boolean;
 }
 
 export interface PodcastEpisode {
@@ -1349,6 +1472,13 @@ export interface PodcastRefreshResponse {
   inserted: number;
   updated: number;
   total: number;
+}
+
+export interface PodcastDeleteDownloadResponse {
+  episode: PodcastEpisode;
+  deleted_file: boolean;
+  missing_file: boolean;
+  removed_track: boolean;
 }
 
 export interface RadioStationPayload {
@@ -1381,6 +1511,15 @@ export interface ScrobbleAccount extends ScrobbleAccountRequest {
   service: ScrobbleService;
   enabled: boolean;
   updated_at: string | null;
+}
+
+export interface LastFmLoginStartResponse {
+  token: string;
+  auth_url: string;
+}
+
+export interface LastFmLoginCompleteResponse {
+  account: ScrobbleAccount;
 }
 
 export interface ScrobbleOutboxEntry {
@@ -1648,12 +1787,29 @@ export interface SettingsResponse {
   suggested_music_path?: string | null;
   write_ratings_to_files: boolean;
   auto_write_fetched_lyrics_sidecars: boolean;
+  acoustid_api_key_configured: boolean;
+  lastfm_api_credentials_configured: boolean;
+  lastfm_api_credentials_source?: string | null;
   extra: Record<string, unknown>;
 }
 
 export interface SettingsUpdateRequest {
   write_ratings_to_files?: boolean;
   auto_write_fetched_lyrics_sidecars?: boolean;
+  acoustid_api_key?: string | null;
+  clear_acoustid_api_key?: boolean;
+  lastfm_api_key?: string | null;
+  lastfm_api_secret?: string | null;
+  clear_lastfm_api_credentials?: boolean;
+}
+
+export interface LibrarySourceRemoveResponse {
+  path: string;
+  library_paths: string[];
+  removed_tracks: number;
+  removed_metadata_cache: number;
+  removed_artwork_cache: number;
+  message: string;
 }
 
 export interface DiagnosticItem {
@@ -1688,6 +1844,50 @@ export interface TrackDeleteResponse {
   removed_from_library: boolean;
   deleted_file: boolean;
   file_missing: boolean;
+}
+
+export interface TracksDeleteResponse {
+  removed_track_ids: number[];
+  removed_count: number;
+  deleted_files: number;
+  missing_track_ids: number[];
+  errors: string[];
+}
+
+export interface TrackMetadataSyncResponse {
+  synced_track_ids: number[];
+  synced_count: number;
+  missing_track_ids: number[];
+  errors: string[];
+}
+
+export interface TrackFileMetadataWriteRequest {
+  track_ids?: number[] | null;
+  include_metadata?: boolean;
+  include_rating?: boolean;
+  apply?: boolean;
+  limit?: number;
+}
+
+export interface TrackFileMetadataWritePreview {
+  track_id: number;
+  path: string;
+  title: string | null;
+  artist: string | null;
+  changed_fields: string[];
+  database: Record<string, unknown>;
+  file: Record<string, unknown>;
+  applied: boolean;
+  error: string | null;
+}
+
+export interface TrackFileMetadataWriteResponse {
+  total: number;
+  changed: number;
+  applied: number;
+  missing_track_ids: number[];
+  errors: string[];
+  previews: TrackFileMetadataWritePreview[];
 }
 
 export interface TrackRestoreRequest {

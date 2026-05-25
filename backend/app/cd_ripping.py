@@ -5,11 +5,16 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
+import sys
+import wave
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock, Thread
+from typing import Iterator
+from urllib.parse import urlencode
 from uuid import uuid4
 
 from .audio_conversion_jobs import audio_codec_args, creation_flags, resolve_ffmpeg_path, safe_component
@@ -28,6 +33,23 @@ RIPPER_TOOLS = ("cdparanoia", "cdda2wav", "icedax")
 EXTRA_VERIFIER_TOOLS = ("whipper", "accuraterip")
 ENCODER_TOOLS = ("flac", "lame")
 
+CD_FRAMES_PER_SECOND = 75
+CD_MSF_OFFSET = 150
+CDDA_SECTOR_SIZE = 2352
+CD_RAW_READ_OFFSET_SECTOR_SIZE = 2048
+WINDOWS_CDDA_READ_SECTORS = 16
+WINDOWS_CDDA_STREAM_READ_SECTORS = CD_FRAMES_PER_SECOND
+ACTIVE_CD_STREAM_TOKENS: dict[str, str] = {}
+ACTIVE_CD_STREAM_LOCK = Lock()
+
+IOCTL_CDROM_READ_TOC = 0x00024000
+IOCTL_CDROM_RAW_READ = 0x0002403E
+GENERIC_READ = 0x80000000
+FILE_SHARE_READ = 0x00000001
+FILE_SHARE_WRITE = 0x00000002
+OPEN_EXISTING = 3
+TRACK_MODE_CDDA = 2
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(microsecond=0)
@@ -45,12 +67,21 @@ def executable_name(name: str) -> str:
     return f"{name}.exe" if os.name == "nt" else name
 
 
+def bundled_tool_dir() -> Path:
+    return Path(sys.executable).resolve().parent / "tools" / "cd-rip"
+
+
 def tool_candidate_paths(name: str) -> list[Path]:
     executable = executable_name(name)
+    backend_root = Path(__file__).resolve().parents[1]
     repo_root = Path(__file__).resolve().parents[2]
     candidates: list[Path] = [
+        bundled_tool_dir() / executable,
+        bundled_tool_dir().parent / executable,
         cd_tool_dir() / executable,
         APP_STORAGE_ROOT / "tools" / executable,
+        backend_root / "tools" / "cd-rip" / executable,
+        backend_root / "tools" / executable,
         repo_root / "tools" / "cd-rip" / executable,
         repo_root / "tools" / executable,
     ]
@@ -83,6 +114,8 @@ def tool_version(path: Path) -> str | None:
             )
         except (OSError, subprocess.SubprocessError):
             continue
+        if result.returncode != 0:
+            continue
         lines = (result.stdout or result.stderr or "").splitlines()
         if lines:
             return lines[0].strip()
@@ -112,6 +145,21 @@ def secure_ripping_supported(tools: dict[str, dict]) -> bool:
 
 def accuraterip_supported(tools: dict[str, dict]) -> bool:
     return bool(tools.get("whipper", {}).get("available") or tools.get("accuraterip", {}).get("available"))
+
+
+def native_windows_cd_ripping_supported() -> bool:
+    return os.name == "nt"
+
+
+def native_windows_tool_entry() -> dict:
+    return {
+        "name": "windows_cdda",
+        "purpose": "native Windows CD audio extraction",
+        "available": native_windows_cd_ripping_supported(),
+        "path": "Windows DeviceIoControl",
+        "version": "Windows CD-ROM raw read",
+        "checked_paths": [],
+    }
 
 
 def powershell_cd_drives() -> list[dict]:
@@ -225,6 +273,7 @@ def cd_rip_setup() -> dict:
     with connect() as conn:
         ffmpeg_path, _configured, _candidates = resolve_ffmpeg_path(conn)
     tool_entries = [
+        native_windows_tool_entry(),
         find_tool("cdparanoia", "secure CD audio extraction"),
         find_tool("cdda2wav", "CD audio extraction and CD-Text"),
         find_tool("icedax", "CD audio extraction and CD-Text"),
@@ -236,7 +285,8 @@ def cd_rip_setup() -> dict:
     tools = {tool["name"]: tool for tool in tool_entries}
     drives = detect_cd_drives()
     secure_available = secure_ripping_supported(tools)
-    basic_available = secure_available or ffmpeg_path is not None
+    native_available = native_windows_cd_ripping_supported()
+    basic_available = native_available or secure_available or ffmpeg_path is not None
     return {
         "available": basic_available and ffmpeg_path is not None,
         "tool_directory": str(cd_tool_dir()),
@@ -249,8 +299,8 @@ def cd_rip_setup() -> dict:
         "accuraterip_available": accuraterip_supported(tools),
         "message": (
             "CD ripping tools are ready."
-            if secure_available and ffmpeg_path is not None
-            else "Install cdparanoia/cdda2wav plus FFmpeg for secure FLAC/MP3 ripping."
+            if (secure_available or native_available) and ffmpeg_path is not None
+            else "Bundled cdda2wav is missing or FFmpeg is not configured for FLAC/MP3 ripping."
         ),
         "warnings": cd_setup_warnings(tools, ffmpeg_path is not None),
     }
@@ -258,12 +308,10 @@ def cd_rip_setup() -> dict:
 
 def cd_setup_warnings(tools: dict[str, dict], ffmpeg_available: bool) -> list[str]:
     warnings: list[str] = []
-    if not secure_ripping_supported(tools):
-        warnings.append("Secure extraction requires cdparanoia, cdda2wav, or icedax in PATH or the FLAC Cafe CD tool folder.")
+    if not native_windows_cd_ripping_supported() and not secure_ripping_supported(tools):
+        warnings.append("Secure extraction requires bundled cdda2wav, cdparanoia, or icedax in PATH or the FLAC Cafe CD tool folder.")
     if not ffmpeg_available:
         warnings.append("FLAC/MP3 encoding requires FFmpeg configured in Audio Conversion.")
-    if not accuraterip_supported(tools):
-        warnings.append("Official AccurateRip verification is not available; rip jobs will still write local SHA-256 verification hashes.")
     if not cd_text_supported(tools):
         warnings.append("CD-Text reading requires cdda2wav or icedax.")
     return warnings
@@ -385,6 +433,9 @@ def requested_drive_track_count(request: object) -> int:
 def selected_ripper(secure_mode: bool) -> dict | None:
     setup = cd_rip_setup()
     tools = {tool["name"]: tool for tool in setup["tools"]}
+    native_tool = tools.get("windows_cdda")
+    if native_tool and native_tool.get("available"):
+        return native_tool
     for name in ("cdparanoia", "cdda2wav", "icedax"):
         tool = tools.get(name)
         if tool and tool.get("available"):
@@ -471,6 +522,291 @@ def run_cd_command(command: list[str]) -> str:
     if completed.returncode != 0:
         raise RuntimeError(output[-2000:] or f"{Path(command[0]).name} exited with {completed.returncode}")
     return output[-4000:]
+
+
+def extract_cd_track_to_wav(drive_id: str, track_number: int, wav_path: Path, secure_mode: bool) -> str:
+    ripper = selected_ripper(secure_mode)
+    if ripper is None:
+        raise RuntimeError("No compatible CD ripping tool was found.")
+    if ripper["name"] == "windows_cdda":
+        return rip_wav_native_windows(drive_id, track_number, wav_path)
+    return run_cd_command(rip_wav_command(ripper, drive_id, track_number, wav_path, secure_mode))
+
+
+def windows_device_path(drive_id: str) -> str:
+    text = drive_id.strip()
+    if text.startswith("\\\\.\\"):
+        return text
+    match = re.match(r"^([A-Za-z]):", text)
+    if match:
+        return f"\\\\.\\{match.group(1).upper()}:"
+    return text
+
+
+def msf_to_lba(address: object) -> int:
+    minute = int(address[1])
+    second = int(address[2])
+    frame = int(address[3])
+    return (minute * 60 * CD_FRAMES_PER_SECOND) + (second * CD_FRAMES_PER_SECOND) + frame - CD_MSF_OFFSET
+
+
+def windows_last_error(message: str) -> OSError:
+    import ctypes
+
+    code = ctypes.get_last_error()
+    return OSError(code, f"{message}: {ctypes.FormatError(code).strip()}")
+
+
+def open_windows_cd_handle(drive_id: str) -> tuple[object, int]:
+    if os.name != "nt":
+        raise RuntimeError("Native Windows CDDA access is only available on Windows.")
+
+    import ctypes
+    from ctypes import wintypes
+
+    device_path = windows_device_path(drive_id)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel32.CreateFileW(
+        device_path,
+        GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        None,
+        OPEN_EXISTING,
+        0,
+        None,
+    )
+    if handle == ctypes.c_void_p(-1).value:
+        raise windows_last_error(f"Could not open CD drive {drive_id}")
+    return kernel32, int(handle)
+
+
+def windows_read_toc(handle: int) -> list[dict[str, int]]:
+    import ctypes
+    from ctypes import wintypes
+
+    class TrackData(ctypes.Structure):
+        _fields_ = [
+            ("reserved", ctypes.c_ubyte),
+            ("adr_control", ctypes.c_ubyte),
+            ("track_number", ctypes.c_ubyte),
+            ("reserved_1", ctypes.c_ubyte),
+            ("address", ctypes.c_ubyte * 4),
+        ]
+
+    class CdromToc(ctypes.Structure):
+        _fields_ = [
+            ("length", ctypes.c_ubyte * 2),
+            ("first_track", ctypes.c_ubyte),
+            ("last_track", ctypes.c_ubyte),
+            ("track_data", TrackData * 100),
+        ]
+
+    toc = CdromToc()
+    returned = wintypes.DWORD(0)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    ok = kernel32.DeviceIoControl(
+        wintypes.HANDLE(handle),
+        IOCTL_CDROM_READ_TOC,
+        None,
+        0,
+        ctypes.byref(toc),
+        ctypes.sizeof(toc),
+        ctypes.byref(returned),
+        None,
+    )
+    if not ok:
+        raise windows_last_error("Could not read CD table of contents")
+
+    toc_length = (int(toc.length[0]) << 8) + int(toc.length[1])
+    entry_count = max(0, min(100, (toc_length - 2) // ctypes.sizeof(TrackData)))
+    if entry_count <= 0:
+        entry_count = max(0, int(toc.last_track) - int(toc.first_track) + 2)
+
+    entries: list[dict[str, int]] = []
+    for item in toc.track_data[:entry_count]:
+        track_number = int(item.track_number)
+        if track_number == 0:
+            continue
+        # TRACK_DATA packs Control in the low nibble and Adr in the high nibble.
+        control = int(item.adr_control) & 0x0F
+        entries.append(
+            {
+                "track_number": track_number,
+                "start_lba": msf_to_lba(item.address),
+                "control": control,
+            }
+        )
+    entries.sort(key=lambda item: item["start_lba"])
+    return entries
+
+
+def windows_track_bounds(handle: int, track_number: int) -> tuple[int, int]:
+    entries = windows_read_toc(handle)
+    index = next((idx for idx, entry in enumerate(entries) if entry["track_number"] == track_number), None)
+    if index is None or index + 1 >= len(entries):
+        raise RuntimeError(f"Track {track_number:02d} was not found in the CD table of contents.")
+    track = entries[index]
+    next_track = entries[index + 1]
+    if track["control"] & 0x04:
+        raise RuntimeError(f"Track {track_number:02d} is a data track, not CD audio.")
+    start_lba = max(0, track["start_lba"])
+    end_lba = max(start_lba, next_track["start_lba"])
+    total_sectors = end_lba - start_lba
+    if total_sectors <= 0:
+        raise RuntimeError(f"Track {track_number:02d} has no readable CDDA sectors.")
+    return start_lba, total_sectors
+
+
+def windows_raw_read_cdda(handle: int, start_lba: int, sector_count: int) -> bytes:
+    import ctypes
+    from ctypes import wintypes
+
+    class RawReadInfo(ctypes.Structure):
+        _fields_ = [
+            ("disk_offset", ctypes.c_longlong),
+            ("sector_count", wintypes.ULONG),
+            ("track_mode", ctypes.c_int),
+        ]
+
+    info = RawReadInfo(
+        max(0, start_lba) * CD_RAW_READ_OFFSET_SECTOR_SIZE,
+        sector_count,
+        TRACK_MODE_CDDA,
+    )
+    output_size = sector_count * CDDA_SECTOR_SIZE
+    buffer = ctypes.create_string_buffer(output_size)
+    returned = wintypes.DWORD(0)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    ok = kernel32.DeviceIoControl(
+        wintypes.HANDLE(handle),
+        IOCTL_CDROM_RAW_READ,
+        ctypes.byref(info),
+        ctypes.sizeof(info),
+        buffer,
+        output_size,
+        ctypes.byref(returned),
+        None,
+    )
+    if not ok:
+        raise windows_last_error(f"Could not read CDDA sector {start_lba}")
+    return buffer.raw[: int(returned.value)]
+
+
+def rip_wav_native_windows(drive_id: str, track_number: int, wav_path: Path) -> str:
+    if os.name != "nt":
+        raise RuntimeError("Native Windows CDDA ripping is only available on Windows.")
+
+    kernel32, handle = open_windows_cd_handle(drive_id)
+
+    try:
+        start_lba, total_sectors = windows_track_bounds(handle, track_number)
+
+        wav_path.parent.mkdir(parents=True, exist_ok=True)
+        with wave.open(str(wav_path), "wb") as handle_wav:
+            handle_wav.setnchannels(2)
+            handle_wav.setsampwidth(2)
+            handle_wav.setframerate(44100)
+            current_lba = start_lba
+            remaining = total_sectors
+            while remaining > 0:
+                sectors = min(WINDOWS_CDDA_READ_SECTORS, remaining)
+                handle_wav.writeframesraw(windows_raw_read_cdda(handle, current_lba, sectors))
+                current_lba += sectors
+                remaining -= sectors
+            handle_wav.writeframes(b"")
+        return f"Read track {track_number:02d} with native Windows CDDA ({total_sectors} sectors)."
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def wav_header(data_size: int) -> bytes:
+    channel_count = 2
+    sample_rate = 44_100
+    bits_per_sample = 16
+    block_align = channel_count * bits_per_sample // 8
+    byte_rate = sample_rate * block_align
+    return b"".join(
+        [
+            b"RIFF",
+            struct.pack("<I", 36 + data_size),
+            b"WAVE",
+            b"fmt ",
+            struct.pack("<IHHIIHH", 16, 1, channel_count, sample_rate, byte_rate, block_align, bits_per_sample),
+            b"data",
+            struct.pack("<I", data_size),
+        ]
+    )
+
+
+def cd_live_track_bounds(drive_id: str, track_number: int) -> tuple[int, int]:
+    kernel32, handle = open_windows_cd_handle(drive_id)
+    try:
+        return windows_track_bounds(handle, track_number)
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def cd_live_wav_content_length(drive_id: str, track_number: int) -> int:
+    _start_lba, total_sectors = cd_live_track_bounds(drive_id, track_number)
+    return 44 + (total_sectors * CDDA_SECTOR_SIZE)
+
+
+def cd_live_track_duration_seconds(drive_id: str, track_number: int) -> float:
+    _start_lba, total_sectors = cd_live_track_bounds(drive_id, track_number)
+    return total_sectors / CD_FRAMES_PER_SECOND
+
+
+def cd_live_stream_is_current(drive_id: str, token: str | None) -> bool:
+    if not token:
+        return True
+    with ACTIVE_CD_STREAM_LOCK:
+        return ACTIVE_CD_STREAM_TOKENS.get(drive_id) == token
+
+
+def cd_live_wav_stream(drive_id: str, track_number: int, token: str | None = None) -> Iterator[bytes]:
+    kernel32, handle = open_windows_cd_handle(drive_id)
+    try:
+        start_lba, total_sectors = windows_track_bounds(handle, track_number)
+        yield wav_header(total_sectors * CDDA_SECTOR_SIZE)
+        current_lba = start_lba
+        remaining = total_sectors
+        while remaining > 0:
+            if not cd_live_stream_is_current(drive_id, token):
+                return
+            sectors = min(WINDOWS_CDDA_STREAM_READ_SECTORS, remaining)
+            try:
+                data = windows_raw_read_cdda(handle, current_lba, sectors)
+                expected_size = sectors * CDDA_SECTOR_SIZE
+                if not cd_live_stream_is_current(drive_id, token):
+                    return
+                yield data if len(data) >= expected_size else data + (b"\x00" * (expected_size - len(data)))
+            except OSError:
+                # Live playback should keep time even when a marginal sector fails.
+                # Retry at single-sector granularity and replace unreadable sectors with silence
+                # instead of aborting the stream and jumping to the next queued CD track.
+                for offset in range(sectors):
+                    if not cd_live_stream_is_current(drive_id, token):
+                        return
+                    try:
+                        data = windows_raw_read_cdda(handle, current_lba + offset, 1)
+                        yield data if len(data) >= CDDA_SECTOR_SIZE else data + (b"\x00" * (CDDA_SECTOR_SIZE - len(data)))
+                    except OSError:
+                        yield b"\x00" * CDDA_SECTOR_SIZE
+            current_lba += sectors
+            remaining -= sectors
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def rip_wav_command(ripper: dict, drive_id: str, track_number: int, wav_path: Path, secure_mode: bool) -> list[str]:
@@ -682,7 +1018,7 @@ def _run_cd_rip_job(job_id: str, request: object) -> None:
                         job.errors.append(f"{target}: target exists")
                     continue
                 target.parent.mkdir(parents=True, exist_ok=True)
-                output = run_cd_command(rip_wav_command(ripper, drive_id, track_number, wav_path, secure_mode))
+                output = extract_cd_track_to_wav(drive_id, track_number, wav_path, secure_mode)
                 if output:
                     with _lock:
                         _jobs[job_id].log.append(output)
@@ -769,6 +1105,117 @@ def cancel_cd_rip_job(job_id: str) -> dict | None:
         return job.snapshot()
 
 
+def cd_preview_dir() -> Path:
+    return APP_STORAGE_ROOT / "cache" / "cd-preview"
+
+
+def cleanup_cd_preview_files(max_age_seconds: int = 24 * 60 * 60, keep_latest: int = 24) -> None:
+    directory = cd_preview_dir()
+    if not directory.exists():
+        return
+    now = datetime.now(timezone.utc).timestamp()
+    files = [path for path in directory.glob("*.wav") if path.is_file()]
+    files.sort(key=lambda path: path.stat().st_mtime if path.exists() else 0, reverse=True)
+    for index, path in enumerate(files):
+        try:
+            age = now - path.stat().st_mtime
+            if index >= keep_latest or age > max_age_seconds:
+                path.unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
+def cd_preview_audio_path(preview_id: str) -> Path | None:
+    if not re.fullmatch(r"[0-9a-f]{32}", preview_id):
+        return None
+    path = cd_preview_dir() / f"{preview_id}.wav"
+    if not path.exists() or not path.is_file():
+        return None
+    return path
+
+
+def wav_duration_seconds(path: Path) -> float | None:
+    try:
+        with wave.open(str(path), "rb") as wav_file:
+            frame_rate = wav_file.getframerate()
+            if frame_rate <= 0:
+                return None
+            return wav_file.getnframes() / frame_rate
+    except (OSError, wave.Error):
+        return None
+
+
+def preview_track_id(preview_id: str) -> int:
+    return -(int(preview_id[:12], 16) % 2_000_000_000 + 1)
+
+
+def prepare_cd_live_track(request: object) -> dict:
+    drive_id = str(getattr(request, "drive_id", None) or "").strip()
+    if not drive_id:
+        raise RuntimeError("Choose a CD drive first.")
+    track_number = int(getattr(request, "track_number", 1))
+    if track_number < 1:
+        raise RuntimeError("Track number must be 1 or higher.")
+
+    track = metadata_for_track(request, track_number)
+    duration_seconds = track.get("duration_seconds") or cd_live_track_duration_seconds(drive_id, track_number)
+    added_at = iso(utc_now())
+    title = track.get("title") or f"Track {track_number:02d}"
+    artist = track.get("artist") or track.get("album_artist")
+    album = track.get("album") or getattr(request, "album_title", None)
+    album_artist = track.get("album_artist") or getattr(request, "album_artist", None) or artist
+    live_id = uuid4().hex
+    with ACTIVE_CD_STREAM_LOCK:
+        ACTIVE_CD_STREAM_TOKENS[drive_id] = live_id
+    query = urlencode({"drive_id": drive_id, "track_number": track_number, "token": live_id})
+
+    return {
+        "status": "prepared",
+        "track_number": track_number,
+        "message": f"Playing CD track {track_number:02d}.",
+        "track": {
+            "id": preview_track_id(live_id),
+            "path": f"cdda://{drive_id}/track/{track_number:02d}",
+            "title": title,
+            "artist": artist,
+            "album": album,
+            "album_artist": album_artist,
+            "track_number": track_number,
+            "disc_number": track.get("disc_number") or 1,
+            "genre": track.get("genre") or getattr(request, "genre", None) or "CD Preview",
+            "analysis_provider": None,
+            "analysis_model": None,
+            "analysis_genre": None,
+            "analysis_genre_confidence": None,
+            "analysis_genre_tags": None,
+            "analysis_embedding": None,
+            "analysis_updated_at": None,
+            "year": track.get("year") or getattr(request, "year", None),
+            "duration_seconds": duration_seconds,
+            "bitrate": 1_411_200,
+            "replaygain_track_gain_db": None,
+            "replaygain_album_gain_db": None,
+            "replaygain_track_peak": None,
+            "replaygain_album_peak": None,
+            "audio_fingerprint": None,
+            "acoustic_fingerprint": None,
+            "acoustic_fingerprint_updated_at": None,
+            "rating": None,
+            "play_count": 0,
+            "skip_count": 0,
+            "last_played_at": None,
+            "last_skipped_at": None,
+            "date_added": added_at,
+            "file_modified_at": None,
+            "audio_url": f"/library/tools/cd-rip/playback/live/audio?{query}",
+            "is_preview": True,
+        },
+    }
+
+
+prepare_cd_preview_track = prepare_cd_live_track
+
+
 def mci_command(command: str) -> None:
     if os.name != "nt":
         raise RuntimeError("CD playback is currently implemented for Windows only.")
@@ -782,17 +1229,68 @@ def mci_command(command: str) -> None:
         raise RuntimeError(error_text.value or f"MCI command failed: {result}")
 
 
-def play_cd_track(track_number: int) -> dict:
+def mci_command_ignoring_closed(command: str) -> None:
+    try:
+        mci_command(command)
+    except RuntimeError as exc:
+        message = str(exc).lower()
+        if "not open" not in message and "not recognized" not in message:
+            raise
+
+
+def mci_quoted(value: str) -> str:
+    escaped = value.replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def normalize_cd_drive_id(drive_id: str | None) -> str | None:
+    if drive_id is None:
+        return None
+    text = drive_id.strip()
+    if not text:
+        return None
+    match = re.match(r"^([A-Za-z]):", text)
+    if match:
+        return f"{match.group(1).upper()}:"
+    return text
+
+
+def open_mci_cd_device(drive_id: str | None) -> None:
+    normalized = normalize_cd_drive_id(drive_id)
+    commands: list[str] = []
+    if normalized:
+        quoted_drive = mci_quoted(normalized)
+        commands.extend(
+            [
+                f"open {quoted_drive} type cdaudio alias flac_cafe_cd",
+                f"open cdaudio!{normalized} alias flac_cafe_cd",
+            ]
+        )
+    commands.append("open cdaudio alias flac_cafe_cd")
+
+    errors: list[str] = []
+    for command in commands:
+        try:
+            mci_command(command)
+            return
+        except RuntimeError as exc:
+            errors.append(str(exc))
+            mci_command_ignoring_closed("close flac_cafe_cd")
+    detail = "; ".join(dict.fromkeys(error for error in errors if error))
+    raise RuntimeError(detail or "Windows could not open the CD audio device.")
+
+
+def play_cd_track(track_number: int, drive_id: str | None = None) -> dict:
     if track_number < 1:
         raise RuntimeError("Track number must be 1 or higher.")
-    mci_command("close flac_cafe_cd")
-    mci_command("open cdaudio alias flac_cafe_cd")
+    mci_command_ignoring_closed("close flac_cafe_cd")
+    open_mci_cd_device(drive_id)
     mci_command("set flac_cafe_cd time format tmsf")
-    mci_command(f"play flac_cafe_cd from {track_number}:0:0")
+    mci_command(f"play flac_cafe_cd from {track_number}:0:0:0")
     return {"status": "playing", "track_number": track_number, "message": f"Playing CD track {track_number}."}
 
 
 def stop_cd_playback() -> dict:
-    mci_command("stop flac_cafe_cd")
-    mci_command("close flac_cafe_cd")
+    mci_command_ignoring_closed("stop flac_cafe_cd")
+    mci_command_ignoring_closed("close flac_cafe_cd")
     return {"status": "stopped", "track_number": None, "message": "CD playback stopped."}

@@ -20,3 +20,9 @@
 ## Code Health
 - Continue extracting orchestration from `frontend/src/app/App.tsx` into focused hooks once the next round of UI behavior settles.
 - Split `backend/app/main.py` into route modules by domain once the API shape is stable enough to avoid churn.
+
+### Notes
+- Some audible clipping when skipping tracks, polish needed
+- last fm login flow does not work
+- File management window needs work
+- 

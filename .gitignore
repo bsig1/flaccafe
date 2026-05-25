@@ -47,6 +47,8 @@ backend/data/*
 !backend/data/.gitkeep
 backend/exports/*
 !backend/exports/.gitkeep
+backend/cache/*
+!backend/cache/.gitkeep
 
 # Local ML/runtime caches
 backend/ml-runtime/
@@ -55,6 +57,9 @@ backend/models/*
 !backend/models/clap/
 backend/models/clap/*
 !backend/models/clap/.gitkeep
+
+# Optional large native tools managed at runtime
+backend/tools/ffmpeg/
 
 # Packaging and installer output
 build-backend/

@@ -23,13 +23,14 @@ import {
   EQUALIZER_PREAMP_MAX_DB,
   EQUALIZER_PREAMP_MIN_DB,
   EqualizerBandMode,
+  REPLAYGAIN_TARGET_MAX_PERCENT,
+  REPLAYGAIN_TARGET_MIN_PERCENT,
   UiPreferences,
   equalizerFrequenciesForMode,
   equalizerPresets,
   formatEqFrequency,
   normalizeEqualizerGains,
-  writeMiniPlayerAlwaysOnTop,
-  writeMiniPlayerSize,
+  replayGainTargetDescription,
 } from "../../shared";
 
 export interface CodecSupportRow {
@@ -54,6 +55,16 @@ export const NATIVE_BUFFER_OPTIONS = [
   { value: 1024, label: "Balanced 1024" },
   { value: 2048, label: "Stable 2048" },
   { value: 4096, label: "Very stable 4096" },
+];
+
+const NATIVE_CODEC_SUPPORT = [
+  { label: "MP3", support: "supported", detail: "Symphonia MP3 decoder" },
+  { label: "FLAC", support: "supported", detail: "Symphonia FLAC decoder" },
+  { label: "WAV", support: "supported", detail: "PCM / WAV container" },
+  { label: "AIFF", support: "supported", detail: "AIFF container" },
+  { label: "Ogg Vorbis", support: "supported", detail: "Vorbis in Ogg" },
+  { label: "Opus", support: "supported", detail: "Opus in Ogg" },
+  { label: "M4A / AAC", support: "supported", detail: "AAC / MP4 via Symphonia" },
 ];
 
 export function detectCodecSupport(): CodecSupportRow[] {
@@ -338,161 +349,14 @@ export function PlayerSettingsSection({
       </div>
     </DisclosureSection>
 
-    <DisclosureSection title="Mini Player" description="Bottom bar and detached mini-player behavior">
-      <div className="grid gap-3 text-sm text-neutral-200">
-        <label className="flex items-center justify-between gap-4">
-          <span className="text-muted">Compact bottom player</span>
-          <input
-            type="checkbox"
-            className="h-4 w-4 accent-moss"
-            checked={uiPreferences.miniPlayer}
-            onChange={(event) =>
-              setUiPreferences((current) => ({
-                ...current,
-                miniPlayer: event.target.checked,
-              }))
-            }
-          />
-        </label>
-        <label className="flex items-center justify-between gap-4">
-          <span className="text-muted">Detached mini-player always on top</span>
-          <input
-            type="checkbox"
-            className="h-4 w-4 accent-moss"
-            checked={uiPreferences.miniPlayerAlwaysOnTop}
-            onChange={(event) => {
-              const value = event.target.checked;
-              writeMiniPlayerAlwaysOnTop(value);
-              setUiPreferences((current) => ({ ...current, miniPlayerAlwaysOnTop: value }));
-            }}
-          />
-        </label>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <NumberField
-            label="Mini Player Width"
-            min={360}
-            max={900}
-            value={uiPreferences.miniPlayerWidth}
-            onChange={(value) => {
-              writeMiniPlayerSize(value, uiPreferences.miniPlayerHeight);
-              setUiPreferences((current) => ({ ...current, miniPlayerWidth: value }));
-            }}
-          />
-          <NumberField
-            label="Mini Player Height"
-            min={96}
-            max={220}
-            value={uiPreferences.miniPlayerHeight}
-            onChange={(value) => {
-              writeMiniPlayerSize(uiPreferences.miniPlayerWidth, value);
-              setUiPreferences((current) => ({ ...current, miniPlayerHeight: value }));
-            }}
-          />
-        </div>
-      </div>
-    </DisclosureSection>
-
-    <DisclosureSection title="Now Playing & Lyrics" description="Presentation layout, lyric fetching, LRC cache, and queue panels">
+    <DisclosureSection title="Lyrics" description="Fetching, synced lyric cache, and follow behavior">
       <div className="grid gap-3 text-sm text-neutral-200">
         <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
           <div>
-            <div className="font-medium text-white">Now Playing screen</div>
-            <div className="text-xs text-muted">Choose the default layout, visualizer, lyrics, and queue presentation.</div>
+            <div className="font-medium text-white">Lyric behavior</div>
+            <div className="text-xs text-muted">Automatic lookup, synced line following, and sidecar LRC caching.</div>
           </div>
           <div className="grid gap-3 md:grid-cols-3">
-            <label className="grid gap-2">
-              <span className="text-xs uppercase text-muted">Layout</span>
-              <select
-                className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
-                value={uiPreferences.nowPlayingLayout}
-                onChange={(event) =>
-                  setUiPreferences((current) => ({
-                    ...current,
-                    nowPlayingLayout: event.target.value as UiPreferences["nowPlayingLayout"],
-                  }))
-                }
-              >
-                <option value="theater">Theater</option>
-                <option value="lyrics">Lyrics</option>
-                <option value="party">Party</option>
-              </select>
-            </label>
-            <label className="grid gap-2">
-              <span className="text-xs uppercase text-muted">Visualizer</span>
-              <select
-                className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
-                value={uiPreferences.nowPlayingVisualizerStyle}
-                onChange={(event) =>
-                  setUiPreferences((current) => ({
-                    ...current,
-                    nowPlayingVisualizerStyle: event.target.value as UiPreferences["nowPlayingVisualizerStyle"],
-                  }))
-                }
-              >
-                <option value="bars">Bars</option>
-                <option value="wave">Wave</option>
-                <option value="radial">Radial</option>
-                <option value="off">Off</option>
-              </select>
-            </label>
-            <label className="grid gap-2">
-              <span className="text-xs uppercase text-muted">Background</span>
-              <select
-                className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
-                value={uiPreferences.nowPlayingBackground}
-                onChange={(event) =>
-                  setUiPreferences((current) => ({
-                    ...current,
-                    nowPlayingBackground: event.target.value as UiPreferences["nowPlayingBackground"],
-                  }))
-                }
-              >
-                <option value="artwork">Album art glow</option>
-                <option value="soft">Cafe glow</option>
-                <option value="none">Plain</option>
-              </select>
-            </label>
-          </div>
-          <div className="grid gap-3 md:grid-cols-3">
-            <label className="grid gap-2">
-              <span className="text-xs uppercase text-muted">Lyric Size</span>
-              <select
-                className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
-                value={uiPreferences.nowPlayingLyricSize}
-                onChange={(event) =>
-                  setUiPreferences((current) => ({
-                    ...current,
-                    nowPlayingLyricSize: event.target.value as UiPreferences["nowPlayingLyricSize"],
-                  }))
-                }
-              >
-                <option value="small">Small</option>
-                <option value="medium">Medium</option>
-                <option value="large">Large</option>
-              </select>
-            </label>
-            <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-panel px-3 py-2">
-              <span className="text-muted">Show lyrics panel</span>
-              <input
-                type="checkbox"
-                className="h-4 w-4 accent-moss"
-                checked={uiPreferences.nowPlayingShowLyrics}
-                onChange={(event) =>
-                  setUiPreferences((current) => ({ ...current, nowPlayingShowLyrics: event.target.checked }))
-                }
-              />
-            </label>
-            <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-panel px-3 py-2">
-              <span className="text-muted">Show queue panel</span>
-              <input
-                type="checkbox"
-                className="h-4 w-4 accent-moss"
-                checked={uiPreferences.nowPlayingShowQueue}
-                onChange={(event) =>
-                  setUiPreferences((current) => ({ ...current, nowPlayingShowQueue: event.target.checked }))
-                }
-              />
-            </label>
             <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-panel px-3 py-2">
               <span className="text-muted">Auto-fetch missing lyrics</span>
               <input
@@ -516,17 +380,6 @@ export function PlayerSettingsSection({
               />
             </label>
             <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-panel px-3 py-2">
-              <span className="text-muted">Follow synced lyric</span>
-              <input
-                type="checkbox"
-                className="h-4 w-4 accent-moss"
-                checked={uiPreferences.nowPlayingAutoScrollLyrics}
-                onChange={(event) =>
-                  setUiPreferences((current) => ({ ...current, nowPlayingAutoScrollLyrics: event.target.checked }))
-                }
-              />
-            </label>
-            <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-panel px-3 py-2">
               <span className="text-muted">Cache fetched LRC files</span>
               <input
                 type="checkbox"
@@ -544,7 +397,7 @@ export function PlayerSettingsSection({
       <div className="grid gap-3 text-sm text-neutral-200">
         <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
           <label className="grid gap-2">
-            <span className="text-xs uppercase text-muted">ReplayGain / Loudness</span>
+            <span className="text-xs uppercase text-muted">Loudness Normalization</span>
             <select
               className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
               value={uiPreferences.replayGainMode}
@@ -556,22 +409,43 @@ export function PlayerSettingsSection({
               }
             >
               <option value="off">Off</option>
-              <option value="track">Track gain</option>
-              <option value="album">Album gain</option>
+              <option value="track">Normalize each track</option>
+              <option value="album">Normalize by album</option>
             </select>
           </label>
-          <label className="grid gap-2">
-            <span className="text-xs uppercase text-muted">ReplayGain Preamp {uiPreferences.replayGainPreampDb.toFixed(1)} dB</span>
+          <label className="grid gap-2 rounded border border-line/70 bg-panel px-3 py-2">
+            <span className="text-xs uppercase text-muted">
+              Target Volume {uiPreferences.replayGainTargetVolumePercent.toFixed(0)}% - {replayGainTargetDescription(uiPreferences.replayGainTargetVolumePercent)}
+            </span>
+            <input
+              type="range"
+              min={REPLAYGAIN_TARGET_MIN_PERCENT}
+              max={REPLAYGAIN_TARGET_MAX_PERCENT}
+              step={1}
+              value={uiPreferences.replayGainTargetVolumePercent}
+              disabled={uiPreferences.replayGainMode === "off"}
+              onChange={(event) =>
+                setUiPreferences((current) => ({ ...current, replayGainTargetVolumePercent: Number(event.target.value) }))
+              }
+              className="accent-moss disabled:opacity-50"
+            />
+            <span className="text-xs text-muted">
+              50% is neutral ReplayGain playback. Lower values leave more headroom; higher values make normalized tracks louder.
+            </span>
+          </label>
+          <label className="grid gap-2 rounded border border-line/70 bg-panel px-3 py-2">
+            <span className="text-xs uppercase text-muted">Fine Tune Preamp {uiPreferences.replayGainPreampDb.toFixed(1)} dB</span>
             <input
               type="range"
               min={-12}
               max={12}
               step={0.5}
               value={uiPreferences.replayGainPreampDb}
+              disabled={uiPreferences.replayGainMode === "off"}
               onChange={(event) =>
                 setUiPreferences((current) => ({ ...current, replayGainPreampDb: Number(event.target.value) }))
               }
-              className="accent-moss"
+              className="accent-moss disabled:opacity-50"
             />
           </label>
           <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-panel px-3 py-2">
@@ -586,7 +460,7 @@ export function PlayerSettingsSection({
             />
           </label>
           <div className="text-xs text-muted">
-            FLAC Cafe reads embedded ReplayGain gain and peak tags during scans and applies gain during playback. Tracks without tags play at normal volume.
+            Playback normalization is applied live from embedded ReplayGain tags. FLAC Cafe converts the selected target loudness into a gain offset, applies track or album gain, and leaves files without tags unchanged. Track mode evens out individual songs; album mode preserves loud and quiet moments inside an album.
           </div>
         </div>
       </div>
@@ -697,15 +571,15 @@ export function PlayerSettingsSection({
       </div>
     </DisclosureSection>
 
-    <DisclosureSection title="Playback Behavior & Codecs" description="Fade, skip threshold, and WebView codec support">
+    <DisclosureSection title="Playback Behavior & Codecs" description="Fade, skip threshold, and codec support for the selected engine">
       <div className="grid gap-3 text-sm text-neutral-200">
         <label className="grid gap-2">
           <span className="text-xs uppercase text-muted">Fade Length {uiPreferences.playerFadeMs}ms</span>
           <input
             type="range"
             min={0}
-            max={500}
-            step={25}
+            max={5000}
+            step={50}
             value={uiPreferences.playerFadeMs}
             onChange={(event) =>
               setUiPreferences((current) => ({ ...current, playerFadeMs: Number(event.target.value) }))
@@ -732,38 +606,58 @@ export function PlayerSettingsSection({
             Leaving a track before this much has played counts as a skip; after that it counts as a play.
           </span>
         </label>
-        <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
-          <div className="flex items-center justify-between gap-3">
+        {uiPreferences.playbackEngine === "webview" ? (
+          <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="font-medium text-white">WebView codec support</div>
+                <div className="text-xs text-muted">
+                  Reported by WebView2 for the currently selected WebView audio engine.
+                </div>
+              </div>
+              <button className="secondary-button h-8" type="button" onClick={onRefreshCodecSupport}>
+                <RefreshCw size={14} />
+                Recheck
+              </button>
+            </div>
+            <div className="grid gap-1 text-xs">
+              {codecSupport.map((codec) => (
+                <div key={codec.label} className="grid grid-cols-[110px_1fr] gap-3 rounded bg-panel px-2 py-1.5">
+                  <span className="text-neutral-200">{codec.label}</span>
+                  <span
+                    className={
+                      codec.support === "probably"
+                        ? "text-moss"
+                        : codec.support === "maybe"
+                          ? "text-ember"
+                          : "text-muted"
+                    }
+                  >
+                    {codec.support === "no" ? "not reported" : codec.support}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
             <div>
-              <div className="font-medium text-white">WebView codec support</div>
+              <div className="font-medium text-white">Native Rust codec support</div>
               <div className="text-xs text-muted">
-                Reported by WebView2. Unsupported files can still be opened in your default Windows audio app from the player bar.
+                Reported from the bundled rodio + Symphonia decoder set. Playback failures are recorded in native diagnostics.
               </div>
             </div>
-            <button className="secondary-button h-8" type="button" onClick={onRefreshCodecSupport}>
-              <RefreshCw size={14} />
-              Recheck
-            </button>
+            <div className="grid gap-1 text-xs">
+              {NATIVE_CODEC_SUPPORT.map((codec) => (
+                <div key={codec.label} className="grid grid-cols-[110px_88px_1fr] gap-3 rounded bg-panel px-2 py-1.5">
+                  <span className="text-neutral-200">{codec.label}</span>
+                  <span className="text-moss">{codec.support}</span>
+                  <span className="truncate text-muted">{codec.detail}</span>
+                </div>
+              ))}
+            </div>
           </div>
-          <div className="grid gap-1 text-xs">
-            {codecSupport.map((codec) => (
-              <div key={codec.label} className="grid grid-cols-[110px_1fr] gap-3 rounded bg-panel px-2 py-1.5">
-                <span className="text-neutral-200">{codec.label}</span>
-                <span
-                  className={
-                    codec.support === "probably"
-                      ? "text-moss"
-                      : codec.support === "maybe"
-                        ? "text-ember"
-                        : "text-muted"
-                  }
-                >
-                  {codec.support === "no" ? "not reported" : codec.support}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
+        )}
       </div>
     </DisclosureSection>
     </>

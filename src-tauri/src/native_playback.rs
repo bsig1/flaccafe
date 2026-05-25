@@ -341,7 +341,11 @@ impl NativeVisualizerState {
     }
 
     fn snapshot(&self) -> (Vec<f32>, u32, u64) {
-        (self.ordered_samples(), self.sample_rate, self.last_updated_ms)
+        (
+            self.ordered_samples(),
+            self.sample_rate,
+            self.last_updated_ms,
+        )
     }
 }
 
@@ -526,8 +530,7 @@ fn goertzel_magnitude(samples: &[f32], sample_rate: f32, frequency: f32) -> f32 
     let sample_count = samples.len().max(1) as f32;
     for (index, sample) in samples.iter().enumerate() {
         let window = if samples.len() > 1 {
-            0.5 - 0.5
-                * ((2.0 * std::f32::consts::PI * index as f32) / (sample_count - 1.0)).cos()
+            0.5 - 0.5 * ((2.0 * std::f32::consts::PI * index as f32) / (sample_count - 1.0)).cos()
         } else {
             1.0
         };
@@ -1140,7 +1143,10 @@ where
             return;
         }
         if let Ok(mut visualizer) = self.visualizer.lock() {
-            visualizer.push_samples(&self.visualizer_pending_samples, self.input.sample_rate().get());
+            visualizer.push_samples(
+                &self.visualizer_pending_samples,
+                self.input.sample_rate().get(),
+            );
         }
         self.visualizer_pending_samples.clear();
     }

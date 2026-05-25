@@ -4,9 +4,9 @@ FLAC Cafe keeps risky library maintenance behind preview-first tools. These tool
 
 ## File Management Navigation
 
-The File Management page groups tools into Watch, Tags, Files, Devices, Import, and Maintenance categories. Use the search box to narrow the page by tool name, description, or common task keywords such as `duplicates`, `MusicBee`, `artwork`, or `ffmpeg`.
+The File Management page groups tools into Tags, Files, Devices, Import, and Maintenance categories. Use the search box to narrow the page by tool name, description, or common task keywords such as `duplicates`, `MusicBee`, `artwork`, or `ffmpeg`.
 
-Most tools remain preview-first. Filtering the page only changes what is visible; it does not reset staged previews, selected track scopes, or pending watcher changes.
+Most tools remain preview-first. Filtering the page only changes what is visible; it does not reset staged previews or selected track scopes.
 
 ## Right-Click Tagging
 
@@ -45,13 +45,13 @@ Inbox notes let you leave a small per-track reminder while triaging new files, s
 
 ## Folder Watch
 
-The File Management page can watch the configured music folder in the background. It does not change the library automatically; it builds a pending-changes list for newly added files, modified files, missing files, and likely moves or renames.
+The Sources page can watch the configured music folder in the background. It does not change the library automatically; it builds a pending-changes list for newly added files, modified files, missing files, and likely moves or renames.
 
 Move detection uses FLAC Cafe's fast file fingerprint to match a new path with a missing tracked path. Applying that change updates the path while preserving ratings, play history, playlist membership, and analysis data.
 
 Use Check Now for an immediate pass, then apply selected changes after reviewing the table. Added and modified files are rescanned through the normal metadata parser. Removed files are removed from SQLite only after you apply them; the watcher never deletes audio files from disk.
 
-When the watcher detects a new pending-change set, it records a notification summary and the app can surface it as a toast or File Management banner. Dismissing the notification does not apply changes; it only marks the notice reviewed.
+When the watcher detects a new pending-change set, it records a notification summary and the app can surface it as a toast or Sources banner. Dismissing the notification does not apply changes; it only marks the notice reviewed.
 
 ## Audiobooks
 
@@ -75,7 +75,7 @@ The Web Radio page stores stream bookmarks in SQLite and plays them through the 
 
 The Scrobbling page keeps ListenBrainz and Last.fm integration behind a local outbox. Queueing history reads local `played` events, stores pending service-specific submissions, and lets you submit or retry when credentials are configured.
 
-ListenBrainz uses a user token and the `/1/submit-listens` API. Last.fm uses the classic API key, shared secret, and session key flow for `track.scrobble`; loved tracks are stored locally and can queue Last.fm `track.love` events. Historical CSV import accepts columns such as `artist`, `title`, `play_count`, `rating`, and `loved`, then previews or applies matching updates to the local library.
+ListenBrainz uses a user token and the `/1/submit-listens` API. Last.fm uses browser approval by default: click Connect, approve FLAC Cafe in the browser, and the app polls Last.fm until it can save the session. Under the hood, Last.fm still requires app credentials, so packaged/dev builds can provide `FLAC_CAFE_LASTFM_API_KEY` and `FLAC_CAFE_LASTFM_API_SECRET`; user-provided credentials live in Settings -> API Keys. Loved tracks are stored locally and can queue Last.fm `track.love` events. Historical CSV import accepts columns such as `artist`, `title`, `play_count`, `rating`, and `loved`, then previews or applies matching updates to the local library.
 
 ## Regex Tag Cleanup
 
@@ -96,6 +96,12 @@ Artwork matching uses the Cover Art Archive front image for the matched MusicBra
 The CLAP Genre Tags tool uses existing CLAP analysis results to preview predicted genre labels before copying them into the editable `genre` field. It is preview-first, supports a confidence threshold, and can be limited to tracks with empty genre tags.
 
 Applying the preview uses the same metadata writer as manual edits. If file tag writing is enabled in Settings, supported audio files are updated; otherwise the genre changes stay in SQLite.
+
+## Volume Tags
+
+The Volume Tags tool scans selected tracks with FFmpeg and previews ReplayGain-style track gain, album gain, and peak values before writing anything. The Library right-click Tagging menu can send the current selection straight to this tool.
+
+Manual mode lets you mark selected tracks with known gain/peak values directly, without running an FFmpeg analysis. Applying stores the values in SQLite for playback normalization. When "Write tags to audio files" is enabled, FLAC Cafe also writes compatible metadata tags for FLAC, MP3, M4A, Ogg, and Opus files. The audio samples are not altered.
 
 ## File Organization
 
@@ -121,7 +127,9 @@ Saved sync profiles store the target folder, device type, music and playlist sub
 
 The CD Ripper panel on the File Management page detects local CD drives, checks for external extraction tools, looks up album metadata through MusicBrainz, and starts background rip jobs to FLAC, MP3, or WAV.
 
-Secure extraction is tool-backed. Put `cdparanoia.exe`, `cdda2wav.exe`, or `icedax.exe` in the app CD tool folder, or make one available on `PATH`. FLAC and MP3 encoding use the same FFmpeg setup as Audio Conversion. FLAC Cafe checks for those tools but does not currently auto-install them. If an AccurateRip-capable tool is installed, FLAC Cafe reports that capability; current rip jobs always write local SHA-256 verification hashes so a rip has an audit trail even when official AccurateRip database matching is unavailable.
+Secure extraction is tool-backed. Windows builds bundle a small cdrtools folder with `cdda2wav.exe` for CD extraction and CD-Text; custom `cdparanoia.exe`, `cdda2wav.exe`, or `icedax.exe` paths on `PATH` are still detected. FLAC and MP3 encoding use the same optional FFmpeg setup as Audio Conversion. If an AccurateRip-capable tool is installed, FLAC Cafe reports that capability; current rip jobs always write local SHA-256 verification hashes so a rip has an audit trail even when official AccurateRip database matching is unavailable.
+
+The Optional Dependencies page shows bundled cdrtools status and can install FFmpeg for encoding. AccurateRip-capable helpers are still detected when present, but are not bundled by FLAC Cafe.
 
 CD playback uses Windows CD audio control for quick track checks. It is intentionally separate from the local-file player and does not add ripped tracks to the library until the output folder is scanned.
 
@@ -166,8 +174,6 @@ Imports match by normalized path first, then by artist/title. Ratings are normal
 The Albums view can open an artwork manager for the selected album. FLAC Cafe lists sidecar images found near album files, embedded artwork found in album tracks, and optional web results from MusicBrainz/Cover Art Archive. A sidecar image can be selected as the album cover, embedded artwork can be saved as a `cover.jpg`/`cover.png` sidecar, and web artwork can be saved beside the album after review.
 
 The artwork manager can embed reviewed JPEG/PNG artwork into supported audio tags for FLAC, MP3, M4A/MP4, Ogg Vorbis, and Opus. WebP covers are allowed as sidecar images, but embedded writes require JPEG or PNG because most audio tag formats do not support WebP artwork reliably.
-
-File Management includes an Artwork Collision Repair tool for folders that contain multiple albums and a single shared `cover`, `folder`, or `front` image. Preview shows the affected albums first. Repair writes album-specific sidecar filenames, selects them in SQLite, and leaves the original shared image in place.
 
 ## Cache Cleanup
 

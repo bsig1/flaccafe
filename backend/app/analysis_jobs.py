@@ -7,8 +7,10 @@ from datetime import datetime, timezone
 from threading import Lock, Thread
 from uuid import uuid4
 
+from .audiobooks import audiobook_where_clause
 from .clap_analysis import ClapAnalyzer, load_config, model_cached, save_track_analysis
 from .database import connect, rows_to_dicts
+from .podcasts import podcast_where_clause
 
 
 def utc_now() -> datetime:
@@ -84,7 +86,12 @@ def _candidate_tracks(
     only_missing: bool,
     track_ids: list[int] | None,
 ) -> list[dict]:
-    clauses = ["path IS NOT NULL", "trim(path) <> ''"]
+    clauses = [
+        "path IS NOT NULL",
+        "trim(path) <> ''",
+        f"NOT {audiobook_where_clause()}",
+        f"NOT {podcast_where_clause()}",
+    ]
     params: list[object] = []
     if track_ids is not None:
         unique_ids = list(dict.fromkeys(int(track_id) for track_id in track_ids))

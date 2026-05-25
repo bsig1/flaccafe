@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from .database import connect, rows_to_dicts
 
 LISTENBRAINZ_SUBMIT_URL = "https://api.listenbrainz.org/1/submit-listens"
 LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/"
+LASTFM_AUTH_URL = "https://www.last.fm/api/auth/"
 
 
 def account_row(service: str) -> dict[str, Any]:
@@ -26,7 +28,16 @@ def list_accounts() -> list[dict[str, Any]]:
 
 
 def save_account(service: str, request: object) -> dict[str, Any]:
-    data = request.model_dump(mode="json") if hasattr(request, "model_dump") else dict(request)
+    data = request.model_dump(mode="json", exclude_unset=True) if hasattr(request, "model_dump") else dict(request)
+    existing = account_row(service)
+
+    def merged_text(field: str) -> Any:
+        return data[field] if field in data else existing.get(field)
+
+    enabled = data.get("enabled")
+    if enabled is None:
+        enabled = bool(existing.get("enabled"))
+
     with connect() as conn:
         conn.execute(
             """
@@ -43,12 +54,12 @@ def save_account(service: str, request: object) -> dict[str, Any]:
             """,
             (
                 service,
-                1 if data.get("enabled") else 0,
-                data.get("username"),
-                data.get("token"),
-                data.get("api_key"),
-                data.get("api_secret"),
-                data.get("session_key"),
+                1 if enabled else 0,
+                merged_text("username"),
+                merged_text("token"),
+                merged_text("api_key"),
+                merged_text("api_secret"),
+                merged_text("session_key"),
             ),
         )
         conn.commit()
@@ -174,6 +185,44 @@ def lastfm_signature(params: dict[str, Any], secret: str) -> str:
     return hashlib.md5("".join(pieces).encode("utf-8")).hexdigest()
 
 
+def clean_secret(value: Any) -> str | None:
+    cleaned = str(value or "").strip()
+    return cleaned or None
+
+
+def configured_lastfm_credentials() -> tuple[str | None, str | None]:
+    return (
+        clean_secret(os.environ.get("FLAC_CAFE_LASTFM_API_KEY") or os.environ.get("LASTFM_API_KEY")),
+        clean_secret(os.environ.get("FLAC_CAFE_LASTFM_API_SECRET") or os.environ.get("LASTFM_API_SECRET")),
+    )
+
+
+def resolve_lastfm_credentials(api_key: str | None = None, api_secret: str | None = None) -> tuple[str, str]:
+    # Last.fm browser auth still needs application credentials. Packaged builds can
+    # provide them through FLAC_CAFE_LASTFM_* so users only see the browser flow;
+    # dev builds can fall back to saved or manually entered credentials.
+    explicit_key = clean_secret(api_key)
+    explicit_secret = clean_secret(api_secret)
+    if explicit_key and explicit_secret:
+        return explicit_key, explicit_secret
+
+    configured_key, configured_secret = configured_lastfm_credentials()
+    if configured_key and configured_secret:
+        return configured_key, configured_secret
+
+    saved = account_row("lastfm")
+    saved_key = clean_secret(saved.get("api_key"))
+    saved_secret = clean_secret(saved.get("api_secret"))
+    if saved_key and saved_secret:
+        return saved_key, saved_secret
+
+    raise RuntimeError(
+        "Last.fm app credentials are not configured for this build. "
+        "Set FLAC_CAFE_LASTFM_API_KEY and FLAC_CAFE_LASTFM_API_SECRET, "
+        "or add your Last.fm API key and shared secret in Settings -> API Keys."
+    )
+
+
 def post_form(url: str, params: dict[str, Any]) -> None:
     req = urlrequest.Request(
         url,
@@ -184,6 +233,70 @@ def post_form(url: str, params: dict[str, Any]) -> None:
     with urlrequest.urlopen(req, timeout=15) as response:
         if response.status >= 400:
             raise RuntimeError(f"HTTP {response.status}")
+
+
+def lastfm_api_post(params: dict[str, Any]) -> dict[str, Any]:
+    req = urlrequest.Request(
+        LASTFM_API_URL,
+        data=parse.urlencode(params).encode("utf-8"),
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    with urlrequest.urlopen(req, timeout=15) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if isinstance(payload, dict) and payload.get("error"):
+        raise RuntimeError(str(payload.get("message") or f"Last.fm error {payload.get('error')}"))
+    if not isinstance(payload, dict):
+        raise RuntimeError("Last.fm returned an unexpected response")
+    return payload
+
+
+def start_lastfm_login(api_key: str | None = None, api_secret: str | None = None) -> dict[str, Any]:
+    key, secret = resolve_lastfm_credentials(api_key, api_secret)
+    params: dict[str, Any] = {
+        "method": "auth.getToken",
+        "api_key": key,
+        "format": "json",
+    }
+    params["api_sig"] = lastfm_signature(params, secret)
+    payload = lastfm_api_post(params)
+    token = str(payload.get("token") or "").strip()
+    if not token:
+        raise RuntimeError("Last.fm did not return an auth token")
+    return {
+        "token": token,
+        "auth_url": f"{LASTFM_AUTH_URL}?{parse.urlencode({'api_key': key, 'token': token})}",
+    }
+
+
+def complete_lastfm_login(api_key: str | None, api_secret: str | None, token: str, enabled: bool = True) -> dict[str, Any]:
+    key, secret = resolve_lastfm_credentials(api_key, api_secret)
+    cleaned_token = token.strip()
+    if not cleaned_token:
+        raise RuntimeError("Last.fm approved token is required")
+    params: dict[str, Any] = {
+        "method": "auth.getSession",
+        "api_key": key,
+        "token": cleaned_token,
+        "format": "json",
+    }
+    params["api_sig"] = lastfm_signature(params, secret)
+    payload = lastfm_api_post(params)
+    session = payload.get("session") if isinstance(payload.get("session"), dict) else {}
+    session_key = str(session.get("key") or "").strip()
+    username = str(session.get("name") or "").strip() or None
+    if not session_key:
+        raise RuntimeError("Last.fm did not return a session key")
+    return save_account(
+        "lastfm",
+        {
+            "enabled": enabled,
+            "username": username,
+            "api_key": key,
+            "api_secret": secret,
+            "session_key": session_key,
+        },
+    )
 
 
 def submit_listenbrainz(rows: list[dict[str, Any]], account: dict[str, Any]) -> None:

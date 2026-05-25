@@ -8,6 +8,8 @@ import {
   Download,
   Fingerprint,
   FolderOpen,
+  LayoutGrid,
+  List,
   MoreHorizontal,
   Pencil,
   Play,
@@ -30,6 +32,7 @@ import {
   X,
 } from "lucide-react";
 import type {
+  CSSProperties,
   DragEvent as ReactDragEvent,
   MouseEvent as ReactMouseEvent,
   UIEvent as ReactUIEvent,
@@ -50,9 +53,11 @@ import {
   embedAlbumArtworkFromPath,
   embedEmbeddedAlbumArtwork,
   fetchAlbumArtworkCandidates,
+  fetchTracks,
   saveEmbeddedAlbumArtwork,
   saveWebAlbumArtwork,
   searchAlbumArtworkWeb,
+  lookupAlbumCompletion,
 } from "../../lib/api";
 import {
   placeFloatingMenu,
@@ -60,6 +65,8 @@ import {
 import type {
   AlbumSummary,
   AlbumArtworkCandidate,
+  AdvancedTrackSearchFilters,
+  ArtistSummary,
   InboxAutoReviewField,
   InboxAutoReviewMatchType,
   InboxAutoReviewRule,
@@ -68,8 +75,6 @@ import type {
   LibraryStatsResponse,
   InboxResponse,
   PlaylistSummary,
-  SmartPlaylistRule,
-  SmartPlaylistSummary,
   Track,
   TrackMetadataUpdate,
 } from "../../types/api";
@@ -78,6 +83,9 @@ import {
   ResizableHeader,
 } from "../components/common";
 import { BulkMetadataModal } from "../components/modals";
+import type {
+  EditableMetadataKey,
+} from "../components/modals";
 import { QuickStartPanel } from "../components/QuickStartPanel";
 import { TrackDetailsPanel } from "../components/TrackDetailsPanel";
 import { LibraryViewTabs } from "./library/LibraryViewTabs";
@@ -90,7 +98,9 @@ import {
   MetadataColumnKey,
   SortKey,
   SortState,
+  TRACK_AVOID_SUBMENU_HEIGHT,
   TRACK_AVOID_SUBMENU_WIDTH,
+  TRACK_CONTEXT_SUBMENU_WIDTH,
   TRACK_CONTEXT_MENU_HEIGHT,
   TRACK_CONTEXT_MENU_WIDTH,
   TrackContextMenu,
@@ -113,21 +123,70 @@ import {
 } from "../shared";
 
 const COMPLETION_CHUNK_SIZE = 80;
+const ALBUM_BROWSE_CHUNK_SIZE = 96;
+const ARTIST_CHUNK_SIZE = 120;
+const TRACK_CONTEXT_ROW_HEIGHT = 36;
+const TRACK_CONTEXT_HEADER_HEIGHT = 34;
+const TRACK_CONTEXT_DIVIDER_HEIGHT = 9;
+const TRACK_TAGGING_SUBMENU_HEIGHT = 260;
+const TRACK_RATING_SUBMENU_HEIGHT = 218;
+const TRACK_RATING_SUBMENU_WIDTH = 192;
+const TRACK_PLAYLIST_SUBMENU_WIDTH = 240;
+const TRACK_SUBMENU_CLOSE_DELAY_MS = 700;
+type ContextSubmenuKey = "tagging" | "rating" | "avoid" | "playlist";
+
+function albumYearsLabel(album: AlbumSummary): string {
+  const years = Array.from(new Set(album.years ?? (album.year ? [album.year] : []))).sort((a, b) => a - b);
+  if (years.length === 0) {
+    return "";
+  }
+  return years.length <= 3 ? years.join(", ") : `${years[0]}-${years[years.length - 1]}`;
+}
+
+function albumEditionLabel(album: AlbumSummary): string {
+  const count = album.edition_count ?? album.album_ids?.length ?? 1;
+  return count > 1 ? `${count} editions` : "";
+}
+
+function albumMetaLabel(album: AlbumSummary): string {
+  return [display(album.album_artist), `${album.track_count} tracks`, formatDuration(album.duration_seconds), albumYearsLabel(album), albumEditionLabel(album)]
+    .filter(Boolean)
+    .join(" - ");
+}
+
+function artistYearsLabel(artist: ArtistSummary): string {
+  if (!artist.first_year && !artist.last_year) {
+    return "";
+  }
+  if (artist.first_year && artist.last_year && artist.first_year !== artist.last_year) {
+    return `${artist.first_year}-${artist.last_year}`;
+  }
+  return String(artist.first_year ?? artist.last_year);
+}
+
+function artistMetaLabel(artist: ArtistSummary): string {
+  return [
+    `${artist.track_count} track${artist.track_count === 1 ? "" : "s"}`,
+    `${artist.album_count} album${artist.album_count === 1 ? "" : "s"}`,
+    formatDuration(artist.duration_seconds),
+    artistYearsLabel(artist),
+  ]
+    .filter(Boolean)
+    .join(" - ");
+}
 
 export function LibraryPage({
   tracks,
   totalTracks,
   albums,
+  artists,
   playlists,
   selectedAlbumId,
   selectedAlbumTracks,
+  selectedArtistName,
+  selectedArtistTracks,
   selectedPlaylistId,
   selectedPlaylistTracks,
-  smartPresets,
-  smartPlaylists,
-  selectedSmartRule,
-  smartTracks,
-  smartPlaylistName,
   libraryStats,
   libraryHealth,
   inbox,
@@ -138,7 +197,10 @@ export function LibraryPage({
   setLibraryView,
   search,
   setSearch,
+  advancedTrackSearch,
+  setAdvancedTrackSearch,
   refreshTracks,
+  refreshAlbums,
   loadMoreTracks,
   isLoading,
   hasMoreTracks,
@@ -152,6 +214,9 @@ export function LibraryPage({
   onPlayNext,
   onAddToQueue,
   onSelectAlbum,
+  onSelectArtist,
+  onPlayAlbum,
+  onPlayArtist,
   onSelectPlaylist,
   onCreatePlaylist,
   onDeletePlaylist,
@@ -160,8 +225,11 @@ export function LibraryPage({
   onEditTrack,
   onBulkMetadata,
   onAutoTagTracks,
+  onSyncFileMetadata,
   onFingerprintTagTracks,
   onClapGenreTagTracks,
+  onVolumeTagTracks,
+  onOpenFileManagementTracks,
   onRequestDeleteTracks,
   onRemoveTrackFromPlaylist,
   onRemoveTracksFromPlaylist,
@@ -169,10 +237,6 @@ export function LibraryPage({
   onExportTracks,
   onExportPlaylist,
   onImportPlaylist,
-  onPreviewSmartRule,
-  onCreateSmartPlaylist,
-  onDeleteSmartPlaylist,
-  onSelectSmartPlaylist,
   onReviewInboxTracks,
   onUpdateInboxNote,
   onSaveInboxAutoReviewRule,
@@ -193,10 +257,10 @@ export function LibraryPage({
   writeRatingsToFiles,
   libraryVisibleColumns,
   setLibraryVisibleColumns,
+  onAlbumGridChange,
   setTargetPlaylistId,
   setNewPlaylistName,
   setImportPlaylistPath,
-  setSmartPlaylistName,
   showQuickStart,
   isScanning,
   suggestedMusicPath,
@@ -208,16 +272,14 @@ export function LibraryPage({
   tracks: Track[];
   totalTracks: number;
   albums: AlbumSummary[];
+  artists: ArtistSummary[];
   playlists: PlaylistSummary[];
   selectedAlbumId: number | null;
   selectedAlbumTracks: Track[];
+  selectedArtistName: string | null;
+  selectedArtistTracks: Track[];
   selectedPlaylistId: number | null;
   selectedPlaylistTracks: Track[];
-  smartPresets: Record<string, SmartPlaylistRule>;
-  smartPlaylists: SmartPlaylistSummary[];
-  selectedSmartRule: SmartPlaylistRule;
-  smartTracks: Track[];
-  smartPlaylistName: string;
   libraryStats: LibraryStatsResponse | null;
   libraryHealth: LibraryHealthResponse | null;
   inbox: InboxResponse | null;
@@ -228,7 +290,10 @@ export function LibraryPage({
   setLibraryView: (view: LibraryView) => void;
   search: string;
   setSearch: (value: string) => void;
+  advancedTrackSearch: AdvancedTrackSearchFilters;
+  setAdvancedTrackSearch: (updater: (current: AdvancedTrackSearchFilters) => AdvancedTrackSearchFilters) => void;
   refreshTracks: () => void | Promise<void>;
+  refreshAlbums: () => void | Promise<void>;
   loadMoreTracks: () => void | Promise<void>;
   isLoading: boolean;
   hasMoreTracks: boolean;
@@ -242,16 +307,22 @@ export function LibraryPage({
   onPlayNext: (track: Track) => void;
   onAddToQueue: (track: Track) => void;
   onSelectAlbum: (albumId: number) => void;
+  onSelectArtist: (artistName: string) => void;
+  onPlayAlbum: (albumId: number) => void | Promise<void>;
+  onPlayArtist: (artistName: string) => void | Promise<void>;
   onSelectPlaylist: (playlistId: number) => void;
   onCreatePlaylist: () => void;
   onDeletePlaylist: (playlistId: number) => void;
-  onAddTracksToPlaylist: (trackIds: number[]) => void;
+  onAddTracksToPlaylist: (trackIds: number[], playlistId?: number) => void | Promise<void>;
   onDeleteTrack: (trackId: number, deleteFile: boolean) => void;
-  onEditTrack: (track: Track) => void;
+  onEditTrack: (track: Track, field?: EditableMetadataKey | null) => void;
   onBulkMetadata: (trackIds: number[], metadata: TrackMetadataUpdate) => void | Promise<void>;
   onAutoTagTracks: (trackIds: number[], apply: boolean) => void | Promise<void>;
+  onSyncFileMetadata: (trackIds: number[]) => void | Promise<void>;
   onFingerprintTagTracks: (trackIds: number[]) => void | Promise<void>;
   onClapGenreTagTracks: (trackIds: number[]) => void | Promise<void>;
+  onVolumeTagTracks: (trackIds: number[]) => void | Promise<void>;
+  onOpenFileManagementTracks: (trackIds: number[]) => void | Promise<void>;
   onRequestDeleteTracks: (trackIds: number[], title: string, allowFileDelete?: boolean) => void;
   onRemoveTrackFromPlaylist: (trackId: number) => void;
   onRemoveTracksFromPlaylist: (trackIds: number[]) => void | Promise<void>;
@@ -259,10 +330,6 @@ export function LibraryPage({
   onExportTracks: (trackIds: number[]) => void | Promise<void>;
   onExportPlaylist: (playlistId: number) => void;
   onImportPlaylist: () => void;
-  onPreviewSmartRule: (rule: SmartPlaylistRule) => void;
-  onCreateSmartPlaylist: () => void;
-  onDeleteSmartPlaylist: (smartPlaylistId: number) => void;
-  onSelectSmartPlaylist: (smartPlaylistId: number) => void;
   onReviewInboxTracks: (trackIds: number[], allNew?: boolean) => void | Promise<void>;
   onUpdateInboxNote: (trackId: number, note: string) => void | Promise<void>;
   onSaveInboxAutoReviewRule: (rule: InboxAutoReviewRuleRequest, ruleId?: number) => void | Promise<void>;
@@ -283,10 +350,10 @@ export function LibraryPage({
   writeRatingsToFiles: boolean;
   libraryVisibleColumns: MetadataColumnKey[];
   setLibraryVisibleColumns: (columns: MetadataColumnKey[]) => void;
+  onAlbumGridChange: (enabled: boolean) => void;
   setTargetPlaylistId: (playlistId: number | null) => void;
   setNewPlaylistName: (value: string) => void;
   setImportPlaylistPath: (value: string) => void;
-  setSmartPlaylistName: (value: string) => void;
   showQuickStart: boolean;
   isScanning: boolean;
   suggestedMusicPath?: string | null;
@@ -298,7 +365,10 @@ export function LibraryPage({
   const [columnWidths, setColumnWidths] = useState(defaultLibraryColumnWidths);
   const [contextMenu, setContextMenu] = useState<TrackContextMenu | null>(null);
   const [columnMenu, setColumnMenu] = useState<ColumnContextMenu | null>(null);
+  const [activeContextSubmenu, setActiveContextSubmenu] = useState<ContextSubmenuKey | null>(null);
   const [selectedTrackIds, setSelectedTrackIds] = useState<Set<number>>(() => new Set());
+  const [selectedTrackCache, setSelectedTrackCache] = useState<Map<number, Track>>(() => new Map());
+  const [isSelectingAllTracks, setIsSelectingAllTracks] = useState(false);
   const [showAllDuplicateGroups, setShowAllDuplicateGroups] = useState(false);
   const [bulkMetadataOpen, setBulkMetadataOpen] = useState(false);
   const [draggedColumn, setDraggedColumn] = useState<MetadataColumnKey | null>(null);
@@ -317,22 +387,45 @@ export function LibraryPage({
   const [inboxRuleNote, setInboxRuleNote] = useState("");
   const [inboxRuleApplyExisting, setInboxRuleApplyExisting] = useState(false);
   const [albumMode, setAlbumMode] = useState<"browse" | "completion">("browse");
+  const [visibleAlbumBrowseCount, setVisibleAlbumBrowseCount] = useState(ALBUM_BROWSE_CHUNK_SIZE);
+  const [visibleArtistCount, setVisibleArtistCount] = useState(ARTIST_CHUNK_SIZE);
   const [completionFilter, setCompletionFilter] = useState<"all" | "incomplete" | "complete">("all");
   const [visibleCompletionCount, setVisibleCompletionCount] = useState(COMPLETION_CHUNK_SIZE);
   const [completionOpenAlbumId, setCompletionOpenAlbumId] = useState<number | null>(null);
   const [completionLoadingAlbumId, setCompletionLoadingAlbumId] = useState<number | null>(null);
+  const [completionLookupAlbumId, setCompletionLookupAlbumId] = useState<number | null>(null);
+  const [completionLookupMessages, setCompletionLookupMessages] = useState<Record<number, string>>({});
+  const [completionLookupAllActive, setCompletionLookupAllActive] = useState(false);
+  const [completionLookupAllProgress, setCompletionLookupAllProgress] = useState<{
+    completed: number;
+    total: number;
+    matched: number;
+    failed: number;
+    etaSeconds: number | null;
+  } | null>(null);
+  const [showAdvancedSearch, setShowAdvancedSearch] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
+  const contextSubmenuCloseTimer = useRef<number | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const selectionAnchorId = useRef<number | null>(null);
+  const completionLookupCancelRef = useRef(false);
 
   const visibleColumns = normalizeLibraryColumns(libraryVisibleColumns);
   const visibleColumnDefs = visibleColumns
     .map((key) => libraryColumnDefinitions.find((column) => column.key === key))
     .filter((column): column is LibraryColumnDefinition => Boolean(column));
+  const advancedSearchActiveCount = Object.entries(advancedTrackSearch).filter(([key, value]) => {
+    if (key === "rating_state") {
+      return value !== undefined && value !== "any";
+    }
+    return typeof value === "boolean" ? value : Boolean(String(value ?? "").trim());
+  }).length;
   const tableWidth = librarySelectionColumnWidth + columnWidths.play + visibleColumnDefs.reduce((total, column) => total + columnWidths[column.key], 0);
   const rowPadding = compactRows ? "px-3 py-2" : "px-3 py-3";
+  const advancedSearchInputClass = "h-9 rounded border border-line bg-panel px-3 text-sm text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2";
   const activeAlbum = albums.find((album) => album.id === selectedAlbumId) ?? null;
+  const activeArtist = artists.find((artist) => artist.name === selectedArtistName) ?? null;
   const activePlaylist = playlists.find((playlist) => playlist.id === selectedPlaylistId) ?? null;
   const completionQuery = search.trim().toLowerCase();
   const completionSearchTerms = completionQuery.split(/\s+/).filter(Boolean);
@@ -384,26 +477,82 @@ export function LibraryPage({
   );
   const renderedCompletionAlbums = visibleCompletionAlbums.slice(0, visibleCompletionCount);
   const hasMoreCompletionAlbums = visibleCompletionCount < visibleCompletionAlbums.length;
+  const renderedBrowseAlbums = albums.slice(0, visibleAlbumBrowseCount);
+  const renderedArtists = artists.slice(0, visibleArtistCount);
+  const hasMoreBrowseAlbums = visibleAlbumBrowseCount < albums.length;
+  const hasMoreArtists = visibleArtistCount < artists.length;
   const completeAlbumCount = albums.length - completionAlbums.length;
   const missingTrackEstimate = completionAlbums.reduce((total, album) => total + (album.missing_track_count ?? 0), 0);
+  const advancedSelectionKey = useMemo(() => JSON.stringify(advancedTrackSearch), [advancedTrackSearch]);
+  const completionLookupEta =
+    completionLookupAllActive && completionLookupAllProgress
+      ? completionLookupAllProgress.etaSeconds === null
+        ? "estimating ETA..."
+        : completionLookupAllProgress.etaSeconds < 1
+          ? "ETA under 1 sec"
+          : `ETA ${formatDuration(completionLookupAllProgress.etaSeconds)}`
+      : null;
+  const librarySummaryText =
+    libraryView === "albums" && albumMode === "completion"
+      ? `${visibleCompletionAlbums.length.toLocaleString()} matching album${visibleCompletionAlbums.length === 1 ? "" : "s"}`
+      : libraryView === "albums"
+        ? `${albums.length.toLocaleString()} album${albums.length === 1 ? "" : "s"}`
+        : libraryView === "artists"
+          ? `${artists.length.toLocaleString()} artist${artists.length === 1 ? "" : "s"}`
+          : libraryView === "playlists"
+            ? `${playlists.length.toLocaleString()} playlist${playlists.length === 1 ? "" : "s"}`
+            : libraryView === "inbox"
+              ? `${(inbox?.total_new ?? 0).toLocaleString()} new inbox track${inbox?.total_new === 1 ? "" : "s"}`
+              : libraryView === "health"
+                ? "Library health tools"
+                : `${tracks.length.toLocaleString()} of ${totalTracks.toLocaleString()} tracks loaded`;
   const viewTracks =
     libraryView === "albums"
       ? selectedAlbumTracks
-      : libraryView === "playlists"
-        ? selectedPlaylistTracks
-        : libraryView === "inbox"
-          ? inbox?.tracks ?? []
-        : libraryView === "smart"
-          ? smartTracks
-          : tracks;
-  const selectedTracks = viewTracks.filter((track) => selectedTrackIds.has(track.id));
-  const selectedIds = selectedTracks.map((track) => track.id);
-  const allViewSelected = viewTracks.length > 0 && viewTracks.every((track) => selectedTrackIds.has(track.id));
+      : libraryView === "artists"
+        ? selectedArtistTracks
+        : libraryView === "playlists"
+          ? selectedPlaylistTracks
+          : libraryView === "inbox"
+            ? inbox?.tracks ?? []
+            : tracks;
+  const viewTrackLookup = useMemo(() => new Map(viewTracks.map((track) => [track.id, track] as const)), [viewTracks]);
+  const selectedIds = useMemo(() => Array.from(selectedTrackIds), [selectedTrackIds]);
+  const selectedTracks = selectedIds
+    .map((trackId) => selectedTrackCache.get(trackId) ?? viewTrackLookup.get(trackId))
+    .filter((track): track is Track => Boolean(track));
+  const selectableTrackCount = libraryView === "tracks" ? totalTracks : viewTracks.length;
+  const allViewSelected =
+    selectableTrackCount > 0 &&
+    (libraryView === "tracks"
+      ? selectedTrackIds.size >= selectableTrackCount
+      : viewTracks.every((track) => selectedTrackIds.has(track.id)));
   const inboxNotesByTrackId = new Map((inbox?.notes ?? []).map((note) => [note.track_id, note]));
   const selectedInboxTrack = libraryView === "inbox" && selectedTracks.length === 1 ? selectedTracks[0] : null;
   const selectedInboxNote = selectedInboxTrack ? inboxNotesByTrackId.get(selectedInboxTrack.id) ?? null : null;
 
   useEffect(() => {
+    setSelectedTrackCache((current) => {
+      let changed = false;
+      const next = new Map(current);
+      for (const track of viewTracks) {
+        if (next.get(track.id) !== track) {
+          next.set(track.id, track);
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [viewTracks]);
+
+  useEffect(() => {
+    clearSelection();
+  }, [libraryView, search, advancedSelectionKey, selectedAlbumId, selectedArtistName, selectedPlaylistId]);
+
+  useEffect(() => {
+    if (libraryView === "tracks") {
+      return;
+    }
     const visibleIds = new Set(viewTracks.map((track) => track.id));
     setSelectedTrackIds((current) => {
       const next = new Set(Array.from(current).filter((trackId) => visibleIds.has(trackId)));
@@ -419,6 +568,34 @@ export function LibraryPage({
     setVisibleCompletionCount(COMPLETION_CHUNK_SIZE);
     setCompletionOpenAlbumId(null);
   }, [completionFilter, completionQuery, albums.length, albumMode]);
+
+  useEffect(() => {
+    setVisibleAlbumBrowseCount(ALBUM_BROWSE_CHUNK_SIZE);
+  }, [albums.length, search, albumGrid]);
+
+  useEffect(() => {
+    setVisibleArtistCount(ARTIST_CHUNK_SIZE);
+  }, [artists.length, search]);
+
+  useEffect(() => {
+    if (!selectedAlbumId) {
+      return;
+    }
+    const selectedIndex = albums.findIndex((album) => album.id === selectedAlbumId);
+    if (selectedIndex >= visibleAlbumBrowseCount) {
+      setVisibleAlbumBrowseCount(Math.min(albums.length, selectedIndex + ALBUM_BROWSE_CHUNK_SIZE));
+    }
+  }, [albums, selectedAlbumId, visibleAlbumBrowseCount]);
+
+  useEffect(() => {
+    if (!selectedArtistName) {
+      return;
+    }
+    const selectedIndex = artists.findIndex((artist) => artist.name === selectedArtistName);
+    if (selectedIndex >= visibleArtistCount) {
+      setVisibleArtistCount(Math.min(artists.length, selectedIndex + ARTIST_CHUNK_SIZE));
+    }
+  }, [artists, selectedArtistName, visibleArtistCount]);
 
   useEffect(() => {
     if (libraryView === "completion") {
@@ -514,6 +691,11 @@ export function LibraryPage({
       if (target?.closest("input, textarea, select, button, a, [contenteditable='true']")) {
         return;
       }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
+        event.preventDefault();
+        void selectAllCurrentScope();
+        return;
+      }
       if (event.key === "F2") {
         const editableTrack = selectedTracks[0] ?? detailTrack;
         if (!editableTrack) {
@@ -558,7 +740,7 @@ export function LibraryPage({
 
     window.addEventListener("keydown", handleLibraryShortcut);
     return () => window.removeEventListener("keydown", handleLibraryShortcut);
-  }, [selectedIds, selectedTracks, detailTrack, libraryView, onEditTrack, onRequestDeleteTracks]);
+  }, [selectedIds, selectedTracks, detailTrack, libraryView, search, sort, advancedTrackSearch, tracks.length, totalTracks, viewTracks, onEditTrack, onRequestDeleteTracks]);
 
   function handleSort(key: SortKey) {
     setSort((current) => {
@@ -620,6 +802,19 @@ export function LibraryPage({
 
   function setSelectionForList(list: Track[], selected: boolean) {
     selectionAnchorId.current = selected ? list[0]?.id ?? null : null;
+    if (selected) {
+      setSelectedTrackCache((current) => {
+        let changed = false;
+        const next = new Map(current);
+        for (const track of list) {
+          if (next.get(track.id) !== track) {
+            next.set(track.id, track);
+            changed = true;
+          }
+        }
+        return changed ? next : current;
+      });
+    }
     setSelectedTrackIds((current) => {
       const next = new Set(current);
       for (const track of list) {
@@ -631,6 +826,48 @@ export function LibraryPage({
       }
       return next;
     });
+  }
+
+  async function selectAllCurrentScope() {
+    if (libraryView !== "tracks" || tracks.length >= totalTracks) {
+      setSelectionForList(viewTracks, true);
+      return;
+    }
+
+    setIsSelectingAllTracks(true);
+    try {
+      const allTracks = await fetchTracks(search, {
+        sortBy: sort.key,
+        sortDirection: sort.direction,
+        advancedFilters: advancedTrackSearch,
+      });
+      setSelectedTrackCache((current) => {
+        const next = new Map(current);
+        for (const track of allTracks) {
+          next.set(track.id, track);
+        }
+        return next;
+      });
+      setSelectedTrackIds(new Set(allTracks.map((track) => track.id)));
+      selectionAnchorId.current = allTracks[0]?.id ?? null;
+    } catch {
+      setSelectionForList(viewTracks, true);
+    } finally {
+      setIsSelectingAllTracks(false);
+    }
+  }
+
+  function handleHeaderSelectionChange(checked: boolean) {
+    if (!checked) {
+      clearSelection();
+      return;
+    }
+    void selectAllCurrentScope();
+  }
+
+  function suppressCheckboxContextMenu(event: ReactMouseEvent) {
+    event.preventDefault();
+    event.stopPropagation();
   }
 
   function clearSelection() {
@@ -777,6 +1014,17 @@ export function LibraryPage({
     }
   }
 
+  function handleLazyPanelScroll(event: ReactUIEvent<HTMLElement>, hasMore: boolean, loadMore: () => void) {
+    if (!hasMore) {
+      return;
+    }
+    const element = event.currentTarget;
+    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+    if (distanceFromBottom < 520) {
+      loadMore();
+    }
+  }
+
   function openTrackContextMenu(event: ReactMouseEvent, track: Track, queue: Track[], removable = false) {
     event.preventDefault();
     setDetailTrack(track);
@@ -792,7 +1040,7 @@ export function LibraryPage({
       viewportHeight: window.innerHeight,
       menuWidth: TRACK_CONTEXT_MENU_WIDTH,
       menuHeight: TRACK_CONTEXT_MENU_HEIGHT,
-      submenuWidth: TRACK_AVOID_SUBMENU_WIDTH,
+      submenuWidth: TRACK_CONTEXT_SUBMENU_WIDTH,
       margin: MENU_VIEWPORT_MARGIN,
     });
     setContextMenu({
@@ -1026,14 +1274,14 @@ export function LibraryPage({
       <tr onContextMenu={openColumnContextMenu}>
         <th className="px-3 py-3">
           <input
-            aria-label="Select current view"
+            aria-label={libraryView === "tracks" ? "Select all matching tracks" : "Select current view"}
             type="checkbox"
             className="h-4 w-4 accent-moss"
             checked={allViewSelected}
-            disabled={viewTracks.length === 0}
-            onChange={(event) => setSelectionForList(viewTracks, event.target.checked)}
+            disabled={selectableTrackCount === 0 || isSelectingAllTracks}
+            onChange={(event) => handleHeaderSelectionChange(event.target.checked)}
             onClick={(event) => event.stopPropagation()}
-            onContextMenu={(event) => event.stopPropagation()}
+            onContextMenu={suppressCheckboxContextMenu}
           />
         </th>
         <ResizableHeader label="" column="play" width={columnWidths.play} sort={sort} onSort={handleSort} onResize={handleResize} />
@@ -1090,6 +1338,13 @@ export function LibraryPage({
           }
           selectTrackLikeWindows(event, track, list);
         }}
+        onDoubleClick={(event) => {
+          if (isInteractiveTrackCellTarget(event.target)) {
+            return;
+          }
+          event.preventDefault();
+          onPlayTrack(track, list);
+        }}
         onContextMenu={(event) => openTrackContextMenu(event, track, list, Boolean(options.removable))}
       >
         <td className={rowPadding}>
@@ -1128,7 +1383,7 @@ export function LibraryPage({
 
   function renderAlbumModeToggle() {
     return (
-      <div className="grid grid-cols-2 rounded border border-line bg-ink p-1 text-xs">
+      <div className="grid min-w-0 grid-cols-2 rounded border border-line bg-ink p-1 text-xs">
         {(
           [
             ["browse", "Browse"],
@@ -1137,15 +1392,46 @@ export function LibraryPage({
         ).map(([id, label]) => (
           <button
             key={id}
-            className={`h-8 rounded px-3 transition ${
+            className={`h-8 min-w-0 rounded px-2 transition ${
               albumMode === id ? "bg-white/10 text-white" : "text-muted hover:text-white"
             }`}
             type="button"
             onClick={() => setAlbumMode(id)}
           >
-            {label}
+            <span className="block truncate">{label}</span>
           </button>
         ))}
+      </div>
+    );
+  }
+
+  function renderAlbumLayoutToggle() {
+    return (
+      <div className="grid min-w-0 grid-cols-2 rounded border border-line bg-ink p-1 text-xs" aria-label="Album view layout">
+        <button
+          className={`flex h-8 min-w-0 items-center justify-center gap-1.5 rounded px-2 transition ${
+            albumGrid ? "bg-white/10 text-white" : "text-muted hover:text-white"
+          }`}
+          type="button"
+          title="Show albums as a cover grid"
+          aria-pressed={albumGrid}
+          onClick={() => onAlbumGridChange(true)}
+        >
+          <LayoutGrid size={14} />
+          <span className="sr-only">Grid</span>
+        </button>
+        <button
+          className={`flex h-8 min-w-0 items-center justify-center gap-1.5 rounded px-2 transition ${
+            !albumGrid ? "bg-white/10 text-white" : "text-muted hover:text-white"
+          }`}
+          type="button"
+          title="Show albums as a compact list"
+          aria-pressed={!albumGrid}
+          onClick={() => onAlbumGridChange(false)}
+        >
+          <List size={14} />
+          <span className="sr-only">List</span>
+        </button>
       </div>
     );
   }
@@ -1162,6 +1448,117 @@ export function LibraryPage({
     });
   }
 
+  async function handleCompletionLengthLookup(album: AlbumSummary) {
+    setCompletionLookupAlbumId(album.id);
+    setCompletionLookupMessages((current) => ({
+      ...current,
+      [album.id]: "Querying MusicBrainz...",
+    }));
+    try {
+      const result = await lookupAlbumCompletion(album.id);
+      setCompletionLookupMessages((current) => ({
+        ...current,
+        [album.id]: result.expected_track_count
+          ? `MusicBrainz reports ${result.expected_track_count.toLocaleString()} tracks${result.release_title ? ` for ${result.release_title}` : ""}.`
+          : result.error ?? "MusicBrainz did not find a confident album length.",
+      }));
+      await refreshAlbums();
+    } catch (error) {
+      setCompletionLookupMessages((current) => ({
+        ...current,
+        [album.id]: error instanceof Error ? error.message : "Could not query album length",
+      }));
+    } finally {
+      setCompletionLookupAlbumId((current) => (current === album.id ? null : current));
+    }
+  }
+
+  async function handleCompletionLookupAll() {
+    const targets = visibleCompletionAlbums;
+    if (targets.length === 0 || completionLookupAllActive) {
+      return;
+    }
+    if (
+      targets.length > 20 &&
+      !window.confirm(
+        `Lookup album lengths for ${targets.length.toLocaleString()} matching albums? MusicBrainz is rate-limited, so this can take a while.`,
+      )
+    ) {
+      return;
+    }
+
+    completionLookupCancelRef.current = false;
+    setCompletionLookupAllActive(true);
+    setCompletionLookupAllProgress({ completed: 0, total: targets.length, matched: 0, failed: 0, etaSeconds: null });
+
+    let matched = 0;
+    let failed = 0;
+    let completed = 0;
+    const startedAt = Date.now();
+    try {
+      for (const album of targets) {
+        if (completionLookupCancelRef.current) {
+          break;
+        }
+        setCompletionLookupAlbumId(album.id);
+        setCompletionLookupMessages((current) => ({
+          ...current,
+          [album.id]: `Lookup ${completed + 1}/${targets.length}: querying MusicBrainz...`,
+        }));
+        try {
+          const result = await lookupAlbumCompletion(album.id);
+          if (result.expected_track_count) {
+            matched += 1;
+          } else {
+            failed += 1;
+          }
+          setCompletionLookupMessages((current) => ({
+            ...current,
+            [album.id]: result.expected_track_count
+              ? `MusicBrainz reports ${result.expected_track_count.toLocaleString()} tracks${result.release_title ? ` for ${result.release_title}` : ""}.`
+              : result.error ?? "MusicBrainz did not find a confident album length.",
+          }));
+        } catch (error) {
+          failed += 1;
+          setCompletionLookupMessages((current) => ({
+            ...current,
+            [album.id]: error instanceof Error ? error.message : "Could not query album length",
+          }));
+        }
+        completed += 1;
+        const elapsedSeconds = Math.max(0.001, (Date.now() - startedAt) / 1000);
+        const averageSeconds = elapsedSeconds / completed;
+        const etaSeconds = Math.max(0, averageSeconds * (targets.length - completed));
+        setCompletionLookupAllProgress({ completed, total: targets.length, matched, failed, etaSeconds });
+        if (completed % 5 === 0) {
+          await refreshAlbums();
+        }
+      }
+      await refreshAlbums();
+    } finally {
+      setCompletionLookupAlbumId(null);
+      setCompletionLookupAllActive(false);
+    }
+  }
+
+  function cancelCompletionLookupAll() {
+    completionLookupCancelRef.current = true;
+  }
+
+  function updateAdvancedTrackSearch<K extends keyof AdvancedTrackSearchFilters>(
+    key: K,
+    value: AdvancedTrackSearchFilters[K],
+  ) {
+    setAdvancedTrackSearch((current) => ({
+      ...current,
+      [key]: value,
+    }));
+  }
+
+  function clearAdvancedTrackSearch() {
+    setAdvancedTrackSearch(() => ({}));
+  }
+
   function renderCompletionView() {
     return (
       <div className="min-h-full p-6">
@@ -1169,9 +1566,8 @@ export function LibraryPage({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="text-sm font-semibold text-white">Collection Completion</div>
-              <div className="text-xs text-muted">Estimated from disc and track numbers already in your local files.</div>
+              <div className="text-xs text-muted">Estimated locally, with optional MusicBrainz length lookups per album.</div>
             </div>
-            {renderAlbumModeToggle()}
           </div>
           <div className="grid gap-3 md:grid-cols-3">
             <div className="rounded border border-line bg-panel p-4">
@@ -1218,8 +1614,56 @@ export function LibraryPage({
                   {completionQuery ? ` for "${search.trim()}"` : ""}.
                 </div>
               </div>
-              <div className="text-xs text-muted">{albums.length.toLocaleString()} total albums</div>
+              <div className="flex flex-wrap items-center justify-end gap-2 text-xs text-muted">
+                <button
+                  className="secondary-button min-h-8 px-3 py-1.5 text-xs"
+                  type="button"
+                  disabled={completionLookupAllActive || visibleCompletionAlbums.length === 0}
+                  title="Lookup MusicBrainz track counts for every album matching the current completion filter"
+                  onClick={() => void handleCompletionLookupAll()}
+                >
+                  <RefreshCw className={completionLookupAllActive ? "animate-spin" : ""} size={14} />
+                  {completionLookupAllActive ? "Looking Up All" : "Lookup All"}
+                </button>
+                {completionLookupAllActive && (
+                  <button
+                    className="rounded border border-line px-3 py-1.5 text-xs text-muted transition hover:border-ember hover:text-ember"
+                    type="button"
+                    onClick={cancelCompletionLookupAll}
+                  >
+                    Stop
+                  </button>
+                )}
+                <span>{albums.length.toLocaleString()} total albums</span>
+              </div>
             </div>
+            {completionLookupAllProgress && (
+              <div className="border-b border-line/70 px-4 py-3">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
+                  <span>
+                    MusicBrainz lookup {completionLookupAllProgress.completed.toLocaleString()}/
+                    {completionLookupAllProgress.total.toLocaleString()}
+                  </span>
+                  <span>
+                    {completionLookupAllProgress.matched.toLocaleString()} matched,{" "}
+                    {completionLookupAllProgress.failed.toLocaleString()} not found
+                    {completionLookupEta ? ` - ${completionLookupEta}` : ""}
+                  </span>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-ink">
+                  <div
+                    className="h-full rounded-full bg-ember transition-all"
+                    style={{
+                      width: `${
+                        completionLookupAllProgress.total > 0
+                          ? Math.min(100, (completionLookupAllProgress.completed / completionLookupAllProgress.total) * 100)
+                          : 0
+                      }%`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
             <div className="grid divide-y divide-line/60">
               {renderedCompletionAlbums.map((album) => {
                 const expected = albumCompletionExpected(album);
@@ -1228,6 +1672,8 @@ export function LibraryPage({
                 const artwork = album.artwork_path || album.artwork_track_id ? albumCoverUrl(album.id) : null;
                 const expanded = completionOpenAlbumId === album.id;
                 const tracksReady = expanded && selectedAlbumId === album.id && completionLoadingAlbumId !== album.id;
+                const lookupMessage = completionLookupMessages[album.id];
+                const queriedTrackCount = album.completion_expected_track_count;
                 return (
                   <div key={album.id} className={expanded ? "bg-white/[0.025]" : ""}>
                     <button
@@ -1248,10 +1694,7 @@ export function LibraryPage({
                         <div className="flex min-w-0 items-center gap-2">
                           <span className="truncate text-sm font-medium text-white">{display(album.album, "Unknown album")}</span>
                         </div>
-                        <div className="truncate text-xs text-muted">
-                          {display(album.album_artist)}
-                          {album.year ? ` - ${album.year}` : ""}
-                        </div>
+                        <div className="truncate text-xs text-muted">{albumMetaLabel(album)}</div>
                         <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-ink">
                           <div className="h-full rounded-full bg-moss" style={{ width: `${progress}%` }} />
                         </div>
@@ -1267,6 +1710,28 @@ export function LibraryPage({
                     </button>
                     {expanded && (
                       <div className="border-t border-line/60 bg-ink/55 px-4 py-3">
+                        <div className="mb-3 ml-0 flex flex-wrap items-center justify-between gap-2 rounded border border-line/70 bg-panel px-3 py-2 text-xs sm:ml-14">
+                          <div className="min-w-0">
+                            <div className="font-medium text-neutral-100">
+                              Expected length: {expected.toLocaleString()} tracks
+                            </div>
+                            <div className="truncate text-muted">
+                              {queriedTrackCount
+                                ? `${album.completion_source ?? "Lookup"} ${queriedTrackCount.toLocaleString()} tracks${album.completion_release_title ? ` - ${album.completion_release_title}` : ""}${album.completion_checked_at ? ` (${formatShortDate(album.completion_checked_at)})` : ""}`
+                                : "Using local disc and track numbers."}
+                              {lookupMessage ? ` ${lookupMessage}` : ""}
+                            </div>
+                          </div>
+                          <button
+                            className="secondary-button min-h-8 px-3 py-1.5 text-xs"
+                            type="button"
+                            disabled={completionLookupAllActive || completionLookupAlbumId === album.id}
+                            onClick={() => void handleCompletionLengthLookup(album)}
+                          >
+                            <RefreshCw className={completionLookupAlbumId === album.id ? "animate-spin" : ""} size={14} />
+                            {completionLookupAlbumId === album.id ? "Looking up" : "Lookup Length"}
+                          </button>
+                        </div>
                         {tracksReady ? (
                           <div className="ml-0 grid gap-1 sm:ml-14">
                             {selectedAlbumTracks.map((track, index) => (
@@ -1334,6 +1799,64 @@ export function LibraryPage({
   const contextLabel = contextBulk
     ? `${contextSelectionIds.length.toLocaleString()} selected tracks`
     : display(contextMenu?.track.title, "Selected track");
+  const contextPlaylistSubmenuHeight = Math.min(Math.max(playlists.length, 1), 8) * TRACK_CONTEXT_ROW_HEIGHT + 10;
+
+  function contextSubmenuStyle(
+    rowIndex: number,
+    width: number,
+    estimatedHeight: number,
+    extraTopOffset = 0,
+  ): CSSProperties {
+    if (!contextMenu) {
+      return {};
+    }
+    const headerOffset = contextBulk ? TRACK_CONTEXT_HEADER_HEIGHT : 0;
+    const desiredTop = contextMenu.y + headerOffset + rowIndex * TRACK_CONTEXT_ROW_HEIGHT + extraTopOffset;
+    const maxTop = Math.max(MENU_VIEWPORT_MARGIN, window.innerHeight - estimatedHeight - MENU_VIEWPORT_MARGIN);
+    const desiredLeft = contextMenu.submenuLeft
+      ? contextMenu.x - width
+      : contextMenu.x + TRACK_CONTEXT_MENU_WIDTH;
+    const maxLeft = Math.max(MENU_VIEWPORT_MARGIN, window.innerWidth - width - MENU_VIEWPORT_MARGIN);
+    return {
+      left: Math.min(Math.max(MENU_VIEWPORT_MARGIN, desiredLeft), maxLeft),
+      top: Math.min(Math.max(MENU_VIEWPORT_MARGIN, desiredTop), maxTop),
+      maxHeight: `calc(100vh - ${MENU_VIEWPORT_MARGIN * 2}px)`,
+    };
+  }
+
+  function openContextSubmenu(submenu: ContextSubmenuKey) {
+    if (contextSubmenuCloseTimer.current !== null) {
+      window.clearTimeout(contextSubmenuCloseTimer.current);
+      contextSubmenuCloseTimer.current = null;
+    }
+    setActiveContextSubmenu(submenu);
+  }
+
+  function scheduleContextSubmenuClose() {
+    if (contextSubmenuCloseTimer.current !== null) {
+      window.clearTimeout(contextSubmenuCloseTimer.current);
+    }
+    contextSubmenuCloseTimer.current = window.setTimeout(() => {
+      setActiveContextSubmenu(null);
+      contextSubmenuCloseTimer.current = null;
+    }, TRACK_SUBMENU_CLOSE_DELAY_MS);
+  }
+
+  function contextSubmenuClass(submenu: ContextSubmenuKey, base: string) {
+    const visible = activeContextSubmenu === submenu;
+    return `${base} ${visible ? "visible opacity-100 pointer-events-auto" : "invisible opacity-0 pointer-events-none"}`;
+  }
+
+  useEffect(() => {
+    if (contextMenu) {
+      return;
+    }
+    setActiveContextSubmenu(null);
+    if (contextSubmenuCloseTimer.current !== null) {
+      window.clearTimeout(contextSubmenuCloseTimer.current);
+      contextSubmenuCloseTimer.current = null;
+    }
+  }, [contextMenu]);
 
   useLayoutEffect(() => {
     if (!contextMenu || !contextMenuRef.current) {
@@ -1386,9 +1909,7 @@ export function LibraryPage({
       <header className="flex min-h-16 flex-wrap items-center justify-between gap-3 border-b border-line px-6 py-3">
         <div>
           <h1 className="text-lg font-semibold text-white">Library</h1>
-          <p className="text-xs text-muted">
-            {tracks.length.toLocaleString()} of {totalTracks.toLocaleString()} tracks loaded
-          </p>
+          <p className="text-xs text-muted">{librarySummaryText}</p>
         </div>
         <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
           <label className="relative block min-w-[12rem] flex-1 sm:flex-none">
@@ -1397,21 +1918,139 @@ export function LibraryPage({
               ref={searchInputRef}
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              className="h-9 w-full rounded border border-line bg-panel pl-9 pr-3 text-sm text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2 sm:w-[min(20rem,42vw)]"
+              className="h-9 w-full rounded border border-line bg-panel pl-9 pr-10 text-sm text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2 sm:w-[min(20rem,42vw)]"
               placeholder="Search tracks, artists, albums"
             />
+            {search && (
+              <button
+                className="absolute right-1.5 top-1 h-7 w-7 rounded text-muted transition hover:bg-elevated hover:text-white"
+                type="button"
+                title="Clear library search"
+                onClick={() => setSearch("")}
+              >
+                <X size={14} className="mx-auto" />
+              </button>
+            )}
           </label>
+          <button
+            className={`secondary-button h-9 ${showAdvancedSearch || advancedSearchActiveCount ? "border-moss/60 text-white" : ""}`}
+            title="Advanced track search"
+            type="button"
+            onClick={() => setShowAdvancedSearch((current) => !current)}
+          >
+            <SlidersHorizontal size={16} />
+            {advancedSearchActiveCount ? ` (${advancedSearchActiveCount})` : ""}
+          </button>
           <button className="icon-button" title="Refresh" type="button" onClick={refreshTracks}>
             <RefreshCw size={17} />
           </button>
         </div>
       </header>
-      <div className="flex min-h-14 flex-wrap items-center justify-between gap-3 border-b border-line bg-[rgb(var(--color-strip))] px-6 py-3">
-        <LibraryViewTabs libraryView={libraryView} setLibraryView={setLibraryView} />
+      {showAdvancedSearch && (
+        <div className="border-b border-line bg-[rgb(var(--color-strip))] px-6 py-3">
+          <div className="grid gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="text-sm font-semibold text-white">Advanced Track Search</div>
+              </div>
+              <button className="secondary-button h-8 text-xs" type="button" disabled={!advancedSearchActiveCount} onClick={clearAdvancedTrackSearch}>
+                <X size={14} />
+                Clear Filters
+              </button>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <label className="grid gap-1 text-xs uppercase text-muted">
+                Artist
+                <input className={advancedSearchInputClass} value={advancedTrackSearch.artist ?? ""} placeholder="Artist or album artist" onChange={(event) => updateAdvancedTrackSearch("artist", event.target.value)} />
+              </label>
+              <label className="grid gap-1 text-xs uppercase text-muted">
+                Album
+                <input className={advancedSearchInputClass} value={advancedTrackSearch.album ?? ""} placeholder="Album title" onChange={(event) => updateAdvancedTrackSearch("album", event.target.value)} />
+              </label>
+              <label className="grid gap-1 text-xs uppercase text-muted">
+                Genre
+                <input className={advancedSearchInputClass} value={advancedTrackSearch.genre ?? ""} placeholder="Tag or CLAP genre" onChange={(event) => updateAdvancedTrackSearch("genre", event.target.value)} />
+              </label>
+              <label className="grid gap-1 text-xs uppercase text-muted">
+                File Type
+                <input className={advancedSearchInputClass} value={advancedTrackSearch.extension ?? ""} placeholder="flac, mp3, opus" onChange={(event) => updateAdvancedTrackSearch("extension", event.target.value)} />
+              </label>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+              <label className="grid gap-1 text-xs uppercase text-muted">
+                Rating
+                <select className={advancedSearchInputClass} value={advancedTrackSearch.rating_state ?? "any"} onChange={(event) => updateAdvancedTrackSearch("rating_state", event.target.value as AdvancedTrackSearchFilters["rating_state"])}>
+                  <option value="any">Any</option>
+                  <option value="rated">Rated only</option>
+                  <option value="unrated">Unrated only</option>
+                </select>
+              </label>
+              <label className="grid gap-1 text-xs uppercase text-muted">
+                Min Stars
+                <input className={advancedSearchInputClass} inputMode="decimal" value={advancedTrackSearch.min_rating ?? ""} placeholder="0.5-5" onChange={(event) => updateAdvancedTrackSearch("min_rating", event.target.value)} />
+              </label>
+              <label className="grid gap-1 text-xs uppercase text-muted">
+                Max Stars
+                <input className={advancedSearchInputClass} inputMode="decimal" value={advancedTrackSearch.max_rating ?? ""} placeholder="0.5-5" onChange={(event) => updateAdvancedTrackSearch("max_rating", event.target.value)} />
+              </label>
+              <label className="grid gap-1 text-xs uppercase text-muted">
+                From Year
+                <input className={advancedSearchInputClass} inputMode="numeric" value={advancedTrackSearch.year_from ?? ""} placeholder="1995" onChange={(event) => updateAdvancedTrackSearch("year_from", event.target.value)} />
+              </label>
+              <label className="grid gap-1 text-xs uppercase text-muted">
+                To Year
+                <input className={advancedSearchInputClass} inputMode="numeric" value={advancedTrackSearch.year_to ?? ""} placeholder="2026" onChange={(event) => updateAdvancedTrackSearch("year_to", event.target.value)} />
+              </label>
+              <label className="flex items-center justify-between gap-3 rounded border border-line bg-panel px-3 py-2 text-xs uppercase text-muted">
+                Missing Metadata
+                <input type="checkbox" className="h-4 w-4 accent-moss" checked={Boolean(advancedTrackSearch.missing_metadata)} onChange={(event) => updateAdvancedTrackSearch("missing_metadata", event.target.checked)} />
+              </label>
+            </div>
+            <div className="grid gap-3 md:grid-cols-[1fr_repeat(2,minmax(8rem,12rem))]">
+              <label className="grid gap-1 text-xs uppercase text-muted">
+                File Path Contains
+                <input className={advancedSearchInputClass} value={advancedTrackSearch.path ?? ""} placeholder="folder, drive, edition, etc." onChange={(event) => updateAdvancedTrackSearch("path", event.target.value)} />
+              </label>
+              <label className="grid gap-1 text-xs uppercase text-muted">
+                Min Seconds
+                <input className={advancedSearchInputClass} inputMode="numeric" value={advancedTrackSearch.min_duration ?? ""} placeholder="120" onChange={(event) => updateAdvancedTrackSearch("min_duration", event.target.value)} />
+              </label>
+              <label className="grid gap-1 text-xs uppercase text-muted">
+                Max Seconds
+                <input className={advancedSearchInputClass} inputMode="numeric" value={advancedTrackSearch.max_duration ?? ""} placeholder="480" onChange={(event) => updateAdvancedTrackSearch("max_duration", event.target.value)} />
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
+      <div className="flex min-h-14 flex-col gap-2 border-b border-line bg-[rgb(var(--color-strip))] px-3 py-2 min-[1280px]:flex-row min-[1280px]:items-center min-[1280px]:justify-between min-[1280px]:px-6 min-[1280px]:py-3">
+        <div className="flex min-w-0 flex-col gap-2 min-[1280px]:flex-row min-[1280px]:items-center min-[1280px]:gap-3">
+          <LibraryViewTabs libraryView={libraryView} setLibraryView={setLibraryView} />
+          {libraryView === "albums" && (
+            <div className="grid w-full min-w-0 grid-cols-[5.5rem_minmax(0,1fr)] gap-2 min-[1280px]:w-[20rem] min-[1280px]:shrink-0">
+              {albumMode === "browse" && <div className="min-w-0">{renderAlbumLayoutToggle()}</div>}
+              <div className={`min-w-0 ${albumMode === "browse" ? "" : "col-span-2"}`}>{renderAlbumModeToggle()}</div>
+            </div>
+          )}
+        </div>
 
-        <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+        <div className="flex min-w-0 items-center gap-2 overflow-x-auto [scrollbar-width:none] min-[1280px]:justify-end [&::-webkit-scrollbar]:hidden">
+          {selectedIds.length > 0 && (
+            <button
+              className="secondary-button shrink-0"
+              type="button"
+              title="Open selected tracks in File Management"
+              onClick={() => void onOpenFileManagementTracks(selectedIds)}
+            >
+              <FolderOpen size={16} />
+              File Management
+              <span className="rounded border border-line bg-ink px-1.5 py-0.5 text-[11px] leading-none text-muted">
+                {selectedIds.length.toLocaleString()}
+              </span>
+            </button>
+          )}
           <button
-            className="icon-button"
+            className="icon-button shrink-0"
             type="button"
             title="Shuffle current view"
             disabled={viewTracks.length === 0}
@@ -1419,11 +2058,11 @@ export function LibraryPage({
           >
             <Shuffle size={16} />
           </button>
-          <button className="primary-button" type="button" onClick={() => onQuickAutoDj(currentTrack)}>
+          <button className="primary-button shrink-0" type="button" onClick={() => onQuickAutoDj(currentTrack)}>
             <Wand2 size={16} />
             AutoDJ
           </button>
-          <details className="relative" data-auto-close>
+          <details className="relative shrink-0" data-auto-close>
             <summary className="icon-button cursor-pointer list-none [&::-webkit-details-marker]:hidden" title="Library actions">
               <MoreHorizontal size={17} />
             </summary>
@@ -1461,13 +2100,23 @@ export function LibraryPage({
                   <RefreshCw size={15} />
                   Refresh view
                 </button>
+                {libraryView === "albums" && activeAlbum && (
+                  <button
+                    className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-neutral-200 hover:bg-white/10"
+                    type="button"
+                    onClick={() => void openAlbumArtworkManager(activeAlbum.id)}
+                  >
+                    <Album size={15} />
+                    Album artwork
+                  </button>
+                )}
               </div>
             </div>
           </details>
         </div>
       </div>
-      <div className="min-h-0 flex flex-1">
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto" onScroll={handleScroll} onClick={handleLibrarySurfaceClick}>
+      <div className="min-h-0 min-w-0 flex flex-1">
+      <div ref={scrollRef} className="min-h-0 min-w-0 flex-1 overflow-auto" onScroll={handleScroll} onClick={handleLibrarySurfaceClick}>
         {libraryView === "tracks" && (
           <>
             <table className="w-full table-fixed text-left text-sm" style={{ minWidth: tableWidth }}>
@@ -1503,10 +2152,27 @@ export function LibraryPage({
                   </div>
                   <div className="text-base font-semibold text-white">No tracks in the library yet</div>
                   <div className="mt-2 text-sm text-muted">
-                    Choose a music folder in Settings, then scan it to build your local catalog.
+                    Choose the folder that holds your downloaded music and FLAC Cafe will scan it into your local catalog.
                   </div>
-                  <button className="primary-button mx-auto mt-4" type="button" onClick={() => setLibraryView("health")}>
-                    <ShieldCheck size={15} />
+                  <div className="mt-4 flex flex-wrap justify-center gap-2">
+                    <button className="primary-button h-10" type="button" disabled={isScanning} onClick={onChooseMusicFolder}>
+                      <FolderOpen size={16} />
+                      {isScanning ? "Scanning" : "Choose Music Folder"}
+                    </button>
+                    {suggestedMusicPath && (
+                      <button
+                        className="secondary-button h-10"
+                        type="button"
+                        disabled={isScanning}
+                        title={suggestedMusicPath}
+                        onClick={() => onUseSuggestedFolder(suggestedMusicPath)}
+                      >
+                        <FolderOpen size={16} />
+                        Use Music Folder
+                      </button>
+                    )}
+                  </div>
+                  <button className="mt-3 text-xs text-muted hover:text-white" type="button" onClick={() => setLibraryView("health")}>
                     View library tools
                   </button>
                 </div>
@@ -1515,18 +2181,102 @@ export function LibraryPage({
           </>
         )}
 
+        {libraryView === "artists" && (
+          <div className="grid h-full min-h-0 min-w-0 grid-cols-[minmax(220px,290px)_minmax(0,1fr)] min-[1280px]:grid-cols-[minmax(240px,320px)_minmax(0,1fr)]">
+            <section
+              className="min-h-0 overflow-auto border-r border-line"
+              onScroll={(event) =>
+                handleLazyPanelScroll(event, hasMoreArtists, () =>
+                  setVisibleArtistCount((current) => Math.min(current + ARTIST_CHUNK_SIZE, artists.length)),
+                )
+              }
+            >
+              <div className="grid">
+                {renderedArtists.map((artist) => {
+                  const active = artist.name === selectedArtistName;
+                  const artwork = artist.artwork_track_id ? albumArtworkUrl(artist.artwork_track_id) : null;
+                  return (
+                    <button
+                      key={artist.name}
+                      className={`grid grid-cols-[44px_minmax(0,1fr)] items-center gap-3 border-b border-line/60 px-4 py-3 text-left transition ${
+                        active ? "bg-white/10" : "hover:bg-white/[0.035]"
+                      }`}
+                      type="button"
+                      onClick={() => onSelectArtist(artist.name)}
+                      onDoubleClick={() => void onPlayArtist(artist.name)}
+                    >
+                      <div className="h-11 w-11 overflow-hidden rounded border border-line bg-panel">
+                        {artwork ? (
+                          <img alt="" className="h-full w-full object-cover" src={artwork} />
+                        ) : (
+                          <div className="grid h-full w-full place-items-center text-moss">
+                            <UserRound size={20} />
+                          </div>
+                        )}
+                      </div>
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-medium text-white">{display(artist.name, "Unknown artist")}</span>
+                        <span className="block truncate text-xs text-muted">{artistMetaLabel(artist)}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+                {hasMoreArtists && (
+                  <div className="px-4 py-4 text-center">
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => setVisibleArtistCount((current) => Math.min(current + ARTIST_CHUNK_SIZE, artists.length))}
+                    >
+                      Load more artists
+                    </button>
+                  </div>
+                )}
+                {artists.length === 0 && (
+                  <div className="px-4 py-10 text-center text-sm text-muted">
+                    {search.trim() ? "No artists match the current search." : "No artists found in the current library."}
+                  </div>
+                )}
+              </div>
+            </section>
+            <section className="min-h-0 min-w-0 overflow-auto">
+              <table className="w-full table-fixed text-left text-sm" style={{ minWidth: tableWidth }}>
+                <colgroup>
+                  <col style={{ width: librarySelectionColumnWidth }} />
+                  <col style={{ width: columnWidths.play }} />
+                  {visibleColumnDefs.map((column) => (
+                    <col key={column.key} style={{ width: columnWidths[column.key] }} />
+                  ))}
+                </colgroup>
+                <thead className="border-b border-line bg-[rgb(var(--color-strip))] text-xs uppercase text-muted">
+                  {renderTableHeader(false)}
+                </thead>
+                <tbody>{renderTrackRows(selectedArtistTracks)}</tbody>
+              </table>
+              {activeArtist && selectedArtistTracks.length === 0 && (
+                <div className="px-4 py-10 text-center text-sm text-muted">
+                  No local tracks found for this artist.
+                </div>
+              )}
+            </section>
+          </div>
+        )}
+
         {libraryView === "albums" && (
           albumMode === "completion" ? (
             renderCompletionView()
           ) : (
-          <div className="grid h-full min-h-0 grid-cols-[360px_minmax(0,1fr)]">
-            <section className="min-h-0 overflow-auto border-r border-line">
-              <div className="sticky top-0 z-10 grid gap-3 border-b border-line bg-ink px-4 py-3">
-                <div className="text-xs uppercase text-muted">{albums.length.toLocaleString()} albums</div>
-                {renderAlbumModeToggle()}
-              </div>
+          <div className="grid h-full min-h-0 min-w-0 grid-cols-[minmax(240px,320px)_minmax(0,1fr)]">
+            <section
+              className="min-h-0 overflow-auto border-r border-line"
+              onScroll={(event) =>
+                handleLazyPanelScroll(event, hasMoreBrowseAlbums, () =>
+                  setVisibleAlbumBrowseCount((current) => Math.min(current + ALBUM_BROWSE_CHUNK_SIZE, albums.length)),
+                )
+              }
+            >
               <div className={albumGrid ? "grid grid-cols-2 gap-3 p-3" : "grid"}>
-                {albums.map((album) => {
+                {renderedBrowseAlbums.map((album) => {
                   const active = album.id === selectedAlbumId;
                   const artwork = album.artwork_path || album.artwork_track_id ? albumCoverUrl(album.id) : null;
                   return (
@@ -1537,12 +2287,13 @@ export function LibraryPage({
                           ? `min-w-0 rounded border border-line bg-panel p-2 text-left transition ${
                               active ? "border-moss bg-white/10" : "hover:border-moss/50"
                             }`
-                          : `grid gap-1 border-b border-line/60 px-4 py-3 text-left transition ${
+                          : `grid grid-cols-[44px_minmax(0,1fr)] items-center gap-3 border-b border-line/60 px-4 py-3 text-left transition ${
                               active ? "bg-white/10" : "hover:bg-white/[0.035]"
                             }`
                       }
                       type="button"
                       onClick={() => onSelectAlbum(album.id)}
+                      onDoubleClick={() => void onPlayAlbum(album.id)}
                     >
                       {albumGrid && (
                         <div className="mb-2 aspect-square overflow-hidden rounded border border-line bg-ink">
@@ -1555,13 +2306,35 @@ export function LibraryPage({
                           )}
                         </div>
                       )}
-                      <span className="block truncate text-sm font-medium text-white">{display(album.album, "Unknown album")}</span>
-                      <span className="block truncate text-xs text-muted">
-                        {display(album.album_artist)} - {album.track_count} tracks - {formatDuration(album.duration_seconds)}
+                      {!albumGrid && (
+                        <div className="h-11 w-11 overflow-hidden rounded border border-line bg-panel">
+                          {artwork ? (
+                            <img alt="" className="h-full w-full object-cover" src={artwork} />
+                          ) : (
+                            <div className="grid h-full w-full place-items-center text-moss">
+                              <Album size={20} />
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-medium text-white">{display(album.album, "Unknown album")}</span>
+                        <span className="block truncate text-xs text-muted">{albumMetaLabel(album)}</span>
                       </span>
                     </button>
                   );
                 })}
+                {hasMoreBrowseAlbums && (
+                  <div className={albumGrid ? "col-span-full px-3 py-4 text-center" : "px-4 py-4 text-center"}>
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => setVisibleAlbumBrowseCount((current) => Math.min(current + ALBUM_BROWSE_CHUNK_SIZE, albums.length))}
+                    >
+                      Load more albums
+                    </button>
+                  </div>
+                )}
                 {albums.length === 0 && (
                   <div className="col-span-full px-3 py-10 text-center text-sm text-muted">
                     Albums will appear here after the first library scan.
@@ -1570,28 +2343,6 @@ export function LibraryPage({
               </div>
             </section>
             <section className="min-h-0 min-w-0 overflow-auto">
-              <div className="sticky top-0 z-10 flex h-12 items-center justify-between border-b border-line bg-ink px-4">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-white">
-                    {activeAlbum ? display(activeAlbum.album, "Unknown album") : "Select an album"}
-                  </div>
-                  <div className="truncate text-xs text-muted">{activeAlbum ? display(activeAlbum.album_artist) : ""}</div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button className="secondary-button" type="button" disabled={selectedAlbumTracks.length === 0} onClick={() => onAddTracksToPlaylist(selectedAlbumTracks.map((track) => track.id))}>
-                    <Plus size={15} />
-                    Add Album
-                  </button>
-                  <button className="secondary-button" type="button" disabled={selectedAlbumTracks.length === 0} onClick={() => onShuffleTracks(selectedAlbumTracks)}>
-                    <Shuffle size={15} />
-                    Shuffle
-                  </button>
-                  <button className="secondary-button" type="button" disabled={!activeAlbum} onClick={() => activeAlbum && void openAlbumArtworkManager(activeAlbum.id)}>
-                    <Album size={15} />
-                    Artwork
-                  </button>
-                </div>
-              </div>
               {activeAlbum && isAlbumArtworkOpen && (
                 <div className="border-b border-line bg-panel px-4 py-3">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -1710,8 +2461,8 @@ export function LibraryPage({
         {libraryView === "completion" && renderCompletionView()}
 
         {libraryView === "playlists" && (
-          <div className="grid min-h-full grid-cols-[360px_minmax(0,1fr)]">
-            <section className="border-r border-line">
+          <div className="grid h-full min-h-0 min-w-0 grid-cols-[minmax(240px,320px)_minmax(0,1fr)]">
+            <section className="min-h-0 overflow-auto border-r border-line">
               <div className="sticky top-0 z-10 border-b border-line bg-ink p-3">
                 <div className="flex gap-2">
                   <input
@@ -1762,24 +2513,31 @@ export function LibraryPage({
                 )}
               </div>
             </section>
-            <section className="min-w-0">
-              <div className="sticky top-0 z-10 flex h-12 items-center justify-between border-b border-line bg-ink px-4">
+            <section className="min-h-0 min-w-0 overflow-auto">
+              <div className="sticky top-0 z-10 grid min-h-12 min-w-0 gap-2 border-b border-line bg-ink px-4 py-2 min-[1180px]:grid-cols-[minmax(0,1fr)_auto] min-[1180px]:items-center">
                 <div className="min-w-0">
                   <div className="truncate text-sm font-semibold text-white">
                     {activePlaylist ? activePlaylist.name : "Select a playlist"}
                   </div>
-                  <div className="truncate text-xs text-muted">{selectedPlaylistTracks.length} tracks</div>
+                  <div className="truncate text-xs text-muted">
+                    {`${selectedPlaylistTracks.length.toLocaleString()} track${selectedPlaylistTracks.length === 1 ? "" : "s"}`}
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <button className="secondary-button" type="button" disabled={selectedPlaylistTracks.length === 0} onClick={() => onShuffleTracks(selectedPlaylistTracks)}>
+                <div className="flex min-w-0 items-center gap-2 overflow-x-auto [scrollbar-width:none] min-[1180px]:justify-end [&::-webkit-scrollbar]:hidden">
+                  <button
+                    className="secondary-button h-8 shrink-0"
+                    type="button"
+                    disabled={selectedPlaylistTracks.length === 0}
+                    onClick={() => onShuffleTracks(selectedPlaylistTracks)}
+                  >
                     <Shuffle size={15} />
                     Shuffle
                   </button>
-                  <button className="secondary-button" type="button" disabled={!activePlaylist || selectedPlaylistTracks.length === 0} onClick={() => activePlaylist && onExportPlaylist(activePlaylist.id)}>
+                  <button className="secondary-button h-8 shrink-0" type="button" disabled={!activePlaylist || selectedPlaylistTracks.length === 0} onClick={() => activePlaylist && onExportPlaylist(activePlaylist.id)}>
                     <Download size={15} />
                     Export
                   </button>
-                  <button className="secondary-button" type="button" disabled={!activePlaylist} onClick={() => activePlaylist && onDeletePlaylist(activePlaylist.id)}>
+                  <button className="secondary-button h-8 shrink-0" type="button" disabled={!activePlaylist} onClick={() => activePlaylist && onDeletePlaylist(activePlaylist.id)}>
                     <Trash2 size={15} />
                     Delete
                   </button>
@@ -1803,8 +2561,8 @@ export function LibraryPage({
         )}
 
         {libraryView === "inbox" && (
-          <div className="grid min-h-full grid-cols-[320px_minmax(0,1fr)]">
-            <section className="border-r border-line p-4">
+          <div className="grid h-full min-h-0 min-w-0 grid-cols-[minmax(240px,300px)_minmax(0,1fr)]">
+            <section className="min-w-0 overflow-auto border-r border-line p-4">
               <div className="grid gap-3 text-sm">
                 <div className="rounded border border-line bg-panel p-3">
                   <div className="text-xs uppercase text-muted">New Tracks</div>
@@ -1841,15 +2599,18 @@ export function LibraryPage({
                   <Plus size={15} />
                   Add Visible
                 </button>
-                <div className="rounded border border-line bg-panel p-3">
+                <div className="min-w-0 overflow-hidden rounded border border-line bg-panel p-3">
                   <div className="flex items-center justify-between gap-2">
-                    <div>
+                    <div className="min-w-0 flex-1 overflow-hidden">
                       <div className="text-xs uppercase text-muted">Track Note</div>
-                      <div className="mt-0.5 truncate text-sm text-neutral-200">
+                      <div
+                        className="mt-0.5 max-w-full truncate text-sm text-neutral-200"
+                        title={selectedInboxTrack ? display(selectedInboxTrack.title, "track") : undefined}
+                      >
                         {selectedInboxTrack ? display(selectedInboxTrack.title, "track") : "Select one Inbox track"}
                       </div>
                     </div>
-                    <Pencil size={15} className="text-muted" />
+                    <Pencil size={15} className="shrink-0 text-muted" />
                   </div>
                   <textarea
                     className="mt-3 min-h-24 w-full resize-y rounded border border-line bg-ink px-3 py-2 text-sm text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2 disabled:opacity-60"
@@ -1976,20 +2737,20 @@ export function LibraryPage({
                 </div>
               </div>
             </section>
-            <section className="min-w-0">
-              <div className="sticky top-0 z-10 flex min-h-14 flex-wrap items-center justify-between gap-3 border-b border-line bg-ink px-4 py-3">
+            <section className="min-w-0 overflow-auto">
+              <div className="sticky top-0 z-10 flex min-h-14 items-center justify-between gap-3 border-b border-line bg-ink px-4 py-3">
                 <div className="min-w-[180px]">
                   <div className="text-sm font-semibold text-white">Inbox Review</div>
                   <div className="text-xs text-muted">
                     {(inbox?.tracks.length ?? 0).toLocaleString()} visible newly scanned tracks
                   </div>
                 </div>
-                <div className="flex flex-wrap items-center justify-end gap-2">
-                  <button className="secondary-button" type="button" disabled={viewTracks.length === 0} onClick={() => onShuffleTracks(viewTracks)}>
+                <div className="flex min-w-0 items-center justify-end gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                  <button className="secondary-button shrink-0" type="button" disabled={viewTracks.length === 0} onClick={() => onShuffleTracks(viewTracks)}>
                     <Shuffle size={15} />
                     Shuffle
                   </button>
-                  <button className="secondary-button" type="button" disabled={viewTracks.length === 0} onClick={() => onExportTracks(viewTracks.map((track) => track.id))}>
+                  <button className="secondary-button shrink-0" type="button" disabled={viewTracks.length === 0} onClick={() => onExportTracks(viewTracks.map((track) => track.id))}>
                     <Download size={15} />
                     Export
                   </button>
@@ -2017,89 +2778,8 @@ export function LibraryPage({
           </div>
         )}
 
-        {libraryView === "smart" && (
-          <div className="grid min-h-full grid-cols-[360px_minmax(0,1fr)]">
-            <section className="border-r border-line">
-              <div className="sticky top-0 z-10 border-b border-line bg-ink p-3">
-                <div className="grid grid-cols-2 gap-2">
-                  {Object.keys(smartPresets).map((preset) => (
-                    <button
-                      key={preset}
-                      className={`secondary-button justify-center ${selectedSmartRule.preset === preset ? "border-moss text-moss" : ""}`}
-                      type="button"
-                      onClick={() => onPreviewSmartRule({ preset, limit: 200 })}
-                    >
-                      {preset.replace("_", " ")}
-                    </button>
-                  ))}
-                </div>
-                <div className="mt-3 grid gap-2">
-                  <input
-                    className="h-9 rounded border border-line bg-panel px-3 text-sm text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
-                    value={smartPlaylistName}
-                    placeholder="Save smart playlist name"
-                    onChange={(event) => setSmartPlaylistName(event.target.value)}
-                  />
-                  <button className="primary-button justify-center" type="button" onClick={onCreateSmartPlaylist}>
-                    <Plus size={15} />
-                    Save Current Rule
-                  </button>
-                </div>
-              </div>
-              <div className="grid">
-                {smartPlaylists.map((playlist) => (
-                  <div key={playlist.id} className="flex items-center gap-2 border-b border-line/60 px-4 py-3">
-                    <button
-                      className="min-w-0 flex-1 text-left"
-                      type="button"
-                      onClick={() => onSelectSmartPlaylist(playlist.id)}
-                    >
-                      <div className="truncate text-sm font-medium text-white">{playlist.name}</div>
-                      <div className="truncate text-xs text-muted">{playlist.rule.preset ?? "custom rule"}</div>
-                    </button>
-                    <button className="icon-button h-8 w-8" type="button" title="Delete smart playlist" onClick={() => onDeleteSmartPlaylist(playlist.id)}>
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </section>
-            <section className="min-w-0">
-              <div className="sticky top-0 z-10 flex min-h-14 flex-wrap items-center justify-between gap-3 border-b border-line bg-ink px-4 py-3">
-                <div className="min-w-[180px]">
-                  <div className="text-sm font-semibold text-white">Smart Preview</div>
-                  <div className="text-xs text-muted">{smartTracks.length} matching tracks</div>
-                </div>
-                <div className="flex flex-wrap items-center justify-end gap-2">
-                  <button className="secondary-button" type="button" disabled={smartTracks.length === 0} onClick={() => onAddTracksToPlaylist(smartTracks.map((track) => track.id))}>
-                    <Plus size={15} />
-                    Add All
-                  </button>
-                  <button className="secondary-button" type="button" disabled={smartTracks.length === 0} onClick={() => onShuffleTracks(smartTracks)}>
-                    <Shuffle size={15} />
-                    Shuffle
-                  </button>
-                </div>
-              </div>
-              <table className="w-full table-fixed text-left text-sm" style={{ minWidth: tableWidth }}>
-                <colgroup>
-                  <col style={{ width: librarySelectionColumnWidth }} />
-                  <col style={{ width: columnWidths.play }} />
-                  {visibleColumnDefs.map((column) => (
-                    <col key={column.key} style={{ width: columnWidths[column.key] }} />
-                  ))}
-                </colgroup>
-                <thead className="border-b border-line bg-[rgb(var(--color-strip))] text-xs uppercase text-muted">
-                  {renderTableHeader(false)}
-                </thead>
-                <tbody>{renderTrackRows(smartTracks)}</tbody>
-              </table>
-            </section>
-          </div>
-        )}
-
         {libraryView === "health" && (
-          <div className="grid min-h-full grid-cols-[320px_minmax(0,1fr)]">
+          <div className="grid h-full min-h-0 min-w-0 grid-cols-[minmax(240px,300px)_minmax(0,1fr)]">
             <section className="border-r border-line p-4">
               <div className="grid gap-3 text-sm">
                 <div className="rounded border border-line bg-panel p-3">
@@ -2295,6 +2975,7 @@ export function LibraryPage({
       <TrackDetailsPanel
         track={detailTrack}
         queue={viewTracks}
+        playlists={playlists}
         isAudioAnalyzing={isAudioAnalyzing}
         onClose={() => setDetailTrack(null)}
         onPlayTrack={onPlayTrack}
@@ -2370,9 +3051,13 @@ export function LibraryPage({
       {contextMenu && (
         <div
           ref={contextMenuRef}
-          className="fixed z-50 w-64 overflow-visible rounded border border-line bg-[rgb(var(--color-popover))] py-1 text-sm text-neutral-100 shadow-2xl"
+          className="fixed z-50 max-h-[calc(100vh-24px)] w-64 overflow-y-auto rounded border border-line bg-[rgb(var(--color-popover))] py-1 text-sm text-neutral-100 shadow-2xl"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onClick={(event) => event.stopPropagation()}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
         >
           {contextBulk && (
             <div className="border-b border-line px-3 py-2 text-xs text-muted">
@@ -2430,7 +3115,7 @@ export function LibraryPage({
             </span>
             <span className="rounded border border-line px-1.5 py-0.5 text-[10px] uppercase text-muted">F2</span>
           </button>
-          <div className="group/tagging relative">
+          <div className="relative" onMouseEnter={() => openContextSubmenu("tagging")} onMouseLeave={scheduleContextSubmenuClose}>
             <button className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left hover:bg-white/10" type="button">
               <span className="inline-flex items-center gap-2">
                 <Tag size={15} />
@@ -2439,9 +3124,13 @@ export function LibraryPage({
               <span className="text-muted">{">"}</span>
             </button>
             <div
-              className={`invisible absolute z-50 w-56 overflow-hidden rounded border border-line bg-[rgb(var(--color-popover))] py-1 opacity-0 shadow-2xl transition group-hover/tagging:visible group-hover/tagging:opacity-100 ${
-                contextMenu.submenuLeft ? "right-full" : "left-full"
-              } ${contextMenu.flipY ? "bottom-0" : "top-0"}`}
+              className={contextSubmenuClass(
+                "tagging",
+                "fixed z-[60] w-56 overflow-auto rounded border border-line bg-[rgb(var(--color-popover))] py-1 shadow-2xl transition",
+              )}
+              style={contextSubmenuStyle(4, TRACK_CONTEXT_SUBMENU_WIDTH, TRACK_TAGGING_SUBMENU_HEIGHT)}
+              onMouseEnter={() => openContextSubmenu("tagging")}
+              onMouseLeave={scheduleContextSubmenuClose}
             >
               <button
                 className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10"
@@ -2458,12 +3147,12 @@ export function LibraryPage({
                 className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10"
                 type="button"
                 onClick={() => {
-                  void onAutoTagTracks(contextSelectionIds, true);
+                  void onSyncFileMetadata(contextSelectionIds);
                   setContextMenu(null);
                 }}
               >
-                <CheckCircle2 size={15} />
-                Auto-Tag Missing Fields
+                <RefreshCw size={15} />
+                Sync Metadata From Files
               </button>
               <button
                 className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10"
@@ -2486,6 +3175,17 @@ export function LibraryPage({
               >
                 <Tag size={15} />
                 Preview CLAP Genres
+              </button>
+              <button
+                className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10"
+                type="button"
+                onClick={() => {
+                  void onVolumeTagTracks(contextSelectionIds);
+                  setContextMenu(null);
+                }}
+              >
+                <Volume2 size={15} />
+                Mark Volume Tags
               </button>
               <button
                 className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10"
@@ -2525,7 +3225,7 @@ export function LibraryPage({
               </button>
             </div>
           </div>
-          <div className="group/rating relative">
+          <div className="relative" onMouseEnter={() => openContextSubmenu("rating")} onMouseLeave={scheduleContextSubmenuClose}>
             <button className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left hover:bg-white/10" type="button">
               <span className="inline-flex items-center gap-2">
                 <Star size={15} />
@@ -2534,9 +3234,13 @@ export function LibraryPage({
               <span className="text-muted">{">"}</span>
             </button>
             <div
-              className={`invisible absolute z-50 grid w-48 grid-cols-2 gap-1 rounded border border-line bg-[rgb(var(--color-popover))] p-2 opacity-0 shadow-2xl transition group-hover/rating:visible group-hover/rating:opacity-100 ${
-                contextMenu.submenuLeft ? "right-full" : "left-full"
-              } ${contextMenu.flipY ? "bottom-0" : "top-0"}`}
+              className={contextSubmenuClass(
+                "rating",
+                "fixed z-[60] grid w-48 grid-cols-2 gap-1 overflow-auto rounded border border-line bg-[rgb(var(--color-popover))] p-2 shadow-2xl transition",
+              )}
+              style={contextSubmenuStyle(5, TRACK_RATING_SUBMENU_WIDTH, TRACK_RATING_SUBMENU_HEIGHT)}
+              onMouseEnter={() => openContextSubmenu("rating")}
+              onMouseLeave={scheduleContextSubmenuClose}
             >
               {[null, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5].map((rating) => (
                 <button
@@ -2579,7 +3283,7 @@ export function LibraryPage({
             Reveal in Explorer
           </button>
           <div className="my-1 border-t border-line" />
-          <div className="group/avoid relative">
+          <div className="relative" onMouseEnter={() => openContextSubmenu("avoid")} onMouseLeave={scheduleContextSubmenuClose}>
             <button className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left hover:bg-white/10" type="button">
               <span className="inline-flex items-center gap-2">
                 <X size={15} />
@@ -2588,9 +3292,13 @@ export function LibraryPage({
               <span className="text-muted">{">"}</span>
             </button>
             <div
-              className={`invisible absolute z-50 w-44 overflow-hidden rounded border border-line bg-[rgb(var(--color-popover))] py-1 opacity-0 shadow-2xl transition group-hover/avoid:visible group-hover/avoid:opacity-100 ${
-                contextMenu.submenuLeft ? "right-full" : "left-full"
-              } ${contextMenu.flipY ? "bottom-0" : "top-0"}`}
+              className={contextSubmenuClass(
+                "avoid",
+                "fixed z-[60] w-44 overflow-auto rounded border border-line bg-[rgb(var(--color-popover))] py-1 shadow-2xl transition",
+              )}
+              style={contextSubmenuStyle(8, TRACK_AVOID_SUBMENU_WIDTH, TRACK_AVOID_SUBMENU_HEIGHT, TRACK_CONTEXT_DIVIDER_HEIGHT)}
+              onMouseEnter={() => openContextSubmenu("avoid")}
+              onMouseLeave={scheduleContextSubmenuClose}
             >
               {(
                 [
@@ -2615,18 +3323,44 @@ export function LibraryPage({
               ))}
             </div>
           </div>
-          <button
-            className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10 disabled:text-muted"
-            type="button"
-            disabled={!targetPlaylistId}
-            onClick={() => {
-              onAddTracksToPlaylist(contextSelectionIds);
-              setContextMenu(null);
-            }}
-          >
-            <Plus size={15} />
-            {contextBulk ? "Add Selected To Playlist" : "Add To Playlist"}
-          </button>
+          <div className="relative" onMouseEnter={() => openContextSubmenu("playlist")} onMouseLeave={scheduleContextSubmenuClose}>
+            <button className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left hover:bg-white/10" type="button">
+              <span className="inline-flex min-w-0 items-center gap-2">
+                <Plus size={15} />
+                <span className="truncate">{contextBulk ? "Add Selected To Playlist" : "Add To Playlist"}</span>
+              </span>
+              <span className="text-muted">{">"}</span>
+            </button>
+            <div
+              className={contextSubmenuClass(
+                "playlist",
+                "fixed z-[60] w-60 overflow-auto rounded border border-line bg-[rgb(var(--color-popover))] py-1 shadow-2xl transition",
+              )}
+              style={contextSubmenuStyle(9, TRACK_PLAYLIST_SUBMENU_WIDTH, contextPlaylistSubmenuHeight, TRACK_CONTEXT_DIVIDER_HEIGHT)}
+              onMouseEnter={() => openContextSubmenu("playlist")}
+              onMouseLeave={scheduleContextSubmenuClose}
+            >
+              {playlists.length === 0 ? (
+                <div className="px-3 py-2 text-xs text-muted">No playlists yet</div>
+              ) : (
+                playlists.map((playlist) => (
+                  <button
+                    key={playlist.id}
+                    className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left hover:bg-white/10"
+                    type="button"
+                    title={playlist.name}
+                    onClick={() => {
+                      void onAddTracksToPlaylist(contextSelectionIds, playlist.id);
+                      setContextMenu(null);
+                    }}
+                  >
+                    <span className="min-w-0 truncate">{playlist.name}</span>
+                    <span className="shrink-0 text-xs text-muted">{playlist.track_count.toLocaleString()}</span>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
           {contextBulk && (
             <>
               <button

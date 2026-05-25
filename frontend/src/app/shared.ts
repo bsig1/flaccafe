@@ -9,6 +9,7 @@ import {
   writeBooleanFlag,
 } from "../lib/uiInteractions";
 import type {
+  AudioAnalysisCoverage,
   AudioAnalysisProgress,
   AutoDjSettings,
   ClapInstallProgress,
@@ -17,8 +18,8 @@ import type {
   Track,
 } from "../types/api";
 
-export type Page = "library" | "analysis" | "nowPlaying" | "artist" | "history" | "autodj" | "audiobooks" | "podcasts" | "radio" | "scrobbling" | "sources" | "fileManagement" | "settings";
-export type LibraryView = "tracks" | "albums" | "playlists" | "completion" | "inbox" | "smart" | "health";
+export type Page = "library" | "analysis" | "nowPlaying" | "artist" | "history" | "autodj" | "audiobooks" | "podcasts" | "radio" | "scrobbling" | "cd" | "sources" | "fileManagement" | "settings";
+export type LibraryView = "tracks" | "artists" | "albums" | "playlists" | "completion" | "inbox" | "smart" | "health";
 export type BackendStatus = "unknown" | "ok" | "down" | "restarting";
 export type PlaybackMode = "normal" | "repeatOne" | "repeatQueue" | "stopAfterCurrent";
 export type PlaybackEngine = "webview" | "native";
@@ -29,9 +30,8 @@ export type FontScale = "small" | "default" | "large";
 export type AutoDjExperience = "simple" | "advanced";
 export type ReplayGainMode = "off" | "track" | "album";
 export type EqualizerBandMode = "10" | "15";
-export type NowPlayingLayout = "theater" | "lyrics" | "party";
+export type NowPlayingLayout = "queue" | "lyrics" | "party";
 export type NowPlayingVisualizerStyle = "bars" | "wave" | "radial" | "off";
-export type NowPlayingBackground = "artwork" | "soft" | "none";
 export type NowPlayingLyricSize = "small" | "medium" | "large";
 export type KeyboardShortcutAction =
   | "page.library"
@@ -44,9 +44,17 @@ export type KeyboardShortcutAction =
   | "page.podcasts"
   | "page.radio"
   | "page.scrobbling"
+  | "page.cd"
   | "page.sources"
   | "page.fileManagement"
   | "page.settings"
+  | "app.openMiniPlayer"
+  | "app.openLyrics"
+  | "app.openQueue"
+  | "app.openCurrentTrack"
+  | "app.openCurrentArtist"
+  | "app.openCurrentAlbum"
+  | "app.undoRecent"
   | "playback.playPause"
   | "playback.previous"
   | "playback.next"
@@ -54,7 +62,11 @@ export type KeyboardShortcutAction =
   | "playback.seekForward"
   | "playback.volumeDown"
   | "playback.volumeUp"
-  | "playback.mute";
+  | "playback.mute"
+  | "playback.repeatCycle"
+  | "playback.repeatQueue"
+  | "playback.repeatOne"
+  | "playback.stopAfterCurrent";
 export type SortKey =
   | "title"
   | "artist"
@@ -113,7 +125,7 @@ export type MetadataColumnKey =
   | "audio_fingerprint"
   | "path";
 export type LibraryColumnKey = "play" | MetadataColumnKey;
-export type HistoryColumnKey = "event" | "track" | "artist" | "album" | "when";
+export type HistoryColumnKey = "event" | "track" | "context" | "when";
 
 export interface LibraryColumnDefinition {
   key: MetadataColumnKey;
@@ -199,9 +211,12 @@ export interface DeleteTrackPrompt {
 }
 
 export type RememberedDeleteChoice = "library" | "file";
+export type CdSidebarMode = "never" | "drive" | "always";
 
 export interface UiPreferences {
   hideFilePaths: boolean;
+  showPodcastFilePaths: boolean;
+  cdSidebarMode: CdSidebarMode;
   compactLibraryRows: boolean;
   defaultQueueLength: number;
   defaultTemperature: number;
@@ -220,6 +235,7 @@ export interface UiPreferences {
   miniPlayerWidth: number;
   miniPlayerHeight: number;
   replayGainMode: ReplayGainMode;
+  replayGainTargetVolumePercent: number;
   replayGainPreampDb: number;
   replayGainPreventClipping: boolean;
   equalizerEnabled: boolean;
@@ -229,7 +245,6 @@ export interface UiPreferences {
   dspLimiterEnabled: boolean;
   nowPlayingLayout: NowPlayingLayout;
   nowPlayingVisualizerStyle: NowPlayingVisualizerStyle;
-  nowPlayingBackground: NowPlayingBackground;
   nowPlayingShowLyrics: boolean;
   nowPlayingShowQueue: boolean;
   nowPlayingLyricSize: NowPlayingLyricSize;
@@ -263,11 +278,12 @@ export type UndoAction =
   | { type: "playlist-remove"; label: string; playlistId: number; trackIds: number[] };
 
 export const LIBRARY_PAGE_SIZE = 150;
-export const DEFAULT_FADE_MS = 150;
+export const DEFAULT_FADE_MS = 500;
 export const END_FADE_SECONDS = 1;
 export const QUEUE_HISTORY_LIMIT = 12;
 export const TRACK_CONTEXT_MENU_WIDTH = 256;
-export const TRACK_CONTEXT_MENU_HEIGHT = 552;
+export const TRACK_CONTEXT_MENU_HEIGHT = 584;
+export const TRACK_CONTEXT_SUBMENU_WIDTH = 224;
 export const TRACK_AVOID_SUBMENU_WIDTH = 176;
 export const TRACK_AVOID_SUBMENU_HEIGHT = 138;
 export const APP_CONTEXT_MENU_WIDTH = 220;
@@ -286,6 +302,11 @@ export const EQUALIZER_GAIN_MIN_DB = -12;
 export const EQUALIZER_GAIN_MAX_DB = 12;
 export const EQUALIZER_PREAMP_MIN_DB = -12;
 export const EQUALIZER_PREAMP_MAX_DB = 6;
+export const REPLAYGAIN_TARGET_DEFAULT_PERCENT = 50;
+export const REPLAYGAIN_TARGET_MIN_PERCENT = 0;
+export const REPLAYGAIN_TARGET_MAX_PERCENT = 100;
+export const REPLAYGAIN_TARGET_QUIET_OFFSET_DB = -6;
+export const REPLAYGAIN_TARGET_LOUD_OFFSET_DB = 8;
 export const VISUALIZER_FRAME_EVENT = "flac-cafe-visualizer-frame";
 
 export interface VisualizerFrame {
@@ -366,19 +387,31 @@ export const defaultKeyboardShortcuts: Record<KeyboardShortcutAction, KeyboardSh
   "page.podcasts": { key: "6", ctrl: true, alt: false, shift: false },
   "page.radio": { key: "7", ctrl: true, alt: false, shift: false },
   "page.scrobbling": { key: "8", ctrl: true, alt: false, shift: false },
+  "page.cd": { key: "", ctrl: false, alt: false, shift: false },
   "page.history": { key: "9", ctrl: true, alt: false, shift: false },
   "page.autodj": { key: "0", ctrl: true, alt: false, shift: false },
   "page.sources": { key: "O", ctrl: true, alt: true, shift: false },
   "page.fileManagement": { key: "F", ctrl: true, alt: true, shift: false },
   "page.settings": { key: "S", ctrl: true, alt: true, shift: false },
+  "app.openMiniPlayer": { key: "", ctrl: false, alt: false, shift: false },
+  "app.openLyrics": { key: "", ctrl: false, alt: false, shift: false },
+  "app.openQueue": { key: "", ctrl: false, alt: false, shift: false },
+  "app.openCurrentTrack": { key: "", ctrl: false, alt: false, shift: false },
+  "app.openCurrentArtist": { key: "", ctrl: false, alt: false, shift: false },
+  "app.openCurrentAlbum": { key: "", ctrl: false, alt: false, shift: false },
+  "app.undoRecent": { key: "z", ctrl: true, alt: false, shift: false },
   "playback.playPause": { key: "Space", ctrl: false, alt: false, shift: false },
   "playback.previous": { key: ",", ctrl: false, alt: true, shift: false },
   "playback.next": { key: ".", ctrl: false, alt: true, shift: false },
-  "playback.seekBackward": { key: "ArrowLeft", ctrl: false, alt: true, shift: false },
-  "playback.seekForward": { key: "ArrowRight", ctrl: false, alt: true, shift: false },
+  "playback.seekBackward": { key: "ArrowLeft", ctrl: false, alt: false, shift: false },
+  "playback.seekForward": { key: "ArrowRight", ctrl: false, alt: false, shift: false },
   "playback.volumeDown": { key: "ArrowDown", ctrl: false, alt: true, shift: false },
   "playback.volumeUp": { key: "ArrowUp", ctrl: false, alt: true, shift: false },
   "playback.mute": { key: "m", ctrl: false, alt: true, shift: false },
+  "playback.repeatCycle": { key: "", ctrl: false, alt: false, shift: false },
+  "playback.repeatQueue": { key: "", ctrl: false, alt: false, shift: false },
+  "playback.repeatOne": { key: "", ctrl: false, alt: false, shift: false },
+  "playback.stopAfterCurrent": { key: "", ctrl: false, alt: false, shift: false },
 };
 
 export const keyboardShortcutLabels: Record<KeyboardShortcutAction, string> = {
@@ -390,11 +423,19 @@ export const keyboardShortcutLabels: Record<KeyboardShortcutAction, string> = {
   "page.podcasts": "Podcasts page",
   "page.radio": "Web Radio page",
   "page.scrobbling": "Scrobbling page",
+  "page.cd": "CD page",
   "page.history": "History page",
   "page.autodj": "AutoDJ page",
   "page.sources": "Sources page",
   "page.fileManagement": "File Management page",
   "page.settings": "Settings page",
+  "app.openMiniPlayer": "Open mini player",
+  "app.openLyrics": "Open lyrics view",
+  "app.openQueue": "Open queue view",
+  "app.openCurrentTrack": "Show current track",
+  "app.openCurrentArtist": "Show current artist",
+  "app.openCurrentAlbum": "Show current album",
+  "app.undoRecent": "Undo recent change",
   "playback.playPause": "Play / pause",
   "playback.previous": "Previous track",
   "playback.next": "Next track",
@@ -403,6 +444,10 @@ export const keyboardShortcutLabels: Record<KeyboardShortcutAction, string> = {
   "playback.volumeDown": "Volume down",
   "playback.volumeUp": "Volume up",
   "playback.mute": "Mute",
+  "playback.repeatCycle": "Cycle repeat mode",
+  "playback.repeatQueue": "Repeat queue",
+  "playback.repeatOne": "Repeat one",
+  "playback.stopAfterCurrent": "Stop after current",
 };
 
 export const keyboardShortcutGroups: Array<{ title: string; actions: KeyboardShortcutAction[] }> = [
@@ -417,11 +462,24 @@ export const keyboardShortcutGroups: Array<{ title: string; actions: KeyboardSho
       "page.podcasts",
       "page.radio",
       "page.scrobbling",
+      "page.cd",
       "page.history",
       "page.autodj",
       "page.sources",
       "page.fileManagement",
       "page.settings",
+    ],
+  },
+  {
+    title: "App",
+    actions: [
+      "app.openMiniPlayer",
+      "app.openLyrics",
+      "app.openQueue",
+      "app.openCurrentTrack",
+      "app.openCurrentArtist",
+      "app.openCurrentAlbum",
+      "app.undoRecent",
     ],
   },
   {
@@ -435,6 +493,10 @@ export const keyboardShortcutGroups: Array<{ title: string; actions: KeyboardSho
       "playback.volumeDown",
       "playback.volumeUp",
       "playback.mute",
+      "playback.repeatCycle",
+      "playback.repeatQueue",
+      "playback.repeatOne",
+      "playback.stopAfterCurrent",
     ],
   },
 ];
@@ -522,11 +584,10 @@ export const defaultLibraryColumnWidths: Record<LibraryColumnKey, number> = {
 };
 
 export const defaultHistoryColumnWidths: Record<HistoryColumnKey, number> = {
-  event: 128,
-  track: 360,
-  artist: 220,
-  album: 260,
-  when: 220,
+  event: 86,
+  track: 280,
+  context: 240,
+  when: 170,
 };
 
 export const defaultAutoDj: AutoDjSettings = {
@@ -605,11 +666,109 @@ export function formatPlaybackTime(seconds: number): string {
   return `${minutes}:${remaining.toString().padStart(2, "0")}`;
 }
 
+export interface StoredPlaybackSession {
+  currentTrackId?: number | null;
+  queueIds?: number[];
+  positionSeconds?: number | null;
+  savedAt?: string;
+}
+
+export function normalizePlaybackResumePosition(
+  positionSeconds: unknown,
+  durationSeconds: number | null | undefined,
+): number | null {
+  const position = typeof positionSeconds === "number" ? positionSeconds : Number(positionSeconds);
+  if (!Number.isFinite(position) || position < 3) {
+    return null;
+  }
+
+  const duration = typeof durationSeconds === "number" && Number.isFinite(durationSeconds) ? durationSeconds : 0;
+  if (duration <= 0) {
+    return Math.max(0, position);
+  }
+
+  const endGuardSeconds = Math.min(10, Math.max(3, duration * 0.04));
+  if (position >= duration - endGuardSeconds) {
+    return null;
+  }
+  return Math.min(Math.max(0, position), Math.max(0, duration - endGuardSeconds));
+}
+
+export function normalizeAudioAnalysisCoverage(
+  coverage: AudioAnalysisCoverage | null,
+  eligibleTrackTotal: number | null | undefined,
+): AudioAnalysisCoverage | null {
+  if (!coverage) {
+    return null;
+  }
+
+  const eligibleTotal =
+    typeof eligibleTrackTotal === "number" && Number.isFinite(eligibleTrackTotal) && eligibleTrackTotal >= 0
+      ? Math.floor(eligibleTrackTotal)
+      : null;
+  if (eligibleTotal === null || coverage.total_tracks <= eligibleTotal) {
+    return coverage;
+  }
+
+  // Older hot-reloaded backends may still report podcasts/audiobooks in CLAP totals.
+  // The main library total is already filtered, so trim the stale excess from the
+  // unanalyzed side before displaying coverage.
+  const staleExtraTracks = coverage.total_tracks - eligibleTotal;
+  const adjustedUnanalyzed = Math.max(
+    0,
+    Math.min(eligibleTotal, coverage.unanalyzed_tracks - staleExtraTracks),
+  );
+  const adjustedAnalyzed = Math.max(0, Math.min(eligibleTotal, eligibleTotal - adjustedUnanalyzed));
+  const coveragePercent = eligibleTotal > 0 ? Math.round((adjustedAnalyzed / eligibleTotal) * 10000) / 100 : 0;
+
+  return {
+    ...coverage,
+    total_tracks: eligibleTotal,
+    analyzed_tracks: adjustedAnalyzed,
+    unanalyzed_tracks: adjustedUnanalyzed,
+    coverage_percent: coveragePercent,
+  };
+}
+
 export function display(value: string | number | null | undefined, fallback = "Unknown"): string {
   if (value === null || value === undefined || value === "") {
     return fallback;
   }
   return String(value);
+}
+
+export const noAlbumToken = "__FLAC_CAFE_NO_ALBUM__";
+
+export interface TrackAlbumDisplayLike {
+  album?: string | null;
+  artist?: string | null;
+  genre?: string | null;
+  analysis_genre?: string | null;
+}
+
+export function isNoAlbumValue(value: string | null | undefined): boolean {
+  const normalized = (value ?? "").trim().toLowerCase();
+  return ["", noAlbumToken.toLowerCase(), "no album", "(no album)", "[no album]"].includes(normalized);
+}
+
+export function isPodcastLikeTrack(track: TrackAlbumDisplayLike | null | undefined): boolean {
+  const genre = (track?.analysis_genre ?? track?.genre ?? "").toLowerCase();
+  return genre.includes("podcast");
+}
+
+export function displayAlbumForTrack(track: TrackAlbumDisplayLike | null | undefined): string | null {
+  const album = (track?.album ?? "").trim();
+  if (isNoAlbumValue(album)) {
+    return null;
+  }
+  if (isPodcastLikeTrack(track)) {
+    const artist = (track?.artist ?? "").trim().toLowerCase();
+    const normalizedAlbum = album.toLowerCase();
+    if (normalizedAlbum === "podcast" || (artist && normalizedAlbum === artist)) {
+      return null;
+    }
+  }
+  return album;
 }
 
 export function trackGenre(track: Track | null | undefined): string | null {
@@ -779,20 +938,36 @@ export function formatFingerprint(value: string | null | undefined): string {
   return value.length > 14 ? value.slice(0, 14) : value;
 }
 
+export function parseAppDate(value: string | null | undefined): Date | null {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  const sqliteUtcMatch = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(trimmed);
+  const isoWithoutZoneMatch = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(trimmed);
+  const normalized = sqliteUtcMatch
+    ? `${trimmed.replace(" ", "T")}Z`
+    : isoWithoutZoneMatch
+      ? `${trimmed}Z`
+      : trimmed;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 export function formatDate(value: string | null | undefined): string {
   if (!value) {
     return "-";
   }
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  const date = parseAppDate(value);
+  return date === null ? value : date.toLocaleString();
 }
 
 export function formatShortDate(value: string | null | undefined): string {
   if (!value) {
     return "-";
   }
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString();
+  const date = parseAppDate(value);
+  return date === null ? value : date.toLocaleDateString();
 }
 
 export function parseLyricTimestamp(line: string): number | null {
@@ -853,11 +1028,11 @@ export function normalizeKeyboardShortcuts(value: unknown): Record<KeyboardShort
   const normalized = { ...defaultKeyboardShortcuts };
   for (const action of Object.keys(defaultKeyboardShortcuts) as KeyboardShortcutAction[]) {
     const shortcut = parsed[action];
-    if (!shortcut || typeof shortcut.key !== "string" || !shortcut.key.trim()) {
+    if (!shortcut || typeof shortcut.key !== "string") {
       continue;
     }
     normalized[action] = {
-      key: shortcut.key,
+      key: shortcut.key.trim(),
       ctrl: Boolean(shortcut.ctrl),
       alt: Boolean(shortcut.alt),
       shift: Boolean(shortcut.shift),
@@ -874,6 +1049,9 @@ export function keyboardEventKey(event: Pick<KeyboardEvent, "key" | "code">): st
 }
 
 export function shortcutMatchesEvent(shortcut: KeyboardShortcut, event: KeyboardEvent): boolean {
+  if (!shortcut.key.trim()) {
+    return false;
+  }
   return (
     keyboardEventKey(event) === (shortcut.key.length === 1 ? shortcut.key.toLowerCase() : shortcut.key) &&
     event.ctrlKey === shortcut.ctrl &&
@@ -897,6 +1075,9 @@ export function shortcutFromEvent(event: KeyboardEvent): KeyboardShortcut | null
 }
 
 export function formatShortcut(shortcut: KeyboardShortcut): string {
+  if (!shortcut.key.trim()) {
+    return "Unassigned";
+  }
   return [
     shortcut.ctrl ? "Ctrl" : null,
     shortcut.alt ? "Alt" : null,
@@ -908,6 +1089,9 @@ export function formatShortcut(shortcut: KeyboardShortcut): string {
 }
 
 export function keyboardShortcutSignature(shortcut: KeyboardShortcut): string {
+  if (!shortcut.key.trim()) {
+    return "";
+  }
   return `${shortcut.ctrl ? "1" : "0"}${shortcut.alt ? "1" : "0"}${shortcut.shift ? "1" : "0"}:${shortcut.key.toLowerCase()}`;
 }
 
@@ -915,12 +1099,21 @@ export function shortcutConflictGroups(shortcuts: Record<KeyboardShortcutAction,
   const bySignature = new Map<string, KeyboardShortcutAction[]>();
   for (const action of Object.keys(shortcuts) as KeyboardShortcutAction[]) {
     const signature = keyboardShortcutSignature(shortcuts[action]);
+    if (!signature) {
+      continue;
+    }
     bySignature.set(signature, [...(bySignature.get(signature) ?? []), action]);
   }
   return Array.from(bySignature.values()).filter((actions) => actions.length > 1);
 }
 
-export function replayGainMultiplier(track: Track | null, mode: ReplayGainMode, preampDb: number, preventClipping = true): number {
+export function replayGainMultiplier(
+  track: Track | null,
+  mode: ReplayGainMode,
+  preampDb: number,
+  preventClipping = true,
+  targetVolumePercent = REPLAYGAIN_TARGET_DEFAULT_PERCENT,
+): number {
   if (!track || mode === "off") {
     return 1;
   }
@@ -935,7 +1128,8 @@ export function replayGainMultiplier(track: Track | null, mode: ReplayGainMode, 
   if (typeof gain !== "number" || !Number.isFinite(gain)) {
     return 1;
   }
-  const db = clampNumber(gain + preampDb, -24, 12);
+  const targetOffsetDb = replayGainTargetOffsetDb(targetVolumePercent);
+  const db = clampNumber(gain + targetOffsetDb + preampDb, -24, 12);
   const desired = clampNumber(Math.pow(10, db / 20), 0.05, 1.5);
   if (!preventClipping || typeof peak !== "number" || !Number.isFinite(peak) || peak <= 0) {
     return desired;
@@ -1010,6 +1204,14 @@ export function writeRememberedDeleteChoice(choice: RememberedDeleteChoice) {
   }
 }
 
+export function clearRememberedDeleteChoice() {
+  try {
+    window.localStorage.removeItem(storageKeys.deleteChoice);
+  } catch {
+    // Remembering delete preference is a convenience only.
+  }
+}
+
 export function readQuickStartDismissed(): boolean {
   return readBooleanFlag(window.localStorage, storageKeys.quickStartDismissed, false);
 }
@@ -1041,6 +1243,43 @@ export function formatEqFrequency(frequency: number): string {
 
 export function dbToGain(db: number): number {
   return 10 ** (db / 20);
+}
+
+export function replayGainTargetOffsetDb(targetVolumePercent: number): number {
+  const percent = clampNumber(targetVolumePercent, REPLAYGAIN_TARGET_MIN_PERCENT, REPLAYGAIN_TARGET_MAX_PERCENT);
+  if (percent <= REPLAYGAIN_TARGET_DEFAULT_PERCENT) {
+    const quietRange = REPLAYGAIN_TARGET_DEFAULT_PERCENT - REPLAYGAIN_TARGET_MIN_PERCENT;
+    return REPLAYGAIN_TARGET_QUIET_OFFSET_DB * (1 - percent / quietRange);
+  }
+  const loudRange = REPLAYGAIN_TARGET_MAX_PERCENT - REPLAYGAIN_TARGET_DEFAULT_PERCENT;
+  return REPLAYGAIN_TARGET_LOUD_OFFSET_DB * ((percent - REPLAYGAIN_TARGET_DEFAULT_PERCENT) / loudRange);
+}
+
+export function replayGainTargetPercentFromLegacyLufs(targetLufs: number): number {
+  const legacyReferenceLufs = -18;
+  const offsetDb = clampNumber(targetLufs, -24, -10) - legacyReferenceLufs;
+  if (offsetDb <= 0) {
+    return Math.round(REPLAYGAIN_TARGET_DEFAULT_PERCENT * (1 - offsetDb / REPLAYGAIN_TARGET_QUIET_OFFSET_DB));
+  }
+  const loudRange = REPLAYGAIN_TARGET_MAX_PERCENT - REPLAYGAIN_TARGET_DEFAULT_PERCENT;
+  return Math.round(REPLAYGAIN_TARGET_DEFAULT_PERCENT + (offsetDb / REPLAYGAIN_TARGET_LOUD_OFFSET_DB) * loudRange);
+}
+
+export function replayGainTargetDescription(targetVolumePercent: number): string {
+  const percent = clampNumber(targetVolumePercent, REPLAYGAIN_TARGET_MIN_PERCENT, REPLAYGAIN_TARGET_MAX_PERCENT);
+  if (percent < 35) {
+    return "Quiet";
+  }
+  if (percent < 50) {
+    return "Softer";
+  }
+  if (percent === 50) {
+    return "Neutral";
+  }
+  if (percent <= 70) {
+    return "Louder";
+  }
+  return "Very loud";
 }
 
 export function getListenedPercent(listenedSeconds: number, durationSeconds: number): number {
@@ -1209,6 +1448,8 @@ export function beginPointerReorderDrag({
 export function readUiPreferences(): UiPreferences {
   const defaults: UiPreferences = {
     hideFilePaths: true,
+    showPodcastFilePaths: false,
+    cdSidebarMode: "drive",
     compactLibraryRows: false,
     defaultQueueLength: 25,
     defaultTemperature: 0.8,
@@ -1227,6 +1468,7 @@ export function readUiPreferences(): UiPreferences {
     miniPlayerWidth: 420,
     miniPlayerHeight: 118,
     replayGainMode: "off",
+    replayGainTargetVolumePercent: REPLAYGAIN_TARGET_DEFAULT_PERCENT,
     replayGainPreampDb: 0,
     replayGainPreventClipping: true,
     equalizerEnabled: false,
@@ -1234,15 +1476,14 @@ export function readUiPreferences(): UiPreferences {
     equalizerPreampDb: 0,
     equalizerGains: normalizeEqualizerGains([], "10"),
     dspLimiterEnabled: true,
-    nowPlayingLayout: "theater",
-    nowPlayingVisualizerStyle: "bars",
-    nowPlayingBackground: "artwork",
+    nowPlayingLayout: "queue",
+    nowPlayingVisualizerStyle: "radial",
     nowPlayingShowLyrics: true,
     nowPlayingShowQueue: true,
     nowPlayingLyricSize: "medium",
     nowPlayingAutoScrollLyrics: true,
-    autoFetchLyrics: false,
-    autoFetchLrcWhenPlainPresent: false,
+    autoFetchLyrics: true,
+    autoFetchLrcWhenPlainPresent: true,
     themeAccent: "cafe",
     density: "comfortable",
     fontScale: "default",
@@ -1255,13 +1496,12 @@ export function readUiPreferences(): UiPreferences {
     const modern = window.localStorage.getItem(storageKeys.uiPreferences) ?? window.localStorage.getItem(legacyStorageKeys.uiPreferences);
     if (modern) {
       const parsed = JSON.parse(modern) as Partial<UiPreferences> & { playerLayout?: string };
-      // Older builds stored compact mode as playerLayout; keep honoring it while using one setting now.
-      const legacyMiniPlayer = parsed.playerLayout === "compact";
-      const validPages: Page[] = ["library", "analysis", "nowPlaying", "artist", "audiobooks", "podcasts", "radio", "scrobbling", "history", "autodj", "sources", "fileManagement", "settings"];
+      // Older builds stored a compact bottom-player mode; the main player now stays full-width.
+      const validPages: Page[] = ["library", "analysis", "nowPlaying", "artist", "audiobooks", "podcasts", "radio", "scrobbling", "cd", "history", "autodj", "sources", "fileManagement", "settings"];
       return {
         ...defaults,
         ...parsed,
-        miniPlayer: typeof parsed.miniPlayer === "boolean" ? parsed.miniPlayer : legacyMiniPlayer,
+        miniPlayer: false,
         miniPlayerAlwaysOnTop:
           typeof parsed.miniPlayerAlwaysOnTop === "boolean" ? parsed.miniPlayerAlwaysOnTop : defaults.miniPlayerAlwaysOnTop,
         miniPlayerWidth: typeof parsed.miniPlayerWidth === "number" ? clampNumber(parsed.miniPlayerWidth, 360, 900) : defaults.miniPlayerWidth,
@@ -1273,6 +1513,12 @@ export function readUiPreferences(): UiPreferences {
           typeof parsed.replayGainPreampDb === "number"
             ? clampNumber(parsed.replayGainPreampDb, -12, 12)
             : defaults.replayGainPreampDb,
+        replayGainTargetVolumePercent:
+          typeof parsed.replayGainTargetVolumePercent === "number"
+            ? clampNumber(parsed.replayGainTargetVolumePercent, REPLAYGAIN_TARGET_MIN_PERCENT, REPLAYGAIN_TARGET_MAX_PERCENT)
+            : typeof (parsed as { replayGainTargetLufs?: unknown }).replayGainTargetLufs === "number"
+              ? replayGainTargetPercentFromLegacyLufs((parsed as { replayGainTargetLufs: number }).replayGainTargetLufs)
+              : defaults.replayGainTargetVolumePercent,
         playbackEngine: ["webview", "native"].includes(parsed.playbackEngine as PlaybackEngine)
           ? (parsed.playbackEngine as PlaybackEngine)
           : defaults.playbackEngine,
@@ -1307,9 +1553,9 @@ export function readUiPreferences(): UiPreferences {
         dspLimiterEnabled:
           typeof parsed.dspLimiterEnabled === "boolean" ? parsed.dspLimiterEnabled : defaults.dspLimiterEnabled,
         nowPlayingLayout:
-          (parsed.nowPlayingLayout as string | undefined) === "studio"
-            ? "theater"
-            : ["theater", "lyrics", "party"].includes(parsed.nowPlayingLayout as NowPlayingLayout)
+          ["studio", "theater"].includes(parsed.nowPlayingLayout as string)
+            ? "queue"
+            : ["queue", "lyrics", "party"].includes(parsed.nowPlayingLayout as NowPlayingLayout)
               ? (parsed.nowPlayingLayout as NowPlayingLayout)
               : defaults.nowPlayingLayout,
         nowPlayingVisualizerStyle: ["bars", "wave", "radial", "off"].includes(
@@ -1317,9 +1563,6 @@ export function readUiPreferences(): UiPreferences {
         )
           ? (parsed.nowPlayingVisualizerStyle as NowPlayingVisualizerStyle)
           : defaults.nowPlayingVisualizerStyle,
-        nowPlayingBackground: ["artwork", "soft", "none"].includes(parsed.nowPlayingBackground as NowPlayingBackground)
-          ? (parsed.nowPlayingBackground as NowPlayingBackground)
-          : defaults.nowPlayingBackground,
         nowPlayingShowLyrics:
           typeof parsed.nowPlayingShowLyrics === "boolean" ? parsed.nowPlayingShowLyrics : defaults.nowPlayingShowLyrics,
         nowPlayingShowQueue:
@@ -1337,6 +1580,18 @@ export function readUiPreferences(): UiPreferences {
           typeof parsed.autoFetchLrcWhenPlainPresent === "boolean"
             ? parsed.autoFetchLrcWhenPlainPresent
             : defaults.autoFetchLrcWhenPlainPresent,
+        showPodcastFilePaths:
+          typeof parsed.showPodcastFilePaths === "boolean"
+            ? parsed.showPodcastFilePaths
+            : defaults.showPodcastFilePaths,
+        cdSidebarMode:
+          ["never", "drive", "always"].includes(parsed.cdSidebarMode as CdSidebarMode)
+            ? (parsed.cdSidebarMode as CdSidebarMode)
+            : typeof (parsed as { showCdSidebarTab?: unknown }).showCdSidebarTab === "boolean"
+              ? (parsed as { showCdSidebarTab: boolean }).showCdSidebarTab
+                ? "drive"
+                : "never"
+              : defaults.cdSidebarMode,
         startupPage: validPages.includes(parsed.startupPage as Page) ? (parsed.startupPage as Page) : defaults.startupPage,
         themeAccent: ["cafe", "mint", "rose", "blue"].includes(parsed.themeAccent as ThemeAccent)
           ? (parsed.themeAccent as ThemeAccent)
@@ -1350,6 +1605,10 @@ export function readUiPreferences(): UiPreferences {
         fontChoice: Object.keys(fontChoiceLabels).includes(parsed.fontChoice as FontChoice)
           ? (parsed.fontChoice as FontChoice)
           : defaults.fontChoice,
+        playerFadeMs:
+          typeof parsed.playerFadeMs === "number"
+            ? clampNumber(parsed.playerFadeMs === 150 ? defaults.playerFadeMs : parsed.playerFadeMs, 0, 5000)
+            : defaults.playerFadeMs,
         skipThresholdPercent:
           typeof parsed.skipThresholdPercent === "number"
             ? clampNumber(parsed.skipThresholdPercent, 0, 95)

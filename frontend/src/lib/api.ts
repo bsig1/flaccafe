@@ -1,14 +1,17 @@
 import type {
+  AlbumCompletionLookupResponse,
   AlbumSummary,
   AlbumArtworkCandidatesResponse,
   AlbumArtworkCollisionResponse,
   AlbumArtworkSearchResponse,
   AlbumArtworkUpdateResponse,
   ArtistInfoResponse,
+  ArtistSummary,
   AudioAnalysisCoverage,
   AudioAnalysisProgress,
   AudioAnalysisStartRequest,
   AudioAnalysisStartResponse,
+  AudioConversionInstallRequest,
   AudioConversionPreviewResponse,
   AudioConversionProgress,
   AudioConversionRequest,
@@ -29,6 +32,7 @@ import type {
   AutoTagResponse,
   AcousticFingerprintRequest,
   AcousticFingerprintResponse,
+  AdvancedTrackSearchFilters,
   BackupResponse,
   BulkUndoBatchEntry,
   BulkUndoLogEntry,
@@ -36,8 +40,6 @@ import type {
   CacheClearResponse,
   CacheClearTarget,
   ChromaprintConfigRequest,
-  ChromaprintInstallRequest,
-  ChromaprintInstallResponse,
   ChromaprintStatusResponse,
   CdPlaybackResponse,
   CdRipMetadataRequest,
@@ -46,6 +48,7 @@ import type {
   CdRipSetupResponse,
   CdRipStartRequest,
   CdRipStartResponse,
+  CdRipTrackMetadata,
   ClapConfigRequest,
   ClapGenreTagRequest,
   ClapGenreTagResponse,
@@ -84,6 +87,7 @@ import type {
   FilenameTagInferenceRequest,
   FilenameTagInferenceResponse,
   LibraryHealthResponse,
+  LibrarySourceRemoveResponse,
   LibraryStatsImportRequest,
   LibraryStatsImportResponse,
   InboxAutoReviewRuleApplyResponse,
@@ -92,6 +96,9 @@ import type {
   InboxResponse,
   InboxReviewResponse,
   InboxTrackNote,
+  HistoryStatsResponse,
+  LastFmLoginCompleteResponse,
+  LastFmLoginStartResponse,
   LibraryStatsResponse,
   LogTailResponse,
   LyricsResponse,
@@ -99,8 +106,11 @@ import type {
   PlayEventEntry,
   PlaylistSummary,
   PodcastEpisode,
+  PodcastDeleteDownloadResponse,
+  PodcastFolderResponse,
   PodcastRefreshResponse,
   PodcastSubscription,
+  PodcastSubscriptionDeleteResponse,
   PodcastSubscriptionPayload,
   RadioStation,
   RadioStationPayload,
@@ -145,6 +155,10 @@ import type {
   TagFieldCopySwapResponse,
   Track,
   TrackDeleteResponse,
+  TrackFileMetadataWriteRequest,
+  TrackFileMetadataWriteResponse,
+  TrackMetadataSyncResponse,
+  TracksDeleteResponse,
   TrackMetadataUpdate,
   TrackPage,
   TrackRestoreRequest,
@@ -152,9 +166,55 @@ import type {
   VirtualTagDefinitionRequest,
   VirtualTagPreviewRequest,
   VirtualTagPreviewResponse,
+  VolumeTagRequest,
+  VolumeTagResponse,
 } from "../types/api";
 
 export const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8765";
+const ARTWORK_URL_SESSION_VERSION = Date.now().toString(36);
+
+function formatApiErrorDetail(detail: unknown, fallback: string): string {
+  if (typeof detail === "string") {
+    return detail;
+  }
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((entry) => {
+        if (typeof entry === "string") {
+          return entry;
+        }
+        if (!entry || typeof entry !== "object") {
+          return "";
+        }
+        const value = entry as { loc?: unknown; msg?: unknown; message?: unknown };
+        const message = typeof value.msg === "string" ? value.msg : typeof value.message === "string" ? value.message : "";
+        const location = Array.isArray(value.loc)
+          ? value.loc.filter((part) => typeof part === "string" || typeof part === "number").join(".")
+          : "";
+        return message ? (location ? `${location}: ${message}` : message) : "";
+      })
+      .filter(Boolean);
+    return messages.length ? messages.join("; ") : fallback;
+  }
+  if (detail && typeof detail === "object") {
+    const value = detail as { msg?: unknown; message?: unknown; error?: unknown };
+    if (typeof value.message === "string") {
+      return value.message;
+    }
+    if (typeof value.msg === "string") {
+      return value.msg;
+    }
+    if (typeof value.error === "string") {
+      return value.error;
+    }
+    try {
+      return JSON.stringify(detail);
+    } catch {
+      return fallback;
+    }
+  }
+  return fallback;
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -169,7 +229,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     let message = `${response.status} ${response.statusText}`;
     try {
       const body = await response.json();
-      message = body.detail ?? message;
+      message = formatApiErrorDetail(body.detail ?? body.message ?? body.error, message);
     } catch {
       // Keep the HTTP status message when the backend does not return JSON.
     }
@@ -209,8 +269,19 @@ export function updateSettings(settings: SettingsUpdateRequest): Promise<Setting
   });
 }
 
+export function removeLibrarySource(path: string): Promise<LibrarySourceRemoveResponse> {
+  return request<LibrarySourceRemoveResponse>("/settings/library-sources/remove", {
+    method: "POST",
+    body: JSON.stringify({ path }),
+  });
+}
+
 export function fetchHistory(limit = 200): Promise<PlayEventEntry[]> {
   return request<PlayEventEntry[]>(`/history?limit=${limit}`);
+}
+
+export function fetchHistoryStats(limit = 10): Promise<HistoryStatsResponse> {
+  return request<HistoryStatsResponse>(`/history/stats?limit=${limit}`);
 }
 
 export function fetchLibraryStats(): Promise<LibraryStatsResponse> {
@@ -430,6 +501,13 @@ export function clapGenreTags(requestBody: ClapGenreTagRequest): Promise<ClapGen
   });
 }
 
+export function volumeTags(requestBody: VolumeTagRequest): Promise<VolumeTagResponse> {
+  return request<VolumeTagResponse>("/library/tools/volume-tags", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
 export function exportMetadataCsvImportReport(
   requestBody: CsvMetadataImportReportRequest,
 ): Promise<CsvMetadataImportReportResponse> {
@@ -460,13 +538,6 @@ export function fetchChromaprintSetup(): Promise<ChromaprintStatusResponse> {
 export function saveChromaprintSetup(requestBody: ChromaprintConfigRequest): Promise<ChromaprintStatusResponse> {
   return request<ChromaprintStatusResponse>("/library/tools/acoustic-fingerprints/setup", {
     method: "PATCH",
-    body: JSON.stringify(requestBody),
-  });
-}
-
-export function installChromaprintTool(requestBody: ChromaprintInstallRequest = {}): Promise<ChromaprintInstallResponse> {
-  return request<ChromaprintInstallResponse>("/library/tools/acoustic-fingerprints/install", {
-    method: "POST",
     body: JSON.stringify(requestBody),
   });
 }
@@ -564,6 +635,15 @@ export function saveAudioConversionSetup(requestBody: AudioConversionSetupReques
   });
 }
 
+export function installAudioConversionFfmpeg(
+  requestBody: AudioConversionInstallRequest = {},
+): Promise<AudioConversionSetupResponse> {
+  return request<AudioConversionSetupResponse>("/library/tools/audio-conversion/install", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
+}
+
 export function previewAudioConversion(requestBody: AudioConversionRequest): Promise<AudioConversionPreviewResponse> {
   return request<AudioConversionPreviewResponse>("/library/tools/audio-conversion/preview", {
     method: "POST",
@@ -612,11 +692,33 @@ export function cancelCdRip(jobId: string): Promise<CdRipProgress> {
   return request<CdRipProgress>(`/library/tools/cd-rip/jobs/${jobId}/cancel`, { method: "POST" });
 }
 
-export function playCdTrack(trackNumber: number, driveId?: string | null): Promise<CdPlaybackResponse> {
-  return request<CdPlaybackResponse>("/library/tools/cd-rip/playback/play", {
+export async function playCdTrack(
+  trackNumber: number,
+  driveId?: string | null,
+  context?: {
+    albumTitle?: string | null;
+    albumArtist?: string | null;
+    year?: number | null;
+    genre?: string | null;
+    tracks?: CdRipTrackMetadata[];
+  },
+): Promise<CdPlaybackResponse> {
+  const response = await request<CdPlaybackResponse>("/library/tools/cd-rip/playback/play", {
     method: "POST",
-    body: JSON.stringify({ drive_id: driveId ?? null, track_number: trackNumber }),
+    body: JSON.stringify({
+      drive_id: driveId ?? null,
+      track_number: trackNumber,
+      album_title: context?.albumTitle ?? null,
+      album_artist: context?.albumArtist ?? null,
+      year: context?.year ?? null,
+      genre: context?.genre ?? null,
+      tracks: context?.tracks ?? [],
+    }),
   });
+  if (response.track?.audio_url?.startsWith("/")) {
+    response.track.audio_url = `${API_BASE}${response.track.audio_url}`;
+  }
+  return response;
 }
 
 export function stopCdPlayback(): Promise<CdPlaybackResponse> {
@@ -684,12 +786,17 @@ export function savePodcastSubscription(
   );
 }
 
-export function deletePodcastSubscription(subscriptionId: number): Promise<{ deleted: boolean }> {
-  return request<{ deleted: boolean }>(`/podcasts/subscriptions/${subscriptionId}`, { method: "DELETE" });
+export function deletePodcastSubscription(subscriptionId: number, deleteFiles = false): Promise<PodcastSubscriptionDeleteResponse> {
+  const query = deleteFiles ? "?delete_files=true" : "";
+  return request<PodcastSubscriptionDeleteResponse>(`/podcasts/subscriptions/${subscriptionId}${query}`, { method: "DELETE" });
 }
 
 export function refreshPodcastSubscription(subscriptionId: number): Promise<PodcastRefreshResponse> {
   return request<PodcastRefreshResponse>(`/podcasts/subscriptions/${subscriptionId}/refresh`, { method: "POST" });
+}
+
+export function ensurePodcastSubscriptionFolder(subscriptionId: number): Promise<PodcastFolderResponse> {
+  return request<PodcastFolderResponse>(`/podcasts/subscriptions/${subscriptionId}/folder`, { method: "POST" });
 }
 
 export function fetchPodcastEpisodes(subscriptionId?: number | null, limit = 200): Promise<PodcastEpisode[]> {
@@ -702,6 +809,10 @@ export function downloadPodcastEpisode(episodeId: number, downloadFolder?: strin
     method: "POST",
     body: JSON.stringify({ download_folder: downloadFolder || null }),
   });
+}
+
+export function deletePodcastEpisodeDownload(episodeId: number): Promise<PodcastDeleteDownloadResponse> {
+  return request<PodcastDeleteDownloadResponse>(`/podcasts/episodes/${episodeId}/download`, { method: "DELETE" });
 }
 
 export function ensurePodcastEpisodeTrack(episodeId: number): Promise<Track> {
@@ -735,6 +846,25 @@ export function saveScrobbleAccount(service: ScrobbleService, requestBody: Scrob
   return request<ScrobbleAccount>(`/scrobbling/accounts/${service}`, {
     method: "PATCH",
     body: JSON.stringify(requestBody),
+  });
+}
+
+export function startLastFmLogin(apiKey?: string | null, apiSecret?: string | null): Promise<LastFmLoginStartResponse> {
+  return request<LastFmLoginStartResponse>("/scrobbling/lastfm/login/start", {
+    method: "POST",
+    body: JSON.stringify({ api_key: apiKey ?? "", api_secret: apiSecret ?? "" }),
+  });
+}
+
+export function completeLastFmLogin(
+  token: string,
+  enabled = true,
+  apiKey?: string | null,
+  apiSecret?: string | null,
+): Promise<LastFmLoginCompleteResponse> {
+  return request<LastFmLoginCompleteResponse>("/scrobbling/lastfm/login/complete", {
+    method: "POST",
+    body: JSON.stringify({ api_key: apiKey ?? "", api_secret: apiSecret ?? "", token, enabled }),
   });
 }
 
@@ -847,13 +977,63 @@ export function cancelClapAudioAnalysis(jobId: string): Promise<AudioAnalysisPro
   return request<AudioAnalysisProgress>(`/analysis/clap/jobs/${jobId}/cancel`, { method: "POST" });
 }
 
-export function fetchTracks(search = ""): Promise<Track[]> {
+export function fetchTracks(
+  search = "",
+  options: {
+    limit?: number | null;
+    offset?: number;
+    sortBy?: string;
+    sortDirection?: "asc" | "desc";
+    advancedFilters?: AdvancedTrackSearchFilters;
+  } = {},
+): Promise<Track[]> {
   const params = new URLSearchParams();
   if (search.trim()) {
     params.set("search", search.trim());
   }
+  if (typeof options.limit === "number") {
+    params.set("limit", String(options.limit));
+  }
+  if (typeof options.offset === "number") {
+    params.set("offset", String(options.offset));
+  }
+  if (options.sortBy) {
+    params.set("sort_by", options.sortBy);
+  }
+  if (options.sortDirection) {
+    params.set("sort_direction", options.sortDirection);
+  }
+  appendAdvancedTrackSearchFilters(params, options.advancedFilters);
   const query = params.toString();
   return request<Track[]>(query ? `/tracks?${query}` : "/tracks");
+}
+
+function appendAdvancedTrackSearchFilters(params: URLSearchParams, filters?: AdvancedTrackSearchFilters) {
+  if (!filters) {
+    return;
+  }
+  (["artist", "album", "genre", "path", "extension"] as const).forEach((key) => {
+    const value = filters[key]?.trim();
+    if (value) {
+      params.set(key, value);
+    }
+  });
+  if (filters.rating_state && filters.rating_state !== "any") {
+    params.set("rating_state", filters.rating_state);
+  }
+  (["min_rating", "max_rating", "year_from", "year_to", "min_duration", "max_duration"] as const).forEach((key) => {
+    const rawValue = filters[key]?.trim();
+    if (!rawValue) {
+      return;
+    }
+    const value = Number(rawValue);
+    if (Number.isFinite(value)) {
+      params.set(key, String(value));
+    }
+  });
+  if (filters.missing_metadata) {
+    params.set("missing_metadata", "true");
+  }
 }
 
 export function fetchTrack(trackId: number): Promise<Track> {
@@ -867,6 +1047,27 @@ export function fetchSimilarTracks(trackId: number, limit = 12): Promise<Similar
 export function deleteTrack(trackId: number, deleteFile = false): Promise<TrackDeleteResponse> {
   const params = new URLSearchParams({ delete_file: String(deleteFile) });
   return request<TrackDeleteResponse>(`/tracks/${trackId}?${params.toString()}`, { method: "DELETE" });
+}
+
+export function deleteTracks(trackIds: number[], deleteFile = false): Promise<TracksDeleteResponse> {
+  return request<TracksDeleteResponse>("/tracks/delete", {
+    method: "POST",
+    body: JSON.stringify({ track_ids: trackIds, delete_file: deleteFile }),
+  });
+}
+
+export function syncTrackMetadata(trackIds: number[]): Promise<TrackMetadataSyncResponse> {
+  return request<TrackMetadataSyncResponse>("/tracks/sync-metadata", {
+    method: "POST",
+    body: JSON.stringify({ track_ids: trackIds }),
+  });
+}
+
+export function writeTrackMetadataToFiles(requestBody: TrackFileMetadataWriteRequest): Promise<TrackFileMetadataWriteResponse> {
+  return request<TrackFileMetadataWriteResponse>("/library/tools/write-metadata-to-files", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
 }
 
 export function updateTrackMetadata(trackId: number, metadata: TrackMetadataUpdate): Promise<Track> {
@@ -889,12 +1090,14 @@ export function fetchTrackPage({
   offset = 0,
   sortBy = "artist",
   sortDirection = "asc",
+  advancedFilters,
 }: {
   search?: string;
   limit?: number;
   offset?: number;
   sortBy?: string;
   sortDirection?: "asc" | "desc";
+  advancedFilters?: AdvancedTrackSearchFilters;
 }): Promise<TrackPage> {
   const params = new URLSearchParams();
   if (search.trim()) {
@@ -904,6 +1107,7 @@ export function fetchTrackPage({
   params.set("offset", String(offset));
   params.set("sort_by", sortBy);
   params.set("sort_direction", sortDirection);
+  appendAdvancedTrackSearchFilters(params, advancedFilters);
   return request<TrackPage>(`/tracks/page?${params.toString()}`);
 }
 
@@ -916,8 +1120,21 @@ export function fetchAlbums(search = ""): Promise<AlbumSummary[]> {
   return request<AlbumSummary[]>(`/albums?${params.toString()}`);
 }
 
+export function fetchArtists(search = ""): Promise<ArtistSummary[]> {
+  const params = new URLSearchParams();
+  if (search.trim()) {
+    params.set("search", search.trim());
+  }
+  params.set("limit", "20000");
+  return request<ArtistSummary[]>(`/artists?${params.toString()}`);
+}
+
 export function fetchAlbumTracks(albumId: number): Promise<Track[]> {
   return request<Track[]>(`/albums/${albumId}/tracks`);
+}
+
+export function lookupAlbumCompletion(albumId: number): Promise<AlbumCompletionLookupResponse> {
+  return request<AlbumCompletionLookupResponse>(`/albums/${albumId}/completion-lookup`, { method: "POST" });
 }
 
 export function fetchAlbumArtworkCandidates(albumId: number): Promise<AlbumArtworkCandidatesResponse> {
@@ -982,8 +1199,12 @@ export function clearAlbumArtwork(albumId: number): Promise<AlbumArtworkUpdateRe
   });
 }
 
-export function albumCoverUrl(albumId: number): string {
-  return `${API_BASE}/albums/${albumId}/artwork`;
+function artworkVersionQuery(version?: string | number | null): string {
+  return `?v=${encodeURIComponent(String(version ?? ARTWORK_URL_SESSION_VERSION))}`;
+}
+
+export function albumCoverUrl(albumId: number, version?: string | number | null): string {
+  return `${API_BASE}/albums/${albumId}/artwork${artworkVersionQuery(version)}`;
 }
 
 export function previewArtworkCollisions(limit = 200): Promise<AlbumArtworkCollisionResponse> {
@@ -1126,8 +1347,8 @@ export function audioUrl(trackId: number): string {
   return `${API_BASE}/tracks/${trackId}/audio`;
 }
 
-export function albumArtworkUrl(trackId: number): string {
-  return `${API_BASE}/tracks/${trackId}/artwork`;
+export function albumArtworkUrl(trackId: number, version?: string | number | null): string {
+  return `${API_BASE}/tracks/${trackId}/artwork${artworkVersionQuery(version)}`;
 }
 
 export function fetchLyrics(trackId: number): Promise<LyricsResponse> {
@@ -1165,8 +1386,8 @@ export function markTrackSkipped(trackId: number): Promise<Track> {
   });
 }
 
-export function fetchArtistLocalTracks(artistName: string): Promise<Track[]> {
-  const params = new URLSearchParams({ name: artistName });
+export function fetchArtistLocalTracks(artistName: string, limit = 100): Promise<Track[]> {
+  const params = new URLSearchParams({ name: artistName, limit: String(limit) });
   return request<Track[]>(`/artists/local-tracks?${params.toString()}`);
 }
 

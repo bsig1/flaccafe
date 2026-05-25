@@ -18,6 +18,10 @@ export function BackendRecoveryPage({
   onRestartBackend: () => void;
   onOpenBackendLog: () => void;
 }) {
+  const recoveryHint = import.meta.env.DEV
+    ? "In development, start the backend with npm run backend:dev."
+    : "In the installed app, Restart Backend should relaunch the bundled service. Open the backend log if it still cannot start.";
+
   return (
     <main className="flex min-w-0 flex-1 flex-col">
       <header className="flex h-16 items-center border-b border-line px-6">
@@ -56,9 +60,7 @@ export function BackendRecoveryPage({
                 Open Log
               </button>
             </div>
-            <div className="text-xs text-muted">
-              In development, start the backend with `npm run backend:dev`. In the installed app, Restart Backend should relaunch the bundled service.
-            </div>
+            <div className="text-xs text-muted">{recoveryHint}</div>
           </div>
         </div>
       </section>

@@ -17,6 +17,13 @@ APP_RATING_EMAIL = "rating@flaccafe.local"
 FMPS_RATING = "FMPS_Rating"
 PLAIN_RATING = "RATING"
 
+REPLAYGAIN_TEXT_KEYS = {
+    "track_gain": ["REPLAYGAIN_TRACK_GAIN", "replaygain_track_gain", "track_gain"],
+    "track_peak": ["REPLAYGAIN_TRACK_PEAK", "replaygain_track_peak", "track_peak"],
+    "album_gain": ["REPLAYGAIN_ALBUM_GAIN", "replaygain_album_gain", "album_gain"],
+    "album_peak": ["REPLAYGAIN_ALBUM_PEAK", "replaygain_album_peak", "album_peak"],
+}
+
 METADATA_KEY_MAP = {
     "title": "title",
     "artist": "artist",
@@ -57,6 +64,14 @@ def _remove_text_keys(tags: object, keys: list[str]) -> None:
                 del tags[key]  # type: ignore[index]
         except Exception:
             continue
+
+
+def _matching_text_keys(tags: object, keys: list[str]) -> list[str]:
+    wanted = {key.lower() for key in keys}
+    try:
+        return [str(existing) for existing in tags.keys() if str(existing).lower() in wanted]  # type: ignore[attr-defined]
+    except Exception:
+        return keys
 
 
 def _write_vorbis_rating(audio: FLAC | OggVorbis | OggOpus, rating: float | None) -> None:
@@ -146,11 +161,125 @@ def write_track_rating(path: Path, rating: float | None) -> None:
     raise ValueError(f"Writing ratings is not supported for {path.suffix or 'this file type'} yet")
 
 
+def _gain_text(value: float | None) -> str | None:
+    return None if value is None else f"{float(value):+.2f} dB"
+
+
+def _peak_text(value: float | None) -> str | None:
+    return None if value is None else f"{max(0.0, float(value)):.6f}"
+
+
+def _replaygain_tag_values(
+    track_gain_db: float | None,
+    track_peak: float | None,
+    album_gain_db: float | None,
+    album_peak: float | None,
+) -> dict[str, str | None]:
+    return {
+        "track_gain": _gain_text(track_gain_db),
+        "track_peak": _peak_text(track_peak),
+        "album_gain": _gain_text(album_gain_db),
+        "album_peak": _peak_text(album_peak),
+    }
+
+
+def _write_vorbis_replaygain_tags(
+    audio: FLAC | OggVorbis | OggOpus,
+    values: dict[str, str | None],
+) -> None:
+    if audio.tags is None:
+        audio.add_tags()
+    if audio.tags is None:
+        raise ValueError("Could not create Vorbis-style tags")
+
+    for logical_key, value in values.items():
+        keys = REPLAYGAIN_TEXT_KEYS[logical_key]
+        _remove_text_keys(audio.tags, _matching_text_keys(audio.tags, keys))
+        if value is not None:
+            audio.tags[keys[0]] = [value]
+    audio.save()
+
+
+def _write_mp3_replaygain_tags(audio: MP3, values: dict[str, str | None]) -> None:
+    try:
+        tags = audio.tags
+        if tags is None:
+            audio.add_tags()
+            tags = audio.tags
+    except ID3NoHeaderError:
+        audio.add_tags()
+        tags = audio.tags
+
+    if tags is None:
+        raise ValueError("Could not create ID3 tags")
+
+    for logical_key, value in values.items():
+        descriptions = REPLAYGAIN_TEXT_KEYS[logical_key]
+        for frame in list(tags.getall("TXXX")):
+            if str(frame.desc).lower() in {description.lower() for description in descriptions}:
+                tags.delall(f"TXXX:{frame.desc}")
+        if value is not None:
+            tags.add(TXXX(encoding=3, desc=descriptions[1], text=[value]))
+    audio.save()
+
+
+def _write_mp4_replaygain_tags(audio: MP4, values: dict[str, str | None]) -> None:
+    if audio.tags is None:
+        audio.add_tags()
+    if audio.tags is None:
+        raise ValueError("Could not create MP4 tags")
+
+    for logical_key, value in values.items():
+        freeform_keys = [f"----:com.apple.iTunes:{key}" for key in REPLAYGAIN_TEXT_KEYS[logical_key]]
+        _remove_text_keys(audio.tags, _matching_text_keys(audio.tags, freeform_keys))
+        if value is not None:
+            audio.tags[freeform_keys[1]] = [MP4FreeForm(value.encode("utf-8"))]
+    audio.save()
+
+
+def write_replaygain_tags(
+    path: Path,
+    track_gain_db: float | None,
+    track_peak: float | None,
+    album_gain_db: float | None = None,
+    album_peak: float | None = None,
+) -> None:
+    if not path.exists() or not path.is_file():
+        raise ValueError("Audio file is missing on disk")
+
+    audio = MutagenFile(path)
+    if audio is None:
+        raise ValueError("Could not read audio tags")
+
+    values = _replaygain_tag_values(track_gain_db, track_peak, album_gain_db, album_peak)
+    if isinstance(audio, (FLAC, OggVorbis, OggOpus)):
+        _write_vorbis_replaygain_tags(audio, values)
+        return
+    if isinstance(audio, MP3):
+        _write_mp3_replaygain_tags(audio, values)
+        return
+    if isinstance(audio, MP4):
+        _write_mp4_replaygain_tags(audio, values)
+        return
+
+    raise ValueError(f"Writing volume tags is not supported for {path.suffix or 'this file type'} yet")
+
+
 def _metadata_value(value: object) -> list[str] | None:
     if value is None:
         return None
     text = str(value).strip()
     return [text] if text else None
+
+
+def _remove_easy_tag(tags: object, tag_key: str) -> None:
+    try:
+        if tag_key in tags:  # type: ignore[operator]
+            del tags[tag_key]  # type: ignore[index]
+    except Exception:
+        # Some mutagen tag maps vary in deletion behavior. Missing keys should
+        # not make clearing an empty metadata field fail the whole save.
+        return
 
 
 def write_track_metadata(path: Path, metadata: dict[str, object]) -> None:
@@ -175,7 +304,7 @@ def write_track_metadata(path: Path, metadata: dict[str, object]) -> None:
         value = _metadata_value(metadata[field])
         try:
             if value is None:
-                audio.tags.pop(tag_key, None)
+                _remove_easy_tag(audio.tags, tag_key)
             else:
                 audio.tags[tag_key] = value
         except Exception as exc:
@@ -279,6 +408,71 @@ def _picture_block(data: bytes, media_type: str) -> Picture:
     picture.desc = "Cover"
     picture.data = data
     return picture
+
+
+def _first_tag_value(value: object) -> object:
+    if isinstance(value, (list, tuple)):
+        return value[0] if value else None
+    return value
+
+
+def read_track_artwork(path: Path) -> tuple[bytes, str] | None:
+    if not path.exists() or not path.is_file():
+        return None
+
+    audio = MutagenFile(path)
+    if audio is None:
+        return None
+
+    if isinstance(audio, FLAC):
+        for picture in audio.pictures or []:
+            if getattr(picture, "data", None):
+                return picture.data, picture.mime or "image/jpeg"
+
+    tags = audio.tags
+    if tags is None:
+        return None
+
+    getall = getattr(tags, "getall", None)
+    if callable(getall):
+        for picture in getall("APIC"):
+            data = getattr(picture, "data", None)
+            if data:
+                return data, getattr(picture, "mime", None) or "image/jpeg"
+
+    try:
+        covers = _first_tag_value(tags.get("covr"))  # type: ignore[attr-defined]
+    except Exception:
+        covers = None
+    if covers:
+        media_type = "image/png" if getattr(covers, "imageformat", None) == MP4Cover.FORMAT_PNG else "image/jpeg"
+        return bytes(covers), media_type
+
+    try:
+        encoded_pictures = tags.get("metadata_block_picture", []) or []  # type: ignore[attr-defined]
+    except Exception:
+        encoded_pictures = []
+    for encoded_picture in encoded_pictures:
+        try:
+            picture = Picture(base64.b64decode(encoded_picture))
+        except Exception:
+            continue
+        if picture.data:
+            return picture.data, picture.mime or "image/jpeg"
+
+    try:
+        coverart = _first_tag_value(tags.get("coverart"))  # type: ignore[attr-defined]
+        covermime = _first_tag_value(tags.get("coverartmime"))  # type: ignore[attr-defined]
+    except Exception:
+        coverart = None
+        covermime = None
+    if isinstance(coverart, str):
+        try:
+            return base64.b64decode(coverart), str(covermime or "image/jpeg")
+        except Exception:
+            return None
+
+    return None
 
 
 def _write_flac_artwork(audio: FLAC, data: bytes, media_type: str) -> None:

@@ -2,6 +2,7 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import {
+  useMemo,
   useState,
 } from "react";
 import {
@@ -9,6 +10,8 @@ import {
   FileText,
   Keyboard,
   RotateCcw,
+  Search,
+  X,
 } from "lucide-react";
 
 import {
@@ -36,7 +39,33 @@ export function KeyboardShortcutsSection({
   const [shortcutCaptureAction, setShortcutCaptureAction] = useState<KeyboardShortcutAction | null>(null);
   const [shortcutMessage, setShortcutMessage] = useState<string | null>(null);
   const [shortcutPresetJson, setShortcutPresetJson] = useState("");
+  const [shortcutSearch, setShortcutSearch] = useState("");
   const shortcutConflicts = shortcutConflictGroups(uiPreferences.keyboardShortcuts);
+  const shortcutQuery = shortcutSearch.trim().toLowerCase();
+  const visibleShortcutGroups = useMemo(
+    () =>
+      keyboardShortcutGroups
+        .map((group) => ({
+          ...group,
+          actions: group.actions.filter((action) => {
+            if (!shortcutQuery) {
+              return true;
+            }
+            const shortcut = uiPreferences.keyboardShortcuts[action];
+            return [
+              group.title,
+              keyboardShortcutLabels[action],
+              formatShortcut(shortcut),
+              shortcut.key,
+            ]
+              .join(" ")
+              .toLowerCase()
+              .includes(shortcutQuery);
+          }),
+        }))
+        .filter((group) => group.actions.length > 0),
+    [shortcutQuery, uiPreferences.keyboardShortcuts],
+  );
 
   function updateShortcut(action: KeyboardShortcutAction, event: ReactKeyboardEvent<HTMLButtonElement>) {
     if (shortcutCaptureAction !== action) {
@@ -74,6 +103,18 @@ export function KeyboardShortcutsSection({
     }));
     setShortcutCaptureAction(null);
     setShortcutMessage(`${keyboardShortcutLabels[action]} reset`);
+  }
+
+  function clearShortcut(action: KeyboardShortcutAction) {
+    setUiPreferences((current) => ({
+      ...current,
+      keyboardShortcuts: {
+        ...current.keyboardShortcuts,
+        [action]: { key: "", ctrl: false, alt: false, shift: false },
+      },
+    }));
+    setShortcutCaptureAction(null);
+    setShortcutMessage(`${keyboardShortcutLabels[action]} cleared`);
   }
 
   function resetAllShortcuts() {
@@ -116,6 +157,28 @@ export function KeyboardShortcutsSection({
             Reset All
           </button>
         </div>
+        <label className="grid gap-2">
+          <span className="text-xs uppercase text-muted">Search Shortcuts</span>
+          <div className="flex h-9 items-center gap-2 rounded border border-line bg-ink px-3 ring-moss/40 focus-within:ring-2">
+            <Search size={15} className="shrink-0 text-muted" />
+            <input
+              className="min-w-0 flex-1 bg-transparent text-white outline-none placeholder:text-muted"
+              value={shortcutSearch}
+              placeholder="Find pages, playback, lyrics, queue, unassigned..."
+              onChange={(event) => setShortcutSearch(event.target.value)}
+            />
+            {shortcutSearch && (
+              <button
+                className="icon-button h-7 w-7 shrink-0"
+                type="button"
+                title="Clear shortcut search"
+                onClick={() => setShortcutSearch("")}
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+        </label>
         {shortcutMessage && <div className="rounded border border-moss/30 bg-moss/10 px-3 py-2 text-xs text-moss">{shortcutMessage}</div>}
         {shortcutConflicts.length > 0 && (
           <div className="rounded border border-ember/40 bg-ember/10 px-3 py-2 text-xs text-ember">
@@ -143,33 +206,45 @@ export function KeyboardShortcutsSection({
             onChange={(event) => setShortcutPresetJson(event.target.value)}
           />
         </div>
-        {keyboardShortcutGroups.map((group) => (
-          <div key={group.title} className="grid gap-2 rounded border border-line/70 bg-ink p-3">
-            <div className="text-xs font-medium uppercase text-muted">{group.title}</div>
-            <div className="grid gap-2">
-              {group.actions.map((action) => (
-                <div key={action} className="grid gap-2 rounded border border-line/60 bg-panel px-3 py-2 sm:grid-cols-[1fr_auto_auto] sm:items-center">
-                  <span className="min-w-0 truncate text-neutral-200">{keyboardShortcutLabels[action]}</span>
-                  <button
-                    className={`secondary-button h-8 justify-center font-mono text-xs ${shortcutCaptureAction === action ? "border-ember text-ember" : ""}`}
-                    type="button"
-                    onClick={() => {
-                      setShortcutCaptureAction(action);
-                      setShortcutMessage(null);
-                    }}
-                    onKeyDown={(event) => updateShortcut(action, event)}
-                  >
-                    {shortcutCaptureAction === action ? "Press keys..." : formatShortcut(uiPreferences.keyboardShortcuts[action])}
-                  </button>
-                  <button className="icon-button h-8 w-8" type="button" title="Reset shortcut" onClick={() => resetShortcut(action)}>
-                    <RotateCcw size={14} />
-                  </button>
+        <div className="max-h-[34rem] overflow-auto rounded border border-line/70 bg-ink p-3 pr-2">
+          <div className="grid gap-3">
+            {visibleShortcutGroups.map((group) => (
+              <div key={group.title} className="grid gap-2">
+                <div className="border-b border-line/60 py-2 text-xs font-medium uppercase text-muted">{group.title}</div>
+                <div className="grid gap-2">
+                  {group.actions.map((action) => (
+                    <div key={action} className="grid gap-2 rounded border border-line/60 bg-panel px-3 py-2 sm:grid-cols-[1fr_auto_auto_auto] sm:items-center">
+                      <span className="min-w-0 truncate text-neutral-200">{keyboardShortcutLabels[action]}</span>
+                      <button
+                        className={`secondary-button h-8 min-w-32 justify-center font-mono text-xs ${shortcutCaptureAction === action ? "border-ember text-ember" : ""}`}
+                        type="button"
+                        onClick={() => {
+                          setShortcutCaptureAction(action);
+                          setShortcutMessage(null);
+                        }}
+                        onKeyDown={(event) => updateShortcut(action, event)}
+                      >
+                        {shortcutCaptureAction === action ? "Press keys..." : formatShortcut(uiPreferences.keyboardShortcuts[action])}
+                      </button>
+                      <button className="icon-button h-8 w-8" type="button" title="Clear shortcut" onClick={() => clearShortcut(action)}>
+                        <X size={14} />
+                      </button>
+                      <button className="icon-button h-8 w-8" type="button" title="Reset shortcut" onClick={() => resetShortcut(action)}>
+                        <RotateCcw size={14} />
+                      </button>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              </div>
+            ))}
+            {visibleShortcutGroups.length === 0 && (
+              <div className="px-3 py-8 text-center text-sm text-muted">
+                No shortcuts match that search.
+              </div>
+            )}
           </div>
-        ))}
-      </div>
+        </div>
+            </div>
     </DisclosureSection>
   );
 }

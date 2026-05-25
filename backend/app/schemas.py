@@ -39,6 +39,8 @@ class Track(BaseModel):
     last_skipped_at: str | None = None
     date_added: str
     file_modified_at: str | None = None
+    audio_url: str | None = None
+    is_preview: bool = False
 
 
 class TrackPage(BaseModel):
@@ -53,6 +55,9 @@ class AlbumSummary(BaseModel):
     album: str | None = None
     album_artist: str | None = None
     year: int | None = None
+    years: list[int] = Field(default_factory=list)
+    album_ids: list[int] = Field(default_factory=list)
+    edition_count: int = 1
     artwork_path: str | None = None
     track_count: int = 0
     expected_track_count: int | None = None
@@ -60,6 +65,36 @@ class AlbumSummary(BaseModel):
     duration_seconds: float | None = None
     average_rating: float | None = None
     artwork_track_id: int | None = None
+    completion_expected_track_count: int | None = None
+    completion_source: str | None = None
+    completion_release_id: str | None = None
+    completion_release_title: str | None = None
+    completion_checked_at: str | None = None
+
+
+class ArtistSummary(BaseModel):
+    name: str
+    track_count: int = 0
+    album_count: int = 0
+    duration_seconds: float | None = None
+    average_rating: float | None = None
+    play_count: int = 0
+    skip_count: int = 0
+    first_year: int | None = None
+    last_year: int | None = None
+    artwork_track_id: int | None = None
+
+
+class AlbumCompletionLookupResponse(BaseModel):
+    album_id: int
+    expected_track_count: int | None = None
+    missing_track_count: int = 0
+    source: str | None = None
+    release_id: str | None = None
+    release_title: str | None = None
+    confidence: float = 0.0
+    checked_at: str | None = None
+    error: str | None = None
 
 
 class AlbumArtworkCandidate(BaseModel):
@@ -226,6 +261,26 @@ class PlayEventEntry(BaseModel):
     timestamp: str
     metadata: dict[str, Any] = Field(default_factory=dict)
     track: Track | None = None
+
+
+class HistoryTrackStat(BaseModel):
+    track: Track
+    play_count: int = 0
+    skip_count: int = 0
+    listened_seconds: float = 0
+
+
+class HistoryStatsResponse(BaseModel):
+    total_play_count: int = 0
+    total_skip_count: int = 0
+    total_play_events: int = 0
+    total_skip_events: int = 0
+    total_rated_events: int = 0
+    unique_played_tracks: int = 0
+    unique_skipped_tracks: int = 0
+    total_listened_seconds: float = 0
+    top_played: list[HistoryTrackStat] = Field(default_factory=list)
+    top_skipped: list[HistoryTrackStat] = Field(default_factory=list)
 
 
 class DuplicateGroup(BaseModel):
@@ -809,6 +864,8 @@ class AutoTagRequest(BaseModel):
     missing_only: bool = True
     include_artwork: bool = True
     save_artwork: bool = False
+    fingerprint_only: bool = False
+    write_to_file: bool | None = None
     apply: bool = False
     limit: int = Field(default=50, ge=1, le=1000)
     candidate_limit: int = Field(default=3, ge=1, le=10)
@@ -875,6 +932,47 @@ class ClapGenreTagResponse(BaseModel):
     previews: list[ClapGenreTagPreview] = Field(default_factory=list)
 
 
+class VolumeTagRequest(BaseModel):
+    track_ids: list[int] | None = Field(default=None, max_length=10000)
+    mode: Literal["analyze", "manual"] = "analyze"
+    apply: bool = False
+    write_to_file: bool | None = None
+    limit: int = Field(default=50, ge=1, le=1000)
+    manual_track_gain_db: float | None = Field(default=None, ge=-60, le=60)
+    manual_track_peak: float | None = Field(default=None, ge=0, le=10)
+    manual_album_gain_db: float | None = Field(default=None, ge=-60, le=60)
+    manual_album_peak: float | None = Field(default=None, ge=0, le=10)
+
+
+class VolumeTagPreview(BaseModel):
+    track_id: int
+    path: str
+    title: str | None = None
+    artist: str | None = None
+    album: str | None = None
+    current_track_gain_db: float | None = None
+    proposed_track_gain_db: float | None = None
+    current_track_peak: float | None = None
+    proposed_track_peak: float | None = None
+    current_album_gain_db: float | None = None
+    proposed_album_gain_db: float | None = None
+    current_album_peak: float | None = None
+    proposed_album_peak: float | None = None
+    changed: bool = False
+    applied: bool = False
+    error: str | None = None
+
+
+class VolumeTagResponse(BaseModel):
+    total: int = 0
+    changed: int = 0
+    applied: int = 0
+    errors: list[str] = Field(default_factory=list)
+    previews: list[VolumeTagPreview] = Field(default_factory=list)
+    ffmpeg_path: str | None = None
+    checked_paths: list[str] = Field(default_factory=list)
+
+
 class DuplicateActionRequest(BaseModel):
     action: Literal["keep_best", "remove_selected", "export_report"]
     track_ids: list[int] = Field(default_factory=list, max_length=10000)
@@ -919,18 +1017,6 @@ class ChromaprintStatusResponse(BaseModel):
     errors: list[str] = Field(default_factory=list)
 
 
-class ChromaprintInstallRequest(BaseModel):
-    source_url: str | None = None
-
-
-class ChromaprintInstallResponse(BaseModel):
-    installed: bool = False
-    fpcalc_path: str | None = None
-    source_url: str
-    message: str
-    errors: list[str] = Field(default_factory=list)
-
-
 class AcousticFingerprintRequest(BaseModel):
     track_ids: list[int] | None = Field(default=None, max_length=10000)
     overwrite: bool = False
@@ -942,6 +1028,7 @@ class AcousticFingerprintResponse(BaseModel):
     processed: int = 0
     updated: int = 0
     skipped: int = 0
+    skipped_reasons: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
 
 
@@ -1108,6 +1195,10 @@ class FolderWatchNotificationAckRequest(BaseModel):
 
 class AudioConversionSetupRequest(BaseModel):
     ffmpeg_path: str | None = None
+
+
+class AudioConversionInstallRequest(BaseModel):
+    source_url: str | None = None
 
 
 class AudioConversionSetupResponse(BaseModel):
@@ -1328,12 +1419,18 @@ class CdRipProgress(BaseModel):
 class CdPlaybackRequest(BaseModel):
     drive_id: str | None = None
     track_number: int = Field(default=1, ge=1, le=999)
+    album_title: str | None = None
+    album_artist: str | None = None
+    year: int | None = None
+    genre: str | None = None
+    tracks: list[CdRipTrackMetadata] = Field(default_factory=list, max_length=5)
 
 
 class CdPlaybackResponse(BaseModel):
     status: str
     track_number: int | None = None
     message: str
+    track: Track | None = None
 
 
 class AudiobookTrack(BaseModel):
@@ -1442,11 +1539,24 @@ class PodcastSubscription(BaseModel):
     description: str | None = None
     auto_download: bool = False
     download_folder: str | None = None
+    effective_download_folder: str | None = None
     last_checked_at: str | None = None
     episode_count: int = 0
     downloaded_count: int = 0
     created_at: str
     updated_at: str
+
+
+class PodcastSubscriptionDeleteResponse(BaseModel):
+    deleted: bool = False
+    deleted_files: int = 0
+    missing_files: int = 0
+    removed_tracks: int = 0
+
+
+class PodcastFolderResponse(BaseModel):
+    path: str
+    created: bool = False
 
 
 class PodcastEpisode(BaseModel):
@@ -1476,6 +1586,13 @@ class PodcastRefreshResponse(BaseModel):
 
 class PodcastDownloadRequest(BaseModel):
     download_folder: str | None = None
+
+
+class PodcastDeleteDownloadResponse(BaseModel):
+    episode: PodcastEpisode
+    deleted_file: bool = False
+    missing_file: bool = False
+    removed_track: bool = False
 
 
 class RadioStationPayload(BaseModel):
@@ -1519,6 +1636,27 @@ class ScrobbleAccount(BaseModel):
     api_secret: str | None = None
     session_key: str | None = None
     updated_at: str | None = None
+
+
+class LastFmLoginStartRequest(BaseModel):
+    api_key: str | None = None
+    api_secret: str | None = None
+
+
+class LastFmLoginStartResponse(BaseModel):
+    token: str
+    auth_url: str
+
+
+class LastFmLoginCompleteRequest(BaseModel):
+    api_key: str | None = None
+    api_secret: str | None = None
+    token: str
+    enabled: bool = True
+
+
+class LastFmLoginCompleteResponse(BaseModel):
+    account: ScrobbleAccount
 
 
 class ScrobbleOutboxEntry(BaseModel):
@@ -1857,6 +1995,59 @@ class TrackDeleteResponse(BaseModel):
     file_missing: bool = False
 
 
+class TracksDeleteRequest(BaseModel):
+    track_ids: list[int] = Field(default_factory=list, max_length=50000)
+    delete_file: bool = False
+
+
+class TracksDeleteResponse(BaseModel):
+    removed_track_ids: list[int] = Field(default_factory=list)
+    removed_count: int = 0
+    deleted_files: int = 0
+    missing_track_ids: list[int] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
+class TrackMetadataSyncRequest(BaseModel):
+    track_ids: list[int] = Field(default_factory=list, max_length=5000)
+
+
+class TrackMetadataSyncResponse(BaseModel):
+    synced_track_ids: list[int] = Field(default_factory=list)
+    synced_count: int = 0
+    missing_track_ids: list[int] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
+class TrackFileMetadataWriteRequest(BaseModel):
+    track_ids: list[int] | None = Field(default=None, max_length=5000)
+    include_metadata: bool = True
+    include_rating: bool = True
+    apply: bool = False
+    limit: int = Field(default=500, ge=1, le=10000)
+
+
+class TrackFileMetadataWritePreview(BaseModel):
+    track_id: int
+    path: str
+    title: str | None = None
+    artist: str | None = None
+    changed_fields: list[str] = Field(default_factory=list)
+    database: dict[str, Any] = Field(default_factory=dict)
+    file: dict[str, Any] = Field(default_factory=dict)
+    applied: bool = False
+    error: str | None = None
+
+
+class TrackFileMetadataWriteResponse(BaseModel):
+    total: int = 0
+    changed: int = 0
+    applied: int = 0
+    missing_track_ids: list[int] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    previews: list[TrackFileMetadataWritePreview] = Field(default_factory=list)
+
+
 class TrackRestoreRequest(BaseModel):
     path: str
     rating: float | None = Field(default=None, ge=0.5, le=5)
@@ -1865,6 +2056,24 @@ class TrackRestoreRequest(BaseModel):
 class SettingsUpdateRequest(BaseModel):
     write_ratings_to_files: bool | None = None
     auto_write_fetched_lyrics_sidecars: bool | None = None
+    acoustid_api_key: str | None = None
+    clear_acoustid_api_key: bool | None = None
+    lastfm_api_key: str | None = None
+    lastfm_api_secret: str | None = None
+    clear_lastfm_api_credentials: bool | None = None
+
+
+class LibrarySourceRemoveRequest(BaseModel):
+    path: str = Field(min_length=1)
+
+
+class LibrarySourceRemoveResponse(BaseModel):
+    path: str
+    library_paths: list[str] = Field(default_factory=list)
+    removed_tracks: int = 0
+    removed_metadata_cache: int = 0
+    removed_artwork_cache: int = 0
+    message: str
 
 
 class AutoDjRequest(BaseModel):
@@ -2081,4 +2290,7 @@ class SettingsResponse(BaseModel):
     suggested_music_path: str | None = None
     write_ratings_to_files: bool = False
     auto_write_fetched_lyrics_sidecars: bool = False
+    acoustid_api_key_configured: bool = False
+    lastfm_api_credentials_configured: bool = False
+    lastfm_api_credentials_source: str | None = None
     extra: dict[str, Any] = Field(default_factory=dict)

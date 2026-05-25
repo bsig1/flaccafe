@@ -14,6 +14,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import sys
 import uuid
 import zipfile
 import xml.etree.ElementTree as ET
@@ -25,7 +26,7 @@ from urllib import parse, request as urlrequest
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from mutagen import File as MutagenFile
 from mutagen.flac import Picture
 from mutagen.mp4 import MP4Cover
@@ -35,6 +36,7 @@ from .database import connect, get_setting, init_db, rows_to_dicts, set_setting
 from .extensions import discover_extensions
 from .file_tags import write_custom_tags, write_track_artwork, write_track_lyrics, write_track_metadata, write_track_rating
 from .gapless import gapless_validate
+from .volume_tags import build_volume_tag_response
 from . import inbox as inbox_service
 from .library_importers import import_library_stats
 from .library_tools import (
@@ -52,7 +54,17 @@ from .library_watcher import (
     start_folder_watcher_from_settings,
     stop_folder_watcher,
 )
-from .musicbrainz_autotag import cover_art_for_release, metadata_changes, parse_year, preview_auto_tags, search_releases, text_similarity
+from .musicbrainz_autotag import (
+    artist_credit_phrase,
+    cover_art_for_release,
+    lookup_release,
+    metadata_changes,
+    parse_year,
+    preview_auto_tags,
+    release_track_entries,
+    search_releases,
+    text_similarity,
+)
 from .analysis_jobs import (
     cancel_audio_analysis_job,
     get_audio_analysis_job,
@@ -63,6 +75,7 @@ from .analysis_jobs import (
 from .audio_conversion_jobs import (
     cancel_audio_conversion_job,
     conversion_preview,
+    ffmpeg_tool_dir,
     ffmpeg_status,
     get_audio_conversion_job,
     resolve_ffmpeg_path,
@@ -81,10 +94,12 @@ from .audiobooks import (
 )
 from .cd_ripping import (
     cancel_cd_rip_job,
+    cd_live_wav_content_length,
+    cd_live_wav_stream,
     cd_rip_setup,
     get_cd_rip_job,
     lookup_cd_metadata,
-    play_cd_track,
+    prepare_cd_live_track,
     start_cd_rip_job,
     stop_cd_playback,
 )
@@ -99,6 +114,7 @@ from .clap_analysis import status as clap_status
 from .clap_install_jobs import get_clap_install_job, start_clap_install_job
 from .playlist import export_m3u
 from .podcasts import (
+    delete_episode_download as delete_podcast_episode_download,
     delete_subscription as delete_podcast_subscription,
     download_episode,
     ensure_episode_track as ensure_podcast_episode_track,
@@ -106,6 +122,7 @@ from .podcasts import (
     list_subscriptions as list_podcast_subscriptions,
     podcast_where_clause,
     refresh_subscription as refresh_podcast_subscription,
+    subscription_download_folder as podcast_subscription_download_folder,
     upsert_subscription as upsert_podcast_subscription,
 )
 from .radio import (
@@ -127,9 +144,11 @@ from .recommender import (
     track_is_exploratory,
     track_is_familiar,
 )
-from .scanner import ScanStats, file_state, path_key, read_metadata, scan_folder, upsert_track
+from .scanner import ScanStats, file_state, is_path_under_folder, path_key, read_metadata, scan_folder, upsert_track
 from .scan_jobs import get_scan_job, start_scan_job
 from .scrobbling import (
+    complete_lastfm_login,
+    configured_lastfm_credentials,
     import_history_csv as import_scrobble_history_csv,
     list_accounts as list_scrobble_accounts,
     loved_tracks as list_loved_tracks,
@@ -137,15 +156,19 @@ from .scrobbling import (
     queue_history as queue_scrobble_history,
     save_account as save_scrobble_account,
     set_loved as set_track_loved,
+    start_lastfm_login,
     submit_outbox as submit_scrobble_outbox,
 )
 from .schemas import (
+    AlbumCompletionLookupResponse,
     AlbumSummary,
     ArtistInfoResponse,
+    ArtistSummary,
     AudioAnalysisCoverage,
     AudioAnalysisProgress,
     AudioAnalysisStartRequest,
     AudioAnalysisStartResponse,
+    AudioConversionInstallRequest,
     AudioConversionPreviewResponse,
     AudioConversionProgress,
     AudioConversionRequest,
@@ -193,8 +216,6 @@ from .schemas import (
     BulkUndoLogEntry,
     BulkUndoRestoreResponse,
     ChromaprintConfigRequest,
-    ChromaprintInstallRequest,
-    ChromaprintInstallResponse,
     ChromaprintStatusResponse,
     ClapGenreTagRequest,
     ClapGenreTagResponse,
@@ -259,7 +280,12 @@ from .schemas import (
     InboxTrackNote,
     InboxReviewRequest,
     InboxReviewResponse,
+    HistoryStatsResponse,
     LibraryStatsResponse,
+    LastFmLoginCompleteRequest,
+    LastFmLoginCompleteResponse,
+    LastFmLoginStartRequest,
+    LastFmLoginStartResponse,
     LyricsResponse,
     LyricsUpdateRequest,
     PlaylistCreateRequest,
@@ -269,9 +295,12 @@ from .schemas import (
     PlaylistTrackRequest,
     PlayEventEntry,
     PodcastDownloadRequest,
+    PodcastDeleteDownloadResponse,
     PodcastEpisode,
+    PodcastFolderResponse,
     PodcastRefreshResponse,
     PodcastSubscription,
+    PodcastSubscriptionDeleteResponse,
     PodcastSubscriptionPayload,
     RatingRequest,
     RadioStation,
@@ -306,6 +335,8 @@ from .schemas import (
     ScrobbleQueueHistoryResponse,
     ScrobbleSubmitRequest,
     ScrobbleSubmitResponse,
+    LibrarySourceRemoveRequest,
+    LibrarySourceRemoveResponse,
     SettingsUpdateRequest,
     SettingsResponse,
     SmartPlaylistCreateRequest,
@@ -333,6 +364,13 @@ from .schemas import (
     TrackLoveResponse,
     Track,
     TrackDeleteResponse,
+    TrackFileMetadataWritePreview,
+    TrackFileMetadataWriteRequest,
+    TrackFileMetadataWriteResponse,
+    TrackMetadataSyncRequest,
+    TrackMetadataSyncResponse,
+    TracksDeleteRequest,
+    TracksDeleteResponse,
     TrackRestoreRequest,
     TrackMetadataUpdateRequest,
     TrackPage,
@@ -341,6 +379,8 @@ from .schemas import (
     VirtualTagPreview,
     VirtualTagPreviewRequest,
     VirtualTagPreviewResponse,
+    VolumeTagRequest,
+    VolumeTagResponse,
 )
 
 MEDIA_TYPES = {
@@ -415,10 +455,7 @@ TRACK_COLUMNS = """
 
 TRACK_FIELD_NAMES = [field.strip() for field in TRACK_COLUMNS.replace("\n", " ").split(",") if field.strip()]
 
-CHROMAPRINT_WINDOWS_URL = (
-    "https://github.com/acoustid/chromaprint/releases/download/v1.6.0/"
-    "chromaprint-fpcalc-1.6.0-windows-x86_64.zip"
-)
+FFMPEG_WINDOWS_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 
 TRACK_JOIN_COLUMNS = """
     tracks.id AS id, tracks.path AS path, tracks.title AS title,
@@ -519,8 +556,49 @@ def _check_writable_directory(path: Path) -> str:
     return "Writable"
 
 
-def recent_backend_error_summary(limit: int = 500) -> str | None:
-    log_path = backend_log_path()
+LOG_RECORD_START_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} ")
+
+
+def log_records(lines: list[str]) -> list[str]:
+    records: list[list[str]] = []
+    current: list[str] = []
+    for line in lines:
+        if LOG_RECORD_START_RE.match(line) and current:
+            records.append(current)
+            current = [line]
+        else:
+            current.append(line)
+    if current:
+        records.append(current)
+    return ["\n".join(record) for record in records]
+
+
+def benign_backend_log_record(record: str) -> bool:
+    return (
+        "_ProactorBasePipeTransport._call_connection_lost" in record
+        and "ConnectionResetError: [WinError 10054]" in record
+    )
+
+
+def backend_log_record_summary(record: str) -> str:
+    lines = [line.strip() for line in record.splitlines() if line.strip()]
+    if not lines:
+        return "Unknown backend log entry"
+    headline = next(
+        (
+            line
+            for line in lines
+            if " CRITICAL " in line or " ERROR " in line or "Traceback" in line or "Exception" in line
+        ),
+        lines[0],
+    )
+    tail = lines[-1]
+    summary = headline if tail == headline else f"{headline} ({tail})"
+    return summary[:500]
+
+
+def recent_backend_error_summary(limit: int = 500, log_path: Path | None = None) -> str | None:
+    log_path = log_path or backend_log_path()
     if not log_path.exists():
         return None
     try:
@@ -528,11 +606,12 @@ def recent_backend_error_summary(limit: int = 500) -> str | None:
     except OSError as exc:
         return f"Could not read backend log: {exc}"
 
-    interesting = [
-        line
-        for line in lines
-        if "Traceback" in line or " CRITICAL " in line or " ERROR " in line or "Exception" in line
-    ]
+    interesting = []
+    for record in log_records(lines):
+        if benign_backend_log_record(record):
+            continue
+        if "Traceback" in record or " CRITICAL " in record or " ERROR " in record or "Exception" in record:
+            interesting.append(backend_log_record_summary(record))
     if not interesting:
         return None
     return interesting[-1].strip()[:500]
@@ -541,8 +620,8 @@ def recent_backend_error_summary(limit: int = 500) -> str | None:
 def _check_recent_backend_errors() -> str:
     summary = recent_backend_error_summary()
     if summary:
-        raise RuntimeError(f"Recent backend error: {summary}")
-    return "No recent backend errors in the current log"
+        raise RuntimeError(f"Recent backend log entry needs review: {summary}")
+    return "No actionable backend errors in the current log"
 
 
 def startup_diagnostics() -> StartupDiagnosticsResponse:
@@ -696,7 +775,11 @@ def create_support_bundle() -> SupportBundleResponse:
         redacted_settings = [
             {
                 **row,
-                "value": "[redacted path]" if "path" in row["key"] or "dir" in row["key"] else row["value"],
+                "value": (
+                    "[redacted secret]"
+                    if "key" in row["key"] or "secret" in row["key"] or "token" in row["key"]
+                    else "[redacted path]" if "path" in row["key"] or "dir" in row["key"] else row["value"]
+                ),
             }
             for row in settings_rows
         ]
@@ -858,6 +941,68 @@ def save_library_paths(conn, paths: list[str]) -> None:
     set_setting(conn, "library_paths_json", json.dumps(normalized, ensure_ascii=True))
 
 
+def library_path_compare_key(path_text: str) -> str:
+    try:
+        path = Path(path_text).expanduser().resolve(strict=False)
+    except (OSError, RuntimeError, ValueError):
+        path = Path(path_text)
+    return os.path.normcase(str(path))
+
+
+def remove_library_source_rows(conn, source_path: str) -> LibrarySourceRemoveResponse:
+    normalized_sources = normalized_library_paths([source_path])
+    if not normalized_sources:
+        raise HTTPException(status_code=400, detail="Choose a library source to remove")
+
+    normalized_source = normalized_sources[0]
+    source_root = Path(normalized_source).expanduser().resolve(strict=False)
+    removed_source_key = library_path_compare_key(normalized_source)
+    remaining_sources = [
+        path for path in stored_library_paths(conn)
+        if library_path_compare_key(path) != removed_source_key
+    ]
+
+    rows = conn.execute("SELECT id, path, path_key FROM tracks").fetchall()
+    source_rows = [
+        row for row in rows
+        if is_path_under_folder(str(row["path"]), source_root)
+    ]
+    removed_tracks = len(source_rows)
+    removed_metadata_cache = 0
+    removed_artwork_cache = 0
+
+    # Removing a source is a library operation only: audio files stay on disk.
+    for row in source_rows:
+        metadata_cursor = conn.execute(
+            "DELETE FROM track_metadata_cache WHERE path_key = ?",
+            (row["path_key"],),
+        )
+        artwork_cursor = conn.execute(
+            "DELETE FROM artwork_cache WHERE path_key = ?",
+            (row["path_key"],),
+        )
+        removed_metadata_cache += max(metadata_cursor.rowcount, 0)
+        removed_artwork_cache += max(artwork_cursor.rowcount, 0)
+        conn.execute("DELETE FROM tracks WHERE id = ?", (row["id"],))
+
+    if removed_tracks:
+        delete_orphan_albums(conn)
+    save_library_paths(conn, remaining_sources)
+    conn.commit()
+
+    return LibrarySourceRemoveResponse(
+        path=normalized_source,
+        library_paths=remaining_sources,
+        removed_tracks=removed_tracks,
+        removed_metadata_cache=removed_metadata_cache,
+        removed_artwork_cache=removed_artwork_cache,
+        message=(
+            f"Removed {removed_tracks} track{'s' if removed_tracks != 1 else ''} from FLAC Cafe. "
+            "Audio files were not deleted from disk."
+        ),
+    )
+
+
 def delete_orphan_albums(conn) -> None:
     conn.execute(
         """
@@ -867,6 +1012,52 @@ def delete_orphan_albums(conn) -> None:
         )
         """
     )
+
+
+def move_file_to_recycle_bin(path: Path) -> None:
+    if os.name != "nt":
+        raise OSError("Moving files to the Recycle Bin is currently only available on Windows.")
+    resolved = path.expanduser().resolve()
+    if not resolved.is_file():
+        raise OSError("Track path is not a file")
+
+    import ctypes
+    from ctypes import wintypes
+
+    class SHFILEOPSTRUCTW(ctypes.Structure):
+        _fields_ = [
+            ("hwnd", wintypes.HWND),
+            ("wFunc", wintypes.UINT),
+            ("pFrom", wintypes.LPCWSTR),
+            ("pTo", wintypes.LPCWSTR),
+            ("fFlags", wintypes.WORD),
+            ("fAnyOperationsAborted", wintypes.BOOL),
+            ("hNameMappings", wintypes.LPVOID),
+            ("lpszProgressTitle", wintypes.LPCWSTR),
+        ]
+
+    FO_DELETE = 0x0003
+    FOF_SILENT = 0x0004
+    FOF_NOCONFIRMATION = 0x0010
+    FOF_ALLOWUNDO = 0x0040
+    FOF_NOERRORUI = 0x0400
+    FOF_WANTNUKEWARNING = 0x4000
+
+    operation = SHFILEOPSTRUCTW()
+    operation.wFunc = FO_DELETE
+    operation.pFrom = f"{resolved}\0\0"
+    operation.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT | FOF_WANTNUKEWARNING
+
+    shell_operation = ctypes.windll.shell32.SHFileOperationW
+    shell_operation.argtypes = [ctypes.POINTER(SHFILEOPSTRUCTW)]
+    shell_operation.restype = ctypes.c_int
+    result = shell_operation(ctypes.byref(operation))
+    if result != 0:
+        raise OSError(result, f"Could not move file to the Recycle Bin (shell error {result})")
+    if operation.fAnyOperationsAborted:
+        raise OSError("Recycle Bin operation was canceled")
+    if resolved.exists():
+        raise OSError("Recycle Bin operation completed, but the file is still present")
 
 
 def ensure_album_for_track(conn, values: dict) -> int | None:
@@ -904,10 +1095,10 @@ def fuzzy_search_terms(search: str) -> list[str]:
     return [term for term in re.split(r"[\s/\\,;:_()\[\]{}|]+", search.strip().lower()) if term]
 
 
-def fuzzy_where_clause(expression: str, search: str) -> tuple[str, list[object]]:
+def fuzzy_condition(expression: str, search: str) -> tuple[str | None, list[object]]:
     terms = fuzzy_search_terms(search)
     if not terms:
-        return "", []
+        return None, []
     compact_expression = compact_sql_expression(expression)
     clauses: list[str] = []
     params: list[object] = []
@@ -915,19 +1106,79 @@ def fuzzy_where_clause(expression: str, search: str) -> tuple[str, list[object]]
         compact_term = re.sub(r"[^a-z0-9]+", "", term)
         clauses.append(f"(lower({expression}) LIKE ? OR {compact_expression} LIKE ?)")
         params.extend([f"%{term}%", f"%{compact_term or term}%"])
-    return f"WHERE {' AND '.join(clauses)}", params
+    return f"({' AND '.join(clauses)})", params
 
 
-def track_where_clause(search: str) -> tuple[str, list[object]]:
+def fuzzy_where_clause(expression: str, search: str) -> tuple[str, list[object]]:
+    condition, params = fuzzy_condition(expression, search)
+    if condition is None:
+        return "", []
+    return f"WHERE {condition}", params
+
+
+def add_fuzzy_filter(clauses: list[str], params: list[object], expression: str, value: object) -> None:
+    if not isinstance(value, str) or not value.strip():
+        return
+    condition, filter_params = fuzzy_condition(expression, value)
+    if condition:
+        clauses.append(condition)
+        params.extend(filter_params)
+
+
+def track_where_clause(search: str, filters: dict[str, object] | None = None) -> tuple[str, list[object]]:
     expression = """coalesce(title, '') || ' ' || coalesce(artist, '') || ' ' ||
                     coalesce(album, '') || ' ' || coalesce(album_artist, '') || ' ' ||
                     coalesce(genre, '') || ' ' || coalesce(analysis_genre, '') || ' ' ||
                     coalesce(path, '')"""
-    search_clause, params = fuzzy_where_clause(expression, search)
-    longform_filter = f"NOT {audiobook_where_clause()} AND NOT {podcast_where_clause()}"
-    if search_clause:
-        return f"{search_clause} AND {longform_filter}", params
-    return f"WHERE {longform_filter}", params
+    condition, params = fuzzy_condition(expression, search)
+    clauses = [f"NOT {audiobook_where_clause()} AND NOT {podcast_where_clause()}"]
+    if condition:
+        clauses.append(condition)
+    filters = filters or {}
+    add_fuzzy_filter(clauses, params, "coalesce(artist, '') || ' ' || coalesce(album_artist, '')", filters.get("artist"))
+    add_fuzzy_filter(clauses, params, "coalesce(album, '')", filters.get("album"))
+    add_fuzzy_filter(clauses, params, "coalesce(genre, '') || ' ' || coalesce(analysis_genre, '')", filters.get("genre"))
+    add_fuzzy_filter(clauses, params, "coalesce(path, '')", filters.get("path"))
+
+    extension = str(filters.get("extension") or "").strip().lower().lstrip(".")
+    if extension:
+        extension = re.sub(r"[^a-z0-9]+", "", extension)
+        if extension:
+            clauses.append("lower(path) LIKE ?")
+            params.append(f"%.{extension}")
+
+    rating_state = str(filters.get("rating_state") or "any").strip().lower()
+    if rating_state == "rated":
+        clauses.append("rating IS NOT NULL")
+    elif rating_state == "unrated":
+        clauses.append("rating IS NULL")
+
+    numeric_filters = [
+        ("min_rating", "rating >= ?"),
+        ("max_rating", "rating <= ?"),
+        ("year_from", "year >= ?"),
+        ("year_to", "year <= ?"),
+        ("min_duration", "duration_seconds >= ?"),
+        ("max_duration", "duration_seconds <= ?"),
+    ]
+    for key, clause in numeric_filters:
+        value = filters.get(key)
+        if value is not None:
+            clauses.append(clause)
+            params.append(value)
+
+    if filters.get("missing_metadata"):
+        clauses.append(
+            """(
+                coalesce(title, '') = ''
+                OR coalesce(artist, '') = ''
+                OR coalesce(album, '') = ''
+                OR coalesce(genre, '') = ''
+                OR year IS NULL
+            )"""
+        )
+
+    return f"WHERE {' AND '.join(clauses)}", params
 
 
 def track_order_clause(sort_by: str, sort_direction: str) -> str:
@@ -946,8 +1197,9 @@ def query_tracks(
     offset: int,
     sort_by: str,
     sort_direction: str,
+    filters: dict[str, object] | None = None,
 ) -> tuple[list[dict], int]:
-    where_clause, params = track_where_clause(search)
+    where_clause, params = track_where_clause(search, filters)
     order_clause = track_order_clause(sort_by, sort_direction)
     query = f"SELECT {TRACK_COLUMNS} FROM tracks {where_clause} {order_clause}"
     query_params = list(params)
@@ -1355,6 +1607,45 @@ def apply_track_rating_update(conn, track_id: int, rating: float | None, record_
     return track_response(conn, track_id)
 
 
+def sync_compare_value(left: object, right: object) -> bool:
+    if left is None or (isinstance(left, str) and not left.strip()):
+        return right is None or (isinstance(right, str) and not right.strip())
+    if right is None or (isinstance(right, str) and not right.strip()):
+        return False
+    if isinstance(left, (int, float)) or isinstance(right, (int, float)):
+        try:
+            return abs(float(left) - float(right)) < 0.01  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return False
+    return str(left).strip().casefold() == str(right).strip().casefold()
+
+
+def database_file_tag_values(track: dict, include_metadata: bool, include_rating: bool) -> dict[str, object | None]:
+    values: dict[str, object | None] = {}
+    if include_metadata:
+        values.update({field: track.get(field) for field in EDITABLE_METADATA_FIELD_ORDER})
+    if include_rating:
+        values["rating"] = track.get("rating")
+    return values
+
+
+def file_tag_values(metadata: dict, include_metadata: bool, include_rating: bool) -> dict[str, object | None]:
+    values: dict[str, object | None] = {}
+    if include_metadata:
+        values.update({field: metadata.get(field) for field in EDITABLE_METADATA_FIELD_ORDER})
+    if include_rating:
+        values["rating"] = metadata.get("rating")
+    return values
+
+
+def changed_file_write_fields(database_values: dict[str, object | None], file_values: dict[str, object | None]) -> list[str]:
+    return [
+        field
+        for field, database_value in database_values.items()
+        if not sync_compare_value(database_value, file_values.get(field))
+    ]
+
+
 def first_tag_value(value: object) -> object | None:
     if isinstance(value, list):
         return value[0] if value else None
@@ -1508,28 +1799,205 @@ def image_candidate(path: Path, source: str, selected_path: Path | None = None) 
 
 
 def album_record(conn, album_id: int):
-    row = conn.execute("SELECT id, album, album_artist, year, artwork_path FROM albums WHERE id = ?", (album_id,)).fetchone()
+    row = conn.execute(
+        """
+        SELECT
+            id,
+            album,
+            album_artist,
+            year,
+            artwork_path,
+            completion_expected_track_count,
+            completion_source,
+            completion_release_id,
+            completion_release_title,
+            completion_checked_at
+        FROM albums
+        WHERE id = ?
+        """,
+        (album_id,),
+    ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Album not found")
     return row
 
 
+def album_group_predicate(album_alias: str = "albums") -> str:
+    return f"""
+    lower(trim(coalesce({album_alias}.album, ''))) = lower(trim(coalesce(?, '')))
+    AND lower(trim(coalesce({album_alias}.album_artist, ''))) = lower(trim(coalesce(?, '')))
+    """
+
+
+def album_group_params(album: sqlite3.Row | dict[str, object]) -> tuple[object, object]:
+    return album["album"], album["album_artist"]
+
+
 def album_track_rows(conn, album_id: int) -> list[dict]:
-    album_record(conn, album_id)
+    album = album_record(conn, album_id)
     return rows_to_dicts(
         conn.execute(
             f"""
-            SELECT {TRACK_COLUMNS}
+            SELECT {TRACK_JOIN_COLUMNS}
             FROM tracks
-            WHERE album_id = ?
+            JOIN albums AS track_albums ON track_albums.id = tracks.album_id
+            WHERE {album_group_predicate("track_albums")}
+              AND NOT {audiobook_where_clause()}
+              AND NOT {podcast_where_clause()}
             ORDER BY coalesce(disc_number, 0) ASC,
                      coalesce(track_number, 0) ASC,
                      lower(coalesce(title, '')) ASC,
                      id ASC
             """,
-            (album_id,),
+            album_group_params(album),
         )
     )
+
+
+def int_from_musicbrainz_value(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        match = re.search(r"\d+", value)
+        if match:
+            return int(match.group(0))
+    return None
+
+
+def release_expected_track_count(release: dict) -> int | None:
+    entries = release_track_entries(release)
+    if entries:
+        return len(entries)
+    direct_count = int_from_musicbrainz_value(release.get("track-count"))
+    if direct_count:
+        return direct_count
+    media = release.get("media")
+    if isinstance(media, list):
+        counts = [int_from_musicbrainz_value(medium.get("track-count")) for medium in media if isinstance(medium, dict)]
+        usable_counts = [count for count in counts if count]
+        if usable_counts:
+            return sum(usable_counts)
+    return None
+
+
+def album_completion_match(album: sqlite3.Row, release: dict, local_track_count: int) -> dict | None:
+    expected_count = release_expected_track_count(release)
+    if not expected_count:
+        return None
+
+    album_title = str(album["album"] or "").strip()
+    album_artist = str(album["album_artist"] or "").strip()
+    release_group = release.get("release-group") if isinstance(release.get("release-group"), dict) else {}
+    release_artist = (
+        artist_credit_phrase(release.get("artist-credit"))
+        or release.get("artist-credit-phrase")
+        or release.get("artist")
+        or ""
+    )
+    release_year = parse_year(release.get("date") or release_group.get("first-release-date"))
+
+    title_score = text_similarity(album_title, release.get("title"))
+    artist_score = text_similarity(album_artist, release_artist) if album_artist else 0.65
+    if album["year"] and release_year:
+        distance = abs(int(album["year"]) - release_year)
+        year_score = 1.0 if distance == 0 else 0.8 if distance <= 1 else 0.55 if distance <= 3 else 0.2
+    else:
+        year_score = 0.55
+    if expected_count < local_track_count:
+        count_score = 0.15
+    elif expected_count == local_track_count:
+        count_score = 0.85
+    else:
+        count_score = max(0.45, min(1.0, local_track_count / expected_count if expected_count else 0.0))
+    confidence = (title_score * 0.45) + (artist_score * 0.3) + (year_score * 0.15) + (count_score * 0.1)
+    return {
+        "release_id": str(release.get("id") or ""),
+        "release_title": str(release.get("title") or album_title),
+        "expected_track_count": expected_count,
+        "confidence": confidence,
+    }
+
+
+def album_completion_title_variants(album_title: str) -> list[str]:
+    variants = [album_title]
+    stripped = re.sub(
+        r"\s*[\[(](?:deluxe|expanded|anniversary|special|bonus|remaster(?:ed)?|edition|version|explicit|clean)[^\])]*[\])]\s*",
+        " ",
+        album_title,
+        flags=re.IGNORECASE,
+    )
+    stripped = re.sub(r"\s+", " ", stripped).strip()
+    if stripped and stripped.casefold() != album_title.casefold():
+        variants.append(stripped)
+    return variants
+
+
+def album_completion_artist_variants(album_artist: str | None) -> list[str | None]:
+    variants: list[str | None] = []
+    if album_artist:
+        variants.append(album_artist)
+        primary = re.split(
+            r"\s*(?:;|,|/|\+|&|\bfeat\.?\b|\bfeaturing\b|\bwith\b)\s*",
+            album_artist,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0].strip()
+        if primary and primary.casefold() != album_artist.casefold():
+            variants.append(primary)
+    variants.append(None)
+    deduped: list[str | None] = []
+    seen: set[str] = set()
+    for variant in variants:
+        key = (variant or "").casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(variant)
+    return deduped
+
+
+def album_completion_release_queries(album_title: str, album_artist: str | None) -> list[tuple[str, str | None]]:
+    queries: list[tuple[str, str | None]] = []
+    seen: set[tuple[str, str]] = set()
+    for title_variant in album_completion_title_variants(album_title):
+        for artist_variant in album_completion_artist_variants(album_artist):
+            key = (title_variant.casefold(), (artist_variant or "").casefold())
+            if key in seen:
+                continue
+            seen.add(key)
+            queries.append((title_variant, artist_variant))
+    return queries
+
+
+def best_album_completion_match(album: sqlite3.Row, local_track_count: int, limit: int = 5) -> dict | None:
+    album_title = str(album["album"] or "").strip()
+    if not album_title:
+        return None
+    album_artist = str(album["album_artist"] or "").strip() or None
+    best_match: dict | None = None
+    seen_release_ids: set[str] = set()
+    for title_variant, artist_variant in album_completion_release_queries(album_title, album_artist):
+        query_matches: list[dict] = []
+        for candidate in search_releases(title_variant, artist_variant, limit):
+            release_id = str(candidate.get("id") or "").strip()
+            candidate_key = release_id or json.dumps(candidate, sort_keys=True, default=str)
+            if candidate_key in seen_release_ids:
+                continue
+            seen_release_ids.add(candidate_key)
+            release = lookup_release(release_id) if release_id else None
+            match = album_completion_match(album, release or candidate, local_track_count)
+            if match:
+                query_matches.append(match)
+        if not query_matches:
+            continue
+        query_best = max(query_matches, key=lambda candidate: candidate["confidence"])
+        if best_match is None or query_best["confidence"] > best_match["confidence"]:
+            best_match = query_best
+        if query_best["confidence"] >= 0.45:
+            return query_best
+    return best_match
 
 
 def album_artwork_candidates(conn, album_id: int) -> list[AlbumArtworkCandidate]:
@@ -1851,7 +2319,7 @@ def download_cover_art(url: str) -> tuple[bytes, str]:
         url,
         headers={
             "Accept": "image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8",
-            "User-Agent": "FLAC Cafe/0.2.1 (local library auto-tag artwork; https://github.com/)",
+            "User-Agent": "FLAC Cafe/0.4.0 (local library auto-tag artwork; https://github.com/)",
         },
     )
     try:
@@ -2181,6 +2649,19 @@ def primary_artist_name(value: str) -> str:
     artist = re.split(r"\s*[;|]\s*", value, maxsplit=1)[0].strip()
     artist = re.split(r"\s+\b(feat\.?|featuring|with)\b\s+", artist, maxsplit=1, flags=re.IGNORECASE)[0].strip()
     return artist or value.strip()
+
+
+def primary_artist_sql(alias: str = "tracks") -> str:
+    artist = f"coalesce({alias}.artist, '')"
+    return f"""
+    trim(
+      CASE
+        WHEN instr({artist}, ';') > 0 THEN substr({artist}, 1, instr({artist}, ';') - 1)
+        WHEN instr({artist}, '|') > 0 THEN substr({artist}, 1, instr({artist}, '|') - 1)
+        ELSE {artist}
+      END
+    )
+    """
 
 
 def artist_cache_key(artist_name: str) -> str:
@@ -2519,6 +3000,16 @@ def get_settings() -> SettingsResponse:
         library_paths = stored_library_paths(conn)
         write_ratings_to_files = get_write_ratings_to_files(conn)
         auto_write_fetched_lyrics_sidecars = get_auto_write_fetched_lyrics_sidecars(conn)
+        acoustid_api_key_configured = bool((get_setting(conn, "acoustid_api_key") or "").strip())
+    lastfm_account = next((account for account in list_scrobble_accounts() if account.get("service") == "lastfm"), {})
+    lastfm_saved_configured = bool((lastfm_account.get("api_key") or "").strip() and (lastfm_account.get("api_secret") or "").strip())
+    lastfm_env_key, lastfm_env_secret = configured_lastfm_credentials()
+    lastfm_env_configured = bool(lastfm_env_key and lastfm_env_secret)
+    lastfm_source = (
+        "environment+saved"
+        if lastfm_env_configured and lastfm_saved_configured
+        else "environment" if lastfm_env_configured else "saved" if lastfm_saved_configured else None
+    )
     return SettingsResponse(
         library_path=library_path or (library_paths[0] if library_paths else None),
         library_paths=library_paths,
@@ -2526,6 +3017,9 @@ def get_settings() -> SettingsResponse:
         suggested_music_path=suggested_music_path(),
         write_ratings_to_files=write_ratings_to_files,
         auto_write_fetched_lyrics_sidecars=auto_write_fetched_lyrics_sidecars,
+        acoustid_api_key_configured=acoustid_api_key_configured,
+        lastfm_api_credentials_configured=bool(lastfm_source),
+        lastfm_api_credentials_source=lastfm_source,
         extra={"clap": clap_status()},
     )
 
@@ -2541,8 +3035,25 @@ def update_settings(request: SettingsUpdateRequest) -> SettingsResponse:
                 "auto_write_fetched_lyrics_sidecars",
                 "1" if request.auto_write_fetched_lyrics_sidecars else "0",
             )
+        if request.clear_acoustid_api_key:
+            set_setting(conn, "acoustid_api_key", None)
+        elif request.acoustid_api_key is not None:
+            set_setting(conn, "acoustid_api_key", request.acoustid_api_key.strip() or None)
         conn.commit()
+    if request.clear_lastfm_api_credentials:
+        save_scrobble_account("lastfm", {"api_key": None, "api_secret": None})
+    elif request.lastfm_api_key is not None or request.lastfm_api_secret is not None:
+        existing = next((account for account in list_scrobble_accounts() if account.get("service") == "lastfm"), {})
+        api_key = request.lastfm_api_key.strip() if request.lastfm_api_key is not None else str(existing.get("api_key") or "").strip()
+        api_secret = request.lastfm_api_secret.strip() if request.lastfm_api_secret is not None else str(existing.get("api_secret") or "").strip()
+        save_scrobble_account("lastfm", {"api_key": api_key or None, "api_secret": api_secret or None})
     return get_settings()
+
+
+@app.post("/settings/library-sources/remove", response_model=LibrarySourceRemoveResponse)
+def remove_library_source(request: LibrarySourceRemoveRequest) -> LibrarySourceRemoveResponse:
+    with connect() as conn:
+        return remove_library_source_rows(conn, request.path)
 
 
 @app.get("/analysis/clap/status", response_model=ClapStatusResponse)
@@ -2567,7 +3078,7 @@ def get_clap_install(job_id: str) -> dict:
 def get_clap_coverage() -> AudioAnalysisCoverage:
     with connect() as conn:
         row = conn.execute(
-            """
+            f"""
             SELECT
                 count(*) AS total_tracks,
                 sum(
@@ -2580,6 +3091,8 @@ def get_clap_coverage() -> AudioAnalysisCoverage:
                 ) AS analyzed_tracks,
                 sum(CASE WHEN analysis_provider = 'clap_failed' THEN 1 ELSE 0 END) AS failed_tracks
             FROM tracks
+            WHERE NOT {audiobook_where_clause()}
+              AND NOT {podcast_where_clause()}
             """
         ).fetchone()
     total = int(row["total_tracks"] or 0)
@@ -2668,8 +3181,42 @@ def list_tracks(
     offset: int = Query(default=0, ge=0),
     sort_by: str = "artist",
     sort_direction: str = "asc",
+    artist: str = "",
+    album: str = "",
+    genre: str = "",
+    path: str = "",
+    extension: str = "",
+    rating_state: str = "any",
+    min_rating: float | None = Query(default=None, ge=0.5, le=5),
+    max_rating: float | None = Query(default=None, ge=0.5, le=5),
+    year_from: int | None = Query(default=None, ge=0, le=9999),
+    year_to: int | None = Query(default=None, ge=0, le=9999),
+    min_duration: float | None = Query(default=None, ge=0),
+    max_duration: float | None = Query(default=None, ge=0),
+    missing_metadata: bool = False,
 ) -> list[dict]:
-    tracks, _total = query_tracks(search, limit, offset, sort_by, sort_direction)
+    tracks, _total = query_tracks(
+        search,
+        limit,
+        offset,
+        sort_by,
+        sort_direction,
+        {
+            "artist": artist,
+            "album": album,
+            "genre": genre,
+            "path": path,
+            "extension": extension,
+            "rating_state": rating_state,
+            "min_rating": min_rating,
+            "max_rating": max_rating,
+            "year_from": year_from,
+            "year_to": year_to,
+            "min_duration": min_duration,
+            "max_duration": max_duration,
+            "missing_metadata": missing_metadata,
+        },
+    )
     return tracks
 
 
@@ -2680,9 +3227,148 @@ def list_track_page(
     offset: int = Query(default=0, ge=0),
     sort_by: str = "artist",
     sort_direction: str = "asc",
+    artist: str = "",
+    album: str = "",
+    genre: str = "",
+    path: str = "",
+    extension: str = "",
+    rating_state: str = "any",
+    min_rating: float | None = Query(default=None, ge=0.5, le=5),
+    max_rating: float | None = Query(default=None, ge=0.5, le=5),
+    year_from: int | None = Query(default=None, ge=0, le=9999),
+    year_to: int | None = Query(default=None, ge=0, le=9999),
+    min_duration: float | None = Query(default=None, ge=0),
+    max_duration: float | None = Query(default=None, ge=0),
+    missing_metadata: bool = False,
 ) -> TrackPage:
-    tracks, total = query_tracks(search, limit, offset, sort_by, sort_direction)
+    tracks, total = query_tracks(
+        search,
+        limit,
+        offset,
+        sort_by,
+        sort_direction,
+        {
+            "artist": artist,
+            "album": album,
+            "genre": genre,
+            "path": path,
+            "extension": extension,
+            "rating_state": rating_state,
+            "min_rating": min_rating,
+            "max_rating": max_rating,
+            "year_from": year_from,
+            "year_to": year_to,
+            "min_duration": min_duration,
+            "max_duration": max_duration,
+            "missing_metadata": missing_metadata,
+        },
+    )
     return TrackPage(tracks=tracks, total=total, limit=limit, offset=offset)
+
+
+@app.post("/library/tools/write-metadata-to-files", response_model=TrackFileMetadataWriteResponse)
+@app.post("/tracks/write-metadata-to-files", response_model=TrackFileMetadataWriteResponse)
+def write_track_metadata_to_files(request: TrackFileMetadataWriteRequest) -> TrackFileMetadataWriteResponse:
+    if not request.include_metadata and not request.include_rating:
+        raise HTTPException(status_code=400, detail="Choose metadata, ratings, or both to write")
+
+    unique_ids = list(dict.fromkeys(int(track_id) for track_id in (request.track_ids or []) if int(track_id) > 0))
+    previews: list[TrackFileMetadataWritePreview] = []
+    missing_ids: list[int] = []
+    errors: list[str] = []
+    applied = 0
+    batch_id = new_undo_batch_id("file-tag-write") if request.apply else None
+
+    with connect() as conn:
+        if unique_ids:
+            rows, missing_ids = tracks_by_ids(conn, unique_ids[: request.limit])
+        else:
+            rows = rows_to_dicts(
+                conn.execute(
+                    f"""
+                    SELECT {TRACK_COLUMNS}
+                    FROM tracks
+                    WHERE NOT {audiobook_where_clause()} AND NOT {podcast_where_clause()}
+                    ORDER BY datetime(updated_at) DESC, id DESC
+                    LIMIT ?
+                    """,
+                    (request.limit,),
+                )
+            )
+
+        for row in rows:
+            track = dict(row)
+            track_id = int(track["id"])
+            path = Path(str(track["path"])).expanduser()
+            database_values = database_file_tag_values(track, request.include_metadata, request.include_rating)
+            file_values: dict[str, object | None] = {}
+            changed_fields: list[str] = []
+            preview = TrackFileMetadataWritePreview(
+                track_id=track_id,
+                path=str(path),
+                title=track.get("title"),
+                artist=track.get("artist"),
+                database=database_values,
+                file=file_values,
+            )
+
+            if not path.exists() or not path.is_file():
+                preview.error = "Audio file is missing on disk"
+                errors.append(f"{track.get('title') or path.name}: {preview.error}")
+                previews.append(preview)
+                continue
+
+            try:
+                metadata = read_metadata(path)
+                file_values = file_tag_values(metadata, request.include_metadata, request.include_rating)
+                changed_fields = changed_file_write_fields(database_values, file_values)
+                preview.file = file_values
+                preview.changed_fields = changed_fields
+
+                if request.apply and changed_fields:
+                    write_bulk_undo_log(
+                        conn,
+                        "sqlite_file_tag_write",
+                        f"Wrote SQLite tags to {track.get('title') or path.name}",
+                        {
+                            "track": track,
+                            "previous_file_values": file_values,
+                            "changed_fields": changed_fields,
+                        },
+                        batch_id,
+                    )
+                    if request.include_metadata and any(field in EDITABLE_METADATA_FIELDS for field in changed_fields):
+                        write_track_metadata(path, {field: track.get(field) for field in EDITABLE_METADATA_FIELD_ORDER})
+                    if request.include_rating and "rating" in changed_fields:
+                        write_track_rating(path, track.get("rating"))
+                    if path.exists():
+                        file_modified_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).replace(microsecond=0).isoformat()
+                        conn.execute(
+                            """
+                            UPDATE tracks
+                            SET file_modified_at = ?, updated_at = datetime('now')
+                            WHERE id = ?
+                            """,
+                            (file_modified_at, track_id),
+                        )
+                    conn.execute("DELETE FROM track_metadata_cache WHERE path_key = ?", (path_key(path),))
+                    preview.applied = True
+                    applied += 1
+            except Exception as exc:
+                preview.error = str(exc)
+                errors.append(f"{track.get('title') or path.name}: {exc}")
+            previews.append(preview)
+
+        conn.commit()
+
+    return TrackFileMetadataWriteResponse(
+        total=len(previews),
+        changed=sum(1 for preview in previews if preview.changed_fields),
+        applied=applied,
+        missing_track_ids=missing_ids,
+        errors=errors[:100],
+        previews=previews,
+    )
 
 
 @app.get("/tracks/{track_id}", response_model=Track)
@@ -2766,10 +3452,10 @@ def delete_track(track_id: int, delete_file: bool = False) -> TrackDeleteRespons
             if not path.is_file():
                 raise HTTPException(status_code=400, detail="Track path is not a file")
             try:
-                path.unlink()
+                move_file_to_recycle_bin(path)
                 deleted_file = True
             except OSError as exc:
-                raise HTTPException(status_code=400, detail=f"Could not delete audio file: {exc}") from exc
+                raise HTTPException(status_code=400, detail=f"Could not move audio file to the Recycle Bin: {exc}") from exc
 
         conn.execute("DELETE FROM tracks WHERE id = ?", (track_id,))
         delete_orphan_albums(conn)
@@ -2780,6 +3466,68 @@ def delete_track(track_id: int, delete_file: bool = False) -> TrackDeleteRespons
         removed_from_library=True,
         deleted_file=deleted_file,
         file_missing=file_missing,
+    )
+
+
+@app.post("/tracks/delete", response_model=TracksDeleteResponse)
+def delete_tracks(request: TracksDeleteRequest) -> TracksDeleteResponse:
+    unique_ids = list(dict.fromkeys(int(track_id) for track_id in request.track_ids if int(track_id) > 0))
+    if not unique_ids:
+        raise HTTPException(status_code=400, detail="Choose at least one track to remove")
+
+    batch_id = new_undo_batch_id("track-remove")
+    with connect() as conn:
+        present_ids = track_ids_present(conn, unique_ids)
+        removed_track_ids, deleted_files, errors = remove_tracks_for_action(
+            conn,
+            unique_ids,
+            request.delete_file,
+            batch_id,
+        )
+        conn.commit()
+
+    missing_track_ids = [track_id for track_id in unique_ids if track_id not in present_ids]
+    return TracksDeleteResponse(
+        removed_track_ids=removed_track_ids,
+        removed_count=len(removed_track_ids),
+        deleted_files=deleted_files,
+        missing_track_ids=missing_track_ids,
+        errors=errors,
+    )
+
+
+@app.post("/tracks/sync-metadata", response_model=TrackMetadataSyncResponse)
+def sync_track_metadata_from_files(request: TrackMetadataSyncRequest) -> TrackMetadataSyncResponse:
+    unique_ids = list(dict.fromkeys(int(track_id) for track_id in request.track_ids if int(track_id) > 0))
+    if not unique_ids:
+        raise HTTPException(status_code=400, detail="Choose at least one track to sync")
+
+    synced: list[int] = []
+    errors: list[str] = []
+    with connect() as conn:
+        rows, missing_ids = tracks_by_ids(conn, unique_ids)
+        for row in rows:
+            track_id = int(row["id"])
+            path = Path(str(row["path"])).expanduser()
+            if not path.exists() or not path.is_file():
+                errors.append(f"{row.get('title') or path.name}: audio file is missing")
+                continue
+            try:
+                metadata = read_metadata(path)
+                conn.execute("DELETE FROM track_metadata_cache WHERE path_key = ?", (metadata["path_key"],))
+                upsert_track(conn, metadata)
+                synced.append(track_id)
+            except Exception as exc:
+                errors.append(f"{row.get('title') or path.name}: {exc}")
+        if synced:
+            delete_orphan_albums(conn)
+        conn.commit()
+
+    return TrackMetadataSyncResponse(
+        synced_track_ids=synced,
+        synced_count=len(synced),
+        missing_track_ids=missing_ids,
+        errors=errors[:100],
     )
 
 
@@ -2832,7 +3580,7 @@ def play_history(limit: int = Query(default=200, ge=1, le=1000)) -> list[PlayEve
     for row in rows:
         track = None
         if row["id"] is not None:
-            track = {column: row[column] for column in Track.model_fields}
+            track = {column: row[column] for column in TRACK_FIELD_NAMES}
         try:
             metadata = json.loads(row["metadata_json"] or "{}")
         except json.JSONDecodeError:
@@ -2848,6 +3596,88 @@ def play_history(limit: int = Query(default=200, ge=1, le=1000)) -> list[PlayEve
             )
         )
     return events
+
+
+def history_track_stat(row: sqlite3.Row) -> dict:
+    track = {column: row[column] for column in TRACK_FIELD_NAMES}
+    return {
+        "track": track,
+        "play_count": int(row["play_count"] or 0),
+        "skip_count": int(row["skip_count"] or 0),
+        "listened_seconds": float(row["listened_seconds"] or 0),
+    }
+
+
+@app.get("/history/stats", response_model=HistoryStatsResponse)
+def play_history_stats(limit: int = Query(default=10, ge=1, le=50)) -> HistoryStatsResponse:
+    with connect() as conn:
+        totals = conn.execute(
+            """
+            SELECT
+                coalesce(sum(play_count), 0) AS total_play_count,
+                coalesce(sum(skip_count), 0) AS total_skip_count,
+                coalesce(sum(coalesce(duration_seconds, 0) * coalesce(play_count, 0)), 0) AS total_listened_seconds,
+                sum(CASE WHEN play_count > 0 THEN 1 ELSE 0 END) AS unique_played_tracks,
+                sum(CASE WHEN skip_count > 0 THEN 1 ELSE 0 END) AS unique_skipped_tracks
+            FROM tracks
+            """
+        ).fetchone()
+        event_totals = {
+            row["event_type"]: int(row["count"] or 0)
+            for row in conn.execute(
+                """
+                SELECT event_type, count(*) AS count
+                FROM play_events
+                GROUP BY event_type
+                """
+            ).fetchall()
+        }
+        top_played = [
+            history_track_stat(row)
+            for row in conn.execute(
+                f"""
+                SELECT {TRACK_COLUMNS},
+                       coalesce(duration_seconds, 0) * coalesce(play_count, 0) AS listened_seconds
+                FROM tracks
+                WHERE play_count > 0
+                ORDER BY play_count DESC,
+                         listened_seconds DESC,
+                         lower(coalesce(artist, '')) ASC,
+                         lower(coalesce(title, '')) ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        ]
+        top_skipped = [
+            history_track_stat(row)
+            for row in conn.execute(
+                f"""
+                SELECT {TRACK_COLUMNS},
+                       coalesce(duration_seconds, 0) * coalesce(play_count, 0) AS listened_seconds
+                FROM tracks
+                WHERE skip_count > 0
+                ORDER BY skip_count DESC,
+                         play_count DESC,
+                         lower(coalesce(artist, '')) ASC,
+                         lower(coalesce(title, '')) ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        ]
+    return HistoryStatsResponse(
+        total_play_count=int(totals["total_play_count"] or 0),
+        total_skip_count=int(totals["total_skip_count"] or 0),
+        total_play_events=event_totals.get("played", 0),
+        total_skip_events=event_totals.get("skipped", 0),
+        total_rated_events=event_totals.get("rated", 0),
+        unique_played_tracks=int(totals["unique_played_tracks"] or 0),
+        unique_skipped_tracks=int(totals["unique_skipped_tracks"] or 0),
+        total_listened_seconds=float(totals["total_listened_seconds"] or 0),
+        top_played=top_played,
+        top_skipped=top_skipped,
+    )
 
 
 @app.get("/library/stats", response_model=LibraryStatsResponse)
@@ -3124,6 +3954,52 @@ def update_audio_conversion_setup(request: AudioConversionSetupRequest) -> Audio
         return AudioConversionSetupResponse(**ffmpeg_status(conn))
 
 
+@app.post("/library/tools/audio-conversion/install", response_model=AudioConversionSetupResponse)
+def install_audio_conversion_ffmpeg(request: AudioConversionInstallRequest) -> AudioConversionSetupResponse:
+    if os.name != "nt":
+        with connect() as conn:
+            status = ffmpeg_status(conn)
+        status["message"] = "Guided FFmpeg install is currently Windows-only. Save an ffmpeg path instead."
+        status["errors"].append("Unsupported platform for the bundled Windows FFmpeg package.")
+        return AudioConversionSetupResponse(**status)
+
+    source_url = request.source_url or FFMPEG_WINDOWS_URL
+    tool_dir = ffmpeg_tool_dir()
+    archive_path = tool_dir / "ffmpeg-release-essentials.zip"
+    tool_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        api_request = urlrequest.Request(source_url, headers={"User-Agent": "FLAC-Cafe"})
+        with urlrequest.urlopen(api_request, timeout=180) as response:
+            archive_path.write_bytes(response.read())
+
+        with zipfile.ZipFile(archive_path) as archive:
+            members_by_name = {Path(name).name.lower(): name for name in archive.namelist()}
+            if "ffmpeg.exe" not in members_by_name:
+                raise OSError("Downloaded archive did not contain ffmpeg.exe")
+            for executable in ["ffmpeg.exe", "ffprobe.exe", "ffplay.exe"]:
+                member = members_by_name.get(executable)
+                if member:
+                    with archive.open(member) as source, (tool_dir / executable).open("wb") as target:
+                        shutil.copyfileobj(source, target)
+
+        archive_path.unlink(missing_ok=True)
+        ffmpeg_path = tool_dir / "ffmpeg.exe"
+        with connect() as conn:
+            set_setting(conn, "ffmpeg_path", str(ffmpeg_path.resolve()))
+            conn.commit()
+            status = ffmpeg_status(conn)
+        status["message"] = "FFmpeg was installed for FLAC Cafe."
+        return AudioConversionSetupResponse(**status)
+    except (OSError, zipfile.BadZipFile, TimeoutError, urlerror.URLError) as exc:
+        archive_path.unlink(missing_ok=True)
+        with connect() as conn:
+            status = ffmpeg_status(conn)
+        status["message"] = "Could not install FFmpeg automatically."
+        status["errors"].append(f"{exc} Source: {source_url}")
+        return AudioConversionSetupResponse(**status)
+
+
 @app.post("/library/tools/audio-conversion/preview", response_model=AudioConversionPreviewResponse)
 def preview_audio_conversion(request: AudioConversionRequest) -> AudioConversionPreviewResponse:
     return AudioConversionPreviewResponse(**conversion_preview(request))
@@ -3197,9 +4073,34 @@ def cancel_cd_rip(job_id: str) -> dict:
 @app.post("/library/tools/cd-rip/playback/play", response_model=CdPlaybackResponse)
 def play_cd_track_route(request: CdPlaybackRequest) -> CdPlaybackResponse:
     try:
-        return CdPlaybackResponse(**play_cd_track(request.track_number))
+        return CdPlaybackResponse(**prepare_cd_live_track(request))
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.head("/library/tools/cd-rip/playback/live/audio")
+@app.get("/library/tools/cd-rip/playback/live/audio")
+def stream_cd_live_audio(
+    drive_id: str = Query(..., min_length=1),
+    track_number: int = Query(..., ge=1, le=999),
+    token: str | None = Query(default=None),
+) -> StreamingResponse:
+    try:
+        content_length = cd_live_wav_content_length(drive_id, track_number)
+        stream = cd_live_wav_stream(drive_id, track_number, token)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return StreamingResponse(
+        stream,
+        media_type="audio/wav",
+        headers={
+            "Content-Length": str(content_length),
+            "Cache-Control": "no-store",
+            "Accept-Ranges": "none",
+        },
+    )
 
 
 @app.post("/library/tools/cd-rip/playback/stop", response_model=CdPlaybackResponse)
@@ -3285,11 +4186,26 @@ def update_podcast_subscription(subscription_id: int, request: PodcastSubscripti
     return PodcastSubscription(**subscription)
 
 
-@app.delete("/podcasts/subscriptions/{subscription_id}")
-def remove_podcast_subscription(subscription_id: int) -> dict:
-    if not delete_podcast_subscription(subscription_id):
+@app.delete("/podcasts/subscriptions/{subscription_id}", response_model=PodcastSubscriptionDeleteResponse)
+def remove_podcast_subscription(subscription_id: int, delete_files: bool = False) -> PodcastSubscriptionDeleteResponse:
+    try:
+        response = delete_podcast_subscription(subscription_id, delete_files)
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Could not delete podcast files: {exc}") from exc
+    if not response.get("deleted"):
         raise HTTPException(status_code=404, detail="Podcast subscription not found")
-    return {"deleted": True}
+    return PodcastSubscriptionDeleteResponse(**response)
+
+
+@app.post("/podcasts/subscriptions/{subscription_id}/folder", response_model=PodcastFolderResponse)
+def ensure_podcast_subscription_folder_route(subscription_id: int) -> PodcastFolderResponse:
+    try:
+        response = podcast_subscription_download_folder(subscription_id, create=True)
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Could not create podcast folder: {exc}") from exc
+    if response is None:
+        raise HTTPException(status_code=404, detail="Podcast subscription not found")
+    return PodcastFolderResponse(**response)
 
 
 @app.post("/podcasts/subscriptions/{subscription_id}/refresh", response_model=PodcastRefreshResponse)
@@ -3319,6 +4235,19 @@ def download_podcast_episode_route(episode_id: int, request: PodcastDownloadRequ
     if episode is None:
         raise HTTPException(status_code=404, detail="Podcast episode not found")
     return PodcastEpisode(**episode)
+
+
+@app.delete("/podcasts/episodes/{episode_id}/download", response_model=PodcastDeleteDownloadResponse)
+def delete_podcast_episode_download_route(episode_id: int) -> PodcastDeleteDownloadResponse:
+    try:
+        response = delete_podcast_episode_download(episode_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Could not delete podcast file: {exc}") from exc
+    if response is None or response.get("episode") is None:
+        raise HTTPException(status_code=404, detail="Podcast episode not found")
+    return PodcastDeleteDownloadResponse(**response)
 
 
 @app.post("/podcasts/episodes/{episode_id}/track", response_model=Track)
@@ -3379,6 +4308,27 @@ def update_scrobble_account(service: str, request: ScrobbleAccountRequest) -> Sc
     if service not in {"listenbrainz", "lastfm"}:
         raise HTTPException(status_code=404, detail="Scrobble service not found")
     return ScrobbleAccount(**save_scrobble_account(service, request))
+
+
+@app.post("/scrobbling/lastfm/login/start", response_model=LastFmLoginStartResponse)
+def start_lastfm_login_route(request: LastFmLoginStartRequest) -> LastFmLoginStartResponse:
+    try:
+        return LastFmLoginStartResponse(**start_lastfm_login(request.api_key, request.api_secret))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Could not reach Last.fm: {exc}") from exc
+
+
+@app.post("/scrobbling/lastfm/login/complete", response_model=LastFmLoginCompleteResponse)
+def complete_lastfm_login_route(request: LastFmLoginCompleteRequest) -> LastFmLoginCompleteResponse:
+    try:
+        account = complete_lastfm_login(request.api_key, request.api_secret, request.token, request.enabled)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Could not reach Last.fm: {exc}") from exc
+    return LastFmLoginCompleteResponse(account=ScrobbleAccount(**account))
 
 
 @app.get("/scrobbling/outbox", response_model=list[ScrobbleOutboxEntry])
@@ -4054,8 +5004,13 @@ def chromaprint_tool_dir() -> Path:
     return APP_STORAGE_ROOT / "tools" / "chromaprint"
 
 
+def bundled_chromaprint_tool_dir() -> Path:
+    return Path(sys.executable).resolve().parent / "tools" / "chromaprint"
+
+
 def fpcalc_candidate_paths(configured_path: str | None = None) -> list[Path]:
     executable = "fpcalc.exe" if os.name == "nt" else "fpcalc"
+    backend_root = Path(__file__).resolve().parents[1]
     repo_root = Path(__file__).resolve().parents[2]
     candidates: list[Path] = []
     if configured_path:
@@ -4063,8 +5018,12 @@ def fpcalc_candidate_paths(configured_path: str | None = None) -> list[Path]:
         candidates.append(configured / executable if configured.is_dir() else configured)
     candidates.extend(
         [
+            bundled_chromaprint_tool_dir() / executable,
+            bundled_chromaprint_tool_dir().parent / executable,
             chromaprint_tool_dir() / executable,
             APP_STORAGE_ROOT / "tools" / executable,
+            backend_root / "tools" / "chromaprint" / executable,
+            backend_root / "tools" / executable,
             repo_root / "tools" / "chromaprint" / executable,
             repo_root / "tools" / executable,
         ]
@@ -4121,8 +5080,8 @@ def chromaprint_status(conn: sqlite3.Connection) -> ChromaprintStatusResponse:
             tool_directory=str(tool_dir),
             checked_paths=checked_paths,
             message=(
-                f"fpcalc was not found. Save a path below, or place fpcalc.exe in {tool_dir} "
-                "so FLAC Cafe can use it without editing PATH."
+                "fpcalc was not found in the bundled tools, saved path, or PATH. "
+                f"You can still place fpcalc.exe in {tool_dir}."
             ),
         )
     return ChromaprintStatusResponse(
@@ -4134,6 +5093,19 @@ def chromaprint_status(conn: sqlite3.Connection) -> ChromaprintStatusResponse:
         checked_paths=checked_paths,
         message="Chromaprint fpcalc is ready for acoustic fingerprint analysis.",
     )
+
+
+def sqlite_chunks(values: list, size: int = 800) -> list[list]:
+    return [values[index : index + size] for index in range(0, len(values), size)]
+
+
+def track_ids_present(conn, track_ids: list[int]) -> set[int]:
+    present: set[int] = set()
+    for chunk in sqlite_chunks(track_ids):
+        placeholders = ",".join("?" for _ in chunk)
+        rows = conn.execute(f"SELECT id FROM tracks WHERE id IN ({placeholders})", chunk).fetchall()
+        present.update(int(row["id"]) for row in rows)
+    return present
 
 
 def remove_tracks_for_action(
@@ -4148,15 +5120,33 @@ def remove_tracks_for_action(
     if not track_ids:
         return removed, deleted_files, errors
     unique_ids = list(dict.fromkeys(track_ids))
-    placeholders = ",".join("?" for _ in unique_ids)
-    rows = rows_to_dicts(
-        conn.execute(
-            f"SELECT path_key, {TRACK_COLUMNS} FROM tracks WHERE id IN ({placeholders})",
-            unique_ids,
+    rows: list[dict] = []
+    for chunk in sqlite_chunks(unique_ids):
+        placeholders = ",".join("?" for _ in chunk)
+        rows.extend(
+            rows_to_dicts(
+                conn.execute(
+                    f"SELECT path_key, {TRACK_COLUMNS} FROM tracks WHERE id IN ({placeholders})",
+                    chunk,
+                )
+            )
         )
-    )
-    for track in rows:
+    rows_by_id = {int(row["id"]): row for row in rows}
+    ordered_rows = [rows_by_id[track_id] for track_id in unique_ids if track_id in rows_by_id]
+    tracks_to_remove: list[dict] = []
+    for track in ordered_rows:
         track_id = int(track["id"])
+        path = Path(track["path"])
+        if delete_files and path.exists():
+            if not path.is_file():
+                errors.append(f"{path}: track path is not a file")
+                continue
+            try:
+                move_file_to_recycle_bin(path)
+                deleted_files += 1
+            except OSError as exc:
+                errors.append(f"{path}: {exc}")
+                continue
         write_bulk_undo_log(
             conn,
             "track_remove",
@@ -4164,17 +5154,19 @@ def remove_tracks_for_action(
             {"track": track, "delete_file": delete_files},
             batch_id,
         )
-        path = Path(track["path"])
-        if delete_files and path.exists():
-            try:
-                path.unlink()
-                deleted_files += 1
-            except OSError as exc:
-                errors.append(f"{path}: {exc}")
-                continue
-        conn.execute("DELETE FROM tracks WHERE id = ?", (track_id,))
-        conn.execute("DELETE FROM track_metadata_cache WHERE path_key = ?", (track.get("path_key"),))
+        tracks_to_remove.append(track)
         removed.append(track_id)
+    if not tracks_to_remove:
+        return removed, deleted_files, errors
+    removable_ids = [int(track["id"]) for track in tracks_to_remove]
+    path_keys = [str(track.get("path_key")) for track in tracks_to_remove if track.get("path_key")]
+    for chunk in sqlite_chunks(path_keys):
+        placeholders = ",".join("?" for _ in chunk)
+        conn.execute(f"DELETE FROM track_metadata_cache WHERE path_key IN ({placeholders})", chunk)
+        conn.execute(f"DELETE FROM artwork_cache WHERE path_key IN ({placeholders})", chunk)
+    for chunk in sqlite_chunks(removable_ids):
+        placeholders = ",".join("?" for _ in chunk)
+        conn.execute(f"DELETE FROM tracks WHERE id IN ({placeholders})", chunk)
     delete_orphan_albums(conn)
     return removed, deleted_files, errors
 
@@ -4188,13 +5180,17 @@ def tracks_by_ids(conn, track_ids: list[int]) -> tuple[list[dict], list[int]]:
     unique_ids = list(dict.fromkeys(track_ids))
     if not unique_ids:
         return [], []
-    placeholders = ",".join("?" for _ in unique_ids)
-    rows = rows_to_dicts(
-        conn.execute(
-            f"SELECT path_key, {TRACK_COLUMNS} FROM tracks WHERE id IN ({placeholders})",
-            unique_ids,
+    rows: list[dict] = []
+    for chunk in sqlite_chunks(unique_ids):
+        placeholders = ",".join("?" for _ in chunk)
+        rows.extend(
+            rows_to_dicts(
+                conn.execute(
+                    f"SELECT path_key, {TRACK_COLUMNS} FROM tracks WHERE id IN ({placeholders})",
+                    chunk,
+                )
+            )
         )
-    )
     by_id = {int(row["id"]): row for row in rows}
     return [by_id[track_id] for track_id in unique_ids if track_id in by_id], [
         track_id for track_id in unique_ids if track_id not in by_id
@@ -4217,6 +5213,12 @@ def acoustic_fingerprint_for_path(path: Path, fpcalc_path: str) -> str:
     if not fingerprint:
         raise OSError("fpcalc did not return a fingerprint")
     return fingerprint
+
+
+def acoustic_fingerprint_track_label(track: dict) -> str:
+    title = str(track.get("title") or "").strip() or Path(str(track.get("path") or "")).name or "Untitled"
+    artist = str(track.get("artist") or "").strip()
+    return f"{title} - {artist}" if artist else title
 
 
 def restore_csv_metadata_import(conn, payload: dict[str, object]) -> tuple[list[int], list[str]]:
@@ -4307,6 +5309,39 @@ def restore_removed_track(conn, payload: dict[str, object]) -> tuple[list[int], 
     return [track_id], []
 
 
+def restore_file_tag_write(conn, payload: dict[str, object]) -> tuple[list[int], list[str]]:
+    track = payload.get("track")
+    previous_values = payload.get("previous_file_values")
+    changed_fields = payload.get("changed_fields")
+    if not isinstance(track, dict) or not isinstance(previous_values, dict) or not isinstance(changed_fields, list):
+        return [], ["Undo payload is missing file tag data"]
+
+    track_id = int(track.get("id") or 0)
+    path = Path(str(track.get("path") or "")).expanduser()
+    if track_id <= 0 or not path.exists() or not path.is_file():
+        return [], [f"Audio file is missing: {path}"]
+
+    metadata_fields = [field for field in EDITABLE_METADATA_FIELD_ORDER if field in changed_fields]
+    try:
+        if metadata_fields:
+            write_track_metadata(path, {field: previous_values.get(field) for field in metadata_fields})
+        if "rating" in changed_fields:
+            write_track_rating(path, previous_values.get("rating"))
+        file_modified_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).replace(microsecond=0).isoformat()
+        conn.execute(
+            """
+            UPDATE tracks
+            SET file_modified_at = ?, updated_at = datetime('now')
+            WHERE id = ?
+            """,
+            (file_modified_at, track_id),
+        )
+        conn.execute("DELETE FROM track_metadata_cache WHERE path_key = ?", (path_key(path),))
+    except Exception as exc:
+        return [], [str(exc)]
+    return [track_id], []
+
+
 def restore_bulk_undo_entry(conn, action_type: str, payload: dict[str, object]) -> tuple[list[int], list[str]]:
     if action_type in {"csv_metadata_import", "regex_metadata_replace", "musicbrainz_auto_tag"}:
         return restore_csv_metadata_import(conn, payload)
@@ -4316,6 +5351,8 @@ def restore_bulk_undo_entry(conn, action_type: str, payload: dict[str, object]) 
         return restore_file_organization(conn, payload)
     if action_type == "track_remove":
         return restore_removed_track(conn, payload)
+    if action_type == "sqlite_file_tag_write":
+        return restore_file_tag_write(conn, payload)
     return [], [f"Undo is not supported for {action_type}"]
 
 
@@ -5231,6 +6268,7 @@ def auto_tag_candidate_tracks(conn, request: AutoTagRequest) -> tuple[list[dict]
 def auto_tag_musicbrainz(request: AutoTagRequest) -> AutoTagResponse:
     with connect() as conn:
         tracks, missing_ids = auto_tag_candidate_tracks(conn, request)
+        acoustid_api_key = get_setting(conn, "acoustid_api_key")
     if missing_ids:
         raise HTTPException(status_code=404, detail=f"Track not found: {missing_ids[0]}")
 
@@ -5240,6 +6278,8 @@ def auto_tag_musicbrainz(request: AutoTagRequest) -> AutoTagResponse:
         missing_only=request.missing_only,
         candidate_limit=request.candidate_limit,
         include_artwork=request.include_artwork,
+        acoustid_api_key=acoustid_api_key,
+        fingerprint_only=request.fingerprint_only,
     )
 
     applied = 0
@@ -5276,7 +6316,7 @@ def auto_tag_musicbrainz(request: AutoTagRequest) -> AutoTagResponse:
                             },
                             batch_id,
                         )
-                        apply_track_metadata_update(conn, track_id, changes)
+                        apply_track_metadata_update(conn, track_id, changes, request.write_to_file)
                         preview["applied"] = True
                         applied += 1
 
@@ -5399,6 +6439,23 @@ def clap_genre_tags(request: ClapGenreTagRequest) -> ClapGenreTagResponse:
     )
 
 
+@app.post("/library/tools/volume-tags", response_model=VolumeTagResponse)
+def volume_tags(request: VolumeTagRequest) -> VolumeTagResponse:
+    return VolumeTagResponse(
+        **build_volume_tag_response(
+            request.track_ids,
+            request.mode,
+            request.apply,
+            request.write_to_file,
+            request.limit,
+            request.manual_track_gain_db,
+            request.manual_track_peak,
+            request.manual_album_gain_db,
+            request.manual_album_peak,
+        )
+    )
+
+
 @app.post("/library/tools/organize-files", response_model=FileOrganizationResponse)
 def organize_files_from_tags(request: FileOrganizationRequest) -> FileOrganizationResponse:
     with connect() as conn:
@@ -5455,7 +6512,7 @@ def organize_files_from_tags(request: FileOrganizationRequest) -> FileOrganizati
                         write_bulk_undo_log(
                             conn,
                             "file_organization",
-                            f"Moved {track.get('title') or current_path.name}",
+                            f"Renamed/reorganized {track.get('title') or current_path.name}",
                             {
                                 "track_id": int(track["id"]),
                                 "from": str(current_path),
@@ -5470,7 +6527,7 @@ def organize_files_from_tags(request: FileOrganizationRequest) -> FileOrganizati
                         if request.cleanup_empty_folders:
                             removed_empty_folders += remove_empty_source_folders(source_parent, library_root)
                     except OSError as exc:
-                        change.error = f"Could not move file: {exc}"
+                        change.error = f"Could not rename/reorganize file: {exc}"
             changes.append(change)
         if request.apply:
             conn.commit()
@@ -5830,56 +6887,12 @@ def update_chromaprint_setup(request: ChromaprintConfigRequest) -> ChromaprintSt
         return chromaprint_status(conn)
 
 
-@app.post("/library/tools/acoustic-fingerprints/install", response_model=ChromaprintInstallResponse)
-def install_chromaprint_tool(request: ChromaprintInstallRequest) -> ChromaprintInstallResponse:
-    if os.name != "nt":
-        return ChromaprintInstallResponse(
-            installed=False,
-            source_url=request.source_url or CHROMAPRINT_WINDOWS_URL,
-            message="Guided Chromaprint install is currently Windows-only. Save an fpcalc path instead.",
-            errors=["Unsupported platform for the bundled Windows fpcalc package."],
-        )
-
-    source_url = request.source_url or CHROMAPRINT_WINDOWS_URL
-    tool_dir = chromaprint_tool_dir()
-    archive_path = tool_dir / "chromaprint-fpcalc.zip"
-    tool_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        api_request = urlrequest.Request(source_url, headers={"User-Agent": "FLAC-Cafe"})
-        with urlrequest.urlopen(api_request, timeout=60) as response:
-            archive_path.write_bytes(response.read())
-        with zipfile.ZipFile(archive_path) as archive:
-            fpcalc_members = [name for name in archive.namelist() if Path(name).name.lower() == "fpcalc.exe"]
-            if not fpcalc_members:
-                raise OSError("Downloaded archive did not contain fpcalc.exe")
-            member = fpcalc_members[0]
-            with archive.open(member) as source, (tool_dir / "fpcalc.exe").open("wb") as target:
-                shutil.copyfileobj(source, target)
-        archive_path.unlink(missing_ok=True)
-        fpcalc_path = tool_dir / "fpcalc.exe"
-        with connect() as conn:
-            set_setting(conn, "chromaprint_fpcalc_path", str(fpcalc_path.resolve()))
-            conn.commit()
-        return ChromaprintInstallResponse(
-            installed=True,
-            fpcalc_path=str(fpcalc_path.resolve()),
-            source_url=source_url,
-            message="Chromaprint fpcalc was installed for FLAC Cafe.",
-        )
-    except (OSError, zipfile.BadZipFile, TimeoutError, urlerror.URLError) as exc:
-        return ChromaprintInstallResponse(
-            installed=False,
-            source_url=source_url,
-            message="Could not install Chromaprint fpcalc automatically.",
-            errors=[str(exc)],
-        )
-
-
 @app.post("/library/tools/acoustic-fingerprints", response_model=AcousticFingerprintResponse)
 def run_acoustic_fingerprint_pass(request: AcousticFingerprintRequest) -> AcousticFingerprintResponse:
     processed = 0
     updated = 0
     skipped = 0
+    skipped_reasons: list[str] = []
     errors: list[str] = []
     with connect() as conn:
         fpcalc_path, _configured, candidates = resolve_fpcalc_path(conn)
@@ -5896,6 +6909,9 @@ def run_acoustic_fingerprint_pass(request: AcousticFingerprintRequest) -> Acoust
         for track in rows:
             if track.get("acoustic_fingerprint") and not request.overwrite:
                 skipped += 1
+                skipped_reasons.append(
+                    f"{acoustic_fingerprint_track_label(track)}: already has an acoustic fingerprint; enable overwrite to refresh it"
+                )
                 continue
             processed += 1
             path = Path(track["path"])
@@ -5928,6 +6944,7 @@ def run_acoustic_fingerprint_pass(request: AcousticFingerprintRequest) -> Acoust
         processed=processed,
         updated=updated,
         skipped=skipped,
+        skipped_reasons=skipped_reasons[:100],
         errors=errors[:100],
     )
 
@@ -5978,7 +6995,8 @@ def list_bulk_undo_batches(limit: int = Query(default=30, ge=1, le=200)) -> list
             WHERE batch_id IS NOT NULL AND trim(batch_id) <> ''
               AND action_type IN (
                 'csv_metadata_import', 'regex_metadata_replace', 'musicbrainz_auto_tag',
-                'file_organization', 'track_remove', 'advanced_tag_edit', 'tag_backup_restore'
+                'file_organization', 'track_remove', 'advanced_tag_edit', 'tag_backup_restore',
+                'sqlite_file_tag_write'
               )
             GROUP BY batch_id, action_type
             ORDER BY datetime(max(created_at)) DESC, max(id) DESC
@@ -6007,7 +7025,7 @@ def restore_bulk_undo_batch(batch_id: str) -> BulkUndoRestoreResponse:
             SELECT id, batch_id, action_type, summary, payload_json, created_at
             FROM bulk_action_undo_log
             WHERE batch_id = ?
-              AND action_type IN ('csv_metadata_import', 'regex_metadata_replace', 'musicbrainz_auto_tag', 'file_organization', 'track_remove')
+              AND action_type IN ('csv_metadata_import', 'regex_metadata_replace', 'musicbrainz_auto_tag', 'file_organization', 'track_remove', 'sqlite_file_tag_write')
             ORDER BY id DESC
             """,
             (batch_id,),
@@ -6209,6 +7227,8 @@ def list_albums(
     limit: int = Query(default=5000, ge=1, le=20000),
     offset: int = Query(default=0, ge=0),
 ) -> list[dict]:
+    album_key = "lower(trim(coalesce(albums.album, '')))"
+    artist_key = "lower(trim(coalesce(albums.album_artist, '')))"
     where_clause, params = fuzzy_where_clause(
         "coalesce(albums.album, '') || ' ' || coalesce(albums.album_artist, '') || ' ' || coalesce(albums.year, '')",
         search,
@@ -6220,54 +7240,181 @@ def list_albums(
         where_clause = f"WHERE {longform_filter}"
 
     with connect() as conn:
-        return rows_to_dicts(
+        rows = rows_to_dicts(
             conn.execute(
                 f"""
-                SELECT
-                    albums.id,
-                    albums.album,
-                    albums.album_artist,
-                    albums.year,
-                    albums.artwork_path,
-                    count(tracks.id) AS track_count,
-                    CASE
-                      WHEN coalesce(album_completion.expected_track_count, 0) > count(tracks.id)
-                      THEN album_completion.expected_track_count
-                      ELSE count(tracks.id)
-                    END AS expected_track_count,
-                    CASE
-                      WHEN coalesce(album_completion.expected_track_count, 0) > count(tracks.id)
-                      THEN album_completion.expected_track_count - count(tracks.id)
-                      ELSE 0
-                    END AS missing_track_count,
-                    sum(tracks.duration_seconds) AS duration_seconds,
-                    avg(tracks.rating) AS average_rating,
-                    min(tracks.id) AS artwork_track_id
-                FROM albums
-                JOIN tracks ON tracks.album_id = albums.id
-                LEFT JOIN (
-                    SELECT album_id, sum(max_track_number) AS expected_track_count
+                WITH album_completion AS (
+                    SELECT album_key, artist_key, sum(max_track_number) AS expected_track_count
                     FROM (
-                        SELECT album_id,
-                               coalesce(disc_number, 1) AS disc_key,
-                               max(track_number) AS max_track_number
+                        SELECT
+                            {album_key} AS album_key,
+                            {artist_key} AS artist_key,
+                            coalesce(tracks.disc_number, 1) AS disc_key,
+                            max(tracks.track_number) AS max_track_number
                         FROM tracks
-                        WHERE track_number IS NOT NULL AND track_number > 0
+                        JOIN albums ON albums.id = tracks.album_id
+                        WHERE tracks.track_number IS NOT NULL
+                          AND tracks.track_number > 0
                           AND NOT {audiobook_where_clause()}
                           AND NOT {podcast_where_clause()}
-                        GROUP BY album_id, coalesce(disc_number, 1)
+                        GROUP BY album_key, artist_key, coalesce(tracks.disc_number, 1)
                     ) AS disc_max
-                    GROUP BY album_id
-                ) AS album_completion ON album_completion.album_id = albums.id
+                    GROUP BY album_key, artist_key
+                ),
+                raw_groups AS (
+                SELECT
+                    min(albums.id) AS id,
+                    min(albums.album) AS album,
+                    min(albums.album_artist) AS album_artist,
+                    min(albums.year) AS year,
+                    group_concat(DISTINCT albums.year) AS years_csv,
+                    group_concat(DISTINCT albums.id) AS album_ids_csv,
+                    count(DISTINCT albums.id) AS edition_count,
+                    max(albums.artwork_path) AS artwork_path,
+                    count(tracks.id) AS track_count,
+                    sum(tracks.duration_seconds) AS duration_seconds,
+                    avg(tracks.rating) AS average_rating,
+                    min(tracks.id) AS artwork_track_id,
+                    max(albums.completion_expected_track_count) AS completion_expected_track_count,
+                    max(albums.completion_source) AS completion_source,
+                    max(albums.completion_release_id) AS completion_release_id,
+                    max(albums.completion_release_title) AS completion_release_title,
+                    max(albums.completion_checked_at) AS completion_checked_at,
+                    coalesce(album_completion.expected_track_count, 0) AS inferred_expected_track_count
+                FROM albums
+                JOIN tracks ON tracks.album_id = albums.id
+                LEFT JOIN album_completion
+                  ON album_completion.album_key = {album_key}
+                 AND album_completion.artist_key = {artist_key}
                 {where_clause}
-                GROUP BY albums.id, album_completion.expected_track_count
-                ORDER BY lower(coalesce(albums.album_artist, '')) ASC,
-                         coalesce(albums.year, 9999) ASC,
-                         lower(coalesce(albums.album, '')) ASC
+                GROUP BY
+                    {album_key},
+                    {artist_key},
+                    album_completion.expected_track_count
+                )
+                SELECT
+                    id,
+                    album,
+                    album_artist,
+                    year,
+                    years_csv,
+                    album_ids_csv,
+                    edition_count,
+                    artwork_path,
+                    track_count,
+                    CASE
+                      WHEN completion_expected_track_count IS NOT NULL
+                      THEN max(track_count, completion_expected_track_count)
+                      ELSE max(track_count, coalesce(inferred_expected_track_count, 0))
+                    END AS expected_track_count,
+                    max(
+                      0,
+                      (
+                        CASE
+                          WHEN completion_expected_track_count IS NOT NULL
+                          THEN max(track_count, completion_expected_track_count)
+                          ELSE max(track_count, coalesce(inferred_expected_track_count, 0))
+                        END
+                      ) - track_count
+                    ) AS missing_track_count,
+                    duration_seconds,
+                    average_rating,
+                    artwork_track_id,
+                    completion_expected_track_count,
+                    completion_source,
+                    completion_release_id,
+                    completion_release_title,
+                    completion_checked_at
+                FROM raw_groups
+                ORDER BY lower(coalesce(album_artist, '')) ASC,
+                         coalesce(year, 9999) ASC,
+                         lower(coalesce(album, '')) ASC
                 LIMIT ? OFFSET ?
                 """,
                 [*params, limit, offset],
             )
+        )
+    for row in rows:
+        years = sorted(
+            {
+                int(value)
+                for value in str(row.pop("years_csv") or "").split(",")
+                if value.strip().isdigit()
+            }
+        )
+        album_ids = sorted(
+            {
+                int(value)
+                for value in str(row.pop("album_ids_csv") or "").split(",")
+                if value.strip().isdigit()
+            }
+        )
+        row["years"] = years
+        row["album_ids"] = album_ids
+        row["edition_count"] = len(album_ids) or int(row.get("edition_count") or 1)
+        row["year"] = years[0] if years else row.get("year")
+    return rows
+
+
+@app.post("/albums/{album_id}/completion-lookup", response_model=AlbumCompletionLookupResponse)
+def lookup_album_completion(album_id: int) -> AlbumCompletionLookupResponse:
+    with connect() as conn:
+        album = album_record(conn, album_id)
+        local_track_count = len(album_track_rows(conn, album_id))
+        match = best_album_completion_match(album, local_track_count)
+        if match is None or match["confidence"] < 0.45:
+            checked_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+            conn.execute(
+                """
+                UPDATE albums
+                SET completion_source = ?,
+                    completion_checked_at = ?
+                WHERE id = ?
+                """,
+                ("MusicBrainz", checked_at, album_id),
+            )
+            conn.commit()
+            return AlbumCompletionLookupResponse(
+                album_id=album_id,
+                expected_track_count=None,
+                missing_track_count=0,
+                source="MusicBrainz",
+                confidence=0.0 if match is None else float(match["confidence"]),
+                checked_at=checked_at,
+                error="No confident MusicBrainz release match found",
+            )
+
+        checked_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        expected_track_count = int(match["expected_track_count"])
+        conn.execute(
+            """
+            UPDATE albums
+            SET completion_expected_track_count = ?,
+                completion_source = ?,
+                completion_release_id = ?,
+                completion_release_title = ?,
+                completion_checked_at = ?
+            WHERE id = ?
+            """,
+            (
+                expected_track_count,
+                "MusicBrainz",
+                match["release_id"],
+                match["release_title"],
+                checked_at,
+                album_id,
+            ),
+        )
+        conn.commit()
+        return AlbumCompletionLookupResponse(
+            album_id=album_id,
+            expected_track_count=expected_track_count,
+            missing_track_count=max(0, expected_track_count - local_track_count),
+            source="MusicBrainz",
+            release_id=match["release_id"],
+            release_title=match["release_title"],
+            confidence=float(match["confidence"]),
+            checked_at=checked_at,
         )
 
 
@@ -6290,7 +7437,7 @@ def album_artwork(album_id: int) -> Response:
                 return Response(
                     content=selected.read_bytes(),
                     media_type=media_type,
-                    headers={"Cache-Control": "private, max-age=3600"},
+                    headers={"Cache-Control": "no-store, max-age=0"},
                 )
             except OSError as exc:
                 raise HTTPException(status_code=404, detail=f"Could not read selected album artwork: {exc}") from exc
@@ -6302,7 +7449,7 @@ def album_artwork(album_id: int) -> Response:
             return Response(
                 content=data,
                 media_type=media_type,
-                headers={"Cache-Control": "private, max-age=3600"},
+                headers={"Cache-Control": "no-store, max-age=0"},
             )
     raise HTTPException(status_code=404, detail="No album artwork found")
 
@@ -6750,7 +7897,7 @@ def track_artwork(track_id: int) -> Response:
     return Response(
         content=data,
         media_type=media_type,
-        headers={"Cache-Control": "private, max-age=3600"},
+        headers={"Cache-Control": "no-store, max-age=0"},
     )
 
 
@@ -6810,6 +7957,71 @@ def update_track_lyrics(track_id: int, request_body: LyricsUpdateRequest) -> Lyr
     return save_database_lyrics(track_id, text, source, request_body.is_synced)
 
 
+@app.get("/artists", response_model=list[ArtistSummary])
+def list_artists(
+    search: str = "",
+    limit: int = Query(default=5000, ge=1, le=20000),
+    offset: int = Query(default=0, ge=0),
+) -> list[dict]:
+    artist_expr = primary_artist_sql()
+    condition, params = fuzzy_condition(
+        "artist_name || ' ' || coalesce(first_album, '') || ' ' || coalesce(first_genre, '') || ' ' || coalesce(first_year, '') || ' ' || coalesce(last_year, '')",
+        search,
+    )
+    where_parts = ["artist_name <> ''"]
+    if condition:
+        where_parts.append(condition)
+    where_clause = f"WHERE {' AND '.join(where_parts)}"
+    with connect() as conn:
+        return rows_to_dicts(
+            conn.execute(
+                f"""
+                WITH artist_tracks AS (
+                    SELECT
+                        {artist_expr} AS artist_name,
+                        tracks.*
+                    FROM tracks
+                    WHERE NOT {audiobook_where_clause()}
+                      AND NOT {podcast_where_clause()}
+                ),
+                grouped AS (
+                    SELECT
+                        artist_name,
+                        min(album) AS first_album,
+                        min(coalesce(analysis_genre, genre)) AS first_genre,
+                        count(id) AS track_count,
+                        count(DISTINCT nullif(lower(trim(coalesce(album, ''))), '')) AS album_count,
+                        sum(duration_seconds) AS duration_seconds,
+                        avg(rating) AS average_rating,
+                        sum(play_count) AS play_count,
+                        sum(skip_count) AS skip_count,
+                        min(year) AS first_year,
+                        max(year) AS last_year,
+                        min(id) AS artwork_track_id
+                    FROM artist_tracks
+                    GROUP BY lower(artist_name)
+                )
+                SELECT
+                    artist_name AS name,
+                    track_count,
+                    album_count,
+                    duration_seconds,
+                    average_rating,
+                    play_count,
+                    skip_count,
+                    first_year,
+                    last_year,
+                    artwork_track_id
+                FROM grouped
+                {where_clause}
+                ORDER BY lower(artist_name) ASC
+                LIMIT ? OFFSET ?
+                """,
+                [*params, limit, offset],
+            )
+        )
+
+
 @app.get("/artists/info", response_model=ArtistInfoResponse)
 def artist_info(name: str, refresh: bool = False) -> ArtistInfoResponse:
     query_name = primary_artist_name(name)
@@ -6848,27 +8060,29 @@ def clear_artist_cache() -> dict[str, int]:
 @app.get("/artists/local-tracks", response_model=list[Track])
 def artist_local_tracks(
     name: str,
-    limit: int = Query(default=20, ge=1, le=100),
+    limit: int = Query(default=100, ge=1, le=20000),
 ) -> list[dict]:
     artist = primary_artist_name(name)
     if not artist:
         raise HTTPException(status_code=400, detail="Artist name is required")
+    artist_expr = primary_artist_sql()
     with connect() as conn:
         return rows_to_dicts(
             conn.execute(
                 f"""
                 SELECT {TRACK_COLUMNS}
                 FROM tracks
-                WHERE lower(coalesce(artist, '')) LIKE ?
-                ORDER BY coalesce(rating, 0) DESC,
-                         play_count DESC,
-                         skip_count ASC,
+                WHERE lower({artist_expr}) = lower(?)
+                  AND NOT {audiobook_where_clause()}
+                  AND NOT {podcast_where_clause()}
+                ORDER BY coalesce(year, 9999) ASC,
                          lower(coalesce(album, '')) ASC,
                          coalesce(disc_number, 0) ASC,
-                         coalesce(track_number, 0) ASC
+                         coalesce(track_number, 0) ASC,
+                         lower(coalesce(title, '')) ASC
                 LIMIT ?
                 """,
-                (f"%{artist.lower()}%", limit),
+                (artist, limit),
             )
         )
 

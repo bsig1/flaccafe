@@ -1,7 +1,9 @@
 import {
   FileText,
+  ListMusic,
   Pause,
   Play,
+  Radio,
   Repeat,
   Repeat1,
   Repeat2,
@@ -13,6 +15,7 @@ import {
 import type {
   CSSProperties,
   ChangeEvent,
+  KeyboardEvent as ReactKeyboardEvent,
   MutableRefObject,
   WheelEvent as ReactWheelEvent,
 } from "react";
@@ -47,6 +50,7 @@ import {
   updateSmtcState,
 } from "../../lib/tauriMedia";
 import type {
+  RadioStation,
   Track,
 } from "../../types/api";
 import {
@@ -65,6 +69,7 @@ import {
   clampNumber,
   dbToGain,
   display,
+  displayAlbumForTrack,
   equalizerFrequenciesForMode,
   formatPlaybackTime,
   miniPlayerChannelName,
@@ -79,13 +84,25 @@ import {
   writeStoredAudioControls,
 } from "../shared";
 
+type ExternalTrackRequest = {
+  id: number;
+  track: Track;
+  queue: Track[];
+};
+
 export function PlayerBar({
   currentTrack,
+  currentRadioStation,
+  radioPlaybackRequestId,
   queue,
+  externalTrackRequest,
   onSelectTrack,
+  onCommitExternalTrackRequest,
   onTrackEnded,
   onTrackSkipped,
   onPlaybackTime,
+  resumePositionSeconds,
+  onResumePositionApplied,
   onRating,
   autoPlay,
   fadeMs,
@@ -95,6 +112,7 @@ export function PlayerBar({
   nativeBufferFrames,
   miniPlayer,
   replayGainMode,
+  replayGainTargetVolumePercent,
   replayGainPreampDb,
   replayGainPreventClipping,
   equalizerEnabled,
@@ -107,17 +125,24 @@ export function PlayerBar({
   setPlaybackMode,
   onOpenMiniPlayer,
   onOpenLyricsView,
+  onOpenQueueView,
   onOpenCurrentTrack,
   onOpenCurrentArtist,
   onOpenCurrentAlbum,
   setStatus,
 }: {
   currentTrack: Track | null;
+  currentRadioStation: RadioStation | null;
+  radioPlaybackRequestId: number;
   queue: Track[];
+  externalTrackRequest: ExternalTrackRequest | null;
   onSelectTrack: (track: Track, queue: Track[], options?: { suppressExitRecord?: boolean }) => void;
+  onCommitExternalTrackRequest: (request: ExternalTrackRequest) => void;
   onTrackEnded: (trackId: number) => Promise<void>;
   onTrackSkipped: (trackId: number) => Promise<void>;
   onPlaybackTime: (seconds: number) => void;
+  resumePositionSeconds: number | null;
+  onResumePositionApplied: () => void;
   onRating: (trackId: number, rating: number | null) => void;
   autoPlay: boolean;
   fadeMs: number;
@@ -127,6 +152,7 @@ export function PlayerBar({
   nativeBufferFrames: number;
   miniPlayer: boolean;
   replayGainMode: "off" | "track" | "album";
+  replayGainTargetVolumePercent: number;
   replayGainPreampDb: number;
   replayGainPreventClipping: boolean;
   equalizerEnabled: boolean;
@@ -139,6 +165,7 @@ export function PlayerBar({
   setPlaybackMode: (mode: PlaybackMode) => void;
   onOpenMiniPlayer: () => void | Promise<void>;
   onOpenLyricsView: () => void;
+  onOpenQueueView: () => void;
   onOpenCurrentTrack: (track: Track) => void;
   onOpenCurrentArtist: (track: Track) => void;
   onOpenCurrentAlbum: (track: Track) => void;
@@ -152,6 +179,7 @@ export function PlayerBar({
   const nextSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
   const nextSourceElementRef = useRef<HTMLAudioElement | null>(null);
   const dspInputRef = useRef<GainNode | null>(null);
+  const dspNormalizationRef = useRef<GainNode | null>(null);
   const dspPreampRef = useRef<GainNode | null>(null);
   const dspFiltersRef = useRef<BiquadFilterNode[]>([]);
   const dspCompressorRef = useRef<DynamicsCompressorNode | null>(null);
@@ -166,30 +194,60 @@ export function PlayerBar({
   const endFadeTrackRef = useRef<number | null>(null);
   const crossfadeTrackRef = useRef<number | null>(null);
   const handoffRef = useRef<{ trackId: number; currentTime: number } | null>(null);
+  const pendingResumePositionRef = useRef<number | null>(null);
   const nativeLoadedTrackIdRef = useRef<number | null>(null);
   const nativeEndedTrackIdRef = useRef<number | null>(null);
   const lastNativeStreamErrorRef = useRef<string | null>(null);
+  const handledExternalTrackRequestRef = useRef<number | null>(null);
+  const activeSourceKeyRef = useRef("empty");
+  const suppressWebPlaybackErrorsUntilRef = useRef(0);
   const smtcActionRef = useRef<(payload: SmtcButtonPayload) => void>(() => {});
   const miniPlayerChannelRef = useRef<BroadcastChannel | null>(null);
   const miniPlayerCommandRef = useRef<(command: MiniPlayerCommand) => void>(() => {});
+  const artworkPreviewTimerRef = useRef<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [volume, setVolume] = useState(readStoredVolume);
+  const [volumePercentDraft, setVolumePercentDraft] = useState<string | null>(null);
   const [muted, setMuted] = useState(readStoredMuted);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [artworkFailed, setArtworkFailed] = useState(false);
-  const currentIndex = currentTrack ? queue.findIndex((track) => track.id === currentTrack.id) : -1;
+  const [showArtworkPreview, setShowArtworkPreview] = useState(false);
+  const isRadioSource = Boolean(currentRadioStation);
+  const isPreviewTrack = Boolean(currentTrack?.is_preview) || (currentTrack?.id ?? 0) < 0;
+  const isCdPreviewTrack = Boolean(currentTrack?.path?.startsWith("cdda://"));
+  const isLibraryTrack = Boolean(currentTrack && currentTrack.id > 0 && !currentTrack.is_preview);
+  const hasPlayableSource = Boolean(currentTrack || currentRadioStation);
+  const activeSourceKey = currentRadioStation ? `radio:${currentRadioStation.id}` : currentTrack ? `track:${currentTrack.id}` : "empty";
+  const currentIndex = currentTrack && !isRadioSource ? queue.findIndex((track) => track.id === currentTrack.id) : -1;
   const hasPrevious = currentIndex > 0;
   const hasNext = currentIndex >= 0 && currentIndex < queue.length - 1;
+  const useNativePlayback = playbackEngine === "native" && !isRadioSource && !currentTrack?.audio_url;
   const preloadedNextTrack =
-    hasNext ? queue[currentIndex + 1] : playbackMode === "repeatQueue" && queue.length > 0 ? queue[0] : null;
-  const effectiveDuration = duration || currentTrack?.duration_seconds || 0;
+    !isRadioSource && hasNext
+      ? queue[currentIndex + 1]
+      : !isRadioSource && playbackMode === "repeatQueue" && queue.length > 0
+        ? queue[0]
+        : null;
+  const canPreloadNextTrack = Boolean(preloadedNextTrack && !preloadedNextTrack.is_preview && !preloadedNextTrack.audio_url);
+  const effectiveDuration = isRadioSource ? 0 : duration || currentTrack?.duration_seconds || 0;
   const progressPercent = effectiveDuration > 0 ? Math.min(100, (currentTime / effectiveDuration) * 100) : 0;
   const smtcPositionSecond = Math.floor(currentTime);
-  const trackSwitchFadeMs = Math.min(fadeMs, 160);
-  const replayGain = replayGainMultiplier(currentTrack, replayGainMode, replayGainPreampDb, replayGainPreventClipping);
-  const outputVolume = muted ? 0 : clampNumber(volume * replayGain, 0, 1);
-  const useNativePlayback = playbackEngine === "native";
+  const trackSwitchFadeMs = Math.max(0, fadeMs);
+  const replayGain = replayGainMultiplier(
+    currentTrack,
+    replayGainMode,
+    replayGainPreampDb,
+    replayGainPreventClipping,
+    replayGainTargetVolumePercent,
+  );
+  const outputVolume = muted ? 0 : clampNumber(volume * (useNativePlayback ? replayGain : 1), 0, useNativePlayback ? 1.5 : 1);
+  const radioSubtitle = currentRadioStation ? display(currentRadioStation.genre, "Live web radio") : null;
+  const trackAudioSourceUrl = (track: Track) => track.audio_url ?? audioUrl(track.id);
+  const webAudioSourceUrl = currentRadioStation?.stream_url ?? (currentTrack ? trackAudioSourceUrl(currentTrack) : null);
+  const webAudioKey = currentRadioStation ? `radio-${currentRadioStation.id}` : currentTrack ? `track-${currentTrack.id}-${currentTrack.audio_url ?? ""}` : "empty";
+  const visualizerTrackId = currentTrack?.id ?? (currentRadioStation ? -currentRadioStation.id : null);
+  activeSourceKeyRef.current = activeSourceKey;
 
   function currentNativeDspSettings(): NativeDspSettings {
     return {
@@ -253,6 +311,7 @@ export function PlayerBar({
 
   function rebuildDspTail(context: AudioContext, input: GainNode) {
     disconnectAudioNode(input);
+    disconnectAudioNode(dspNormalizationRef.current);
     disconnectAudioNode(dspPreampRef.current);
     for (const filter of dspFiltersRef.current) {
       disconnectAudioNode(filter);
@@ -260,6 +319,7 @@ export function PlayerBar({
     disconnectAudioNode(dspCompressorRef.current);
     disconnectAudioNode(analyserRef.current);
 
+    const normalization = context.createGain();
     const preamp = context.createGain();
     const frequencies = equalizerFrequenciesForMode(equalizerBandMode);
     const filters = frequencies.map((frequency, index) => {
@@ -279,7 +339,8 @@ export function PlayerBar({
     analyser.fftSize = 2048;
     analyser.smoothingTimeConstant = 0.82;
 
-    input.connect(preamp);
+    input.connect(normalization);
+    normalization.connect(preamp);
     let previous: AudioNode = preamp;
     for (const filter of filters) {
       previous.connect(filter);
@@ -294,6 +355,7 @@ export function PlayerBar({
       analyser.connect(context.destination);
     }
 
+    dspNormalizationRef.current = normalization;
     dspPreampRef.current = preamp;
     dspFiltersRef.current = filters;
     dspCompressorRef.current = compressor;
@@ -327,10 +389,11 @@ export function PlayerBar({
 
   function updateDspSettings() {
     const context = audioContextRef.current;
-    if (!context || !dspPreampRef.current || dspFiltersRef.current.length === 0) {
+    if (!context || !dspNormalizationRef.current || !dspPreampRef.current || dspFiltersRef.current.length === 0) {
       return;
     }
     const now = context.currentTime;
+    dspNormalizationRef.current.gain.setTargetAtTime(replayGain, now, 0.01);
     const preampGain = equalizerEnabled ? dbToGain(equalizerPreampDb) : 1;
     dspPreampRef.current.gain.setTargetAtTime(preampGain, now, 0.01);
     for (const [index, filter] of dspFiltersRef.current.entries()) {
@@ -374,6 +437,7 @@ export function PlayerBar({
       cancelFade();
       cancelNativeFade();
       cancelCrossfade();
+      clearArtworkPreviewTimer();
       cancelVisualizerLoop();
       miniPlayerChannelRef.current?.close();
       void audioContextRef.current?.close().catch(() => {
@@ -438,11 +502,15 @@ export function PlayerBar({
   }, []);
 
   useEffect(() => {
+    if (!canPreloadNextTrack) {
+      nextAudioRef.current?.pause();
+      return;
+    }
     const audio = nextAudioRef.current;
     if (audio) {
       audio.load();
     }
-  }, [preloadedNextTrack?.id]);
+  }, [canPreloadNextTrack, preloadedNextTrack?.id]);
 
   useEffect(() => {
     if (useNativePlayback) {
@@ -451,13 +519,14 @@ export function PlayerBar({
     ensureWebAudioGraph();
   }, [
     useNativePlayback,
-    currentTrack?.id,
+    activeSourceKey,
     preloadedNextTrack?.id,
     equalizerEnabled,
     equalizerBandMode,
     equalizerPreampDb,
     equalizerGains,
     dspLimiterEnabled,
+    replayGain,
   ]);
 
   useEffect(() => {
@@ -479,10 +548,13 @@ export function PlayerBar({
   useEffect(() => {
     emitVisualizerState(false);
     cancelVisualizerLoop();
-    if (!isPlaying || !currentTrack) {
+    if (!isPlaying || visualizerTrackId === null) {
       return;
     }
     if (useNativePlayback) {
+      if (!currentTrack) {
+        return;
+      }
       let nativeVisualizerInFlight = false;
       const tick = (timestamp: number) => {
         if (!nativeVisualizerInFlight && timestamp - visualizerLastEmitRef.current >= 33) {
@@ -545,7 +617,7 @@ export function PlayerBar({
         });
         const level = frequencyBins.reduce((sum, value) => sum + value, 0) / Math.max(1, frequencyBins.length);
         emitVisualizerFrame({
-          trackId: currentTrack.id,
+          trackId: visualizerTrackId,
           isPlaying,
           isLive: true,
           level,
@@ -560,7 +632,7 @@ export function PlayerBar({
 
     visualizerFrameRef.current = window.requestAnimationFrame(tick);
     return cancelVisualizerLoop;
-  }, [useNativePlayback, isPlaying, currentTrack?.id, equalizerEnabled, equalizerBandMode, dspLimiterEnabled]);
+  }, [useNativePlayback, isPlaying, visualizerTrackId, equalizerEnabled, equalizerBandMode, dspLimiterEnabled, replayGain]);
 
   function cancelFade() {
     if (fadeTimerRef.current !== null) {
@@ -581,6 +653,43 @@ export function PlayerBar({
       window.clearInterval(crossfadeTimerRef.current);
       crossfadeTimerRef.current = null;
     }
+  }
+
+  function hardStopWebAudioElement(element: HTMLAudioElement | null) {
+    if (!element) {
+      return;
+    }
+    suppressWebPlaybackErrorsUntilRef.current = window.performance.now() + 1500;
+    try {
+      element.pause();
+      element.removeAttribute("src");
+      element.load();
+    } catch {
+      // Media teardown is best-effort; the next source render will recover.
+    }
+  }
+
+  function clearArtworkPreviewTimer() {
+    if (artworkPreviewTimerRef.current !== null) {
+      window.clearTimeout(artworkPreviewTimerRef.current);
+      artworkPreviewTimerRef.current = null;
+    }
+  }
+
+  function scheduleArtworkPreview() {
+    if (!artworkSrc) {
+      return;
+    }
+    clearArtworkPreviewTimer();
+    artworkPreviewTimerRef.current = window.setTimeout(() => {
+      setShowArtworkPreview(true);
+      artworkPreviewTimerRef.current = null;
+    }, 1050);
+  }
+
+  function hideArtworkPreview() {
+    clearArtworkPreviewTimer();
+    setShowArtworkPreview(false);
   }
 
   function fadeVolume(targetVolume: number, durationMs: number, afterFade?: () => void) {
@@ -651,6 +760,7 @@ export function PlayerBar({
       setDuration(status.duration_seconds ?? track.duration_seconds ?? 0);
       setCurrentTime(status.position_seconds);
       onPlaybackTime(status.position_seconds);
+      pendingResumePositionRef.current = null;
       setIsPlaying(true);
       if (fadeMs > 0) {
         fadeNativeVolume(outputVolume, fadeMs, undefined, 0);
@@ -699,7 +809,7 @@ export function PlayerBar({
       return;
     }
     if (nativeLoadedTrackIdRef.current !== currentTrack.id || nativeEndedTrackIdRef.current === currentTrack.id) {
-      await startNativeTrack(currentTrack);
+      await startNativeTrack(currentTrack, currentTime);
       return;
     }
     try {
@@ -764,7 +874,11 @@ export function PlayerBar({
     if (!audio) {
       return;
     }
+    const requestedSourceKey = activeSourceKey;
     cancelFade();
+    if (pendingResumePositionRef.current !== null && audio.currentTime < 1) {
+      applyPendingResumeToAudio();
+    }
     audio.volume = 0;
     try {
       await resumeWebAudioGraph();
@@ -772,16 +886,22 @@ export function PlayerBar({
       setIsPlaying(true);
       fadeVolume(outputVolume, fadeMs);
     } catch (error: unknown) {
+      const isStaleAttempt = activeSourceKeyRef.current !== requestedSourceKey;
+      const isSuppressedTeardownError = window.performance.now() < suppressWebPlaybackErrorsUntilRef.current;
+      const isIntentionalCdAbort = isCdPreviewTrack && error instanceof DOMException && error.name === "AbortError";
+      if (isStaleAttempt || isSuppressedTeardownError || isIntentionalCdAbort) {
+        return;
+      }
       audio.volume = outputVolume;
       if (audio.error) {
-        setStatus("Audio source failed to load. Restart the app if the backend was updated recently.");
+        setStatus(isRadioSource ? "Radio stream could not be loaded." : "Audio source failed to load. Restart the app if the backend was updated recently.");
         return;
       }
       if (error instanceof DOMException && error.name === "NotAllowedError") {
-        setStatus("Press play to start playback.");
+        setStatus(isRadioSource ? "Press play to start the radio stream." : "Press play to start playback.");
         return;
       }
-      setStatus("Playback could not start for this file.");
+      setStatus(isRadioSource ? "Radio stream could not start." : "Playback could not start for this file.");
     }
   }
 
@@ -811,23 +931,86 @@ export function PlayerBar({
   }
 
   useEffect(() => {
+    if (!externalTrackRequest || handledExternalTrackRequestRef.current === externalTrackRequest.id) {
+      return;
+    }
+
+    handledExternalTrackRequestRef.current = externalTrackRequest.id;
+    const commitTrackRequest = () => onCommitExternalTrackRequest(externalTrackRequest);
+
+    cancelCrossfade();
+    crossfadeTrackRef.current = null;
+    nextAudioRef.current?.pause();
+
+    if (isCdPreviewTrack) {
+      cancelFade();
+      const audio = audioRef.current;
+      hardStopWebAudioElement(audio);
+      commitTrackRequest();
+      return;
+    }
+
+    if (!hasPlayableSource || !isPlaying || trackSwitchFadeMs <= 0) {
+      if (useNativePlayback) {
+        void nativeStop().finally(commitTrackRequest);
+        return;
+      }
+      commitTrackRequest();
+      return;
+    }
+
+    if (useNativePlayback) {
+      fadeNativeVolume(0, trackSwitchFadeMs, () => {
+        void nativeStop().finally(commitTrackRequest);
+      });
+      return;
+    }
+
+    const audio = audioRef.current;
+    if (!audio || audio.paused) {
+      commitTrackRequest();
+      return;
+    }
+
+    fadeVolume(0, trackSwitchFadeMs, () => {
+      audio.pause();
+      try {
+        audio.currentTime = 0;
+      } catch {
+        // Some codecs do not permit seeking during teardown.
+      }
+      commitTrackRequest();
+    });
+  }, [externalTrackRequest?.id]);
+
+  useEffect(() => {
     cancelFade();
     setCurrentTime(0);
     onPlaybackTime(0);
-    setDuration(currentTrack?.duration_seconds ?? 0);
+    setDuration(isRadioSource ? 0 : currentTrack?.duration_seconds ?? 0);
     setArtworkFailed(false);
     setIsPlaying(false);
     endFadeTrackRef.current = null;
     crossfadeTrackRef.current = null;
     nativeEndedTrackIdRef.current = null;
+    pendingResumePositionRef.current = null;
 
-    if (!currentTrack) {
+    if (!hasPlayableSource) {
       if (useNativePlayback) {
         nativeLoadedTrackIdRef.current = null;
         void nativeStop().catch(() => {
           // Native playback may not be available in browser preview.
         });
       }
+      return;
+    }
+    if (isRadioSource) {
+      if (autoPlay) {
+        void playWithFade();
+      }
+      return;
+    }
+    if (!currentTrack) {
       return;
     }
     if (useNativePlayback) {
@@ -860,14 +1043,87 @@ export function PlayerBar({
     if (autoPlay) {
       void playWithFade();
     }
-  }, [currentTrack?.id, autoPlay, useNativePlayback]);
+  }, [activeSourceKey, radioPlaybackRequestId, autoPlay, useNativePlayback]);
+
+  useEffect(() => {
+    if (!currentTrack) {
+      if (resumePositionSeconds !== null) {
+        onResumePositionApplied();
+      }
+      return;
+    }
+    if (resumePositionSeconds === null) {
+      return;
+    }
+
+    const boundedTime =
+      effectiveDuration > 0
+        ? Math.min(Math.max(0, resumePositionSeconds), Math.max(0, effectiveDuration - 1))
+        : Math.max(0, resumePositionSeconds);
+    if (!Number.isFinite(boundedTime) || boundedTime <= 0) {
+      onResumePositionApplied();
+      return;
+    }
+
+    setCurrentTime(boundedTime);
+    onPlaybackTime(boundedTime);
+    pendingResumePositionRef.current = boundedTime;
+
+    const audio = audioRef.current;
+    if (!useNativePlayback && audio) {
+      applyPendingResumeToAudio();
+    } else if (useNativePlayback && nativeLoadedTrackIdRef.current === currentTrack.id) {
+      void nativeSeek(boundedTime).catch(() => {
+        // A restored position can still be used when playback starts.
+      });
+      pendingResumePositionRef.current = null;
+    }
+
+    onResumePositionApplied();
+  }, [currentTrack?.id, resumePositionSeconds, useNativePlayback]);
+
+  function applyPendingResumeToAudio() {
+    const audio = audioRef.current;
+    const pendingResumePosition = pendingResumePositionRef.current;
+    if (!audio || pendingResumePosition === null || pendingResumePosition <= 0) {
+      return false;
+    }
+
+    const durationLimit = Number.isFinite(audio.duration)
+      ? Math.max(0, audio.duration - 1)
+      : effectiveDuration > 0
+        ? Math.max(0, effectiveDuration - 1)
+        : pendingResumePosition;
+    const targetTime = Math.min(pendingResumePosition, durationLimit);
+
+    try {
+      audio.currentTime = targetTime;
+      setCurrentTime(targetTime);
+      onPlaybackTime(targetTime);
+      return true;
+    } catch {
+      // Some codecs allow seeking only after metadata finishes loading.
+      return false;
+    }
+  }
+
+  function maybeClearPendingResume(actualTime: number) {
+    const pendingResumePosition = pendingResumePositionRef.current;
+    if (pendingResumePosition === null) {
+      return;
+    }
+    if (Math.abs(actualTime - pendingResumePosition) <= 1 || actualTime > pendingResumePosition) {
+      pendingResumePositionRef.current = null;
+    }
+  }
 
   function syncDuration() {
     const audio = audioRef.current;
     if (!audio) {
       return;
     }
-    setDuration(Number.isFinite(audio.duration) ? audio.duration : currentTrack?.duration_seconds ?? 0);
+    setDuration(isRadioSource ? 0 : Number.isFinite(audio.duration) ? audio.duration : currentTrack?.duration_seconds ?? 0);
+    applyPendingResumeToAudio();
   }
 
   function handleSeek(event: ChangeEvent<HTMLInputElement>) {
@@ -876,11 +1132,15 @@ export function PlayerBar({
   }
 
   function seekTo(nextTime: number) {
+    if (isRadioSource || isCdPreviewTrack) {
+      return;
+    }
     const audio = audioRef.current;
     const boundedTime =
       effectiveDuration > 0 ? Math.min(Math.max(0, nextTime), effectiveDuration) : Math.max(0, nextTime);
     setCurrentTime(boundedTime);
     onPlaybackTime(boundedTime);
+    pendingResumePositionRef.current = null;
     if (useNativePlayback) {
       void nativeSeek(boundedTime).catch((error) => {
         setStatus(error instanceof Error ? error.message : "Native seek failed.");
@@ -905,7 +1165,7 @@ export function PlayerBar({
       return;
     }
     const audio = audioRef.current;
-    if (!audio || !currentTrack) {
+    if (!audio || !hasPlayableSource) {
       return;
     }
     if (audio.paused) {
@@ -927,6 +1187,35 @@ export function PlayerBar({
     changeVolume(Number(event.target.value));
   }
 
+  function commitVolumePercent(rawValue: string) {
+    const trimmed = rawValue.trim();
+    if (!trimmed) {
+      return;
+    }
+    const percent = Number(trimmed);
+    if (!Number.isFinite(percent)) {
+      return;
+    }
+    changeVolume(clampNumber(percent, 0, 100) / 100);
+  }
+
+  function handleVolumePercentChange(event: ChangeEvent<HTMLInputElement>) {
+    const nextValue = event.target.value.replace(/[^\d.]/g, "");
+    setVolumePercentDraft(nextValue);
+    if (nextValue.trim()) {
+      commitVolumePercent(nextValue);
+    }
+  }
+
+  function handleVolumePercentKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Enter") {
+      event.currentTarget.blur();
+    } else if (event.key === "Escape") {
+      setVolumePercentDraft(null);
+      event.currentTarget.blur();
+    }
+  }
+
   function handleVolumeWheel(event: ReactWheelEvent) {
     event.preventDefault();
     changeVolume(volume + (event.deltaY < 0 ? 0.05 : -0.05));
@@ -934,6 +1223,20 @@ export function PlayerBar({
 
   function toggleMuted() {
     setMuted((current) => !current);
+  }
+
+  function cycleRepeatMode() {
+    setPlaybackMode(
+      playbackMode === "normal"
+        ? "repeatQueue"
+        : playbackMode === "repeatQueue"
+          ? "repeatOne"
+          : "normal",
+    );
+  }
+
+  function toggleStopAfterCurrent() {
+    setPlaybackMode(playbackMode === "stopAfterCurrent" ? "normal" : "stopAfterCurrent");
   }
 
   function playRelative(offset: number, recordExit = true) {
@@ -946,6 +1249,13 @@ export function PlayerBar({
       cancelCrossfade();
       crossfadeTrackRef.current = null;
       nextAudioRef.current?.pause();
+      if (isCdPreviewTrack) {
+        cancelFade();
+        hardStopWebAudioElement(audio);
+        setIsPlaying(false);
+        onSelectTrack(nextTrack, queue, { suppressExitRecord: true });
+        return;
+      }
       if (useNativePlayback) {
         if (isPlaying && fadeMs > 0) {
           void startNativeCrossfade(nextTrack, false);
@@ -992,6 +1302,15 @@ export function PlayerBar({
       return;
     }
     const nextTime = audio.currentTime;
+    const pendingResumePosition = pendingResumePositionRef.current;
+    if (pendingResumePosition !== null) {
+      if (nextTime < 1 || nextTime < pendingResumePosition - 2) {
+        if (applyPendingResumeToAudio()) {
+          return;
+        }
+      }
+      maybeClearPendingResume(nextTime);
+    }
     setCurrentTime(nextTime);
     onPlaybackTime(nextTime);
     const audioDuration = Number.isFinite(audio.duration) ? audio.duration : effectiveDuration;
@@ -999,6 +1318,7 @@ export function PlayerBar({
     if (
       currentTrack &&
       preloadedNextTrack &&
+      canPreloadNextTrack &&
       playbackMode !== "stopAfterCurrent" &&
       playbackMode !== "repeatOne" &&
       fadeMs > 0 &&
@@ -1011,6 +1331,7 @@ export function PlayerBar({
     }
     if (
       currentTrack &&
+      !isCdPreviewTrack &&
       (!preloadedNextTrack || playbackMode === "stopAfterCurrent") &&
       audioDuration > END_FADE_SECONDS * 2 &&
       audioDuration - nextTime <= END_FADE_SECONDS &&
@@ -1031,6 +1352,12 @@ export function PlayerBar({
       return;
     }
     if (crossfadeTrackRef.current === currentTrack.id) {
+      return;
+    }
+    const endedAt = audioRef.current?.currentTime ?? currentTime;
+    if (isCdPreviewTrack && effectiveDuration > 15 && endedAt < effectiveDuration - 8) {
+      setIsPlaying(false);
+      setStatus("CD playback stopped early. Press play to retry this track.");
       return;
     }
     await onTrackEnded(currentTrack.id);
@@ -1064,9 +1391,16 @@ export function PlayerBar({
         if (canceled) {
           return;
         }
-        setIsPlaying(status.is_playing);
-        setCurrentTime(status.position_seconds);
-        onPlaybackTime(status.position_seconds);
+        const waitingForNativeResume =
+          pendingResumePositionRef.current !== null &&
+          Boolean(currentTrack) &&
+          nativeLoadedTrackIdRef.current !== currentTrack?.id &&
+          !status.is_playing;
+        if (!waitingForNativeResume) {
+          setIsPlaying(status.is_playing);
+          setCurrentTime(status.position_seconds);
+          onPlaybackTime(status.position_seconds);
+        }
         if (status.duration_seconds !== null) {
           setDuration(status.duration_seconds);
         }
@@ -1082,6 +1416,7 @@ export function PlayerBar({
         if (
           currentTrack &&
           preloadedNextTrack &&
+          canPreloadNextTrack &&
           playbackMode !== "stopAfterCurrent" &&
           playbackMode !== "repeatOne" &&
           fadeMs > 0 &&
@@ -1114,20 +1449,31 @@ export function PlayerBar({
       canceled = true;
       window.clearInterval(timer);
     };
-  }, [useNativePlayback, currentTrack?.id, playbackMode, currentIndex, queue, fadeMs, preloadedNextTrack?.id, outputVolume]);
+  }, [useNativePlayback, currentTrack?.id, playbackMode, currentIndex, queue, fadeMs, preloadedNextTrack?.id, canPreloadNextTrack, outputVolume]);
 
   useEffect(() => {
-    if (!useNativePlayback || !preloadedNextTrack || playbackMode === "stopAfterCurrent") {
+    if (!useNativePlayback || !preloadedNextTrack || !canPreloadNextTrack || playbackMode === "stopAfterCurrent") {
       return;
     }
     void nativePrepareNextFile(preloadedNextTrack.path).catch(() => {
       // Preparation failures are recorded by the native diagnostics panel.
     });
-  }, [useNativePlayback, preloadedNextTrack?.id, preloadedNextTrack?.path, playbackMode]);
+  }, [useNativePlayback, preloadedNextTrack?.id, preloadedNextTrack?.path, canPreloadNextTrack, playbackMode]);
 
-  const artworkSrc = currentTrack && !artworkFailed ? albumArtworkUrl(currentTrack.id) : null;
+  const artworkSrc =
+    currentTrack && !isRadioSource && !isPreviewTrack && !artworkFailed
+      ? albumArtworkUrl(currentTrack.id, currentTrack.file_modified_at)
+      : null;
   const hasCurrentArtist = Boolean(currentTrack?.artist?.trim());
-  const hasCurrentAlbum = Boolean(currentTrack?.album?.trim());
+  const currentAlbumLabel = displayAlbumForTrack(currentTrack);
+  const hasCurrentAlbum = Boolean(currentAlbumLabel);
+  const isCurrentPodcast = Boolean(currentTrack?.genre?.toLowerCase().includes("podcast"));
+  const currentArtistLabel = display(currentTrack?.artist, isCurrentPodcast ? "Podcast" : "Unknown artist");
+  const playerTitle = currentRadioStation ? display(currentRadioStation.name, "Radio stream") : currentTrack ? display(currentTrack.title, "Untitled") : "Nothing playing";
+
+  useEffect(() => {
+    hideArtworkPreview();
+  }, [artworkSrc]);
 
   miniPlayerCommandRef.current = (command: MiniPlayerCommand) => {
     if (command.type === "playPause") {
@@ -1143,13 +1489,13 @@ export function PlayerBar({
 
   smtcActionRef.current = (payload: SmtcButtonPayload) => {
     if (payload.command === "play") {
-      if (currentTrack && !isPlaying) {
+      if (hasPlayableSource && !isPlaying) {
         void playWithFade();
       }
       return;
     }
     if (payload.command === "pause") {
-      if (currentTrack && isPlaying) {
+      if (hasPlayableSource && isPlaying) {
         pauseWithFade();
       }
       return;
@@ -1185,8 +1531,23 @@ export function PlayerBar({
         return;
       }
 
+      const isPlainArrowSeek =
+        hasPlayableSource &&
+        !isRadioSource &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        !event.metaKey &&
+        !event.shiftKey &&
+        (event.key === "ArrowLeft" || event.key === "ArrowRight");
+
+      if (isPlainArrowSeek) {
+        event.preventDefault();
+        seekTo(currentTime + (event.key === "ArrowRight" ? 5 : -5));
+        return;
+      }
+
       if (event.key === "MediaPlayPause" || shortcutMatchesEvent(keyboardShortcuts["playback.playPause"], event)) {
-        if (event.repeat || !currentTrack) {
+        if (event.repeat || !hasPlayableSource) {
           return;
         }
         event.preventDefault();
@@ -1235,12 +1596,24 @@ export function PlayerBar({
       } else if (shortcutMatchesEvent(keyboardShortcuts["playback.mute"], event)) {
         event.preventDefault();
         toggleMuted();
+      } else if (shortcutMatchesEvent(keyboardShortcuts["playback.repeatCycle"], event)) {
+        event.preventDefault();
+        cycleRepeatMode();
+      } else if (shortcutMatchesEvent(keyboardShortcuts["playback.repeatQueue"], event)) {
+        event.preventDefault();
+        setPlaybackMode(playbackMode === "repeatQueue" ? "normal" : "repeatQueue");
+      } else if (shortcutMatchesEvent(keyboardShortcuts["playback.repeatOne"], event)) {
+        event.preventDefault();
+        setPlaybackMode(playbackMode === "repeatOne" ? "normal" : "repeatOne");
+      } else if (shortcutMatchesEvent(keyboardShortcuts["playback.stopAfterCurrent"], event)) {
+        event.preventDefault();
+        toggleStopAfterCurrent();
       }
     }
 
     window.addEventListener("keydown", handleLocalAudioKeyDown);
     return () => window.removeEventListener("keydown", handleLocalAudioKeyDown);
-  }, [currentTrack, currentTime, volume, muted, hasPrevious, hasNext, queue, currentIndex, outputVolume, keyboardShortcuts]);
+  }, [currentTrack, currentRadioStation, currentTime, volume, muted, hasPrevious, hasNext, queue, currentIndex, outputVolume, keyboardShortcuts, playbackMode]);
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
@@ -1292,56 +1665,92 @@ export function PlayerBar({
       }`}
     >
       <div className="flex min-w-0 items-center gap-3">
-        <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded border border-line bg-panel text-moss shadow-inner">
-          {artworkSrc ? (
-            <img
-              key={artworkSrc}
-              alt=""
-              className="h-full w-full object-cover"
-              src={artworkSrc}
-              onError={() => setArtworkFailed(true)}
-            />
-          ) : (
-            <Volume2 size={22} />
+        <div className="relative shrink-0">
+          <div
+            aria-label={artworkSrc ? `Album cover for ${playerTitle}` : undefined}
+            className="grid h-16 w-16 place-items-center overflow-hidden rounded border border-line bg-panel text-moss shadow-inner outline-none transition focus-visible:ring-2 focus-visible:ring-moss/55"
+            role={artworkSrc ? "img" : undefined}
+            tabIndex={artworkSrc ? 0 : -1}
+            onBlur={hideArtworkPreview}
+            onFocus={scheduleArtworkPreview}
+            onMouseEnter={scheduleArtworkPreview}
+            onMouseLeave={hideArtworkPreview}
+          >
+            {artworkSrc ? (
+              <img
+                key={artworkSrc}
+                alt=""
+                className="h-full w-full object-cover"
+                src={artworkSrc}
+                onError={() => setArtworkFailed(true)}
+              />
+            ) : isRadioSource ? (
+              <Radio size={22} />
+            ) : (
+              <Volume2 size={22} />
+            )}
+          </div>
+          {artworkSrc && showArtworkPreview && (
+            <div className="pointer-events-none absolute bottom-[calc(100%+0.75rem)] left-0 z-50 w-60 overflow-hidden rounded-lg border border-line bg-panel shadow-2xl shadow-black/45">
+              <img
+                alt=""
+                className="aspect-square w-full object-cover"
+                src={artworkSrc}
+                onError={() => {
+                  setArtworkFailed(true);
+                  hideArtworkPreview();
+                }}
+              />
+            </div>
           )}
         </div>
         <div className="grid min-w-0 gap-0.5 overflow-hidden">
           <button
-            className="min-w-0 max-w-full truncate rounded text-left text-sm font-semibold text-white transition hover:text-moss disabled:cursor-default disabled:hover:text-white"
+            className="w-fit min-w-0 max-w-full justify-self-start truncate rounded text-left text-sm font-semibold text-white transition hover:text-moss disabled:cursor-default disabled:hover:text-white"
             type="button"
-            disabled={!currentTrack}
-            title={currentTrack ? "Show track in Library" : undefined}
-            onClick={() => currentTrack && onOpenCurrentTrack(currentTrack)}
+            disabled={!isLibraryTrack}
+            title={isLibraryTrack ? "Show track in Library" : undefined}
+            onClick={() => isLibraryTrack && currentTrack && onOpenCurrentTrack(currentTrack)}
           >
-            {currentTrack ? display(currentTrack.title, "Untitled") : "Nothing playing"}
+            {playerTitle}
           </button>
-          {currentTrack ? (
+          {currentRadioStation ? (
+            <div className="min-w-0 truncate text-xs text-muted" title={currentRadioStation.stream_url}>
+              {radioSubtitle}
+            </div>
+          ) : currentTrack ? (
             <div
               className="flex min-w-0 max-w-full items-center gap-1 overflow-hidden text-muted"
               style={{ fontSize: "clamp(0.68rem, 0.58rem + 0.22vw, 0.75rem)" }}
             >
-              <button
-                className="min-w-0 max-w-full shrink truncate rounded text-left transition hover:text-white disabled:cursor-default disabled:hover:text-muted"
-                type="button"
-                title={`Open artist: ${display(currentTrack.artist)}`}
-                disabled={!hasCurrentArtist}
-                onClick={() => onOpenCurrentArtist(currentTrack)}
-              >
-                {display(currentTrack.artist)}
-              </button>
-              <span className="shrink-0">-</span>
-              <button
-                className="min-w-0 max-w-full shrink truncate rounded text-left transition hover:text-white disabled:cursor-default disabled:hover:text-muted"
-                type="button"
-                title={`Open album: ${display(currentTrack.album, "Unknown album")}`}
-                disabled={!hasCurrentAlbum}
-                onClick={() => onOpenCurrentAlbum(currentTrack)}
-              >
-                {display(currentTrack.album, "Unknown album")}
-              </button>
+              {hasCurrentArtist && !isPreviewTrack ? (
+                <button
+                  className="min-w-0 max-w-full shrink truncate rounded text-left transition hover:text-white"
+                  type="button"
+                  title={`Open artist: ${currentArtistLabel}`}
+                  onClick={() => onOpenCurrentArtist(currentTrack)}
+                >
+                  {currentArtistLabel}
+                </button>
+              ) : (
+                <span className="min-w-0 max-w-full shrink truncate">{currentArtistLabel}</span>
+              )}
+              {hasCurrentAlbum && !isPreviewTrack && (
+                <>
+                  <span className="shrink-0">-</span>
+                  <button
+                    className="min-w-0 max-w-full shrink truncate rounded text-left transition hover:text-white"
+                    type="button"
+                    title={`Open album: ${currentAlbumLabel}`}
+                    onClick={() => onOpenCurrentAlbum(currentTrack)}
+                  >
+                    {currentAlbumLabel}
+                  </button>
+                </>
+              )}
             </div>
           ) : (
-            <div className="truncate text-xs text-muted">Select a track from Library or AutoDJ</div>
+            <div className="truncate text-xs text-muted">Select a track or radio station</div>
           )}
         </div>
       </div>
@@ -1361,7 +1770,7 @@ export function PlayerBar({
             className="grid h-11 w-11 place-items-center rounded-full bg-ember text-ink shadow-sm shadow-black/25 transition hover:bg-[rgb(var(--color-primary-hover))] disabled:cursor-not-allowed disabled:opacity-50"
             type="button"
             title={isPlaying ? "Pause" : "Play"}
-            disabled={!currentTrack}
+            disabled={!hasPlayableSource}
             onClick={togglePlayback}
           >
             {isPlaying ? <Pause size={19} fill="currentColor" /> : <Play size={19} fill="currentColor" />}
@@ -1377,14 +1786,14 @@ export function PlayerBar({
           </button>
         </div>
 
-        {!useNativePlayback && currentTrack ? (
+        {!useNativePlayback && webAudioSourceUrl ? (
           <audio
-            key={currentTrack.id}
+            key={webAudioKey}
             ref={audioRef}
             className="hidden"
             crossOrigin="anonymous"
-            preload="auto"
-            src={audioUrl(currentTrack.id)}
+            preload={isRadioSource || isCdPreviewTrack ? "metadata" : "auto"}
+            src={webAudioSourceUrl}
             onLoadedMetadata={syncDuration}
             onTimeUpdate={handleTimeUpdate}
             onPlay={() => setIsPlaying(true)}
@@ -1392,85 +1801,123 @@ export function PlayerBar({
             onCanPlay={() => {
               syncDuration();
             }}
-            onEnded={handleEnded}
+            onSeeked={() => {
+              const audio = audioRef.current;
+              if (audio) {
+                maybeClearPendingResume(audio.currentTime);
+              }
+            }}
+            onEnded={isRadioSource ? () => setIsPlaying(false) : handleEnded}
             onError={() => {
+              const isStaleEvent = activeSourceKeyRef.current !== activeSourceKey;
+              const isSuppressedTeardownError = window.performance.now() < suppressWebPlaybackErrorsUntilRef.current;
+              if (isStaleEvent || isSuppressedTeardownError) {
+                return;
+              }
               const code = audioRef.current?.error?.code;
               const message =
-                code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
-                  ? "This file is not supported by the current WebView codec stack. Use the external-player button for a fallback."
-                  : "Audio source failed to load. The backend may need a restart, or the file may be missing.";
+                isRadioSource
+                  ? "Radio stream could not be loaded."
+                  : code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
+                    ? "This file is not supported by the current WebView codec stack. Use the external-player button for a fallback."
+                    : "Audio source failed to load. The backend may need a restart, or the file may be missing.";
               setStatus(message);
             }}
           />
         ) : !useNativePlayback ? (
           <audio ref={audioRef} className="hidden" crossOrigin="anonymous" />
         ) : null}
-        {!useNativePlayback && preloadedNextTrack && (
+        {!useNativePlayback && preloadedNextTrack && canPreloadNextTrack && (
           <audio
             key={`next-${preloadedNextTrack.id}`}
             ref={nextAudioRef}
             className="hidden"
             crossOrigin="anonymous"
             preload="auto"
-            src={audioUrl(preloadedNextTrack.id)}
+            src={trackAudioSourceUrl(preloadedNextTrack)}
           />
         )}
 
-        <div className="grid grid-cols-[minmax(48px,auto)_1fr_minmax(48px,auto)_auto] items-center gap-3 text-xs tabular-nums text-muted">
-          <span className="text-right">{formatPlaybackTime(currentTime)}</span>
-          <input
-            aria-label="Playback position"
-            className="player-progress"
-            disabled={!currentTrack || effectiveDuration <= 0}
-            max={Math.max(effectiveDuration, 0)}
-            min={0}
-            step={1}
-            style={{ "--progress": `${progressPercent}%` } as CSSProperties}
-            type="range"
-            value={effectiveDuration > 0 ? Math.min(currentTime, effectiveDuration) : 0}
-            onChange={handleSeek}
-          />
-          <span>{formatPlaybackTime(effectiveDuration)}</span>
+        <div
+          className={`grid ${
+            isRadioSource
+              ? "grid-cols-[minmax(48px,auto)_1fr_auto]"
+              : "grid-cols-[minmax(48px,auto)_1fr_minmax(48px,auto)_auto]"
+          } items-center gap-3 text-xs tabular-nums text-muted`}
+        >
+          <span className="text-right">{isRadioSource ? "Live" : formatPlaybackTime(currentTime)}</span>
+          {isRadioSource ? (
+            <div
+              aria-label="Live stream"
+              className="h-2 min-w-0 overflow-hidden rounded-full bg-line/70 shadow-inner"
+              role="progressbar"
+            >
+              <div
+                className="h-full w-full rounded-full bg-ember transition-opacity"
+                style={{ boxShadow: isPlaying ? "0 0 12px rgb(var(--color-ember) / 0.55)" : undefined }}
+              />
+            </div>
+          ) : (
+            <input
+              aria-label="Playback position"
+              className="player-progress"
+              disabled={!currentTrack || effectiveDuration <= 0 || isCdPreviewTrack}
+              max={Math.max(effectiveDuration, 0)}
+              min={0}
+              step={1}
+              style={{ "--progress": `${progressPercent}%` } as CSSProperties}
+              type="range"
+              value={effectiveDuration > 0 ? Math.min(currentTime, effectiveDuration) : 0}
+              onChange={handleSeek}
+            />
+          )}
+          {!isRadioSource && <span>{formatPlaybackTime(effectiveDuration)}</span>}
           <div className="flex items-center justify-end gap-1">
-            <button
-              className={`icon-button h-8 w-8 ${
-                playbackMode === "repeatQueue" || playbackMode === "repeatOne" ? "border-moss text-moss" : ""
-              }`}
-              type="button"
-              title={playbackMode === "repeatOne" ? "Repeat one" : playbackMode === "repeatQueue" ? "Repeat queue" : "Repeat off"}
-              onClick={() =>
-                setPlaybackMode(
-                  playbackMode === "normal"
-                    ? "repeatQueue"
-                    : playbackMode === "repeatQueue"
-                      ? "repeatOne"
-                      : "normal",
-                )
-              }
-            >
-              {playbackMode === "repeatOne" ? (
-                <Repeat1 size={14} />
-              ) : playbackMode === "repeatQueue" ? (
-                <Repeat2 size={14} />
-              ) : (
-                <Repeat size={14} />
-              )}
-            </button>
-            <button
-              className="icon-button h-8 w-8"
-              type="button"
-              title="Open clean lyrics view"
-              onClick={onOpenLyricsView}
-            >
-              <FileText size={14} />
-            </button>
+            {!isRadioSource && (
+              <>
+                <button
+                  className={`icon-button h-8 w-8 ${
+                    playbackMode === "repeatQueue" || playbackMode === "repeatOne" ? "border-moss text-moss" : ""
+                  }`}
+                  type="button"
+                  title={playbackMode === "repeatOne" ? "Repeat one" : playbackMode === "repeatQueue" ? "Repeat queue" : "Repeat off"}
+                  onClick={cycleRepeatMode}
+                >
+                  {playbackMode === "repeatOne" ? (
+                    <Repeat1 size={14} />
+                  ) : playbackMode === "repeatQueue" ? (
+                    <Repeat2 size={14} />
+                  ) : (
+                    <Repeat size={14} />
+                  )}
+                </button>
+                <button
+                  className="icon-button h-8 w-8"
+                  type="button"
+                  title="Open lyrics"
+                  onClick={onOpenLyricsView}
+                >
+                  <FileText size={14} />
+                </button>
+              </>
+            )}
+            {!isRadioSource && (
+              <button
+                className="icon-button h-8 w-8"
+                type="button"
+                title="Open queue"
+                onClick={onOpenQueueView}
+              >
+                <ListMusic size={14} />
+              </button>
+            )}
           </div>
         </div>
       </div>
 
       <div className="grid min-w-0 justify-items-end gap-2 text-right text-xs text-muted">
         <div
-          className={`grid ${miniPlayer ? "w-[144px] grid-cols-[28px_1fr_32px]" : "w-[176px] grid-cols-[28px_1fr_36px]"} items-center gap-2`}
+          className={`grid ${miniPlayer ? "w-[156px] grid-cols-[28px_1fr_48px]" : "w-[188px] grid-cols-[28px_1fr_48px]"} items-center gap-2`}
           onWheel={handleVolumeWheel}
         >
           <button
@@ -1491,10 +1938,32 @@ export function PlayerBar({
             value={volume}
             onChange={handleVolumeChange}
           />
-          <span className="text-right tabular-nums text-neutral-300">{Math.round(volume * 100)}%</span>
+          <span className="flex items-center justify-end gap-0.5 tabular-nums text-neutral-300" title="Volume percent">
+            <input
+              aria-label="Volume percent"
+              className="h-6 w-8 border-0 bg-transparent p-0 text-right text-xs text-neutral-300 outline-none transition focus:text-white focus:underline focus:decoration-moss"
+              inputMode="numeric"
+              max={100}
+              min={0}
+              step={1}
+              type="text"
+              value={volumePercentDraft ?? String(Math.round(volume * 100))}
+              onChange={handleVolumePercentChange}
+              onBlur={(event) => {
+                commitVolumePercent(event.currentTarget.value);
+                setVolumePercentDraft(null);
+              }}
+              onFocus={(event) => {
+                setVolumePercentDraft(String(Math.round(volume * 100)));
+                event.currentTarget.select();
+              }}
+              onKeyDown={handleVolumePercentKeyDown}
+            />
+            <span>%</span>
+          </span>
         </div>
-        <div className={`flex ${miniPlayer ? "w-[144px]" : "w-[176px]"} max-w-full items-center justify-end`}>
-          {currentTrack && !miniPlayer && (
+        <div className={`flex ${miniPlayer ? "w-[156px]" : "w-[188px]"} max-w-full items-center justify-end`}>
+          {isLibraryTrack && currentTrack && !miniPlayer && (
             <div className="shrink min-w-0 scale-90 origin-right">
               <RatingStars rating={currentTrack.rating} onChange={(rating) => onRating(currentTrack.id, rating)} />
             </div>

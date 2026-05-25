@@ -59,6 +59,8 @@ export function MaintenanceSection({
   onCopySupportBundlePath: () => void;
   onClearArtistCache: () => void;
 }) {
+  const reviewItems = startupDiagnostics?.items.filter((item) => !item.ok) ?? [];
+
   return (
     <DisclosureSection title="Maintenance" description="Background services and database helpers">
       <div className="grid gap-3 text-sm text-neutral-200">
@@ -106,7 +108,7 @@ export function MaintenanceSection({
                 startupDiagnostics?.ok
                   ? "border-moss/40 bg-moss/10 text-moss"
                   : startupDiagnostics
-                    ? "border-ember/50 bg-ember/10 text-ember"
+                    ? "border-yellow-400/40 bg-yellow-400/10 text-yellow-100"
                     : "border-line bg-panel text-muted"
               }`}
             >
@@ -115,12 +117,18 @@ export function MaintenanceSection({
           </div>
           {startupDiagnostics && (
             <div className="mt-3 grid gap-2">
+              {reviewItems.length > 0 && (
+                <div className="rounded border border-yellow-400/30 bg-yellow-400/10 px-3 py-2 text-xs text-yellow-100">
+                  {reviewItems.length.toLocaleString()} self-check note{reviewItems.length === 1 ? "" : "s"} to review.
+                  Optional features and ignored shutdown noise do not mean FLAC Cafe is broken.
+                </div>
+              )}
               {startupDiagnostics.items.map((item) => (
                 <div key={item.key} className="flex items-start gap-2 text-xs">
                   {item.ok ? (
                     <CheckCircle2 className="mt-0.5 shrink-0 text-moss" size={14} />
                   ) : (
-                    <Info className="mt-0.5 shrink-0 text-ember" size={14} />
+                    <Info className="mt-0.5 shrink-0 text-yellow-100" size={14} />
                   )}
                   <div className="min-w-0">
                     <div className="font-medium text-neutral-200">{item.label}</div>

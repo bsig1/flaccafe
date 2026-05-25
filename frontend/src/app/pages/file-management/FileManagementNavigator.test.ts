@@ -12,7 +12,6 @@ import {
 describe("file management navigator", () => {
   it("filters tools by category and task keywords", () => {
     expect(filterFileManagementSections(fileManagementSections, "Tags", "artwork").map((section) => section.id)).toEqual([
-      "artworkCollisions",
       "musicBrainz",
     ]);
     expect(filterFileManagementSections(fileManagementSections, "Import", "musicbee").map((section) => section.id)).toEqual([

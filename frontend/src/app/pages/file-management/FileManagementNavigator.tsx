@@ -3,7 +3,7 @@ import {
   X,
 } from "lucide-react";
 
-export type FileManagementCategory = "All" | "Watch" | "Tags" | "Files" | "Devices" | "Import" | "Maintenance";
+export type FileManagementCategory = "All" | "Setup" | "Tags" | "Files" | "Devices" | "Import" | "Maintenance";
 
 export interface FileManagementSectionMeta {
   id: string;
@@ -15,7 +15,7 @@ export interface FileManagementSectionMeta {
 
 export const fileManagementCategories: FileManagementCategory[] = [
   "All",
-  "Watch",
+  "Setup",
   "Tags",
   "Files",
   "Devices",
@@ -25,18 +25,11 @@ export const fileManagementCategories: FileManagementCategory[] = [
 
 export const fileManagementSections: FileManagementSectionMeta[] = [
   {
-    id: "folderWatch",
-    title: "Folder Watch",
-    description: "Review adds, moves, removes, and tag updates before applying them.",
-    category: "Watch",
-    keywords: ["background", "rescan", "missing files", "removed", "moves", "notifications"],
-  },
-  {
-    id: "artworkCollisions",
-    title: "Artwork Collision Repair",
-    description: "Find shared folder covers that make multiple albums show the same artwork.",
-    category: "Tags",
-    keywords: ["covers", "art", "folder.jpg", "album art", "embedded"],
+    id: "optionalDependencies",
+    title: "Optional Dependencies",
+    description: "Install and inspect large optional runtimes such as CLAP and FFmpeg.",
+    category: "Setup",
+    keywords: ["dependencies", "install", "setup", "ml", "clap", "ffmpeg", "runtime"],
   },
   {
     id: "filenameTags",
@@ -53,6 +46,13 @@ export const fileManagementSections: FileManagementSectionMeta[] = [
     keywords: ["replace", "preset", "artist cleanup", "metadata"],
   },
   {
+    id: "writeMetadataFiles",
+    title: "Write Database Tags To Files",
+    description: "Push FLAC Cafe's SQLite metadata and ratings into local audio tags.",
+    category: "Tags",
+    keywords: ["sqlite", "database", "write", "sync", "files", "ratings", "metadata"],
+  },
+  {
     id: "musicBrainz",
     title: "MusicBrainz Auto-Tag",
     description: "Preview album or track matches, missing-field fills, and artwork.",
@@ -67,9 +67,16 @@ export const fileManagementSections: FileManagementSectionMeta[] = [
     keywords: ["clap", "genre", "analysis", "embeddings", "classification", "metadata"],
   },
   {
+    id: "volumeTags",
+    title: "Volume Tags",
+    description: "Analyze loudness and write ReplayGain-style volume tags.",
+    category: "Tags",
+    keywords: ["volume", "gain", "replaygain", "loudness", "normalization", "ffmpeg"],
+  },
+  {
     id: "organizer",
     title: "File Organizer",
-    description: "Preview tag-based moves and export a review report.",
+    description: "Preview tag-based renames/reorganization and export a review report.",
     category: "Files",
     keywords: ["move", "rename", "folders", "template", "paths"],
   },
@@ -125,9 +132,9 @@ export const fileManagementSections: FileManagementSectionMeta[] = [
   {
     id: "acousticFingerprints",
     title: "Acoustic Fingerprints",
-    description: "Optional Chromaprint fpcalc pass for stronger duplicate matching and fingerprint-assisted tagging.",
+    description: "Chromaprint fingerprints for duplicate matching and optional AcoustID-assisted tagging.",
     category: "Maintenance",
-    keywords: ["chromaprint", "fpcalc", "fingerprint", "duplicates", "tagging", "musicbrainz"],
+    keywords: ["chromaprint", "fpcalc", "fingerprint", "duplicates", "tagging", "musicbrainz", "acoustid"],
   },
   {
     id: "reportViewer",

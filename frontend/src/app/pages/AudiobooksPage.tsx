@@ -15,6 +15,9 @@ import {
   useMemo,
   useState,
 } from "react";
+import type {
+  MouseEvent,
+} from "react";
 
 import {
   createAudiobookBookmark,
@@ -165,7 +168,6 @@ interface AudiobooksPageProps {
 
 export function AudiobooksPage({ setStatus, onPlayTrack, onAddToQueue }: AudiobooksPageProps) {
   const [tracks, setTracks] = useState<AudiobookTrack[]>([]);
-  const [total, setTotal] = useState(0);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [openBookKeys, setOpenBookKeys] = useState<Set<string>>(new Set());
   const [bookmarks, setBookmarks] = useState<AudiobookBookmark[]>([]);
@@ -174,7 +176,7 @@ export function AudiobooksPage({ setStatus, onPlayTrack, onAddToQueue }: Audiobo
   const [bookmarkLabel, setBookmarkLabel] = useState("Bookmark");
   const [bookmarkNote, setBookmarkNote] = useState("");
   const [chapterText, setChapterText] = useState("");
-  const selected = useMemo(() => tracks.find((track) => track.id === selectedId) ?? tracks[0] ?? null, [selectedId, tracks]);
+  const selected = useMemo(() => (selectedId === null ? null : tracks.find((track) => track.id === selectedId) ?? null), [selectedId, tracks]);
   const playableTracks = useMemo(() => tracks.map(audiobookToTrack), [tracks]);
   const selectedTrack = useMemo(() => (selected ? audiobookToTrack(selected) : null), [selected]);
   const bookGroups = useMemo(() => groupAudiobooksByBook(tracks), [tracks]);
@@ -188,11 +190,11 @@ export function AudiobooksPage({ setStatus, onPlayTrack, onAddToQueue }: Audiobo
     try {
       const response = await fetchAudiobooks(300, 0);
       setTracks(response.tracks);
-      setTotal(response.total);
-      if (!selectedId && response.tracks[0]) {
-        setSelectedId(response.tracks[0].id);
+      if (selectedId !== null && !response.tracks.some((track) => track.id === selectedId)) {
+        setSelectedId(null);
       }
-      setStatus(response.total ? `Loaded ${response.total.toLocaleString()} audiobook track${response.total === 1 ? "" : "s"}` : "No audiobook tracks found");
+      const bookCount = groupAudiobooksByBook(response.tracks).length;
+      setStatus(bookCount ? `Loaded ${bookCount.toLocaleString()} audiobook book${bookCount === 1 ? "" : "s"}` : "No audiobook books found");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not load audiobooks");
     }
@@ -229,20 +231,6 @@ export function AudiobooksPage({ setStatus, onPlayTrack, onAddToQueue }: Audiobo
     void loadSelectedDetails(selected);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id]);
-
-  useEffect(() => {
-    if (!selectedBookKey) {
-      return;
-    }
-    setOpenBookKeys((current) => {
-      if (current.has(selectedBookKey)) {
-        return current;
-      }
-      const next = new Set(current);
-      next.add(selectedBookKey);
-      return next;
-    });
-  }, [selectedBookKey]);
 
   async function saveProgress() {
     if (!selected) {
@@ -330,6 +318,13 @@ export function AudiobooksPage({ setStatus, onPlayTrack, onAddToQueue }: Audiobo
     });
   }
 
+  function clearSelectionOnClickAway(event: MouseEvent<HTMLDivElement>) {
+    const target = event.target;
+    if (target instanceof Element && !target.closest("[data-audiobook-interactive='true']")) {
+      setSelectedId(null);
+    }
+  }
+
   return (
     <section className="flex min-h-0 flex-1 flex-col overflow-hidden bg-app">
       <header className="border-b border-line px-6 py-4">
@@ -350,10 +345,13 @@ export function AudiobooksPage({ setStatus, onPlayTrack, onAddToQueue }: Audiobo
           </div>
         </div>
       </header>
-      <div className="grid min-h-0 flex-1 gap-4 overflow-hidden p-4 lg:grid-cols-[minmax(320px,0.9fr)_minmax(360px,1.1fr)]">
+      <div
+        className="grid min-h-0 flex-1 gap-4 overflow-hidden p-4 lg:grid-cols-[minmax(320px,0.9fr)_minmax(360px,1.1fr)]"
+        onMouseDown={clearSelectionOnClickAway}
+      >
         <div className="min-h-0 overflow-hidden rounded border border-line bg-panel">
           <div className="border-b border-line px-3 py-2 text-xs uppercase text-muted">
-            {total.toLocaleString()} audiobook track{total === 1 ? "" : "s"}
+            {bookGroups.length.toLocaleString()} audiobook book{bookGroups.length === 1 ? "" : "s"}
           </div>
           <div className="grid max-h-full gap-2 overflow-auto p-2">
             {bookGroups.map((group) => {
@@ -363,6 +361,7 @@ export function AudiobooksPage({ setStatus, onPlayTrack, onAddToQueue }: Audiobo
               return (
                 <div key={group.key} className={`rounded border transition ${groupSelected ? "border-moss/50 bg-white/5" : "border-line bg-ink/50"}`}>
                   <button
+                    data-audiobook-interactive="true"
                     className="grid w-full min-w-0 gap-1 px-3 py-2 text-left hover:bg-white/5"
                     type="button"
                     onClick={() => toggleBook(group)}
@@ -384,6 +383,7 @@ export function AudiobooksPage({ setStatus, onPlayTrack, onAddToQueue }: Audiobo
                     <div className="grid gap-1 border-t border-line p-1">
                       {group.tracks.map((track) => (
                         <div
+                          data-audiobook-interactive="true"
                           key={track.id}
                           className={`grid min-w-0 gap-1 rounded px-3 py-2 text-left transition ${
                             selected?.id === track.id ? "bg-white/10 text-white" : "text-neutral-200 hover:bg-white/5"
@@ -433,7 +433,7 @@ export function AudiobooksPage({ setStatus, onPlayTrack, onAddToQueue }: Audiobo
 
         <div className="min-h-0 overflow-auto rounded border border-line bg-panel p-4">
           {selected ? (
-            <div className="grid gap-5">
+            <div className="grid gap-5" data-audiobook-interactive="true">
               <div>
                 <div className="flex items-center gap-2 text-lg font-semibold text-white">
                   <BookOpen size={20} />
@@ -520,7 +520,15 @@ export function AudiobooksPage({ setStatus, onPlayTrack, onAddToQueue }: Audiobo
               </div>
             </div>
           ) : (
-            <div className="grid h-full place-items-center text-center text-sm text-muted">Select an audiobook to edit resume data.</div>
+            <div className="grid h-full place-items-center text-center text-sm text-muted">
+              <div className="max-w-sm">
+                <BookOpen className="mx-auto mb-3 text-moss" size={28} />
+                <div className="text-base font-medium text-white">No audiobook selected</div>
+                <div className="mt-1 text-xs text-muted">
+                  Open a book on the left to play, bookmark, or edit resume data. Click empty space to clear the current selection.
+                </div>
+              </div>
+            </div>
           )}
         </div>
       </div>

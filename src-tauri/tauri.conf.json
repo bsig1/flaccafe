@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "FLAC Cafe",
-  "version": "0.2.1",
+  "version": "0.5.0",
   "identifier": "app.flaccafe.prototype",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -33,7 +33,22 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../dist-backend/flaccafe-backend.exe": "flaccafe-backend.exe"
+      "../dist-backend/flaccafe-backend.exe": "flaccafe-backend.exe",
+      "../backend/tools/chromaprint/fpcalc.exe": "tools/chromaprint/fpcalc.exe",
+      "../backend/tools/cd-rip/cdda2wav.exe": "tools/cd-rip/cdda2wav.exe",
+      "../backend/tools/cd-rip/cdrecord.exe": "tools/cd-rip/cdrecord.exe",
+      "../backend/tools/cd-rip/cygwin1.dll": "tools/cd-rip/cygwin1.dll",
+      "../backend/tools/cd-rip/devdump.exe": "tools/cd-rip/devdump.exe",
+      "../backend/tools/cd-rip/isodump.exe": "tools/cd-rip/isodump.exe",
+      "../backend/tools/cd-rip/isoinfo.exe": "tools/cd-rip/isoinfo.exe",
+      "../backend/tools/cd-rip/isovfy.exe": "tools/cd-rip/isovfy.exe",
+      "../backend/tools/cd-rip/mkisofs.exe": "tools/cd-rip/mkisofs.exe",
+      "../backend/tools/cd-rip/mount.exe": "tools/cd-rip/mount.exe",
+      "../backend/tools/cd-rip/readcd.exe": "tools/cd-rip/readcd.exe",
+      "../backend/tools/cd-rip/rscsi.exe": "tools/cd-rip/rscsi.exe",
+      "../backend/tools/cd-rip/scgcheck.exe": "tools/cd-rip/scgcheck.exe",
+      "../backend/tools/cd-rip/sh.exe": "tools/cd-rip/sh.exe",
+      "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md"
     },
     "windows": {
       "wix": {

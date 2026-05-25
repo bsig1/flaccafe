@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 from backend.app.database import connect, init_db, set_setting
 from backend.app.extensions import discover_extensions
-from backend.app.main import app, fetch_artist_info_from_wikipedia, recommendation_drift
+from backend.app.main import app, fetch_artist_info_from_wikipedia, recent_backend_error_summary, recommendation_drift
 from backend.app.scanner import ScanStats, file_fingerprint, file_modified_at, path_key
 
 
@@ -83,6 +83,72 @@ class ApiTests(unittest.TestCase):
         diagnostics = self.client.get("/diagnostics/startup")
         self.assertEqual(diagnostics.status_code, 200)
         self.assertIn("items", diagnostics.json())
+
+    def test_settings_can_store_and_clear_acoustid_key_without_returning_secret(self) -> None:
+        saved = self.client.patch("/settings", json={"acoustid_api_key": "client-key-123"})
+        self.assertEqual(saved.status_code, 200)
+        self.assertTrue(saved.json()["acoustid_api_key_configured"])
+        self.assertNotIn("client-key-123", json.dumps(saved.json()))
+        with connect() as conn:
+            self.assertEqual(conn.execute("SELECT value FROM settings WHERE key = 'acoustid_api_key'").fetchone()["value"], "client-key-123")
+
+        cleared = self.client.patch("/settings", json={"clear_acoustid_api_key": True})
+        self.assertEqual(cleared.status_code, 200)
+        self.assertFalse(cleared.json()["acoustid_api_key_configured"])
+
+    def test_settings_can_store_lastfm_credentials_without_returning_secrets(self) -> None:
+        saved = self.client.patch(
+            "/settings",
+            json={"lastfm_api_key": "lastfm-key", "lastfm_api_secret": "lastfm-secret"},
+        )
+
+        self.assertEqual(saved.status_code, 200)
+        self.assertTrue(saved.json()["lastfm_api_credentials_configured"])
+        self.assertEqual(saved.json()["lastfm_api_credentials_source"], "saved")
+        self.assertNotIn("lastfm-key", json.dumps(saved.json()))
+        self.assertNotIn("lastfm-secret", json.dumps(saved.json()))
+        with connect() as conn:
+            row = conn.execute("SELECT api_key, api_secret FROM scrobble_accounts WHERE service = 'lastfm'").fetchone()
+        self.assertEqual(row["api_key"], "lastfm-key")
+        self.assertEqual(row["api_secret"], "lastfm-secret")
+
+        cleared = self.client.patch("/settings", json={"clear_lastfm_api_credentials": True})
+        self.assertEqual(cleared.status_code, 200)
+        self.assertFalse(cleared.json()["lastfm_api_credentials_configured"])
+
+    def test_recent_backend_errors_ignores_windows_connection_reset_noise(self) -> None:
+        log_path = self.root / "backend.log"
+        log_path.write_text(
+            "\n".join(
+                [
+                    "2026-05-24 09:01:45,843 ERROR asyncio: Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)",
+                    "handle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>",
+                    "Traceback (most recent call last):",
+                    "  File \"C:\\Program Files\\Python312\\Lib\\asyncio\\events.py\", line 84, in _run",
+                    "ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        self.assertIsNone(recent_backend_error_summary(log_path=log_path))
+
+    def test_recent_backend_errors_keeps_actionable_tracebacks(self) -> None:
+        log_path = self.root / "backend.log"
+        log_path.write_text(
+            "\n".join(
+                [
+                    "2026-05-24 09:01:45,843 ERROR flac_cafe.backend: Something failed",
+                    "Traceback (most recent call last):",
+                    "RuntimeError: real problem",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        summary = recent_backend_error_summary(log_path=log_path)
+        self.assertIsNotNone(summary)
+        self.assertIn("Something failed", summary or "")
 
     def test_support_bundle_endpoint_creates_zip(self) -> None:
         response = self.client.post("/diagnostics/support-bundle")
@@ -156,6 +222,71 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(settings.status_code, 200)
         self.assertEqual(settings.json()["library_paths"], [str(folder_a.resolve()), str(folder_b.resolve())])
 
+    def test_remove_library_source_removes_tracks_but_keeps_files(self) -> None:
+        folder_a = self.root / "Music A"
+        folder_b = self.root / "Music B"
+        folder_a.mkdir()
+        folder_b.mkdir()
+        removed_file = folder_a / "remove-me.mp3"
+        nested_removed_file = folder_a / "Disc 1" / "remove-me-too.flac"
+        kept_file = folder_b / "keep-me.mp3"
+        nested_removed_file.parent.mkdir()
+        for audio_file in [removed_file, nested_removed_file, kept_file]:
+            audio_file.write_bytes(b"audio")
+
+        removed_id = insert_track(removed_file)
+        nested_removed_id = insert_track(nested_removed_file)
+        kept_id = insert_track(kept_file)
+        with connect() as conn:
+            set_setting(conn, "library_path", str(folder_a.resolve()))
+            set_setting(conn, "library_paths_json", json.dumps([str(folder_a.resolve()), str(folder_b.resolve())]))
+            for audio_file in [removed_file, nested_removed_file, kept_file]:
+                conn.execute(
+                    """
+                    INSERT INTO track_metadata_cache(path_key, path, file_modified_at, file_size, metadata_json)
+                    VALUES(?, ?, 'now', ?, '{}')
+                    """,
+                    (path_key(audio_file), str(audio_file), audio_file.stat().st_size),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO artwork_cache(path_key, path, file_modified_at, file_size, media_type, data)
+                    VALUES(?, ?, 'now', ?, 'image/jpeg', ?)
+                    """,
+                    (path_key(audio_file), str(audio_file), audio_file.stat().st_size, b"art"),
+                )
+            conn.commit()
+
+        response = self.client.post("/settings/library-sources/remove", json={"path": str(folder_a)})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["removed_tracks"], 2)
+        self.assertEqual(body["removed_metadata_cache"], 2)
+        self.assertEqual(body["removed_artwork_cache"], 2)
+        self.assertEqual(body["library_paths"], [str(folder_b.resolve())])
+        self.assertTrue(removed_file.exists())
+        self.assertTrue(nested_removed_file.exists())
+        self.assertTrue(kept_file.exists())
+        with connect() as conn:
+            removed_rows = conn.execute(
+                "SELECT id FROM tracks WHERE id IN (?, ?)",
+                (removed_id, nested_removed_id),
+            ).fetchall()
+            kept_row = conn.execute("SELECT id FROM tracks WHERE id = ?", (kept_id,)).fetchone()
+            removed_cache = conn.execute(
+                "SELECT path_key FROM track_metadata_cache WHERE path_key IN (?, ?)",
+                (path_key(removed_file), path_key(nested_removed_file)),
+            ).fetchall()
+            kept_cache = conn.execute(
+                "SELECT path_key FROM track_metadata_cache WHERE path_key = ?",
+                (path_key(kept_file),),
+            ).fetchone()
+        self.assertEqual(removed_rows, [])
+        self.assertIsNotNone(kept_row)
+        self.assertEqual(removed_cache, [])
+        self.assertIsNotNone(kept_cache)
+
     def test_rating_endpoint_updates_track(self) -> None:
         audio_file = self.root / "rated.mp3"
         audio_file.write_bytes(b"audio")
@@ -182,6 +313,144 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(body["album"], "New Album")
         self.assertEqual(body["year"], 2025)
 
+    def test_sync_metadata_endpoint_refreshes_tags_from_file(self) -> None:
+        audio_file = self.root / "sync-tags.mp3"
+        audio_file.write_bytes(b"audio")
+        track_id = insert_track(audio_file, title="Old Title", artist="Old Artist", album="Old Album", rating=4.0)
+        missing_id = track_id + 999
+        metadata = {
+            "path": str(audio_file.resolve()),
+            "path_key": path_key(audio_file),
+            "title": "File Title",
+            "artist": "File Artist",
+            "album": "File Album",
+            "album_artist": "File Album Artist",
+            "track_number": 7,
+            "disc_number": 1,
+            "genre": "Pop",
+            "year": 2026,
+            "duration_seconds": 241.0,
+            "bitrate": 320000,
+            "replaygain_track_gain_db": None,
+            "replaygain_album_gain_db": None,
+            "replaygain_track_peak": None,
+            "replaygain_album_peak": None,
+            "audio_fingerprint": "fresh-file-fingerprint",
+            "rating": 2.0,
+            "file_modified_at": file_modified_at(audio_file),
+        }
+
+        with connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO track_metadata_cache(path_key, path, file_modified_at, file_size, metadata_json)
+                VALUES(?, ?, ?, ?, '{}')
+                """,
+                (path_key(audio_file), str(audio_file), metadata["file_modified_at"], audio_file.stat().st_size),
+            )
+            conn.commit()
+
+        with patch("backend.app.main.read_metadata", return_value=metadata):
+            response = self.client.post("/tracks/sync-metadata", json={"track_ids": [track_id, missing_id]})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["synced_track_ids"], [track_id])
+        self.assertEqual(body["synced_count"], 1)
+        self.assertEqual(body["missing_track_ids"], [missing_id])
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT title, artist, album, album_artist, track_number, genre, rating FROM tracks WHERE id = ?",
+                (track_id,),
+            ).fetchone()
+            cache_row = conn.execute("SELECT path_key FROM track_metadata_cache WHERE path_key = ?", (path_key(audio_file),)).fetchone()
+        self.assertEqual(row["title"], "File Title")
+        self.assertEqual(row["artist"], "File Artist")
+        self.assertEqual(row["album"], "File Album")
+        self.assertEqual(row["album_artist"], "File Album Artist")
+        self.assertEqual(row["track_number"], 7)
+        self.assertEqual(row["genre"], "Pop")
+        self.assertEqual(row["rating"], 4.0)
+        self.assertIsNone(cache_row)
+
+    def test_write_metadata_to_files_previews_and_applies_database_tags(self) -> None:
+        audio_file = self.root / "write-tags.flac"
+        audio_file.write_bytes(b"audio")
+        track_id = insert_track(audio_file, title="Database Title", artist="Database Artist", album="Database Album", rating=4.5)
+        file_metadata = {
+            "path": str(audio_file.resolve()),
+            "path_key": path_key(audio_file),
+            "title": "File Title",
+            "artist": "File Artist",
+            "album": "File Album",
+            "album_artist": "File Artist",
+            "track_number": None,
+            "disc_number": None,
+            "genre": "Rock",
+            "year": 2024,
+            "duration_seconds": 180.0,
+            "bitrate": None,
+            "replaygain_track_gain_db": None,
+            "replaygain_album_gain_db": None,
+            "replaygain_track_peak": None,
+            "replaygain_album_peak": None,
+            "audio_fingerprint": "fingerprint",
+            "rating": 2.0,
+            "file_modified_at": file_modified_at(audio_file),
+        }
+
+        with patch("backend.app.main.read_metadata", return_value=file_metadata), patch(
+            "backend.app.main.write_track_metadata"
+        ) as write_metadata, patch("backend.app.main.write_track_rating") as write_rating:
+            preview = self.client.post(
+                "/library/tools/write-metadata-to-files",
+                json={"track_ids": [track_id], "include_metadata": True, "include_rating": True},
+            )
+            legacy_preview = self.client.post(
+                "/tracks/write-metadata-to-files",
+                json={"track_ids": [track_id], "include_metadata": True, "include_rating": True},
+            )
+
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(legacy_preview.status_code, 200)
+        preview_body = preview.json()
+        self.assertEqual(preview_body["changed"], 1)
+        self.assertIn("title", preview_body["previews"][0]["changed_fields"])
+        self.assertIn("rating", preview_body["previews"][0]["changed_fields"])
+        write_metadata.assert_not_called()
+        write_rating.assert_not_called()
+
+        with patch("backend.app.main.read_metadata", return_value=file_metadata), patch(
+            "backend.app.main.write_track_metadata"
+        ) as write_metadata, patch("backend.app.main.write_track_rating") as write_rating:
+            applied = self.client.post(
+                "/library/tools/write-metadata-to-files",
+                json={"track_ids": [track_id], "include_metadata": True, "include_rating": True, "apply": True},
+            )
+
+        self.assertEqual(applied.status_code, 200)
+        self.assertEqual(applied.json()["applied"], 1)
+        write_metadata.assert_called_once()
+        self.assertEqual(write_metadata.call_args.args[0], audio_file)
+        self.assertEqual(write_metadata.call_args.args[1]["title"], "Database Title")
+        write_rating.assert_called_once_with(audio_file, 4.5)
+
+        undo_batches = self.client.get("/library/tools/undo-batches")
+        self.assertEqual(undo_batches.status_code, 200)
+        batch = next((item for item in undo_batches.json() if item["action_type"] == "sqlite_file_tag_write"), None)
+        self.assertIsNotNone(batch)
+        with patch("backend.app.main.write_track_metadata") as write_metadata, patch(
+            "backend.app.main.write_track_rating"
+        ) as write_rating:
+            restored = self.client.post(f"/library/tools/undo-batches/{batch['batch_id']}/restore")
+
+        self.assertEqual(restored.status_code, 200)
+        self.assertTrue(restored.json()["restored"])
+        write_metadata.assert_called_once()
+        self.assertEqual(write_metadata.call_args.args[0], audio_file)
+        self.assertEqual(write_metadata.call_args.args[1]["title"], "File Title")
+        write_rating.assert_called_once_with(audio_file, 2.0)
+
     def test_track_listings_hide_audiobooks_but_audiobooks_remain_listed(self) -> None:
         music_file = self.root / "Music" / "song.mp3"
         book_file = self.root / "Audiobooks" / "book.mp3"
@@ -205,6 +474,72 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(audiobooks.status_code, 200)
         self.assertEqual(audiobooks.json()["total"], 1)
         self.assertEqual(audiobooks.json()["tracks"][0]["id"], book_id)
+
+    def test_track_page_supports_advanced_search_filters(self) -> None:
+        music_dir = self.root / "Advanced Search"
+        music_dir.mkdir()
+        favorite = music_dir / "favorite.flac"
+        unrated = music_dir / "unrated.mp3"
+        missing = music_dir / "missing.opus"
+        favorite.write_bytes(b"audio")
+        unrated.write_bytes(b"audio")
+        missing.write_bytes(b"audio")
+        favorite_id = insert_track(
+            favorite,
+            title="Fuzzy Favorite",
+            artist="Advanced Artist",
+            album="Filter Album",
+            genre="Synth Pop",
+            year=1999,
+            duration_seconds=245,
+            rating=4.5,
+        )
+        unrated_id = insert_track(
+            unrated,
+            title="Deep Cut",
+            artist="Other Artist",
+            album="Other Album",
+            genre="Jazz",
+            year=2024,
+            duration_seconds=180,
+            rating=None,
+        )
+        missing_id = insert_track(
+            missing,
+            title="Needs Tags",
+            artist="",
+            album="",
+            genre="",
+            year=None,
+            duration_seconds=60,
+            rating=None,
+        )
+
+        filtered = self.client.get(
+            "/tracks/page",
+            params={
+                "artist": "advanced",
+                "album": "filter",
+                "genre": "synth",
+                "extension": "flac",
+                "min_rating": 4,
+                "year_from": 1990,
+                "year_to": 2000,
+                "min_duration": 200,
+            },
+        )
+        self.assertEqual(filtered.status_code, 200)
+        self.assertEqual([track["id"] for track in filtered.json()["tracks"]], [favorite_id])
+
+        unrated_response = self.client.get("/tracks/page", params={"rating_state": "unrated"})
+        self.assertEqual(unrated_response.status_code, 200)
+        unrated_ids = [track["id"] for track in unrated_response.json()["tracks"]]
+        self.assertIn(unrated_id, unrated_ids)
+        self.assertNotIn(favorite_id, unrated_ids)
+
+        missing_response = self.client.get("/tracks/page", params={"missing_metadata": "true"})
+        self.assertEqual(missing_response.status_code, 200)
+        self.assertIn(missing_id, [track["id"] for track in missing_response.json()["tracks"]])
 
     def test_infer_tags_from_filename_preview_and_apply(self) -> None:
         music_dir = self.root / "Music"
@@ -971,7 +1306,8 @@ class ApiTests(unittest.TestCase):
         self.assertIn("-ar 48000", command_text)
         self.assertIn("libmp3lame", command_text)
         self.assertIn("-b:a 192k", command_text)
-        self.assertIn("0:v?", command_text)
+        self.assertIn("-vn", command_text)
+        self.assertNotIn("0:v?", command_text)
 
     def test_cd_rip_setup_reports_drives_and_tools(self) -> None:
         ffmpeg = self.root / "ffmpeg.exe"
@@ -1014,6 +1350,95 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(body["ffmpeg_available"])
         self.assertEqual(body["drives"][0]["id"], "D:")
         self.assertEqual(body["drives"][0]["track_count"], 2)
+
+    def test_cd_rip_prefers_native_windows_reader_when_available(self) -> None:
+        from backend.app import cd_ripping
+
+        fake_setup = {
+            "tools": [
+                {"name": "windows_cdda", "purpose": "native", "available": True, "path": "Windows DeviceIoControl"},
+                {"name": "cdda2wav", "purpose": "legacy", "available": True, "path": str(self.root / "cdda2wav.exe")},
+            ],
+            "ffmpeg_available": True,
+            "ffmpeg_path": str(self.root / "ffmpeg.exe"),
+        }
+
+        with patch("backend.app.cd_ripping.cd_rip_setup", return_value=fake_setup):
+            ripper = cd_ripping.selected_ripper(True)
+
+        self.assertIsNotNone(ripper)
+        self.assertEqual(ripper["name"], "windows_cdda")
+        self.assertEqual(cd_ripping.windows_device_path("D:"), "\\\\.\\D:")
+
+    def test_cd_playback_ignores_closed_alias_and_uses_selected_drive(self) -> None:
+        from backend.app import cd_ripping
+
+        commands: list[str] = []
+
+        def fake_mci(command: str) -> None:
+            commands.append(command)
+            if command == "close flac_cafe_cd":
+                raise RuntimeError("The specified device is not open or is not recognized by MCI.")
+
+        with patch("backend.app.cd_ripping.mci_command", side_effect=fake_mci):
+            response = cd_ripping.play_cd_track(2, "D:")
+
+        self.assertEqual(response["status"], "playing")
+        self.assertIn('open "D:" type cdaudio alias flac_cafe_cd', commands)
+        self.assertIn("play flac_cafe_cd from 2:0:0:0", commands)
+
+    def test_cd_playback_route_returns_main_player_live_track(self) -> None:
+        with patch(
+            "backend.app.main.prepare_cd_live_track",
+            return_value={
+                "status": "prepared",
+                "track_number": 3,
+                "message": "Playing CD track 03.",
+                "track": {
+                    "id": -123,
+                    "path": "cdda://E:/track/03",
+                    "title": "CD Song",
+                    "artist": "CD Artist",
+                    "album": "CD Album",
+                    "album_artist": "CD Artist",
+                    "track_number": 3,
+                    "disc_number": 1,
+                    "genre": "CD Preview",
+                    "date_added": "2026-05-24T00:00:00+00:00",
+                    "file_modified_at": None,
+                    "audio_url": "/library/tools/cd-rip/playback/live/audio?drive_id=E%3A&track_number=3",
+                    "is_preview": True,
+                },
+            },
+        ) as live_mock:
+            response = self.client.post(
+                "/library/tools/cd-rip/playback/play",
+                json={
+                    "drive_id": "E:",
+                    "track_number": 3,
+                    "album_title": "CD Album",
+                    "album_artist": "CD Artist",
+                    "tracks": [{"track_number": 3, "title": "CD Song", "artist": "CD Artist"}],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["track"]["is_preview"])
+        self.assertEqual(body["track"]["id"], -123)
+        self.assertIn("/library/tools/cd-rip/playback/live/audio", body["track"]["audio_url"])
+        live_mock.assert_called_once()
+
+    def test_cd_live_audio_streams_wav_response(self) -> None:
+        with (
+            patch("backend.app.main.cd_live_wav_content_length", return_value=47),
+            patch("backend.app.main.cd_live_wav_stream", return_value=iter([b"RIFF", b"audio"])),
+        ):
+            response = self.client.get("/library/tools/cd-rip/playback/live/audio?drive_id=D%3A&track_number=1")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "audio/wav")
+        self.assertEqual(response.content, b"RIFFaudio")
 
     def test_cd_rip_metadata_uses_musicbrainz_release_tracks(self) -> None:
         search_release = {"id": "release-1", "title": "Lookup Album"}
@@ -1225,6 +1650,7 @@ class ApiTests(unittest.TestCase):
         refreshed = self.client.post(f"/podcasts/subscriptions/{subscription_id}/refresh")
         self.assertEqual(refreshed.status_code, 200)
         self.assertEqual(refreshed.json()["subscription"]["title"], "Test Cast")
+        self.assertEqual(Path(refreshed.json()["subscription"]["effective_download_folder"]), download_folder / "Test Cast")
         self.assertEqual(refreshed.json()["total"], 1)
 
         episodes = self.client.get(f"/podcasts/episodes?subscription_id={subscription_id}")
@@ -1236,11 +1662,14 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(downloaded.status_code, 200)
         local_path = Path(downloaded.json()["local_path"])
         self.assertTrue(local_path.exists())
+        self.assertEqual(local_path.parent, download_folder / "Test Cast")
         self.assertEqual(local_path.read_bytes(), b"podcast audio")
 
-        deleted = self.client.delete(f"/podcasts/subscriptions/{subscription_id}")
+        deleted = self.client.delete(f"/podcasts/subscriptions/{subscription_id}?delete_files=true")
         self.assertEqual(deleted.status_code, 200)
         self.assertTrue(deleted.json()["deleted"])
+        self.assertEqual(deleted.json()["deleted_files"], 1)
+        self.assertFalse(local_path.exists())
 
     def test_default_podcast_download_adds_podcast_track_outside_main_library(self) -> None:
         media = self.root / "default-episode.mp3"
@@ -1264,7 +1693,14 @@ class ApiTests(unittest.TestCase):
             json={"title": "Default Cast", "feed_url": feed.as_uri(), "download_folder": None},
         )
         self.assertEqual(created.status_code, 200)
+        self.assertEqual(Path(created.json()["effective_download_folder"]).name, "Default Cast")
         subscription_id = created.json()["id"]
+
+        folder = self.client.post(f"/podcasts/subscriptions/{subscription_id}/folder")
+        self.assertEqual(folder.status_code, 200)
+        self.assertTrue(Path(folder.json()["path"]).exists())
+        self.assertEqual(Path(folder.json()["path"]).name, "Default Cast")
+
         refreshed = self.client.post(f"/podcasts/subscriptions/{subscription_id}/refresh")
         self.assertEqual(refreshed.status_code, 200)
         episodes = self.client.get(f"/podcasts/episodes?subscription_id={subscription_id}")
@@ -1279,6 +1715,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(track.status_code, 200)
         self.assertEqual(track.json()["genre"], "Podcast")
         self.assertEqual(track.json()["title"], "Default Episode")
+        self.assertIsNone(track.json()["album"])
 
         main_library = self.client.get("/tracks/page")
         self.assertEqual(main_library.status_code, 200)
@@ -1287,6 +1724,16 @@ class ApiTests(unittest.TestCase):
         ensured = self.client.post(f"/podcasts/episodes/{episode_id}/track")
         self.assertEqual(ensured.status_code, 200)
         self.assertEqual(ensured.json()["id"], track_id)
+
+        local_path = Path(downloaded.json()["local_path"])
+        deleted = self.client.delete(f"/podcasts/episodes/{episode_id}/download")
+        self.assertEqual(deleted.status_code, 200)
+        self.assertTrue(deleted.json()["deleted_file"])
+        self.assertFalse(local_path.exists())
+        self.assertIsNone(deleted.json()["episode"]["local_path"])
+        self.assertIsNone(deleted.json()["episode"]["track_id"])
+        missing_track = self.client.get(f"/tracks/{track_id}")
+        self.assertEqual(missing_track.status_code, 404)
 
     def test_radio_station_bookmarks_and_played_timestamp(self) -> None:
         created = self.client.post(
@@ -1324,6 +1771,88 @@ class ApiTests(unittest.TestCase):
         deleted = self.client.delete(f"/radio/stations/{station_id}")
         self.assertEqual(deleted.status_code, 200)
         self.assertTrue(deleted.json()["deleted"])
+
+    def test_lastfm_login_start_returns_authorization_url(self) -> None:
+        with patch("backend.app.scrobbling.lastfm_api_post", return_value={"token": "token-123"}):
+            response = self.client.post(
+                "/scrobbling/lastfm/login/start",
+                json={"api_key": "api-key", "api_secret": "shared-secret"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["token"], "token-123")
+        self.assertIn("last.fm/api/auth", body["auth_url"])
+        self.assertIn("api_key=api-key", body["auth_url"])
+        self.assertIn("token=token-123", body["auth_url"])
+
+    def test_lastfm_login_start_uses_configured_credentials(self) -> None:
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "FLAC_CAFE_LASTFM_API_KEY": "env-key",
+                    "FLAC_CAFE_LASTFM_API_SECRET": "env-secret",
+                },
+                clear=False,
+            ),
+            patch("backend.app.scrobbling.lastfm_api_post", return_value={"token": "token-123"}) as lastfm_post,
+        ):
+            response = self.client.post("/scrobbling/lastfm/login/start", json={})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("api_key=env-key", response.json()["auth_url"])
+        params = lastfm_post.call_args.args[0]
+        self.assertEqual(params["api_key"], "env-key")
+
+    def test_lastfm_login_complete_saves_session_key(self) -> None:
+        with patch(
+            "backend.app.scrobbling.lastfm_api_post",
+            return_value={"session": {"key": "session-key", "name": "listener"}},
+        ):
+            response = self.client.post(
+                "/scrobbling/lastfm/login/complete",
+                json={
+                    "api_key": "api-key",
+                    "api_secret": "shared-secret",
+                    "token": "approved-token",
+                    "enabled": True,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        account = response.json()["account"]
+        self.assertEqual(account["service"], "lastfm")
+        self.assertTrue(account["enabled"])
+        self.assertEqual(account["username"], "listener")
+        self.assertEqual(account["session_key"], "session-key")
+
+        accounts = self.client.get("/scrobbling/accounts")
+        self.assertEqual(accounts.status_code, 200)
+        lastfm = next(item for item in accounts.json() if item["service"] == "lastfm")
+        self.assertEqual(lastfm["username"], "listener")
+        self.assertEqual(lastfm["session_key"], "session-key")
+
+    def test_lastfm_account_patch_preserves_saved_credentials(self) -> None:
+        created = self.client.patch(
+            "/scrobbling/accounts/lastfm",
+            json={
+                "enabled": True,
+                "api_key": "api-key",
+                "api_secret": "shared-secret",
+                "session_key": "session-key",
+            },
+        )
+        self.assertEqual(created.status_code, 200)
+
+        updated = self.client.patch("/scrobbling/accounts/lastfm", json={"enabled": False})
+
+        self.assertEqual(updated.status_code, 200)
+        account = updated.json()
+        self.assertFalse(account["enabled"])
+        self.assertEqual(account["api_key"], "api-key")
+        self.assertEqual(account["api_secret"], "shared-secret")
+        self.assertEqual(account["session_key"], "session-key")
 
     def test_scrobbling_outbox_loved_tracks_and_history_import(self) -> None:
         audio_file = self.root / "scrobble.mp3"
@@ -1373,6 +1902,36 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(row["play_count"], 7)
         self.assertEqual(row["rating"], 4.5)
 
+    def test_history_stats_summarizes_play_and_skip_counts(self) -> None:
+        first = self.root / "history-a.mp3"
+        second = self.root / "history-b.mp3"
+        first.write_bytes(b"audio")
+        second.write_bytes(b"audio")
+        first_id = insert_track(first, title="History A", artist="Stats Artist", duration_seconds=180.0)
+        second_id = insert_track(second, title="History B", artist="Stats Artist", duration_seconds=60.0)
+        with connect() as conn:
+            conn.execute("UPDATE tracks SET play_count = 3, skip_count = 1 WHERE id = ?", (first_id,))
+            conn.execute("UPDATE tracks SET play_count = 1, skip_count = 4 WHERE id = ?", (second_id,))
+            conn.execute("INSERT INTO play_events(track_id, event_type) VALUES(?, 'played')", (first_id,))
+            conn.execute("INSERT INTO play_events(track_id, event_type) VALUES(?, 'skipped')", (second_id,))
+            conn.execute("INSERT INTO play_events(track_id, event_type) VALUES(?, 'rated')", (first_id,))
+            conn.commit()
+
+        response = self.client.get("/history/stats?limit=1")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["total_play_count"], 4)
+        self.assertEqual(body["total_skip_count"], 5)
+        self.assertEqual(body["total_play_events"], 1)
+        self.assertEqual(body["total_skip_events"], 1)
+        self.assertEqual(body["total_rated_events"], 1)
+        self.assertEqual(body["unique_played_tracks"], 2)
+        self.assertEqual(body["unique_skipped_tracks"], 2)
+        self.assertEqual(body["total_listened_seconds"], 600)
+        self.assertEqual(body["top_played"][0]["track"]["id"], first_id)
+        self.assertEqual(body["top_skipped"][0]["track"]["id"], second_id)
+
     def test_gapless_validation_reports_adjacent_pairs(self) -> None:
         album_dir = self.root / "Album"
         album_dir.mkdir()
@@ -1395,6 +1954,123 @@ class ApiTests(unittest.TestCase):
         self.assertFalse(body["pairs"][0]["sample_accurate_ready"])
         self.assertTrue(body["pairs"][0]["warnings"])
 
+    def test_clap_coverage_excludes_audiobooks_and_podcasts(self) -> None:
+        music = self.root / "music.flac"
+        analyzed = self.root / "analyzed.flac"
+        audiobook = self.root / "Audiobooks" / "book.flac"
+        podcast = self.root / "Podcasts" / "episode.mp3"
+        audiobook.parent.mkdir()
+        podcast.parent.mkdir()
+        for path in [music, analyzed, audiobook, podcast]:
+            path.write_bytes(b"audio")
+        insert_track(music, title="Music", genre="Rock")
+        analyzed_id = insert_track(analyzed, title="Analyzed", genre="Rock")
+        insert_track(audiobook, title="Book", genre="Audiobook")
+        podcast_id = insert_track(podcast, title="Episode", genre="Podcast")
+        with connect() as conn:
+            conn.execute(
+                "UPDATE tracks SET analysis_provider = 'clap', analysis_embedding = '[0.1]' WHERE id = ?",
+                (analyzed_id,),
+            )
+            conn.execute(
+                "UPDATE tracks SET analysis_provider = 'clap_failed' WHERE id = ?",
+                (podcast_id,),
+            )
+            conn.commit()
+
+        response = self.client.get("/analysis/clap/coverage")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["total_tracks"], 2)
+        self.assertEqual(body["analyzed_tracks"], 1)
+        self.assertEqual(body["unanalyzed_tracks"], 1)
+        self.assertEqual(body["failed_tracks"], 0)
+
+    def test_audio_analysis_candidates_exclude_linked_podcast_episode(self) -> None:
+        from backend.app.analysis_jobs import _candidate_tracks
+
+        music = self.root / "music.flac"
+        episode = self.root / "download.mp3"
+        music.write_bytes(b"music")
+        episode.write_bytes(b"podcast")
+        music_id = insert_track(music, title="Music", genre="Rock")
+        episode_id = insert_track(episode, title="Talk Episode", artist="Feed", album=None, genre="Talk")
+        with connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO podcast_subscriptions(title, feed_url)
+                VALUES('Feed', 'https://example.test/feed.xml')
+                """
+            )
+            subscription_id = int(cursor.lastrowid)
+            conn.execute(
+                """
+                INSERT INTO podcast_episodes(subscription_id, track_id, guid, title, local_path, download_status)
+                VALUES(?, ?, 'episode-1', 'Talk Episode', ?, 'downloaded')
+                """,
+                (subscription_id, episode_id, str(episode)),
+            )
+            conn.commit()
+
+        candidates = _candidate_tracks(limit=50, overwrite=True, only_missing=False, track_ids=None)
+        candidate_ids = {int(track["id"]) for track in candidates}
+
+        self.assertIn(music_id, candidate_ids)
+        self.assertNotIn(episode_id, candidate_ids)
+        self.assertEqual(_candidate_tracks(limit=50, overwrite=True, only_missing=False, track_ids=[episode_id]), [])
+
+    def test_album_list_groups_same_album_across_year_variants(self) -> None:
+        album_dir = self.root / "Grouped Album"
+        album_dir.mkdir()
+        original = album_dir / "01.flac"
+        bonus = album_dir / "15.flac"
+        original.write_bytes(b"one")
+        bonus.write_bytes(b"bonus")
+        with connect() as conn:
+            first_album = conn.execute(
+                "INSERT INTO albums(album, album_artist, year) VALUES('Sports', 'Modern Baseball', 2012)"
+            )
+            second_album = conn.execute(
+                "INSERT INTO albums(album, album_artist, year) VALUES('Sports', 'Modern Baseball', 2015)"
+            )
+            first_album_id = int(first_album.lastrowid)
+            second_album_id = int(second_album.lastrowid)
+            conn.commit()
+        insert_track(
+            original,
+            title="Original",
+            artist="Modern Baseball",
+            album="Sports",
+            album_artist="Modern Baseball",
+            album_id=first_album_id,
+            year=2012,
+            track_number=1,
+        )
+        insert_track(
+            bonus,
+            title="Bonus Demo",
+            artist="Modern Baseball",
+            album="Sports",
+            album_artist="Modern Baseball",
+            album_id=second_album_id,
+            year=2015,
+            track_number=15,
+        )
+
+        albums = self.client.get("/albums", params={"search": "sports"})
+
+        self.assertEqual(albums.status_code, 200)
+        body = albums.json()
+        self.assertEqual(len(body), 1)
+        self.assertEqual(body[0]["track_count"], 2)
+        self.assertEqual(body[0]["years"], [2012, 2015])
+        self.assertEqual(body[0]["edition_count"], 2)
+
+        tracks = self.client.get(f"/albums/{body[0]['id']}/tracks")
+        self.assertEqual(tracks.status_code, 200)
+        self.assertEqual([track["title"] for track in tracks.json()], ["Original", "Bonus Demo"])
+
     def test_albums_include_completion_estimate_from_track_numbers(self) -> None:
         album_dir = self.root / "Completion Album"
         album_dir.mkdir()
@@ -1416,6 +2092,120 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(album["track_count"], 2)
         self.assertEqual(album["expected_track_count"], 3)
         self.assertEqual(album["missing_track_count"], 1)
+
+    def test_album_completion_lookup_persists_musicbrainz_track_count(self) -> None:
+        album_dir = self.root / "Lookup Album"
+        album_dir.mkdir()
+        first = album_dir / "01.mp3"
+        second = album_dir / "02.mp3"
+        first.write_bytes(b"one")
+        second.write_bytes(b"two")
+        with connect() as conn:
+            cursor = conn.execute("INSERT INTO albums(album, album_artist, year) VALUES('Lookup Album', 'Lookup Artist', 2026)")
+            album_id = int(cursor.lastrowid)
+            conn.commit()
+        insert_track(first, title="One", artist="Lookup Artist", album="Lookup Album", album_artist="Lookup Artist", album_id=album_id, track_number=1)
+        insert_track(second, title="Two", artist="Lookup Artist", album="Lookup Album", album_artist="Lookup Artist", album_id=album_id, track_number=2)
+        release = {
+            "id": "release-lookup",
+            "title": "Lookup Album",
+            "artist-credit": [{"name": "Lookup Artist"}],
+            "date": "2026-02-01",
+            "media": [
+                {
+                    "position": 1,
+                    "tracks": [
+                        {"number": "1", "title": "One", "recording": {"id": "r1"}},
+                        {"number": "2", "title": "Two", "recording": {"id": "r2"}},
+                        {"number": "3", "title": "Three", "recording": {"id": "r3"}},
+                        {"number": "4", "title": "Four", "recording": {"id": "r4"}},
+                    ],
+                }
+            ],
+        }
+
+        with patch("backend.app.main.search_releases", return_value=[{"id": "release-lookup"}]), patch(
+            "backend.app.main.lookup_release",
+            return_value=release,
+        ):
+            response = self.client.post(f"/albums/{album_id}/completion-lookup")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["expected_track_count"], 4)
+        self.assertEqual(body["missing_track_count"], 2)
+        self.assertEqual(body["source"], "MusicBrainz")
+
+        albums_response = self.client.get("/albums")
+        self.assertEqual(albums_response.status_code, 200)
+        album = next(item for item in albums_response.json() if item["id"] == album_id)
+        self.assertEqual(album["expected_track_count"], 4)
+        self.assertEqual(album["missing_track_count"], 2)
+        self.assertEqual(album["completion_release_id"], "release-lookup")
+
+    def test_album_completion_lookup_falls_back_when_album_artist_is_too_strict(self) -> None:
+        album_dir = self.root / "Lookup Fallback"
+        album_dir.mkdir()
+        first = album_dir / "01.mp3"
+        second = album_dir / "02.mp3"
+        first.write_bytes(b"one")
+        second.write_bytes(b"two")
+        with connect() as conn:
+            cursor = conn.execute(
+                "INSERT INTO albums(album, album_artist, year) VALUES('Lookup Fallback', 'Lookup Artist feat. Guest', 2026)"
+            )
+            album_id = int(cursor.lastrowid)
+            conn.commit()
+        insert_track(
+            first,
+            title="One",
+            artist="Lookup Artist",
+            album="Lookup Fallback",
+            album_artist="Lookup Artist feat. Guest",
+            album_id=album_id,
+            track_number=1,
+        )
+        insert_track(
+            second,
+            title="Two",
+            artist="Lookup Artist",
+            album="Lookup Fallback",
+            album_artist="Lookup Artist feat. Guest",
+            album_id=album_id,
+            track_number=2,
+        )
+        release = {
+            "id": "release-fallback",
+            "title": "Lookup Fallback",
+            "artist-credit": [{"name": "Lookup Artist"}],
+            "date": "2026",
+            "media": [
+                {
+                    "position": 1,
+                    "tracks": [
+                        {"number": "1", "title": "One", "recording": {"id": "r1"}},
+                        {"number": "2", "title": "Two", "recording": {"id": "r2"}},
+                        {"number": "3", "title": "Three", "recording": {"id": "r3"}},
+                    ],
+                }
+            ],
+        }
+        calls: list[tuple[str, str | None]] = []
+
+        def fake_search(album: str, artist: str | None, limit: int) -> list[dict]:
+            calls.append((album, artist))
+            return [{"id": "release-fallback"}] if artist == "Lookup Artist" else []
+
+        with patch("backend.app.main.search_releases", side_effect=fake_search), patch(
+            "backend.app.main.lookup_release",
+            return_value=release,
+        ):
+            response = self.client.post(f"/albums/{album_id}/completion-lookup")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["expected_track_count"], 3)
+        self.assertIn(("Lookup Fallback", "Lookup Artist"), calls)
 
     def test_extension_discovery_validates_manifests(self) -> None:
         extension_dir = self.root / "extensions"
@@ -1605,6 +2395,13 @@ class ApiTests(unittest.TestCase):
             row = conn.execute("SELECT acoustic_fingerprint FROM tracks WHERE id = ?", (track_id,)).fetchone()
         self.assertEqual(row["acoustic_fingerprint"], "acoustic-token")
 
+        with patch("backend.app.main.fpcalc_candidate_paths", return_value=[fake_fpcalc]):
+            skipped = self.client.post("/library/tools/acoustic-fingerprints", json={"track_ids": [track_id]})
+        self.assertEqual(skipped.status_code, 200)
+        self.assertEqual(skipped.json()["updated"], 0)
+        self.assertEqual(skipped.json()["skipped"], 1)
+        self.assertIn("already has an acoustic fingerprint", skipped.json()["skipped_reasons"][0])
+
     def test_chromaprint_setup_can_use_saved_fpcalc_path_without_path(self) -> None:
         fake_fpcalc = self.root / "fpcalc.exe"
         fake_fpcalc.write_bytes(b"not a real executable")
@@ -1710,6 +2507,56 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["deleted_file"])
         self.assertFalse(audio_file.exists())
+
+    def test_bulk_delete_endpoint_removes_tracks_in_one_request(self) -> None:
+        first_file = self.root / "bulk-delete-a.mp3"
+        second_file = self.root / "bulk-delete-b.flac"
+        kept_file = self.root / "bulk-keep.mp3"
+        for audio_file in [first_file, second_file, kept_file]:
+            audio_file.write_bytes(b"audio")
+        first_id = insert_track(first_file)
+        second_id = insert_track(second_file)
+        kept_id = insert_track(kept_file)
+        with connect() as conn:
+            for audio_file in [first_file, second_file, kept_file]:
+                conn.execute(
+                    """
+                    INSERT INTO track_metadata_cache(path_key, path, file_modified_at, file_size, metadata_json)
+                    VALUES(?, ?, 'now', ?, '{}')
+                    """,
+                    (path_key(audio_file), str(audio_file), audio_file.stat().st_size),
+                )
+            conn.commit()
+
+        response = self.client.post(
+            "/tracks/delete",
+            json={"track_ids": [first_id, second_id], "delete_file": False},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["removed_count"], 2)
+        self.assertEqual(body["removed_track_ids"], [first_id, second_id])
+        self.assertEqual(body["deleted_files"], 0)
+        self.assertTrue(first_file.exists())
+        self.assertTrue(second_file.exists())
+        with connect() as conn:
+            removed_rows = conn.execute(
+                "SELECT id FROM tracks WHERE id IN (?, ?)",
+                (first_id, second_id),
+            ).fetchall()
+            kept_row = conn.execute("SELECT id FROM tracks WHERE id = ?", (kept_id,)).fetchone()
+            removed_cache = conn.execute(
+                "SELECT path_key FROM track_metadata_cache WHERE path_key IN (?, ?)",
+                (path_key(first_file), path_key(second_file)),
+            ).fetchall()
+            undo_rows = conn.execute(
+                "SELECT id FROM bulk_action_undo_log WHERE action_type = 'track_remove'"
+            ).fetchall()
+        self.assertEqual(removed_rows, [])
+        self.assertIsNotNone(kept_row)
+        self.assertEqual(removed_cache, [])
+        self.assertEqual(len(undo_rows), 2)
 
     def test_restore_endpoint_rescans_removed_track(self) -> None:
         audio_file = self.root / "restore-me.mp3"
@@ -1926,6 +2773,219 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(row["album"], "Known Album")
         self.assertEqual(row["year"], 2022)
         self.assertTrue(Path(row["artwork_path"]).exists())
+
+    def test_auto_tag_uses_acoustid_fingerprint_lookup_when_configured(self) -> None:
+        audio_file = self.root / "no-tears.flac"
+        audio_file.write_bytes(b"audio")
+        track_id = insert_track(
+            audio_file,
+            title="no tears left to cr",
+            artist="Ariana Grande",
+            album="Sweetener",
+            acoustic_fingerprint="fingerprint-token",
+            duration_seconds=207.0,
+        )
+        recording = {
+            "id": "acoustid-recording",
+            "_acoustid_score": 0.98,
+            "score": 98,
+            "title": "no tears left to cry",
+            "artist-credit": [{"name": "Ariana Grande"}],
+            "releases": [
+                {
+                    "id": "sweetener-release",
+                    "title": "Sweetener",
+                    "date": "2018-08-17",
+                    "artist-credit": [{"name": "Ariana Grande"}],
+                    "release-group": {"primary-type": "Album", "secondary-types": []},
+                }
+            ],
+        }
+        with connect() as conn:
+            set_setting(conn, "acoustid_api_key", "client-key-123")
+            conn.commit()
+
+        with patch("backend.app.musicbrainz_autotag.lookup_acoustid_recordings", return_value=[recording]) as lookup, patch(
+            "backend.app.musicbrainz_autotag.search_recordings"
+        ) as search_recordings, patch("backend.app.musicbrainz_autotag.cover_art_for_release", return_value=None):
+            response = self.client.post(
+                "/library/tools/autotag",
+                json={"mode": "track", "track_ids": [track_id], "missing_only": False, "include_artwork": False},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        lookup.assert_called_once()
+        self.assertEqual(lookup.call_args.args[0], "client-key-123")
+        search_recordings.assert_not_called()
+        preview = response.json()["previews"][0]
+        self.assertEqual(preview["source"], "AcoustID + MusicBrainz")
+        self.assertEqual(preview["recording_id"], "acoustid-recording")
+        self.assertEqual(preview["proposed"]["title"], "no tears left to cry")
+        self.assertIn("title", preview["changed_fields"])
+
+    def test_fingerprint_only_auto_tag_does_not_fall_back_to_metadata_search(self) -> None:
+        audio_file = self.root / "wrong-tags.flac"
+        audio_file.write_bytes(b"audio")
+        track_id = insert_track(
+            audio_file,
+            title="Existing Metadata Title",
+            artist="Existing Metadata Artist",
+            album="Existing Metadata Album",
+            acoustic_fingerprint="fingerprint-token",
+            duration_seconds=207.0,
+        )
+        with connect() as conn:
+            set_setting(conn, "acoustid_api_key", "client-key-123")
+            conn.commit()
+
+        with patch("backend.app.musicbrainz_autotag.lookup_acoustid_recordings", return_value=[]) as lookup, patch(
+            "backend.app.musicbrainz_autotag.search_recordings"
+        ) as search_recordings:
+            response = self.client.post(
+                "/library/tools/autotag",
+                json={
+                    "mode": "track",
+                    "track_ids": [track_id],
+                    "missing_only": False,
+                    "include_artwork": False,
+                    "fingerprint_only": True,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        lookup.assert_called_once()
+        search_recordings.assert_not_called()
+        body = response.json()
+        self.assertEqual(body["matched"], 0)
+        preview = body["previews"][0]
+        self.assertEqual(preview["source"], "AcoustID + MusicBrainz")
+        self.assertIn("No AcoustID recording match", preview["error"])
+
+    def test_musicbrainz_auto_tag_prefers_artist_release_over_compilation(self) -> None:
+        audio_file = self.root / "positions.mp3"
+        audio_file.write_bytes(b"audio")
+        track_id = insert_track(
+            audio_file,
+            title="positions",
+            artist="Ariana Grande",
+            album="Wrong Album",
+            genre="Wrong Genre",
+            year=None,
+        )
+        recordings = [
+            {
+                "id": "compilation-recording",
+                "score": "100",
+                "title": "Positions",
+                "artist-credit": [{"name": "Ariana Grande"}],
+                "releases": [
+                    {
+                        "id": "compilation-release",
+                        "title": "NRJ Music Awards 2021",
+                        "date": "2021-02-27",
+                        "status": "Official",
+                        "artist-credit": [{"name": "Various Artists"}],
+                        "release-group": {"primary-type": "Album", "secondary-types": ["Compilation"]},
+                    }
+                ],
+            },
+            {
+                "id": "artist-recording",
+                "score": "100",
+                "title": "positions",
+                "artist-credit": [{"name": "Ariana Grande"}],
+                "releases": [
+                    {
+                        "id": "artist-release",
+                        "title": "positions",
+                        "date": "2021-07-22",
+                        "status": "Official",
+                        "artist-credit": [{"name": "Ariana Grande"}],
+                        "release-group": {"primary-type": "Single", "secondary-types": []},
+                    }
+                ],
+            },
+        ]
+
+        with patch("backend.app.musicbrainz_autotag.search_recordings", return_value=recordings), patch(
+            "backend.app.musicbrainz_autotag.cover_art_for_release",
+            return_value=None,
+        ):
+            response = self.client.post(
+                "/library/tools/autotag",
+                json={"mode": "track", "track_ids": [track_id], "missing_only": False, "include_artwork": False},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        preview = response.json()["previews"][0]
+        self.assertEqual(preview["release_id"], "artist-release")
+        self.assertEqual(preview["proposed"]["album"], "positions")
+        self.assertIn("album", preview["changed_fields"])
+
+    def test_musicbrainz_auto_tag_write_to_file_flag_controls_file_writes(self) -> None:
+        audio_file = self.root / "autotag-file-write.mp3"
+        audio_file.write_bytes(b"audio")
+        track_id = insert_track(audio_file, title="Known Song", artist="Known Artist", album=None, genre=None, year=None)
+        recording = {
+            "id": "recording-1",
+            "score": "100",
+            "title": "Known Song",
+            "artist-credit": [{"name": "Known Artist"}],
+            "releases": [
+                {
+                    "id": "release-1",
+                    "title": "Known Album",
+                    "date": "2022",
+                    "artist-credit": [{"name": "Known Artist"}],
+                }
+            ],
+        }
+        with connect() as conn:
+            set_setting(conn, "write_ratings_to_files", "1")
+            conn.commit()
+
+        with patch("backend.app.musicbrainz_autotag.search_recordings", return_value=[recording]), patch(
+            "backend.app.musicbrainz_autotag.cover_art_for_release",
+            return_value=None,
+        ), patch("backend.app.main.write_track_metadata") as write_metadata:
+            response = self.client.post(
+                "/library/tools/autotag",
+                json={
+                    "mode": "track",
+                    "track_ids": [track_id],
+                    "missing_only": True,
+                    "include_artwork": False,
+                    "write_to_file": False,
+                    "apply": True,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["applied"], 1)
+        write_metadata.assert_not_called()
+
+        with connect() as conn:
+            conn.execute("UPDATE tracks SET album = 'Wrong Album', year = NULL WHERE id = ?", (track_id,))
+            conn.commit()
+
+        with patch("backend.app.musicbrainz_autotag.search_recordings", return_value=[recording]), patch(
+            "backend.app.musicbrainz_autotag.cover_art_for_release",
+            return_value=None,
+        ), patch("backend.app.main.write_track_metadata") as write_metadata:
+            response = self.client.post(
+                "/library/tools/autotag",
+                json={
+                    "mode": "track",
+                    "track_ids": [track_id],
+                    "missing_only": False,
+                    "include_artwork": False,
+                    "write_to_file": True,
+                    "apply": True,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        write_metadata.assert_called_once()
 
     def test_musicbrainz_auto_tag_album_mode_matches_track_numbers(self) -> None:
         first_file = self.root / "one.mp3"

@@ -29,11 +29,18 @@ import {
   formatPercent,
   formatTime,
   isAnalysisTerminal,
+  normalizeAudioAnalysisCoverage,
 } from "../shared";
+
+const CLAP_RUNTIME_SIZE_HINTS = {
+  cpu: "Approx runtime size: 1-2 GB installed",
+  cuda: "Approx runtime size: 5-7 GB installed",
+} satisfies Record<ClapInstallDevice, string>;
 
 export function AnalysisPage({
   clapStatus,
   coverage,
+  eligibleTrackTotal,
   progress,
   audioAnalysisLimit,
   setAudioAnalysisLimit,
@@ -62,6 +69,7 @@ export function AnalysisPage({
 }: {
   clapStatus: ClapStatusResponse | null;
   coverage: AudioAnalysisCoverage | null;
+  eligibleTrackTotal: number | null;
   progress: AudioAnalysisProgress | null;
   audioAnalysisLimit: number;
   setAudioAnalysisLimit: (value: number) => void;
@@ -91,12 +99,46 @@ export function AnalysisPage({
   const [installPromptOpen, setInstallPromptOpen] = useState(false);
   const clapReady = Boolean(clapStatus?.installed);
   const clapStatusLoaded = Boolean(clapStatus);
+  const clapDependencyErrorCount = Object.keys(clapStatus?.dependency_errors ?? {}).length;
+  const clapNeedsOptionalInstall = Boolean(
+    clapStatus && !clapReady && clapStatus.runtime_managed && !clapStatus.runtime_exists,
+  );
+  const clapSetupBlocked = Boolean(clapStatus && !clapReady && clapStatus.install_supported === false);
+  const clapRuntimeProblem = Boolean(
+    clapStatus && !clapReady && !clapNeedsOptionalInstall && !clapSetupBlocked && (clapStatus.runtime_exists || clapDependencyErrorCount > 0),
+  );
+  const clapStatusBadge = clapReady
+    ? { className: "border-moss/40 bg-moss/10 text-moss", label: "analysis ok" }
+    : clapSetupBlocked
+      ? { className: "border-ember/50 bg-ember/10 text-ember", label: "setup blocked" }
+      : clapRuntimeProblem
+        ? { className: "border-ember/50 bg-ember/10 text-ember", label: "runtime issue" }
+        : { className: "border-line bg-white/[0.04] text-muted", label: "optional setup" };
+  const modelStateClass = !clapStatusLoaded
+    ? "text-muted"
+    : clapReady && clapStatus?.model_cached
+      ? "text-moss"
+      : clapRuntimeProblem || clapSetupBlocked
+        ? "text-ember"
+        : "text-muted";
+  const modelStateLabel = !clapStatusLoaded
+    ? "Checking"
+    : !clapReady
+      ? "Optional"
+      : clapStatus?.model_cached
+        ? "Cached"
+        : "Downloads on first run";
   const showRuntimeInstall = clapStatusLoaded;
-  const progressPercent = Math.max(0, Math.min(100, progress?.percent ?? coverage?.coverage_percent ?? 0));
+  const activeJob = Boolean(progress && !isAnalysisTerminal(progress.status));
+  const activeProgress = activeJob ? progress : null;
+  const displayCoverage = normalizeAudioAnalysisCoverage(coverage, eligibleTrackTotal);
+  const coverageAdjustedForLibrary = Boolean(
+    coverage && displayCoverage && coverage.total_tracks !== displayCoverage.total_tracks,
+  );
+  const progressPercent = Math.max(0, Math.min(100, activeProgress?.percent ?? displayCoverage?.coverage_percent ?? 0));
   const installPercent = Math.max(0, Math.min(100, installProgress?.percent ?? 0));
   const failures = progress?.failed_tracks ?? [];
-  const statusText = installProgress?.message ?? progress?.message ?? clapStatus?.message ?? "CLAP status loading";
-  const activeJob = Boolean(progress && !isAnalysisTerminal(progress.status));
+  const statusText = installProgress?.message ?? activeProgress?.message ?? clapStatus?.message ?? "CLAP status loading";
   const canPause = isAudioAnalyzing && progress?.status === "running";
   const canResume = isAudioAnalyzing && progress?.status === "paused";
   const torchRuntime = clapStatus?.torch_device
@@ -114,13 +156,9 @@ export function AnalysisPage({
         <div className="flex items-center gap-2">
           {clapStatus && (
             <span
-              className={`rounded border px-2 py-1 text-xs uppercase ${
-                clapReady && Object.keys(clapStatus.dependency_errors ?? {}).length === 0
-                  ? "border-moss/40 bg-moss/10 text-moss"
-                  : "border-ember/50 bg-ember/10 text-ember"
-              }`}
+              className={`rounded border px-2 py-1 text-xs uppercase ${clapStatusBadge.className}`}
             >
-              {clapReady ? "analysis ok" : "runtime issue"}
+              {clapStatusBadge.label}
             </span>
           )}
           <button className="secondary-button" type="button" onClick={onRefresh}>
@@ -146,29 +184,32 @@ export function AnalysisPage({
           <div className="grid gap-3 md:grid-cols-4">
             <div className="rounded border border-line bg-panel p-4">
               <div className="text-xs uppercase text-muted">Coverage</div>
-              <div className="mt-1 text-2xl font-semibold text-white">{formatPercent(coverage?.coverage_percent)}</div>
+              <div className="mt-1 text-2xl font-semibold text-white">{formatPercent(displayCoverage?.coverage_percent)}</div>
               <div className="mt-1 text-xs text-muted">
-                {(coverage?.analyzed_tracks ?? 0).toLocaleString()} of {(coverage?.total_tracks ?? 0).toLocaleString()}
+                {(displayCoverage?.analyzed_tracks ?? 0).toLocaleString()} of {(displayCoverage?.total_tracks ?? 0).toLocaleString()}
               </div>
+              {coverageAdjustedForLibrary && (
+                <div className="mt-2 text-[11px] text-muted">Excludes podcasts and audiobooks</div>
+              )}
             </div>
             <div className="rounded border border-line bg-panel p-4">
               <div className="text-xs uppercase text-muted">Unanalyzed</div>
               <div className="mt-1 text-2xl font-semibold text-ember">
-                {(coverage?.unanalyzed_tracks ?? 0).toLocaleString()}
+                {(displayCoverage?.unanalyzed_tracks ?? 0).toLocaleString()}
               </div>
               <div className="mt-1 text-xs text-muted">Tracks without CLAP embeddings</div>
             </div>
             <div className="rounded border border-line bg-panel p-4">
               <div className="text-xs uppercase text-muted">Failures</div>
               <div className="mt-1 text-2xl font-semibold text-red-300">
-                {(coverage?.failed_tracks ?? 0).toLocaleString()}
+                {(displayCoverage?.failed_tracks ?? 0).toLocaleString()}
               </div>
               <div className="mt-1 text-xs text-muted">Marked for retry</div>
             </div>
             <div className="rounded border border-line bg-panel p-4">
               <div className="text-xs uppercase text-muted">Model</div>
-              <div className={`mt-1 text-sm font-semibold ${clapReady && clapStatus?.model_cached ? "text-moss" : "text-ember"}`}>
-                {!clapStatusLoaded ? "Checking" : !clapReady ? "Optional" : clapStatus?.model_cached ? "Cached" : "Needs download"}
+              <div className={`mt-1 text-sm font-semibold ${modelStateClass}`}>
+                {modelStateLabel}
               </div>
               <div className="mt-1 truncate text-xs text-muted">{torchRuntime}</div>
             </div>
@@ -330,25 +371,25 @@ export function AnalysisPage({
             <section className="rounded border border-line bg-panel p-5">
               <div className="mb-4 flex items-center justify-between gap-3">
                 <div className="text-sm font-semibold text-white">Progress</div>
-                <div className="text-xs uppercase text-muted">{progress?.phase ?? progress?.status ?? "idle"}</div>
+                <div className="text-xs uppercase text-muted">{activeProgress?.phase ?? activeProgress?.status ?? "idle"}</div>
               </div>
               <div className="mb-2 flex items-center justify-between text-xs text-muted">
                 <span>
-                  {(progress?.processed_tracks ?? coverage?.analyzed_tracks ?? 0).toLocaleString()} of{" "}
-                  {(progress?.total_tracks ?? coverage?.total_tracks ?? 0).toLocaleString()}
+                  {(activeProgress?.processed_tracks ?? displayCoverage?.analyzed_tracks ?? 0).toLocaleString()} of{" "}
+                  {(activeProgress?.total_tracks ?? displayCoverage?.total_tracks ?? 0).toLocaleString()}
                 </span>
-                <span>ETA {formatTime(progress?.eta_seconds)}</span>
+                <span>ETA {formatTime(activeProgress?.eta_seconds)}</span>
               </div>
               <div className="h-2 overflow-hidden rounded bg-ink">
                 <div className="h-full rounded bg-ember transition-all duration-300" style={{ width: `${progressPercent}%` }} />
               </div>
               <div className="mt-3 grid grid-cols-3 gap-3 text-center text-xs">
                 <div>
-                  <div className="font-semibold text-moss">{(progress?.analyzed ?? coverage?.analyzed_tracks ?? 0).toLocaleString()}</div>
+                  <div className="font-semibold text-moss">{(activeProgress?.analyzed ?? displayCoverage?.analyzed_tracks ?? 0).toLocaleString()}</div>
                   <div className="text-muted">Analyzed</div>
                 </div>
                 <div>
-                  <div className="font-semibold text-red-300">{(progress?.skipped ?? coverage?.failed_tracks ?? 0).toLocaleString()}</div>
+                  <div className="font-semibold text-red-300">{(activeProgress?.skipped ?? displayCoverage?.failed_tracks ?? 0).toLocaleString()}</div>
                   <div className="text-muted">Skipped</div>
                 </div>
                 <div>
@@ -356,10 +397,10 @@ export function AnalysisPage({
                   <div className="text-muted">Progress</div>
                 </div>
               </div>
-              {progress?.current_track && (
-                <div className="mt-3 truncate text-xs text-neutral-300">{progress.current_track}</div>
+              {activeProgress?.current_track && (
+                <div className="mt-3 truncate text-xs text-neutral-300">{activeProgress.current_track}</div>
               )}
-              {progress?.model_cached_at_start === false && (
+              {activeProgress?.model_cached_at_start === false && (
                 <div className="mt-3 rounded border border-ember/30 bg-ember/10 px-3 py-2 text-xs text-ember">
                   First model load may take several minutes.
                 </div>
@@ -406,6 +447,8 @@ export function AnalysisPage({
               >
                 <div className="font-semibold text-white">{clapReady ? "Use CPU Runtime" : "CPU"}</div>
                 <div className="mt-1 text-xs text-muted">Smaller, most compatible, good for background analysis.</div>
+                <div className="mt-2 text-xs text-muted">{CLAP_RUNTIME_SIZE_HINTS.cpu}</div>
+                <div className="mt-1 text-[11px] text-muted">Model cache downloads separately on first analysis.</div>
               </button>
               <button
                 className="rounded border border-line bg-ink p-4 text-left transition hover:border-moss/70"
@@ -417,6 +460,8 @@ export function AnalysisPage({
               >
                 <div className="font-semibold text-white">{clapReady ? "Use NVIDIA CUDA" : "NVIDIA CUDA"}</div>
                 <div className="mt-1 text-xs text-muted">Larger download, faster analysis on supported NVIDIA GPUs.</div>
+                <div className="mt-2 text-xs text-muted">{CLAP_RUNTIME_SIZE_HINTS.cuda}</div>
+                <div className="mt-1 text-[11px] text-muted">Model cache downloads separately on first analysis.</div>
               </button>
             </div>
           </div>

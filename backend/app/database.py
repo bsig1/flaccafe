@@ -16,6 +16,11 @@ CREATE TABLE IF NOT EXISTS albums (
   album_artist TEXT,
   year INTEGER,
   artwork_path TEXT,
+  completion_expected_track_count INTEGER,
+  completion_source TEXT,
+  completion_release_id TEXT,
+  completion_release_title TEXT,
+  completion_checked_at TEXT,
   UNIQUE(album, album_artist, year)
 );
 
@@ -386,12 +391,10 @@ CREATE INDEX IF NOT EXISTS idx_audiobook_bookmarks_track ON audiobook_bookmarks(
 CREATE INDEX IF NOT EXISTS idx_audiobook_chapters_track ON audiobook_chapters(track_id, chapter_index);
 CREATE INDEX IF NOT EXISTS idx_podcast_episodes_subscription ON podcast_episodes(subscription_id, published_at);
 CREATE INDEX IF NOT EXISTS idx_podcast_episodes_status ON podcast_episodes(download_status);
-CREATE INDEX IF NOT EXISTS idx_podcast_episodes_track ON podcast_episodes(track_id);
 CREATE INDEX IF NOT EXISTS idx_radio_stations_name ON radio_stations(lower(name));
 CREATE INDEX IF NOT EXISTS idx_radio_stations_last_played ON radio_stations(last_played_at);
 CREATE INDEX IF NOT EXISTS idx_scrobble_outbox_status ON scrobble_outbox(status, service, created_at);
 CREATE INDEX IF NOT EXISTS idx_scrobble_outbox_track ON scrobble_outbox(track_id);
-CREATE INDEX IF NOT EXISTS idx_bulk_action_undo_log_batch ON bulk_action_undo_log(batch_id);
 """
 
 
@@ -421,6 +424,7 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
         ensure_track_analysis_columns(active)
         ensure_track_lyrics_columns(active)
         ensure_podcast_episode_columns(active)
+        ensure_album_completion_columns(active)
         active.executescript(SCHEMA)
         ensure_inbox_initialized(active)
         active.commit()
@@ -540,6 +544,23 @@ def ensure_podcast_episode_columns(conn: sqlite3.Connection) -> None:
     if "track_id" not in columns:
         conn.execute("ALTER TABLE podcast_episodes ADD COLUMN track_id INTEGER REFERENCES tracks(id) ON DELETE SET NULL")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_podcast_episodes_track ON podcast_episodes(track_id)")
+
+
+def ensure_album_completion_columns(conn: sqlite3.Connection) -> None:
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(albums)").fetchall()
+    }
+    additions = {
+        "completion_expected_track_count": "ALTER TABLE albums ADD COLUMN completion_expected_track_count INTEGER",
+        "completion_source": "ALTER TABLE albums ADD COLUMN completion_source TEXT",
+        "completion_release_id": "ALTER TABLE albums ADD COLUMN completion_release_id TEXT",
+        "completion_release_title": "ALTER TABLE albums ADD COLUMN completion_release_title TEXT",
+        "completion_checked_at": "ALTER TABLE albums ADD COLUMN completion_checked_at TEXT",
+    }
+    for column, sql in additions.items():
+        if column not in columns:
+            conn.execute(sql)
 
 
 def ensure_inbox_initialized(conn: sqlite3.Connection) -> None:

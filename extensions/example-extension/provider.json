@@ -1,0 +1,13 @@
+{
+  "name": "Example Metadata Provider",
+  "apiVersion": 1,
+  "endpoints": {
+    "artistSearch": "https://metadata.example.invalid/artists?q={artist}",
+    "albumSearch": "https://metadata.example.invalid/albums?artist={artist}&album={album}",
+    "artworkSearch": "https://metadata.example.invalid/artwork?album={album}"
+  },
+  "notes": [
+    "This file is illustrative only.",
+    "FLAC Cafe validates and lists the manifest, but it does not execute extension code yet."
+  ]
+}

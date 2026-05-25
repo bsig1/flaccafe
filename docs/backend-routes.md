@@ -10,6 +10,7 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `POST /diagnostics/support-bundle` creates a redacted zip for troubleshooting.
 - `GET /settings` returns library path, database path, and user flags.
 - `PATCH /settings` updates user flags such as file tag writing.
+- `POST /settings/library-sources/remove` removes a source folder from saved settings and removes matching tracks from SQLite without deleting audio files.
 - `POST /settings/backup` copies the SQLite database to the export folder.
 - `GET /extensions` lists discovered skin/plugin manifests.
 - `POST /extensions/reload` rescans extension manifest folders.
@@ -17,11 +18,12 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 ## Library And Maintenance
 
 - `GET /tracks` returns the legacy music track list, excluding audiobook-like and podcast-like rows.
-- `GET /tracks/page` returns paged, sorted music tracks for infinite scrolling, excluding audiobook-like and podcast-like rows.
+- `GET /tracks/page` returns paged, sorted music tracks for infinite scrolling, with optional advanced search filters, excluding audiobook-like and podcast-like rows.
 - `GET /tracks/{track_id}` returns one track.
 - `PATCH /tracks/{track_id}/metadata` updates editable tags in SQLite, and optionally audio files.
 - `PATCH /tracks/{track_id}/rating` updates a half-star rating in SQLite, and optionally audio files.
 - `DELETE /tracks/{track_id}` removes a track from the library and can optionally delete the file.
+- `POST /tracks/delete` removes many tracks in one request, using batched SQLite deletes and optional file deletion.
 - `POST /tracks/restore` rescans a previously removed file back into the library.
 - `GET /library/stats` returns dashboard counts.
 - `GET /library/health` returns missing files, duplicate groups, missing metadata, and unrated tracks.
@@ -55,6 +57,7 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `POST /library/tools/tag-backups/restore` restores tags from a backup export.
 - `POST /library/tools/autotag` previews or applies MusicBrainz album/track metadata and optional Cover Art Archive sidecar artwork.
 - `POST /library/tools/clap-genre-tags` previews or applies CLAP genre predictions to editable track Genre tags.
+- `POST /library/tools/volume-tags` previews or applies FFmpeg-analyzed ReplayGain-style volume tags.
 - `POST /library/tools/artwork-collisions` previews or repairs folders where multiple albums share one folder-level cover.
 - `POST /library/tools/organize-files` previews or applies tag-based file moves.
 - `POST /library/tools/organize-files/report` writes a JSON file-organization preview report.
@@ -66,6 +69,7 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `DELETE /library/tools/device-sync/profiles/{profile_id}` deletes a saved device sync profile.
 - `GET /library/tools/audio-conversion/setup` checks configured, bundled, and PATH-based FFmpeg locations.
 - `PATCH /library/tools/audio-conversion/setup` saves or clears a custom FFmpeg path.
+- `POST /library/tools/audio-conversion/install` downloads the Windows FFmpeg essentials ZIP into the local FLAC Cafe tools folder.
 - `POST /library/tools/audio-conversion/preview` previews audio conversion targets.
 - `POST /library/tools/audio-conversion/jobs` starts an audio conversion job.
 - `GET /library/tools/audio-conversion/jobs/{job_id}` returns audio conversion job progress.
@@ -85,7 +89,6 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `POST /library/duplicates/review` fetches arbitrary duplicate-review tracks and recommendation groups.
 - `GET /library/tools/acoustic-fingerprints/setup` checks configured, bundled, and PATH-based `fpcalc` locations.
 - `PATCH /library/tools/acoustic-fingerprints/setup` saves or clears a custom `fpcalc` path.
-- `POST /library/tools/acoustic-fingerprints/install` downloads the official Windows Chromaprint `fpcalc` tool into the app tool folder.
 - `POST /library/tools/acoustic-fingerprints` runs an optional Chromaprint fingerprint pass when `fpcalc` is available.
 - `GET /library/tools/undo-log` lists recent bulk metadata, duplicate, and file organization actions.
 - `POST /library/tools/undo-log/{entry_id}/restore` restores a supported bulk action.
@@ -121,17 +124,22 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `POST /podcasts/subscriptions` creates or replaces a podcast subscription.
 - `PATCH /podcasts/subscriptions/{subscription_id}` updates a podcast subscription.
 - `DELETE /podcasts/subscriptions/{subscription_id}` deletes a podcast subscription and its episodes.
+- `POST /podcasts/subscriptions/{subscription_id}/folder` creates/resolves the effective feed download folder for Explorer reveal.
 - `POST /podcasts/subscriptions/{subscription_id}/refresh` fetches a feed and upserts episode rows.
 - `GET /podcasts/episodes` lists podcast episodes, optionally by subscription.
 - `POST /podcasts/episodes/{episode_id}/download` downloads an episode to the subscription or app podcast folder.
+- `DELETE /podcasts/episodes/{episode_id}/download` deletes a downloaded podcast file and clears its generated local track.
 - `POST /podcasts/episodes/{episode_id}/track` adds a downloaded episode to SQLite as a `Podcast` track and returns it for playback.
 - `GET /radio/stations` lists web radio stream bookmarks.
 - `POST /radio/stations` creates or replaces a web radio bookmark by stream URL.
 - `PATCH /radio/stations/{station_id}` updates a web radio bookmark.
 - `DELETE /radio/stations/{station_id}` deletes a web radio bookmark.
 - `POST /radio/stations/{station_id}/played` records that a web radio bookmark was started.
+- `GET /history/stats` returns aggregate listening history totals and top played/skipped tracks.
 - `GET /scrobbling/accounts` lists ListenBrainz and Last.fm account settings.
 - `PATCH /scrobbling/accounts/{service}` updates a scrobbling account.
+- `POST /scrobbling/lastfm/login/start` requests a Last.fm desktop auth token and authorization URL, using bundled/saved app credentials unless custom credentials are supplied.
+- `POST /scrobbling/lastfm/login/complete` exchanges an authorized Last.fm token for a saved session key and stores the app credentials used for later scrobbles.
 - `GET /scrobbling/outbox` lists queued, submitted, and failed scrobble events.
 - `POST /scrobbling/outbox/queue-history` queues local played events for a service.
 - `POST /scrobbling/outbox/submit` submits queued scrobbles to ListenBrainz or Last.fm.
@@ -143,6 +151,7 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 ## Albums, Playlists, And Smart Playlists
 
 - `GET /albums` lists album summaries.
+- `POST /albums/{album_id}/completion-lookup` queries MusicBrainz for an album's expected track count and stores it for completion estimates.
 - `GET /albums/{album_id}/tracks` lists an album's tracks.
 - `GET /albums/{album_id}/artwork` serves selected, sidecar, or embedded album artwork.
 - `GET /albums/{album_id}/artwork-candidates` lists local sidecar and embedded artwork candidates.

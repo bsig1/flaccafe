@@ -1,14 +1,11 @@
 import {
   ArrowUp,
   Coffee,
-  ExternalLink,
   Library,
-  MoreHorizontal,
   Pause,
   Play,
   SkipBack,
   SkipForward,
-  X,
 } from "lucide-react";
 import type {
   CSSProperties,
@@ -27,7 +24,6 @@ import {
   formatPlaybackTime,
   miniPlayerChannelName,
   readMiniPlayerAlwaysOnTop,
-  readMiniPlayerSize,
   readMiniPlayerSnapshot,
   sendMiniPlayerCommand,
   storageKeys,
@@ -35,6 +31,9 @@ import {
   writeMiniPlayerAlwaysOnTop,
   writeMiniPlayerSize,
 } from "../shared";
+
+const MINI_PLAYER_WIDTH = 420;
+const MINI_PLAYER_HEIGHT = 118;
 
 export function MiniPlayerWindow() {
   useRangeWheelControls();
@@ -44,6 +43,8 @@ export function MiniPlayerWindow() {
   const duration = snapshot.duration || track?.duration_seconds || 0;
   const progressPercent = duration > 0 ? Math.min(100, (snapshot.currentTime / duration) * 100) : 0;
   const artworkSrc = track ? albumArtworkUrl(track.id) : null;
+  const isPodcastTrack = Boolean(track?.genre?.toLowerCase().includes("podcast"));
+  const trackArtistLabel = display(track?.artist, isPodcastTrack ? "Podcast" : "Unknown artist");
   const [artworkFailed, setArtworkFailed] = useState(false);
 
   useEffect(() => {
@@ -74,8 +75,8 @@ export function MiniPlayerWindow() {
   }, [track?.id]);
 
   useEffect(() => {
-    const size = readMiniPlayerSize();
-    void applyMiniPlayerChrome(alwaysOnTop, size.width, size.height);
+    writeMiniPlayerSize(MINI_PLAYER_WIDTH, MINI_PLAYER_HEIGHT);
+    void applyMiniPlayerChrome(alwaysOnTop, MINI_PLAYER_WIDTH, MINI_PLAYER_HEIGHT);
   }, []);
 
   useEffect(() => {
@@ -114,21 +115,10 @@ export function MiniPlayerWindow() {
     }
   }
 
-  async function closeMiniPlayer() {
-    try {
-      const { getCurrentWindow } = await import("@tauri-apps/api/window");
-      await restoreMainWindow();
-      await getCurrentWindow().destroy();
-    } catch {
-      window.close();
-    }
-  }
-
   async function toggleAlwaysOnTop() {
     try {
       const next = !alwaysOnTop;
-      const size = readMiniPlayerSize();
-      await applyMiniPlayerChrome(next, size.width, size.height);
+      await applyMiniPlayerChrome(next, MINI_PLAYER_WIDTH, MINI_PLAYER_HEIGHT);
       writeMiniPlayerAlwaysOnTop(next);
       setAlwaysOnTop(next);
     } catch {
@@ -137,11 +127,6 @@ export function MiniPlayerWindow() {
         return !current;
       });
     }
-  }
-
-  async function snapMiniPlayer(width: number, height: number) {
-    writeMiniPlayerSize(width, height);
-    await applyMiniPlayerChrome(alwaysOnTop, width, height);
   }
 
   async function applyMiniPlayerChrome(nextAlwaysOnTop: boolean, width: number, height: number) {
@@ -158,7 +143,7 @@ export function MiniPlayerWindow() {
 
   return (
     <main className="flex h-screen min-h-0 flex-col overflow-hidden bg-[rgb(var(--color-mini))] text-white">
-      <div className="grid h-full grid-cols-[82px_minmax(0,1fr)_132px] items-center gap-3 border border-white/5 bg-[rgb(var(--color-quiet))] p-3 shadow-2xl">
+      <div className="grid h-full grid-cols-[82px_minmax(0,1fr)_92px] items-center gap-3 border border-white/5 bg-[rgb(var(--color-quiet))] p-3 shadow-2xl">
         <div className="grid h-[72px] w-[72px] place-items-center overflow-hidden rounded-lg border border-white/10 bg-[rgb(var(--color-mini-panel))] text-moss shadow-lg shadow-black/30">
           {artworkSrc && !artworkFailed ? (
             <img alt="" className="h-full w-full object-cover" src={artworkSrc} onError={() => setArtworkFailed(true)} />
@@ -176,10 +161,8 @@ export function MiniPlayerWindow() {
             )}
           </div>
           {track ? (
-            <div className="flex min-w-0 items-center gap-1 text-xs text-muted">
-              <span className="max-w-[52%] truncate">{display(track.artist)}</span>
-              <span className="shrink-0">-</span>
-              <span className="min-w-0 truncate">{display(track.album, "Unknown album")}</span>
+            <div className="min-w-0 truncate text-xs text-muted">
+              {trackArtistLabel}
             </div>
           ) : (
             <div className="truncate text-xs text-muted">Use the main window to start a queue</div>
@@ -211,17 +194,8 @@ export function MiniPlayerWindow() {
             >
               <ArrowUp size={13} />
             </button>
-            <button className="icon-button h-7 w-7" type="button" title="Compact size" onClick={() => void snapMiniPlayer(420, 118)}>
-              <MoreHorizontal size={13} />
-            </button>
-            <button className="icon-button h-7 w-7" type="button" title="Wide size" onClick={() => void snapMiniPlayer(720, 132)}>
-              <ExternalLink size={13} />
-            </button>
             <button className="icon-button h-7 w-7" type="button" title="Open main app" onClick={() => void restoreMainAndCloseMiniPlayer()}>
               <Library size={13} />
-            </button>
-            <button className="icon-button h-7 w-7" type="button" title="Close mini player" onClick={() => void closeMiniPlayer()}>
-              <X size={13} />
             </button>
           </div>
           <div className="flex items-center gap-1.5 rounded-full border border-white/10 bg-[rgb(var(--color-mini-panel))] p-1 shadow-inner">

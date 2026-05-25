@@ -178,6 +178,35 @@ class LibraryWorkflowTests(unittest.TestCase):
             ).fetchone()
         self.assertIsNone(cache_row)
 
+    def test_file_metadata_writer_can_clear_empty_easy_tags(self) -> None:
+        from backend.app.file_tags import write_track_metadata
+
+        class FakeTags(dict):
+            def pop(self, key):  # pragma: no cover - this intentionally lacks a default argument.
+                return super().pop(key)
+
+        class FakeAudio:
+            def __init__(self) -> None:
+                self.tags = FakeTags({"title": ["Old Title"], "artist": ["Old Artist"]})
+                self.saved = False
+
+            def add_tags(self) -> None:
+                self.tags = FakeTags()
+
+            def save(self) -> None:
+                self.saved = True
+
+        fake_audio = FakeAudio()
+        audio_file = self.root / "clear-empty.flac"
+        audio_file.write_bytes(b"audio")
+
+        with patch("backend.app.file_tags.MutagenFile", return_value=fake_audio):
+            write_track_metadata(audio_file, {"title": None, "artist": "New Artist"})
+
+        self.assertNotIn("title", fake_audio.tags)
+        self.assertEqual(fake_audio.tags["artist"], ["New Artist"])
+        self.assertTrue(fake_audio.saved)
+
     def test_metadata_cache_reuses_unchanged_file_tags(self) -> None:
         audio_file = self.root / "cached.flac"
         audio_file.write_bytes(b"audio")

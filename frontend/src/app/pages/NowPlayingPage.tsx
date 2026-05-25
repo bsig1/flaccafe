@@ -48,6 +48,7 @@ import {
   PlaybackQueueContextMenu,
   beginPointerReorderDrag,
   display,
+  displayAlbumForTrack,
   miniPlayerChannelName,
   parseLyricTimestamp,
   readMiniPlayerSnapshot,
@@ -168,7 +169,13 @@ export function NowPlayingPage({
     return () => document.removeEventListener("fullscreenchange", syncFullscreen);
   }, []);
 
-  const artworkSrc = currentTrack && !artworkFailed ? albumArtworkUrl(currentTrack.id) : null;
+  const artworkSrc = currentTrack && !artworkFailed ? albumArtworkUrl(currentTrack.id, currentTrack.file_modified_at) : null;
+  const currentAlbumLabel = displayAlbumForTrack(currentTrack);
+  const currentArtistAlbumLabel = currentTrack
+    ? currentAlbumLabel
+      ? `${display(currentTrack.artist)} - ${currentAlbumLabel}`
+      : display(currentTrack.artist)
+    : "Idle";
   const lyricLines = lyrics?.lyrics?.split("\n") ?? [];
   const hasLyrics = lyricLines.some((line) => line.trim().length > 0);
   const timedLines = lyricLines.map((line, index) => ({ line, index, time: parseLyricTimestamp(line) }));
@@ -179,7 +186,7 @@ export function NowPlayingPage({
     return active;
   }, -1);
   const layout = uiPreferences.nowPlayingLayout;
-  const isTheater = layout === "theater";
+  const isQueueLayout = layout === "queue";
   const isLyricsView = layout === "lyrics";
   const showLyrics = isLyricsView || uiPreferences.nowPlayingShowLyrics;
   const showQueue = uiPreferences.nowPlayingShowQueue && layout !== "party" && !isLyricsView;
@@ -196,8 +203,9 @@ export function NowPlayingPage({
       : uiPreferences.nowPlayingLyricSize === "small"
         ? "text-base leading-7"
         : "text-lg leading-8";
-  const titleSizeClass = layout === "party" ? "text-4xl md:text-5xl" : isTheater ? "text-4xl" : "text-2xl";
+  const titleSizeClass = layout === "party" ? "text-2xl md:text-3xl" : isQueueLayout ? "text-lg 2xl:text-2xl" : "text-xl";
   const metadataLinkClass = "max-w-full truncate rounded text-left transition hover:text-moss focus:outline-none focus:ring-2 focus:ring-moss/40";
+  const lyricsSaveDisabled = !currentTrack || lyricsBusy || (lyricsTarget === "file" && !writeRatingsToFiles);
 
   function openTrackLink(action: (track: Track) => void) {
     if (currentTrack) {
@@ -297,6 +305,21 @@ export function NowPlayingPage({
     }
   }
 
+  useEffect(() => {
+    function handleLyricsSaveShortcut(event: KeyboardEvent) {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "s" || !isEditingLyrics) {
+        return;
+      }
+      event.preventDefault();
+      if (!lyricsSaveDisabled) {
+        void handleSaveLyrics();
+      }
+    }
+
+    window.addEventListener("keydown", handleLyricsSaveShortcut);
+    return () => window.removeEventListener("keydown", handleLyricsSaveShortcut);
+  }, [currentTrack?.id, isEditingLyrics, lyricsDraft, lyricsSynced, lyricsTarget, lyricsSaveDisabled]);
+
   function updateNowPlayingPreference<K extends keyof UiPreferences>(key: K, value: UiPreferences[K]) {
     setUiPreferences((current) => ({ ...current, [key]: value }));
   }
@@ -316,20 +339,14 @@ export function NowPlayingPage({
   return (
     <main className={`relative flex min-w-0 flex-1 flex-col overflow-hidden ${layout === "party" ? "bg-black" : ""}`}>
       <DragGhostPreview ghost={queueDragGhost} />
-      {artworkSrc && uiPreferences.nowPlayingBackground === "artwork" && (
-        <div className="pointer-events-none absolute inset-0 opacity-20">
-          <img alt="" className="h-full w-full object-cover" src={artworkSrc} />
-          <div className="absolute inset-0 bg-ink/80 backdrop-blur-2xl" />
-        </div>
-      )}
-      {uiPreferences.nowPlayingBackground === "soft" && (
+      {layout !== "party" && (
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_25%_20%,rgb(var(--color-primary)/0.16),transparent_36%),radial-gradient(circle_at_80%_60%,rgb(var(--color-moss)/0.14),transparent_34%)]" />
       )}
       <header className="relative z-10 flex min-h-16 flex-wrap items-center justify-between gap-4 border-b border-line px-4 py-2 lg:px-6">
         <div>
           <h1 className="text-lg font-semibold text-white">Now Playing</h1>
           <p className="text-xs text-muted">
-            {currentTrack ? `${display(currentTrack.artist)} - ${display(currentTrack.album, "Unknown album")}` : "Idle"}
+            {currentArtistAlbumLabel}
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2 text-xs">
@@ -340,7 +357,7 @@ export function NowPlayingPage({
               value={layout}
               onChange={(event) => updateNowPlayingPreference("nowPlayingLayout", event.target.value as UiPreferences["nowPlayingLayout"])}
             >
-              <option value="theater">Theater</option>
+              <option value="queue">Queue</option>
               <option value="lyrics">Lyrics</option>
               <option value="party">Party</option>
             </select>
@@ -355,7 +372,7 @@ export function NowPlayingPage({
               }
             >
               <option value="bars">Bars</option>
-              <option value="wave">Wave</option>
+              <option value="wave">Ribbon</option>
               <option value="radial">Radial</option>
               <option value="off">Off</option>
             </select>
@@ -401,12 +418,12 @@ export function NowPlayingPage({
               )}
             </div>
             <div className="min-w-0 flex-1">
-              <div className="truncate text-xl font-semibold text-white">
+              <div className="truncate text-lg font-semibold text-white">
                 {currentTrack ? display(currentTrack.title, "Untitled") : "Nothing playing"}
               </div>
               <div className="mt-1 truncate text-sm text-muted">
                 {currentTrack
-                  ? `${display(currentTrack.artist)} - ${display(currentTrack.album, "Unknown album")}`
+                  ? currentArtistAlbumLabel
                   : "Choose a track from Library or AutoDJ"}
               </div>
               {lyrics?.source && <div className="mt-1 truncate text-xs text-muted">{lyrics.source}</div>}
@@ -487,7 +504,8 @@ export function NowPlayingPage({
                   <button
                     className="primary-button"
                     type="button"
-                    disabled={!currentTrack || lyricsBusy || (lyricsTarget === "file" && !writeRatingsToFiles)}
+                    disabled={lyricsSaveDisabled}
+                    title="Save lyrics (Ctrl+S)"
                     onClick={() => void handleSaveLyrics()}
                   >
                     <Pencil size={15} />
@@ -559,7 +577,7 @@ export function NowPlayingPage({
                     "Nothing playing"
                   )}
                 </h2>
-                <div className="mt-2 truncate text-xl text-neutral-200 md:text-2xl">
+                <div className="mt-2 truncate text-base text-neutral-200 md:text-lg">
                   {currentTrack ? (
                     <button className={metadataLinkClass} type="button" onClick={() => openTrackLink(onOpenCurrentArtist)}>
                       {display(currentTrack.artist)}
@@ -568,15 +586,13 @@ export function NowPlayingPage({
                     "Choose a track from Library or AutoDJ"
                   )}
                 </div>
+                {currentTrack && currentAlbumLabel && (
                 <div className="mt-1 truncate text-sm text-muted md:text-base">
-                  {currentTrack ? (
                     <button className={metadataLinkClass} type="button" onClick={() => openTrackLink(onOpenCurrentAlbum)}>
-                      {display(currentTrack.album, "Unknown album")}
+                      {currentAlbumLabel}
                     </button>
-                  ) : (
-                    ""
-                  )}
                 </div>
+                )}
               </div>
               <div className="h-[clamp(72px,18vh,150px)] min-h-0">
                 <AudioVisualizer
@@ -597,19 +613,25 @@ export function NowPlayingPage({
         </div>
       ) : (
       <div
-        className={`relative z-10 grid min-h-0 flex-1 gap-4 overflow-auto p-4 xl:overflow-hidden xl:p-6 ${
-          layout === "theater"
+        className={`relative z-10 grid min-h-0 flex-1 gap-4 overflow-auto p-4 xl:p-6 ${
+          isQueueLayout
             ? showQueue
-              ? "grid-cols-1 xl:grid-cols-[minmax(260px,380px)_minmax(0,1fr)_minmax(260px,300px)]"
-              : "grid-cols-1 xl:grid-cols-[minmax(280px,420px)_minmax(0,1fr)]"
+              ? showLyrics
+                ? "grid-cols-1 md:grid-cols-[minmax(170px,240px)_minmax(0,1fr)] xl:grid-cols-[minmax(170px,250px)_minmax(0,1fr)_minmax(320px,420px)] xl:overflow-hidden"
+                : "grid-cols-1 md:grid-cols-[minmax(190px,280px)_minmax(320px,440px)] xl:grid-cols-[minmax(220px,340px)_minmax(380px,520px)] xl:overflow-hidden"
+              : "grid-cols-1 md:grid-cols-[minmax(220px,320px)_minmax(0,1fr)] xl:grid-cols-[minmax(260px,380px)_minmax(0,1fr)] xl:overflow-hidden"
             : showQueue
-              ? "grid-cols-1 xl:grid-cols-[minmax(240px,320px)_minmax(0,1fr)_minmax(260px,300px)]"
-              : "grid-cols-1 xl:grid-cols-[minmax(240px,320px)_minmax(0,1fr)]"
+              ? "grid-cols-1 xl:grid-cols-[minmax(240px,320px)_minmax(0,1fr)_minmax(260px,300px)] xl:overflow-hidden"
+              : "grid-cols-1 xl:grid-cols-[minmax(240px,320px)_minmax(0,1fr)] xl:overflow-hidden"
         }`}
       >
-        <section className={`min-h-0 min-w-0 overflow-auto pr-1 ${isTheater ? "grid content-center text-center" : ""}`}>
+        <section
+          className={`min-h-0 min-w-0 overflow-auto pr-1 ${
+            isQueueLayout ? "grid content-start text-center xl:content-center" : ""
+          } ${isQueueLayout && showQueue && showLyrics ? "md:row-span-2 xl:row-span-1" : ""}`}
+        >
           <div className={`mx-auto aspect-square w-full overflow-hidden rounded border border-line bg-panel shadow-xl ${
-            isTheater ? "max-w-[48vh]" : "max-w-[38vh]"
+            isQueueLayout ? "max-w-[min(42vh,18rem)] 2xl:max-w-[48vh]" : "max-w-[38vh]"
           }`}>
             {artworkSrc ? (
               <img
@@ -636,7 +658,7 @@ export function NowPlayingPage({
                 "Nothing playing"
               )}
             </h2>
-            <div className="mt-2 truncate text-sm text-neutral-300">
+            <div className="mt-2 truncate text-xs text-neutral-300 2xl:text-sm">
               {currentTrack ? (
                 <button className={metadataLinkClass} type="button" onClick={() => openTrackLink(onOpenCurrentArtist)}>
                   {display(currentTrack.artist)}
@@ -645,18 +667,16 @@ export function NowPlayingPage({
                 "Choose a track from Library or AutoDJ"
               )}
             </div>
+            {currentTrack && currentAlbumLabel && (
             <div className="mt-1 truncate text-sm text-muted">
-              {currentTrack ? (
                 <button className={metadataLinkClass} type="button" onClick={() => openTrackLink(onOpenCurrentAlbum)}>
-                  {display(currentTrack.album, "Unknown album")}
+                  {currentAlbumLabel}
                 </button>
-              ) : (
-                ""
-              )}
             </div>
+            )}
           </div>
 
-          {currentTrack && !isTheater && (
+          {currentTrack && !isQueueLayout && (
             <div className="mt-5 grid grid-cols-2 gap-3 text-sm">
               <div className="rounded border border-line bg-panel p-3">
                 <div className="text-xs uppercase text-muted">Year</div>
@@ -668,11 +688,11 @@ export function NowPlayingPage({
               </div>
             </div>
           )}
-          <div className={isTheater ? "mt-6 h-44 2xl:h-56" : "mt-5 h-24 2xl:h-28"}>
+          <div className={isQueueLayout ? "mt-4 h-24 xl:h-36 2xl:h-56" : "mt-5 h-24 2xl:h-28"}>
             <AudioVisualizer
               active={visualizerActive}
               frame={visualizerFrame}
-              frameless={isTheater}
+              frameless={isQueueLayout}
               seed={currentTrack?.id ?? 0}
               style={visualizerStyle}
             />
@@ -680,8 +700,8 @@ export function NowPlayingPage({
         </section>
 
         {showLyrics ? (
-        <section className={`min-h-[360px] min-w-0 xl:min-h-0 ${
-          isTheater ? "rounded-none border-0 bg-transparent" : "rounded border border-line bg-panel"
+        <section className={`grid min-h-[360px] min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden ${
+          isQueueLayout ? "rounded border border-line/40 bg-panel/45 xl:min-h-0" : "rounded border border-line bg-panel xl:min-h-0"
         }`}>
           <div className="flex min-h-12 flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2">
             <div>
@@ -708,7 +728,7 @@ export function NowPlayingPage({
             </div>
           </div>
 
-          <div ref={lyricsScrollRef} className="scrollbar-hidden h-[calc(100%-3rem)] overflow-auto px-4 py-4 lg:px-7 lg:py-6">
+          <div ref={lyricsScrollRef} className="scrollbar-hidden min-h-0 overflow-auto px-4 py-4 lg:px-7 lg:py-6">
             {isLyricsLoading && <div className="text-sm text-muted">Loading lyrics...</div>}
             {!isLyricsLoading && !currentTrack && (
               <div className="grid h-full place-items-center text-sm text-muted">No track selected.</div>
@@ -765,7 +785,8 @@ export function NowPlayingPage({
                   <button
                     className="primary-button"
                     type="button"
-                    disabled={!currentTrack || lyricsBusy || (lyricsTarget === "file" && !writeRatingsToFiles)}
+                    disabled={lyricsSaveDisabled}
+                    title="Save lyrics (Ctrl+S)"
                     onClick={() => void handleSaveLyrics()}
                   >
                     <Pencil size={15} />
@@ -806,7 +827,7 @@ export function NowPlayingPage({
             )}
           </div>
         </section>
-        ) : (
+        ) : isQueueLayout && showQueue ? null : (
           <section className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] rounded border border-line bg-panel">
             <div className="border-b border-line px-4 py-3">
               <div className="text-sm font-semibold text-white">Visualizer</div>
@@ -827,7 +848,9 @@ export function NowPlayingPage({
         )}
 
         {showQueue && (
-        <section className="min-h-[320px] min-w-0 rounded border border-line bg-panel xl:min-h-0">
+        <section className={`${isQueueLayout ? "min-h-[420px] md:min-h-[min(48vh,560px)]" : "min-h-[320px]"} min-w-0 rounded border border-line bg-panel xl:min-h-0 ${
+          isQueueLayout && showLyrics ? "md:col-start-2 xl:col-start-auto" : ""
+        }`}>
           <div className="flex h-12 items-center justify-between border-b border-line px-4">
             <div>
               <div className="text-sm font-semibold text-white">Queue</div>
@@ -853,7 +876,9 @@ export function NowPlayingPage({
                   key={`${track.id}-${index}`}
                   data-reorder-index={index}
                   onContextMenu={(event) => openQueueContextMenu(event, index, track)}
-                  className={`flex w-full items-center gap-3 border-b border-line/60 px-3 py-2 text-left text-sm transition ${
+                  className={`flex w-full items-center gap-3 border-b border-line/60 text-left transition ${
+                    isQueueLayout ? "px-4 py-3 text-sm" : "px-3 py-2 text-sm"
+                  } ${
                     active
                       ? "bg-white/10"
                       : dragIndex === index

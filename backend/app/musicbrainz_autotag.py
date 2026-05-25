@@ -14,7 +14,8 @@ from urllib import parse, request as urlrequest
 
 MUSICBRAINZ_ROOT = "https://musicbrainz.org/ws/2"
 COVER_ART_ROOT = "https://coverartarchive.org"
-USER_AGENT = "FLAC Cafe/0.2.1 (local library auto-tag preview; https://github.com/)"
+ACOUSTID_ROOT = "https://api.acoustid.org/v2"
+USER_AGENT = "FLAC Cafe/0.4.0 (local library auto-tag preview; https://github.com/)"
 REQUEST_TIMEOUT_SECONDS = 12
 REQUEST_SPACING_SECONDS = 1.05
 
@@ -149,15 +150,102 @@ def json_get(url: str) -> dict[str, Any] | None:
         return None
 
 
+def json_post_form(url: str, data: dict[str, object]) -> dict[str, Any] | None:
+    global _last_request_at
+    encoded = parse.urlencode(data).encode("utf-8")
+    with _request_lock:
+        elapsed = time.monotonic() - _last_request_at
+        if elapsed < REQUEST_SPACING_SECONDS:
+            time.sleep(REQUEST_SPACING_SECONDS - elapsed)
+        request = urlrequest.Request(
+            url,
+            data=encoded,
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": USER_AGENT,
+            },
+        )
+        _last_request_at = time.monotonic()
+    try:
+        with urlrequest.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
 def musicbrainz_get(resource: str, params: dict[str, object]) -> dict[str, Any] | None:
     query = parse.urlencode({**params, "fmt": "json"})
     return json_get(f"{MUSICBRAINZ_ROOT}/{resource}?{query}")
 
 
+def lookup_acoustid_recordings(
+    api_key: str | None,
+    fingerprint: object,
+    duration_seconds: object,
+    limit: int,
+) -> list[dict[str, Any]]:
+    key = (api_key or "").strip()
+    fingerprint_text = str(fingerprint or "").strip()
+    if not key or not fingerprint_text:
+        return []
+    try:
+        duration = int(round(float(duration_seconds)))
+    except (TypeError, ValueError):
+        return []
+    if duration <= 0:
+        return []
+
+    payload = json_post_form(
+        f"{ACOUSTID_ROOT}/lookup",
+        {
+            "client": key,
+            "duration": duration,
+            "fingerprint": fingerprint_text,
+            "meta": "recordingids",
+            "format": "json",
+        },
+    )
+    if not payload or payload.get("status") != "ok":
+        return []
+
+    recording_scores: dict[str, float] = {}
+    for result in payload.get("results") or []:
+        if not isinstance(result, dict):
+            continue
+        try:
+            score = float(result.get("score") or 0)
+        except (TypeError, ValueError):
+            score = 0.0
+        for recording in result.get("recordings") or []:
+            if not isinstance(recording, dict):
+                continue
+            recording_id = str(recording.get("id") or "").strip()
+            if recording_id and score > recording_scores.get(recording_id, 0.0):
+                recording_scores[recording_id] = score
+
+    recordings: list[dict[str, Any]] = []
+    for recording_id, acoustid_score in sorted(recording_scores.items(), key=lambda item: item[1], reverse=True)[:limit]:
+        recording = musicbrainz_get(
+            f"recording/{recording_id}",
+            {"inc": "releases+artist-credits+genres+tags+release-groups"},
+        )
+        if not recording:
+            continue
+        recording["_acoustid_score"] = acoustid_score
+        recording["score"] = max(float(recording.get("score") or 0), acoustid_score * 100)
+        recordings.append(recording)
+    return recordings
+
+
+def musicbrainz_phrase(value: object) -> str:
+    return str(value or "").replace("\\", "\\\\").replace('"', '\\"')
+
+
 def search_releases(album: str, artist: str | None, limit: int) -> list[dict[str, Any]]:
-    terms = [f'release:"{album}"']
+    terms = [f'release:"{musicbrainz_phrase(album)}"']
     if artist:
-        terms.append(f'artist:"{artist}"')
+        terms.append(f'artist:"{musicbrainz_phrase(artist)}"')
     payload = musicbrainz_get("release", {"query": " AND ".join(terms), "limit": max(1, min(10, limit))})
     releases = payload.get("releases") if payload else []
     return [release for release in releases if isinstance(release, dict)]
@@ -171,9 +259,9 @@ def lookup_release(release_id: str) -> dict[str, Any] | None:
 
 
 def search_recordings(title: str, artist: str | None, limit: int) -> list[dict[str, Any]]:
-    terms = [f'recording:"{title}"']
+    terms = [f'recording:"{musicbrainz_phrase(title)}"']
     if artist:
-        terms.append(f'artist:"{artist}"')
+        terms.append(f'artist:"{musicbrainz_phrase(artist)}"')
     payload = musicbrainz_get("recording", {"query": " AND ".join(terms), "limit": max(1, min(10, limit))})
     recordings = payload.get("recordings") if payload else []
     return [recording for recording in recordings if isinstance(recording, dict)]
@@ -276,18 +364,149 @@ def release_metadata(release: dict[str, Any], track_entry: dict[str, Any] | None
 
 
 def recording_metadata(recording: dict[str, Any]) -> dict[str, Any]:
-    releases = [release for release in recording.get("releases") or [] if isinstance(release, dict)]
-    release = releases[0] if releases else {}
+    return recording_release_metadata(recording)
+
+
+def recording_release_metadata(recording: dict[str, Any], release: dict[str, Any] | None = None) -> dict[str, Any]:
+    releases = [item for item in recording.get("releases") or [] if isinstance(item, dict)]
+    selected_release = release or (releases[0] if releases else {})
     return {
         "title": recording.get("title"),
         "artist": artist_credit_phrase(recording.get("artist-credit")),
-        "album": release.get("title"),
-        "album_artist": artist_credit_phrase(release.get("artist-credit")),
+        "album": selected_release.get("title"),
+        "album_artist": artist_credit_phrase(selected_release.get("artist-credit")),
         "track_number": None,
         "disc_number": None,
-        "genre": genre_name(recording.get("genres"), recording.get("tags"), release.get("genres"), release.get("tags")),
-        "year": parse_year(release.get("date") or recording.get("first-release-date")),
+        "genre": genre_name(recording.get("genres"), recording.get("tags"), selected_release.get("genres"), selected_release.get("tags")),
+        "year": parse_year(selected_release.get("date") or recording.get("first-release-date")),
     }
+
+
+def release_artist(release: dict[str, Any]) -> str | None:
+    return artist_credit_phrase(release.get("artist-credit"))
+
+
+def release_is_compilation(release: dict[str, Any]) -> bool:
+    artist = normalized_text(release_artist(release))
+    release_group = release.get("release-group") if isinstance(release.get("release-group"), dict) else {}
+    secondary_types = release_group.get("secondary-types") if isinstance(release_group.get("secondary-types"), list) else []
+    return artist in {"various artists", "various"} or any(normalized_text(item) == "compilation" for item in secondary_types)
+
+
+def recording_release_score(
+    release: dict[str, Any],
+    title: str,
+    artist: str | None,
+    current_album: object,
+) -> float:
+    release_title = release.get("title")
+    release_artist_text = release_artist(release)
+    artist_score = text_similarity(artist, release_artist_text) if artist else 0.5
+    album_score = text_similarity(current_album, release_title)
+    title_as_album_score = text_similarity(title, release_title) * 0.78
+    title_score = max(album_score, title_as_album_score)
+
+    release_group = release.get("release-group") if isinstance(release.get("release-group"), dict) else {}
+    primary_type = normalized_text(release_group.get("primary-type"))
+    type_bonus = 0.0
+    if primary_type == "album":
+        type_bonus = 0.08
+    elif primary_type == "single":
+        type_bonus = 0.06
+    elif primary_type == "ep":
+        type_bonus = 0.04
+
+    artist_bonus = 0.18 if artist_score >= 0.85 else 0.0
+    compilation_penalty = 0.35 if release_is_compilation(release) else 0.0
+    official_bonus = 0.04 if normalized_text(release.get("status")) == "official" else 0.0
+    date_bonus = 0.02 if release.get("date") else 0.0
+    return max(
+        0.0,
+        min(
+            1.0,
+            (artist_score * 0.42)
+            + (title_score * 0.34)
+            + artist_bonus
+            + type_bonus
+            + official_bonus
+            + date_bonus
+            - compilation_penalty,
+        ),
+    )
+
+
+def best_recording_match(
+    recordings: list[dict[str, Any]],
+    title: str,
+    artist: str | None,
+    current_album: object,
+) -> tuple[dict[str, Any], dict[str, Any] | None, float]:
+    def base_recording_score(recording: dict[str, Any]) -> float:
+        try:
+            mb_score = float(recording.get("score") or 0) / 100
+        except (TypeError, ValueError):
+            mb_score = 0.0
+        return (
+            text_similarity(title, recording.get("title")) * 0.48
+            + (text_similarity(artist, artist_credit_phrase(recording.get("artist-credit"))) if artist else 0.5) * 0.34
+            + mb_score * 0.18
+        )
+
+    best: tuple[dict[str, Any], dict[str, Any] | None, float] | None = None
+    for recording in recordings:
+        base_score = base_recording_score(recording)
+        releases = [release for release in recording.get("releases") or [] if isinstance(release, dict)]
+        if not releases:
+            score = base_score * 0.72
+            candidate = (recording, None, score)
+            if best is None or candidate[2] > best[2]:
+                best = candidate
+            continue
+        for release in releases:
+            release_score = recording_release_score(release, title, artist, current_album)
+            score = (base_score * 0.55) + (release_score * 0.45)
+            candidate = (recording, release, score)
+            if best is None or candidate[2] > best[2]:
+                best = candidate
+    if best is None:
+        raise ValueError("No MusicBrainz recording match found")
+    return best
+
+
+def best_acoustid_recording_match(
+    recordings: list[dict[str, Any]],
+    artist: str | None,
+    current_album: object,
+) -> tuple[dict[str, Any], dict[str, Any] | None, float]:
+    best: tuple[dict[str, Any], dict[str, Any] | None, float] | None = None
+    for recording in recordings:
+        try:
+            acoustid_score = float(recording.get("_acoustid_score") or 0)
+        except (TypeError, ValueError):
+            acoustid_score = 0.0
+        recording_artist = artist_credit_phrase(recording.get("artist-credit"))
+        artist_score = text_similarity(artist, recording_artist) if artist else 0.75
+        releases = [release for release in recording.get("releases") or [] if isinstance(release, dict)]
+        if not releases:
+            score = (acoustid_score * 0.82) + (artist_score * 0.18)
+            candidate = (recording, None, score)
+            if best is None or candidate[2] > best[2]:
+                best = candidate
+            continue
+        for release in releases:
+            release_score = recording_release_score(
+                release,
+                str(recording.get("title") or ""),
+                artist or recording_artist,
+                current_album,
+            )
+            score = (acoustid_score * 0.72) + (release_score * 0.18) + (artist_score * 0.1)
+            candidate = (recording, release, score)
+            if best is None or candidate[2] > best[2]:
+                best = candidate
+    if best is None:
+        raise ValueError("No AcoustID recording match found")
+    return best
 
 
 def best_release_for_group(tracks: list[dict[str, Any]], candidate_limit: int) -> tuple[dict[str, Any] | None, float]:
@@ -336,17 +555,17 @@ def match_release_track(track: dict[str, Any], entries: list[dict[str, Any]]) ->
     return best, text_similarity(track.get("title"), best.get("title"))
 
 
-def preview_album_group(tracks: list[dict[str, Any]], missing_only: bool, candidate_limit: int, include_artwork: bool) -> list[AutoTagPreview]:
+def preview_album_group(
+    tracks: list[dict[str, Any]],
+    missing_only: bool,
+    candidate_limit: int,
+    include_artwork: bool,
+    acoustid_api_key: str | None = None,
+) -> list[AutoTagPreview]:
     release, release_score = best_release_for_group(tracks, candidate_limit)
     if not release:
         return [
-            AutoTagPreview(
-                track_id=int(track["id"]),
-                path=str(track["path"]),
-                current=current_metadata(track),
-                match_type="album",
-                error="No MusicBrainz release match found",
-            )
+            preview_track(track, missing_only, candidate_limit, include_artwork, acoustid_api_key)
             for track in tracks
         ]
 
@@ -379,47 +598,118 @@ def preview_album_group(tracks: list[dict[str, Any]], missing_only: bool, candid
     return previews
 
 
-def preview_track(track: dict[str, Any], missing_only: bool, candidate_limit: int, include_artwork: bool) -> AutoTagPreview:
+def preview_track(
+    track: dict[str, Any],
+    missing_only: bool,
+    candidate_limit: int,
+    include_artwork: bool,
+    acoustid_api_key: str | None = None,
+    fingerprint_only: bool = False,
+) -> AutoTagPreview:
+    current = current_metadata(track)
+    artist = str(track.get("artist") or "").strip() or None
+    if fingerprint_only and not str(track.get("acoustic_fingerprint") or "").strip():
+        return AutoTagPreview(
+            track_id=int(track["id"]),
+            path=str(track["path"]),
+            current=current,
+            source="AcoustID + MusicBrainz",
+            error="No acoustic fingerprint stored. Run Analyze Fingerprints first.",
+        )
+    if fingerprint_only and not (acoustid_api_key or "").strip():
+        return AutoTagPreview(
+            track_id=int(track["id"]),
+            path=str(track["path"]),
+            current=current,
+            source="AcoustID + MusicBrainz",
+            error="AcoustID API key is required for fingerprint-only tag lookup.",
+        )
+
+    acoustid_recordings = lookup_acoustid_recordings(
+        acoustid_api_key,
+        track.get("acoustic_fingerprint"),
+        track.get("duration_seconds"),
+        candidate_limit,
+    )
+    if acoustid_recordings:
+        try:
+            recording, release, score = best_acoustid_recording_match(acoustid_recordings, artist, track.get("album"))
+            confidence = round(max(0.0, min(1.0, score)), 3)
+            release = release or {}
+            proposed = recording_release_metadata(recording, release)
+            release_id = release.get("id")
+            artwork = cover_art_for_release(str(release_id)) if include_artwork and release_id else None
+            changes = metadata_changes(current_metadata(track), proposed, missing_only)
+            return AutoTagPreview(
+                track_id=int(track["id"]),
+                path=str(track["path"]),
+                current=current,
+                proposed=proposed,
+                changed_fields=list(changes),
+                confidence=confidence,
+                match_type="track",
+                source="AcoustID + MusicBrainz",
+                release_id=release_id,
+                release_title=release.get("title"),
+                recording_id=recording.get("id"),
+                artwork_url=artwork.get("image_url") if artwork else None,
+                artwork_thumbnail_url=artwork.get("thumbnail_url") if artwork else None,
+            )
+        except ValueError:
+            if fingerprint_only:
+                return AutoTagPreview(
+                    track_id=int(track["id"]),
+                    path=str(track["path"]),
+                    current=current,
+                    source="AcoustID + MusicBrainz",
+                    error="No AcoustID recording match found for this fingerprint.",
+                )
+
+    if fingerprint_only:
+        return AutoTagPreview(
+            track_id=int(track["id"]),
+            path=str(track["path"]),
+            current=current,
+            source="AcoustID + MusicBrainz",
+            error="No AcoustID recording match found for this fingerprint.",
+        )
+
     title = str(track.get("title") or Path(str(track.get("path") or "")).stem).strip()
     if not title:
         return AutoTagPreview(
             track_id=int(track["id"]),
             path=str(track["path"]),
-            current=current_metadata(track),
+            current=current,
             error="Track has no title to search",
         )
-    artist = str(track.get("artist") or "").strip() or None
     recordings = search_recordings(title, artist, candidate_limit)
     if not recordings:
         return AutoTagPreview(
             track_id=int(track["id"]),
             path=str(track["path"]),
-            current=current_metadata(track),
+            current=current,
             error="No MusicBrainz recording match found",
         )
 
-    def recording_score(recording: dict[str, Any]) -> float:
-        try:
-            mb_score = float(recording.get("score") or 0) / 100
-        except (TypeError, ValueError):
-            mb_score = 0.0
-        return (
-            text_similarity(title, recording.get("title")) * 0.45
-            + (text_similarity(artist, artist_credit_phrase(recording.get("artist-credit"))) if artist else 0.5) * 0.35
-            + mb_score * 0.2
+    try:
+        recording, release, score = best_recording_match(recordings, title, artist, track.get("album"))
+    except ValueError:
+        return AutoTagPreview(
+            track_id=int(track["id"]),
+            path=str(track["path"]),
+            current=current,
+            error="No MusicBrainz recording match found",
         )
-
-    recording = max(recordings, key=recording_score)
-    confidence = round(max(0.0, min(1.0, recording_score(recording))), 3)
-    proposed = recording_metadata(recording)
-    release = next((release for release in recording.get("releases") or [] if isinstance(release, dict)), {})
+    confidence = round(max(0.0, min(1.0, score)), 3)
+    release = release or {}
+    proposed = recording_release_metadata(recording, release)
     release_id = release.get("id")
     artwork = cover_art_for_release(str(release_id)) if include_artwork and release_id else None
     changes = metadata_changes(current_metadata(track), proposed, missing_only)
     return AutoTagPreview(
         track_id=int(track["id"]),
         path=str(track["path"]),
-        current=current_metadata(track),
+        current=current,
         proposed=proposed,
         changed_fields=list(changes),
         confidence=confidence,
@@ -444,10 +734,12 @@ def preview_auto_tags(
     missing_only: bool,
     candidate_limit: int = 3,
     include_artwork: bool = True,
+    acoustid_api_key: str | None = None,
+    fingerprint_only: bool = False,
 ) -> list[dict[str, Any]]:
-    if mode == "track":
+    if mode == "track" or fingerprint_only:
         return [
-            preview_track(track, missing_only, candidate_limit, include_artwork).to_dict()
+            preview_track(track, missing_only, candidate_limit, include_artwork, acoustid_api_key, fingerprint_only).to_dict()
             for track in tracks
         ]
 
@@ -459,6 +751,6 @@ def preview_auto_tags(
     for group_tracks in groups.values():
         previews.extend(
             preview.to_dict()
-            for preview in preview_album_group(group_tracks, missing_only, candidate_limit, include_artwork)
+            for preview in preview_album_group(group_tracks, missing_only, candidate_limit, include_artwork, acoustid_api_key)
         )
     return previews

@@ -712,9 +712,6 @@ export function AutoDjPage({
                   {settings.seed_track_id ? "Seeded from current track" : "Use current track"}
                 </button>
               </label>
-              <div className="rounded border border-line/70 bg-ink p-3 text-xs text-muted">
-                Advanced includes cooldowns, scoring weights, profiles, avoid rules, and seed-neighbor filters.
-              </div>
             </div>
           ) : (
             <>

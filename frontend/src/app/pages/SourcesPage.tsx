@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 
 import type {
+  FolderWatchStatus,
   ScanProgress,
   ScanResult,
 } from "../../types/api";
@@ -13,6 +14,7 @@ import {
   fileName,
   formatTime,
 } from "../shared";
+import { FolderWatchSection } from "./sources/FolderWatchSection";
 
 function uniqueSourceFolders(paths: string[]) {
   const seen = new Set<string>();
@@ -37,9 +39,16 @@ export function SourcesPage({
   suggestedMusicPath,
   onBrowse,
   onScan,
+  onRemoveSource,
   scanResult,
   scanProgress,
   isScanning,
+  folderWatchStatus,
+  onStartFolderWatch,
+  onStopFolderWatch,
+  onRefreshFolderWatch,
+  onApplyFolderWatch,
+  onAcknowledgeFolderWatchNotifications,
 }: {
   folderPath: string;
   setFolderPath: (value: string) => void;
@@ -48,9 +57,16 @@ export function SourcesPage({
   suggestedMusicPath?: string | null;
   onBrowse: () => void;
   onScan: (pathOverride?: string | string[]) => void | Promise<void>;
+  onRemoveSource: (path: string) => void | Promise<void>;
   scanResult: ScanResult | null;
   scanProgress: ScanProgress | null;
   isScanning: boolean;
+  folderWatchStatus: FolderWatchStatus | null;
+  onStartFolderWatch: (intervalSeconds: number) => void | Promise<void>;
+  onStopFolderWatch: () => void | Promise<void>;
+  onRefreshFolderWatch: () => void | Promise<void>;
+  onApplyFolderWatch: (changeIds: string[], applyAll?: boolean) => void | Promise<void>;
+  onAcknowledgeFolderWatchNotifications: (notificationIds: string[], allNotifications?: boolean) => void | Promise<void>;
 }) {
   const normalizedLibraryFolders = uniqueSourceFolders(libraryFolders);
   const pendingFolderPath = folderPath.trim();
@@ -68,14 +84,6 @@ export function SourcesPage({
     const next = uniqueSourceFolders([...libraryFolders, pendingFolderPath]);
     setLibraryFolders(next);
     setFolderPath("");
-  }
-
-  function removeLibraryFolder(path: string) {
-    const next = libraryFolders.filter((item) => item !== path);
-    setLibraryFolders(next);
-    if (folderPath === path) {
-      setFolderPath(next[0] ?? "");
-    }
   }
 
   function addSuggestedMusicFolder() {
@@ -151,6 +159,7 @@ export function SourcesPage({
                   {normalizedLibraryFolders.length
                     ? `${normalizedLibraryFolders.length.toLocaleString()} source folder${normalizedLibraryFolders.length === 1 ? "" : "s"}`
                     : "No folders selected yet"}
+                  {normalizedLibraryFolders.length > 0 ? " - removing a source also removes its tracks from the library, not from disk" : ""}
                 </div>
               </div>
               <button
@@ -180,9 +189,9 @@ export function SourcesPage({
                       <button
                         className="icon-button h-8 w-8"
                         type="button"
-                        title="Remove folder from source list"
+                        title="Remove source and its tracks from the library"
                         disabled={isScanning}
-                        onClick={() => removeLibraryFolder(path)}
+                        onClick={() => void onRemoveSource(path)}
                       >
                         <X size={14} />
                       </button>
@@ -196,6 +205,16 @@ export function SourcesPage({
               )}
             </div>
           </div>
+
+          <FolderWatchSection
+            folderPath={normalizedLibraryFolders[0] ?? folderPath}
+            folderWatchStatus={folderWatchStatus}
+            onStartFolderWatch={onStartFolderWatch}
+            onStopFolderWatch={onStopFolderWatch}
+            onRefreshFolderWatch={onRefreshFolderWatch}
+            onApplyFolderWatch={onApplyFolderWatch}
+            onAcknowledgeFolderWatchNotifications={onAcknowledgeFolderWatchNotifications}
+          />
 
           {scanProgress && scanProgress.status !== "completed" && scanProgress.status !== "failed" && (
             <div className="rounded border border-line bg-panel p-4">

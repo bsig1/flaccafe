@@ -1,13 +1,12 @@
 import {
-  Bell,
   CheckCircle2,
   Download,
   Eye,
   EyeOff,
+  ExternalLink,
   FileText,
   Fingerprint,
   FolderOpen,
-  Image,
   ListChecks,
   RefreshCw,
   RotateCcw,
@@ -24,7 +23,6 @@ import {
 
 import type {
   AcousticFingerprintResponse,
-  AlbumArtworkCollisionResponse,
   AudioConversionPreviewResponse,
   AudioConversionProgress,
   AudioConversionSetupResponse,
@@ -32,10 +30,12 @@ import type {
   BulkUndoBatchEntry,
   BulkUndoLogEntry,
   BulkUndoRestoreResponse,
-  ChromaprintInstallResponse,
   CacheClearTarget,
   ChromaprintStatusResponse,
+  ClapInstallDevice,
+  ClapInstallProgress,
   ClapGenreTagResponse,
+  ClapStatusResponse,
   CsvMetadataExportResponse,
   CsvMetadataImportReportResponse,
   CsvMetadataImportResponse,
@@ -48,22 +48,24 @@ import type {
   DuplicateReviewResponse,
   FileOrganizationReportResponse,
   FileOrganizationResponse,
-  FolderWatchChange,
-  FolderWatchStatus,
   FilenameTagInferenceResponse,
   PlaylistSummary,
   ReportFileResponse,
   TagRegexReplaceResponse,
+  Track,
+  TrackFileMetadataWriteResponse,
 } from "../../types/api";
 import {
-  applyArtworkCollisionRepair,
   deleteDeviceSyncProfile,
   fetchDeviceSyncDevices,
   fetchDeviceSyncProfiles,
   clapGenreTags,
-  previewArtworkCollisions,
   saveDeviceSyncProfile,
+  writeTrackMetadataToFiles,
 } from "../../lib/api";
+import {
+  openExternalUrl,
+} from "../../lib/externalLinks";
 import {
   DisclosureAccordionProvider,
   DisclosureSection,
@@ -85,7 +87,9 @@ import type {
   FileManagementCategory,
 } from "./file-management/FileManagementNavigator";
 import { LibraryImportersSection } from "./file-management/LibraryImportersSection";
+import { OptionalDependenciesSection } from "./file-management/OptionalDependenciesSection";
 import { ReportViewerSection } from "./file-management/ReportViewerSection";
+import { VolumeTagsSection } from "./file-management/VolumeTagsSection";
 import {
   CSV_IMPORT_FIELDS,
   DEFAULT_FILENAME_TAG_PATTERNS,
@@ -105,6 +109,29 @@ import type {
   FileOrganizationOptions,
 } from "./file-management/fileManagementUtils";
 
+const ACOUSTID_API_KEY_URL = "https://acoustid.org/api-key";
+
+type AutoTagRequestOptions = {
+  fingerprintOnly?: boolean;
+};
+
+function defaultToolTarget(folderPath: string, folderName: string): string {
+  const trimmed = folderPath.trim().replace(/[\\/]+$/, "");
+  if (!trimmed) {
+    return "";
+  }
+  const separator = trimmed.includes("\\") ? "\\" : "/";
+  return `${trimmed}${separator}${folderName}`;
+}
+
+function defaultAudioConversionTarget(folderPath: string): string {
+  return defaultToolTarget(folderPath, "FLAC Cafe Converted");
+}
+
+function defaultCdRipTarget(folderPath: string): string {
+  return defaultToolTarget(folderPath, "FLAC Cafe CD Rips");
+}
+
 export function FileManagementPage({
   initialFocusToolId,
   initialTrackScopeIds,
@@ -123,15 +150,9 @@ export function FileManagementPage({
   onApplyAutoTag,
   fileOrganizationPreview,
   fileOrganizationReport,
-  folderWatchStatus,
   onPreviewFileOrganization,
   onApplyFileOrganization,
   onExportFileOrganizationReport,
-  onStartFolderWatch,
-  onStopFolderWatch,
-  onRefreshFolderWatch,
-  onApplyFolderWatch,
-  onAcknowledgeFolderWatchNotifications,
   deviceSyncPreview,
   onDeviceSync,
   audioConversionSetup,
@@ -139,6 +160,10 @@ export function FileManagementPage({
   audioConversionProgress,
   onRefreshAudioConversionSetup,
   onSaveAudioConversionSetup,
+  onInstallAudioConversionFfmpeg,
+  onBrowseAudioConversionTarget,
+  onBrowseCdRipTarget,
+  onPlayCdPreviewTrack,
   onPreviewAudioConversion,
   onStartAudioConversion,
   onCancelAudioConversion,
@@ -154,11 +179,14 @@ export function FileManagementPage({
   onDuplicateAction,
   onLoadDuplicateReview,
   onRevealTracksByIds,
+  clapStatus,
+  clapInstallProgress,
+  isClapInstalling,
+  onRefreshClapStatus,
+  onInstallClap,
   chromaprintSetup,
   onRefreshChromaprintSetup,
   onSaveChromaprintSetup,
-  chromaprintInstallResult,
-  onInstallChromaprintTool,
   acousticFingerprintResult,
   onRunAcousticFingerprintPass,
   bulkUndoLog,
@@ -171,6 +199,7 @@ export function FileManagementPage({
   onReadReportFile,
   onAdvancedTagLibraryChanged,
   onClearTrackScope,
+  onOpenApiKeysSettings,
   onSelectLibraryTarget,
   setStatus,
 }: {
@@ -204,25 +233,22 @@ export function FileManagementPage({
     missingOnly: boolean,
     includeArtwork: boolean,
     trackIds?: number[] | null,
+    options?: AutoTagRequestOptions,
   ) => void | Promise<void>;
   onApplyAutoTag: (
     mode: "album" | "track",
     missingOnly: boolean,
     includeArtwork: boolean,
     saveArtwork: boolean,
+    writeToFile: boolean,
     trackIds?: number[] | null,
+    options?: AutoTagRequestOptions,
   ) => void | Promise<void>;
   fileOrganizationPreview: FileOrganizationResponse | null;
   fileOrganizationReport: FileOrganizationReportResponse | null;
-  folderWatchStatus: FolderWatchStatus | null;
   onPreviewFileOrganization: (template: string, baseFolder?: string | null, options?: FileOrganizationOptions) => void | Promise<void>;
-  onApplyFileOrganization: (template: string, baseFolder?: string | null, options?: FileOrganizationOptions) => void | Promise<void>;
+  onApplyFileOrganization: (template: string, baseFolder?: string | null, options?: FileOrganizationOptions) => boolean | Promise<boolean>;
   onExportFileOrganizationReport: (template: string, baseFolder?: string | null, options?: FileOrganizationOptions) => void | Promise<void>;
-  onStartFolderWatch: (intervalSeconds: number) => void | Promise<void>;
-  onStopFolderWatch: () => void | Promise<void>;
-  onRefreshFolderWatch: () => void | Promise<void>;
-  onApplyFolderWatch: (changeIds: string[], applyAll?: boolean) => void | Promise<void>;
-  onAcknowledgeFolderWatchNotifications: (notificationIds: string[], allNotifications?: boolean) => void | Promise<void>;
   deviceSyncPreview: DeviceSyncResponse | null;
   onDeviceSync: (
     targetFolder: string,
@@ -242,6 +268,10 @@ export function FileManagementPage({
   audioConversionProgress: AudioConversionProgress | null;
   onRefreshAudioConversionSetup: () => void | Promise<void>;
   onSaveAudioConversionSetup: (ffmpegPath: string | null) => void | Promise<void>;
+  onInstallAudioConversionFfmpeg: () => void | Promise<void>;
+  onBrowseAudioConversionTarget: () => Promise<string | null>;
+  onBrowseCdRipTarget: () => Promise<string | null>;
+  onPlayCdPreviewTrack: (track: Track, queue?: Track[]) => void;
   onPreviewAudioConversion: (targetFolder: string, options: AudioConversionOptions) => void | Promise<void>;
   onStartAudioConversion: (targetFolder: string, options: AudioConversionOptions) => void | Promise<void>;
   onCancelAudioConversion: () => void | Promise<void>;
@@ -257,11 +287,14 @@ export function FileManagementPage({
   onDuplicateAction: (request: DuplicateActionRequest) => void | Promise<void>;
   onLoadDuplicateReview: (trackIds: number[], groups: number[][]) => void | Promise<void>;
   onRevealTracksByIds: (trackIds: number[]) => void | Promise<void>;
+  clapStatus: ClapStatusResponse | null;
+  clapInstallProgress: ClapInstallProgress | null;
+  isClapInstalling: boolean;
+  onRefreshClapStatus: () => void | Promise<void>;
+  onInstallClap: (device: ClapInstallDevice, force?: boolean) => void | Promise<void>;
   chromaprintSetup: ChromaprintStatusResponse | null;
   onRefreshChromaprintSetup: () => void | Promise<void>;
   onSaveChromaprintSetup: (fpcalcPath: string | null) => void | Promise<void>;
-  chromaprintInstallResult: ChromaprintInstallResponse | null;
-  onInstallChromaprintTool: () => void | Promise<void>;
   acousticFingerprintResult: AcousticFingerprintResponse | null;
   onRunAcousticFingerprintPass: (trackIds: number[] | null, overwrite: boolean, limit: number) => void | Promise<void>;
   bulkUndoLog: BulkUndoLogEntry[];
@@ -274,6 +307,7 @@ export function FileManagementPage({
   onReadReportFile: (reportPath: string) => void | Promise<void>;
   onAdvancedTagLibraryChanged: () => void | Promise<void>;
   onClearTrackScope: () => void;
+  onOpenApiKeysSettings: () => void;
   onSelectLibraryTarget: (view: "tracks" | "albums") => void;
   setStatus: (message: string) => void;
 }) {
@@ -284,6 +318,10 @@ export function FileManagementPage({
   const [filenamePresetMessage, setFilenamePresetMessage] = useState<string | null>(null);
   const [filenamePresetJson, setFilenamePresetJson] = useState("");
   const [acceptedFilenameTrackIds, setAcceptedFilenameTrackIds] = useState<Set<number>>(() => new Set());
+  const [fileWriteIncludeMetadata, setFileWriteIncludeMetadata] = useState(true);
+  const [fileWriteIncludeRatings, setFileWriteIncludeRatings] = useState(true);
+  const [fileWritePreview, setFileWritePreview] = useState<TrackFileMetadataWriteResponse | null>(null);
+  const [fileWriteBusy, setFileWriteBusy] = useState(false);
   const [tagRegexField, setTagRegexField] = useState<"title" | "artist" | "album" | "album_artist" | "genre">("artist");
   const [tagRegexPattern, setTagRegexPattern] = useState("\\s+feat\\..*$");
   const [tagRegexReplacement, setTagRegexReplacement] = useState("");
@@ -292,7 +330,12 @@ export function FileManagementPage({
   const [autoTagMissingOnly, setAutoTagMissingOnly] = useState(true);
   const [autoTagIncludeArtwork, setAutoTagIncludeArtwork] = useState(true);
   const [autoTagSaveArtwork, setAutoTagSaveArtwork] = useState(false);
+  const [autoTagWriteToFiles, setAutoTagWriteToFiles] = useState(false);
   const [acceptedAutoTagTrackIds, setAcceptedAutoTagTrackIds] = useState<Set<number>>(() => new Set());
+  const [autoTagPreviewSource, setAutoTagPreviewSource] = useState<"musicbrainz" | "fingerprint" | null>(null);
+  const [fingerprintTagMissingOnly, setFingerprintTagMissingOnly] = useState(false);
+  const [fingerprintTagSaveArtwork, setFingerprintTagSaveArtwork] = useState(false);
+  const [fingerprintTagWriteToFiles, setFingerprintTagWriteToFiles] = useState(false);
   const [clapGenreMissingOnly, setClapGenreMissingOnly] = useState(true);
   const [clapGenreMinConfidence, setClapGenreMinConfidence] = useState(0.35);
   const [clapGenrePreview, setClapGenrePreview] = useState<ClapGenreTagResponse | null>(null);
@@ -301,8 +344,6 @@ export function FileManagementPage({
   const [organizeBaseFolder, setOrganizeBaseFolder] = useState("");
   const [organizeCollisionStrategy, setOrganizeCollisionStrategy] = useState<"skip" | "auto_rename">("skip");
   const [organizeCleanupEmptyFolders, setOrganizeCleanupEmptyFolders] = useState(false);
-  const [watchIntervalSeconds, setWatchIntervalSeconds] = useState(folderWatchStatus?.interval_seconds ?? 45);
-  const [acceptedFolderWatchIds, setAcceptedFolderWatchIds] = useState<Set<string>>(() => new Set());
   const [deviceSyncTarget, setDeviceSyncTarget] = useState("");
   const [deviceSyncProfileId, setDeviceSyncProfileId] = useState<number | null>(null);
   const [deviceSyncProfileName, setDeviceSyncProfileName] = useState("");
@@ -330,11 +371,8 @@ export function FileManagementPage({
   const [acousticOverwrite, setAcousticOverwrite] = useState(false);
   const [acousticLimit, setAcousticLimit] = useState(200);
   const [reportPath, setReportPath] = useState("");
-  const [artworkCollisionLimit, setArtworkCollisionLimit] = useState(200);
-  const [artworkCollisionPreview, setArtworkCollisionPreview] = useState<AlbumArtworkCollisionResponse | null>(null);
-  const [artworkCollisionBusy, setArtworkCollisionBusy] = useState(false);
   const [toolSearch, setToolSearch] = useState("");
-  const [toolCategory, setToolCategory] = useState<FileManagementCategory>("Tags");
+  const [toolCategory, setToolCategory] = useState<FileManagementCategory>("All");
   const [openFileManagementSection, setOpenFileManagementSection] = useState<string | null>(null);
 
   const initialScopeKey = (initialTrackScopeIds ?? []).join(",");
@@ -353,23 +391,26 @@ export function FileManagementPage({
   const duplicateGroups = useMemo(() => parseDuplicateGroups(duplicateGroupsText), [duplicateGroupsText]);
   const allFilenameTagPresets = Array.from(new Set([...DEFAULT_FILENAME_TAG_PATTERNS, ...filenameTagPresets]));
   const isCustomFilenameTagPreset = filenameTagPresets.includes(filenameTagPattern);
-  const folderWatchChanges = folderWatchStatus?.changes ?? [];
-  const activeFolderWatchNotifications = (folderWatchStatus?.notifications ?? []).filter((notification) => !notification.acknowledged);
-  const folderWatchChangeKey = folderWatchChanges.map((change) => change.id).join("|");
-  const selectedWatchCount = folderWatchChanges.filter((change) => acceptedFolderWatchIds.has(change.id)).length;
   const autoTagChangedIds = useMemo(
     () =>
       autoTagPreview?.previews
-        .filter((preview) => acceptedAutoTagTrackIds.has(preview.track_id) && !preview.error && preview.changed_fields.length > 0)
+        .filter((preview) => acceptedAutoTagTrackIds.has(preview.track_id) && !preview.error && !preview.applied && preview.changed_fields.length > 0)
         .map((preview) => preview.track_id) ?? [],
     [acceptedAutoTagTrackIds, autoTagPreview],
   );
   const autoTagArtworkIds = useMemo(
     () =>
       autoTagPreview?.previews
-        .filter((preview) => acceptedAutoTagTrackIds.has(preview.track_id) && !preview.error && Boolean(preview.artwork_url))
+        .filter((preview) => acceptedAutoTagTrackIds.has(preview.track_id) && !preview.error && !preview.artwork_saved && Boolean(preview.artwork_url))
         .map((preview) => preview.track_id) ?? [],
     [acceptedAutoTagTrackIds, autoTagPreview],
+  );
+  const fingerprintAutoTagIds = useMemo(
+    () =>
+      autoTagPreviewSource === "fingerprint" && autoTagPreview
+        ? Array.from(new Set([...autoTagChangedIds, ...(fingerprintTagSaveArtwork ? autoTagArtworkIds : [])]))
+        : [],
+    [autoTagArtworkIds, autoTagChangedIds, autoTagPreview, autoTagPreviewSource, fingerprintTagSaveArtwork],
   );
   const acceptedChangedFilenameIds = useMemo(
     () =>
@@ -385,6 +426,13 @@ export function FileManagementPage({
 
   function openSignalFor(sectionId: string) {
     return initialFocusToolId === sectionId ? focusOpenSignal : undefined;
+  }
+
+  function openOptionalDependenciesSection() {
+    setToolCategory("All");
+    setToolSearch("Optional Dependencies");
+    setOpenFileManagementSection("Optional Dependencies");
+    void onRefreshAudioConversionSetup();
   }
 
   useEffect(() => {
@@ -403,6 +451,10 @@ export function FileManagementPage({
     setToolCategory("All");
     setToolSearch(section?.title ?? initialFocusToolId);
     setOpenFileManagementSection(section?.title ?? null);
+    if (initialFocusToolId === "musicBrainz" && incomingTrackScopeIds.length > 0) {
+      setAutoTagMode("track");
+      setAutoTagMissingOnly(false);
+    }
   }, [initialFocusToolId, initialScopeKey]);
 
   useEffect(() => {
@@ -420,17 +472,11 @@ export function FileManagementPage({
   }, [chromaprintSetup?.configured_path, chromaprintSetup?.resolved_path]);
 
   useEffect(() => {
-    setWatchIntervalSeconds(folderWatchStatus?.interval_seconds ?? 45);
-  }, [folderWatchStatus?.interval_seconds]);
-
-  useEffect(() => {
-    setAcceptedFolderWatchIds(new Set(folderWatchChanges.map((change) => change.id)));
-  }, [folderWatchChangeKey]);
-
-  useEffect(() => {
     const next = new Set<number>();
     for (const preview of autoTagPreview?.previews ?? []) {
-      if (!preview.error && (preview.changed_fields.length > 0 || preview.artwork_url)) {
+      const hasTagChanges = preview.changed_fields.length > 0 || preview.applied;
+      const hasArtwork = Boolean(preview.artwork_url) || preview.artwork_saved;
+      if (!preview.error && (hasTagChanges || hasArtwork)) {
         next.add(preview.track_id);
       }
     }
@@ -524,43 +570,6 @@ export function FileManagementPage({
       setDeviceSyncProfileName(device.label);
     }
     setStatus(`Using ${device.label} at ${device.root_path}`);
-  }
-
-  async function previewArtworkCollisionRepair() {
-    setArtworkCollisionBusy(true);
-    setStatus("Checking album artwork folders...");
-    try {
-      const response = await previewArtworkCollisions(artworkCollisionLimit);
-      setArtworkCollisionPreview(response);
-      setStatus(
-        response.total
-          ? `Found ${response.total.toLocaleString()} album artwork collision${response.total === 1 ? "" : "s"}`
-          : "No album artwork collisions found",
-      );
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Could not check artwork collisions");
-    } finally {
-      setArtworkCollisionBusy(false);
-    }
-  }
-
-  async function applyArtworkCollisionRepairs() {
-    setArtworkCollisionBusy(true);
-    setStatus("Repairing album artwork collisions...");
-    try {
-      const response = await applyArtworkCollisionRepair(artworkCollisionLimit);
-      setArtworkCollisionPreview(response);
-      setStatus(
-        `Repaired ${response.repaired.toLocaleString()} of ${response.total.toLocaleString()} album artwork collision${
-          response.total === 1 ? "" : "s"
-        }`,
-      );
-      await onAdvancedTagLibraryChanged();
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Could not repair artwork collisions");
-    } finally {
-      setArtworkCollisionBusy(false);
-    }
   }
 
   async function previewClapGenreTags(apply = false) {
@@ -741,6 +750,10 @@ export function FileManagementPage({
     };
   }
 
+  async function applyFileOrganization() {
+    await onApplyFileOrganization(organizeTemplate, organizeBaseFolder, organizationOptions());
+  }
+
   function duplicateScopeForAction(): number[] {
     return duplicateTrackIds.length ? duplicateTrackIds : scopedTrackIds;
   }
@@ -770,43 +783,6 @@ export function FileManagementPage({
     });
   }
 
-  function toggleFolderWatchChange(changeId: string) {
-    setAcceptedFolderWatchIds((current) => {
-      const next = new Set(current);
-      if (next.has(changeId)) {
-        next.delete(changeId);
-      } else {
-        next.add(changeId);
-      }
-      return next;
-    });
-  }
-
-  function toggleAllFolderWatchChanges() {
-    setAcceptedFolderWatchIds((current) =>
-      current.size === folderWatchChanges.length ? new Set() : new Set(folderWatchChanges.map((change) => change.id)),
-    );
-  }
-
-  function folderWatchTypeLabel(change: FolderWatchChange): string {
-    if (change.change_type === "added") {
-      return "Add";
-    }
-    if (change.change_type === "modified") {
-      return "Update tags";
-    }
-    if (change.change_type === "removed") {
-      return "Remove";
-    }
-    return "Move";
-  }
-
-  function folderWatchTrackLabel(change: FolderWatchChange): string {
-    const title = change.title?.trim() || change.new_path?.split(/[\\/]/).pop() || change.old_path?.split(/[\\/]/).pop() || "Audio file";
-    const artist = change.artist?.trim();
-    return artist ? `${title} - ${artist}` : title;
-  }
-
   function toggleAutoTagTrack(trackId: number) {
     setAcceptedAutoTagTrackIds((current) => {
       const next = new Set(current);
@@ -830,8 +806,76 @@ export function FileManagementPage({
     setStatus("Using each tool's default target");
   }
 
+  function pendingFileWriteIds() {
+    return (
+      fileWritePreview?.previews
+        .filter((preview) => preview.changed_fields.length > 0 && !preview.applied && !preview.error)
+        .map((preview) => preview.track_id) ?? []
+    );
+  }
+
+  function fileWriteChangeDetails(preview: TrackFileMetadataWriteResponse["previews"][number]) {
+    return preview.changed_fields
+      .slice(0, 5)
+      .map((field) => `${field.replace("_", " ")}: ${previewLabel(preview.file[field])} -> ${previewLabel(preview.database[field])}`);
+  }
+
+  async function previewDatabaseFileWrites(apply: boolean) {
+    if (!fileWriteIncludeMetadata && !fileWriteIncludeRatings) {
+      setStatus("Choose metadata, ratings, or both before writing files.");
+      return;
+    }
+    if (apply && !fileWritePreview) {
+      setStatus("Preview file writes first. If nothing differs, there will be nothing to write.");
+      return;
+    }
+    const pendingIds = pendingFileWriteIds();
+    const scope = apply && fileWritePreview ? pendingIds : currentScope(scopedTrackIds);
+    if (apply && fileWritePreview && pendingIds.length === 0) {
+      setStatus("No pending SQLite-to-file changes to write.");
+      return;
+    }
+    if (apply) {
+      const targetText = scope?.length ? `${scope.length.toLocaleString()} changed track${scope.length === 1 ? "" : "s"}` : "the current preview target";
+      if (!window.confirm(`Write FLAC Cafe's SQLite metadata to ${targetText}? This updates audio file tags.`)) {
+        return;
+      }
+    }
+
+    setFileWriteBusy(true);
+    setStatus(apply ? "Writing SQLite metadata to audio files..." : "Previewing SQLite-to-file metadata differences...");
+    try {
+      const response = await writeTrackMetadataToFiles({
+        track_ids: scope?.length ? scope : null,
+        include_metadata: fileWriteIncludeMetadata,
+        include_rating: fileWriteIncludeRatings,
+        apply,
+        limit: apply ? 10000 : 500,
+      });
+      setFileWritePreview(response);
+      if (apply) {
+        await onAdvancedTagLibraryChanged();
+      }
+      setStatus(
+        apply
+          ? `Wrote SQLite tags to ${response.applied.toLocaleString()} file${response.applied === 1 ? "" : "s"}`
+          : `Found ${response.changed.toLocaleString()} file${response.changed === 1 ? "" : "s"} with tag differences`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      setStatus(
+        message.includes("404") || message.toLowerCase().includes("not found")
+          ? "SQLite-to-file sync is not available in the running backend yet. Restart the dev backend or relaunch Tauri."
+          : message || "Could not write SQLite metadata to files",
+      );
+    } finally {
+      setFileWriteBusy(false);
+    }
+  }
+
   async function previewMusicBrainzAutoTags() {
     const scope = currentScope(scopedTrackIds);
+    setAutoTagPreviewSource("musicbrainz");
     setStatus(
       scope
         ? `Previewing MusicBrainz tags for ${scope.length.toLocaleString()} selected track${scope.length === 1 ? "" : "s"}...`
@@ -841,20 +885,16 @@ export function FileManagementPage({
   }
 
   async function applyMusicBrainzAutoTags() {
+    setAutoTagPreviewSource("musicbrainz");
     const scope = autoTagPreview
       ? Array.from(new Set([...autoTagChangedIds, ...(autoTagSaveArtwork ? autoTagArtworkIds : [])]))
       : currentScope(scopedTrackIds);
-    const scopedCount = scopedTrackIds.length;
     setStatus(
       scope?.length
         ? `Applying MusicBrainz tags to ${scope.length.toLocaleString()} track${scope.length === 1 ? "" : "s"}...`
         : "Applying MusicBrainz tags to the default tool target...",
     );
-    await onApplyAutoTag(autoTagMode, autoTagMissingOnly, autoTagIncludeArtwork, autoTagSaveArtwork, scope);
-    if (scopedCount) {
-      setTrackScopeText("");
-      onClearTrackScope();
-    }
+    await onApplyAutoTag(autoTagMode, autoTagMissingOnly, autoTagIncludeArtwork, autoTagSaveArtwork, autoTagWriteToFiles, scope);
   }
 
   async function analyzeAcousticFingerprints() {
@@ -869,24 +909,70 @@ export function FileManagementPage({
 
   async function previewAcousticFingerprintTags() {
     const scope = currentScope(scopedTrackIds);
+    setAutoTagPreviewSource("fingerprint");
+    setAutoTagMode("track");
+    setAutoTagMissingOnly(fingerprintTagMissingOnly);
+    setAutoTagIncludeArtwork(true);
     setStatus(
       scope
         ? `Fingerprinting ${scope.length.toLocaleString()} selected track${scope.length === 1 ? "" : "s"} before tag preview...`
         : "Fingerprinting the default tool target before tag preview...",
     );
     await onRunAcousticFingerprintPass(scope, acousticOverwrite, acousticLimit);
-    setStatus("Building MusicBrainz tag preview from fingerprints...");
-    await onPreviewAutoTag("track", true, true, scope);
+    setStatus("Building AcoustID fingerprint-only tag preview...");
+    await onPreviewAutoTag("track", fingerprintTagMissingOnly, true, scope, { fingerprintOnly: true });
+  }
+
+  async function applyAcousticFingerprintTags() {
+    if (!fingerprintAutoTagIds.length) {
+      setStatus("No accepted fingerprint tag changes to apply.");
+      return;
+    }
+    setAutoTagPreviewSource("fingerprint");
+    setStatus(
+      `Applying fingerprint tags to ${fingerprintAutoTagIds.length.toLocaleString()} track${fingerprintAutoTagIds.length === 1 ? "" : "s"}...`,
+    );
+    await onApplyAutoTag(
+      "track",
+      fingerprintTagMissingOnly,
+      true,
+      fingerprintTagSaveArtwork,
+      fingerprintTagWriteToFiles,
+      fingerprintAutoTagIds,
+      { fingerprintOnly: true },
+    );
   }
 
   function autoTagFieldSummary(preview: NonNullable<typeof autoTagPreview>["previews"][number]): string {
     if (preview.error) {
       return preview.error;
     }
+    if (preview.applied && preview.artwork_saved) {
+      return "Applied tags and saved cover";
+    }
+    if (preview.applied) {
+      return "Applied tags; library rows refreshed";
+    }
+    if (preview.artwork_saved) {
+      return "Cover saved";
+    }
     if (!preview.changed_fields.length) {
       return preview.artwork_url ? "Artwork match only" : "Matched; no field changes";
     }
     return preview.changed_fields.join(", ");
+  }
+
+  function autoTagChangeDetails(preview: NonNullable<typeof autoTagPreview>["previews"][number]) {
+    return preview.changed_fields
+      .slice(0, 5)
+      .map((field) => {
+        const current = preview.current[field];
+        const proposed = preview.proposed[field];
+        if (preview.applied) {
+          return `${field.replace("_", " ")}: updated to ${previewLabel(proposed)}`;
+        }
+        return `${field.replace("_", " ")}: ${String(current ?? "(empty)")} -> ${String(proposed ?? "(empty)")}`;
+      });
   }
 
   return (
@@ -961,284 +1047,20 @@ export function FileManagementPage({
             </div>
           )}
 
-          {showTool("folderWatch") && (
-          <DisclosureSection title="Folder Watch" description="Background change detection with a review step before the database changes">
-            <div className="grid gap-4 text-sm text-neutral-200">
-              <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-center">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span
-                      className={`rounded border px-2 py-1 text-xs uppercase ${
-                        folderWatchStatus?.enabled
-                          ? "border-moss/40 bg-moss/10 text-moss"
-                          : "border-line bg-panel text-muted"
-                      }`}
-                    >
-                      {folderWatchStatus?.enabled ? "watching" : "stopped"}
-                    </span>
-                    <span className="rounded border border-line bg-panel px-2 py-1 text-xs uppercase text-muted">
-                      {folderWatchStatus?.status ?? "idle"}
-                    </span>
-                    <span className="rounded border border-line bg-panel px-2 py-1 text-xs uppercase text-muted">
-                      {folderWatchStatus?.pending_count ?? 0} pending
-                    </span>
-                  </div>
-                  <div className="mt-2 truncate text-xs text-muted" title={folderWatchStatus?.folder_path ?? folderPath}>
-                    {(folderWatchStatus?.folder_path ?? folderPath) || "No watched folder yet"}
-                  </div>
-                  {folderWatchStatus?.error && <div className="mt-2 text-xs text-ember">{folderWatchStatus.error}</div>}
-                </div>
-                <div className="grid gap-2 sm:grid-cols-[130px_auto] sm:items-end">
-                  <NumberField
-                    label="Seconds"
-                    min={10}
-                    max={3600}
-                    value={watchIntervalSeconds}
-                    onChange={setWatchIntervalSeconds}
-                  />
-                  <div className="flex flex-wrap gap-2">
-                    <button className="secondary-button" type="button" onClick={() => void onRefreshFolderWatch()}>
-                      <RefreshCw size={15} />
-                      Check Now
-                    </button>
-                    <button className="secondary-button" type="button" onClick={() => void onStartFolderWatch(watchIntervalSeconds)}>
-                      <Eye size={15} />
-                      Watch
-                    </button>
-                    <button className="secondary-button" type="button" onClick={() => void onStopFolderWatch()}>
-                      Stop
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {activeFolderWatchNotifications.length > 0 && (
-                <div className="grid gap-2 rounded border border-moss/30 bg-moss/10 px-3 py-2">
-                  {activeFolderWatchNotifications.slice(-3).map((notification) => (
-                    <div key={notification.id} className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2 text-sm font-medium text-white">
-                          <Bell size={15} className="text-moss" />
-                          {notification.title}
-                        </div>
-                        <div className="truncate text-xs text-muted">{notification.message}</div>
-                      </div>
-                      <button
-                        className="secondary-button"
-                        type="button"
-                        onClick={() => void onAcknowledgeFolderWatchNotifications([notification.id])}
-                      >
-                        Dismiss
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <div className="grid gap-2 sm:grid-cols-4">
-                {(["added", "modified", "moved", "removed"] as const).map((kind) => (
-                  <div key={kind} className="rounded border border-line/70 bg-ink px-3 py-2">
-                    <div className="text-lg font-semibold text-white">{folderWatchStatus?.counts?.[kind] ?? 0}</div>
-                    <div className="text-xs uppercase text-muted">
-                      {kind === "modified" ? "updates" : kind}
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <button
-                  className="secondary-button"
-                  type="button"
-                  disabled={folderWatchChanges.length === 0}
-                  onClick={toggleAllFolderWatchChanges}
-                >
-                  <ListChecks size={15} />
-                  {acceptedFolderWatchIds.size === folderWatchChanges.length ? "Clear" : "Select All"}
-                </button>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs text-muted">
-                    {selectedWatchCount.toLocaleString()} selected
-                    {folderWatchStatus && folderWatchStatus.pending_count > folderWatchChanges.length
-                      ? `, showing ${folderWatchChanges.length.toLocaleString()} of ${folderWatchStatus.pending_count.toLocaleString()}`
-                      : ""}
-                  </span>
-                  <button
-                    className="primary-button"
-                    type="button"
-                    disabled={selectedWatchCount === 0}
-                    onClick={() => void onApplyFolderWatch(Array.from(acceptedFolderWatchIds), false)}
-                  >
-                    <CheckCircle2 size={15} />
-                    Apply Selected
-                  </button>
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    disabled={(folderWatchStatus?.pending_count ?? 0) === 0}
-                    onClick={() => void onApplyFolderWatch([], true)}
-                  >
-                    Apply All
-                  </button>
-                </div>
-              </div>
-
-              {folderWatchChanges.length > 0 ? (
-                <div className="max-h-96 overflow-auto rounded border border-line/70">
-                  <table className="w-full min-w-[820px] border-collapse text-left text-xs">
-                    <thead className="sticky top-0 bg-panel text-[11px] uppercase text-muted">
-                      <tr>
-                        <th className="w-10 px-2 py-2">
-                          <span className="sr-only">Apply</span>
-                        </th>
-                        <th className="px-2 py-2">Change</th>
-                        <th className="px-2 py-2">Track</th>
-                        <th className="px-2 py-2">Path</th>
-                        <th className="px-2 py-2">Detail</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {folderWatchChanges.map((change) => (
-                        <tr key={change.id} className="border-t border-line/60 bg-ink/70">
-                          <td className="px-2 py-2 align-top">
-                            <input
-                              type="checkbox"
-                              className="h-4 w-4 accent-moss"
-                              checked={acceptedFolderWatchIds.has(change.id)}
-                              onChange={() => toggleFolderWatchChange(change.id)}
-                            />
-                          </td>
-                          <td className="whitespace-nowrap px-2 py-2 align-top font-medium text-neutral-200">
-                            {folderWatchTypeLabel(change)}
-                          </td>
-                          <td className="max-w-56 px-2 py-2 align-top">
-                            <div className="truncate text-neutral-200" title={folderWatchTrackLabel(change)}>
-                              {folderWatchTrackLabel(change)}
-                            </div>
-                            {change.album && <div className="truncate text-muted">{change.album}</div>}
-                          </td>
-                          <td className="max-w-80 px-2 py-2 align-top">
-                            {change.change_type === "moved" ? (
-                              <div className="grid gap-1">
-                                <div className="truncate text-muted" title={change.old_path ?? undefined}>
-                                  {change.old_path}
-                                </div>
-                                <div className="truncate text-neutral-200" title={change.new_path ?? undefined}>
-                                  {change.new_path}
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="truncate text-muted" title={change.new_path ?? change.old_path ?? undefined}>
-                                {change.new_path ?? change.old_path}
-                              </div>
-                            )}
-                          </td>
-                          <td className="max-w-56 px-2 py-2 align-top">
-                            <div className="truncate text-muted">{change.summary}</div>
-                            {change.previous_modified_at && change.file_modified_at && (
-                              <div className="truncate text-muted">
-                                {change.previous_modified_at} {"->"} {change.file_modified_at}
-                              </div>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="rounded border border-line/70 bg-ink px-3 py-6 text-center text-xs text-muted">
-                  No pending folder changes. The watcher will keep checking in the background while it is enabled.
-                </div>
-              )}
-            </div>
-          </DisclosureSection>
-          )}
-
-          {showTool("artworkCollisions") && (
-          <DisclosureSection title="Artwork Collision Repair" description="Find shared folder covers that make multiple albums show the same artwork">
-            <div className="grid gap-4 text-sm text-neutral-200">
-              <div className="grid gap-3 md:grid-cols-[140px_1fr] md:items-end">
-                <NumberField
-                  label="Album Limit"
-                  min={1}
-                  max={2000}
-                  value={artworkCollisionLimit}
-                  onChange={setArtworkCollisionLimit}
-                />
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="text-xs text-muted">
-                    Preview creates no files. Repair writes album-specific sidecar images and selects them in the album database row.
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <button className="secondary-button" type="button" disabled={artworkCollisionBusy} onClick={() => void previewArtworkCollisionRepair()}>
-                      <Eye size={15} />
-                      Preview
-                    </button>
-                    <button
-                      className="primary-button"
-                      type="button"
-                      disabled={artworkCollisionBusy || (artworkCollisionPreview?.total ?? 0) === 0}
-                      onClick={() => void applyArtworkCollisionRepairs()}
-                    >
-                      <Image size={15} />
-                      Repair
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {artworkCollisionPreview && (
-                <div className="rounded border border-line bg-ink p-3 text-xs">
-                  <div className="mb-3 grid gap-2 sm:grid-cols-3">
-                    <div>
-                      <div className="font-semibold text-white">{artworkCollisionPreview.total.toLocaleString()}</div>
-                      <div className="text-muted">Collisions</div>
-                    </div>
-                    <div>
-                      <div className="font-semibold text-moss">{artworkCollisionPreview.repaired.toLocaleString()}</div>
-                      <div className="text-muted">Repaired</div>
-                    </div>
-                    <div>
-                      <div className="font-semibold text-ember">{artworkCollisionPreview.errors.length.toLocaleString()}</div>
-                      <div className="text-muted">Errors</div>
-                    </div>
-                  </div>
-                  <div className="grid max-h-80 gap-1 overflow-auto pr-1">
-                    {artworkCollisionPreview.issues.slice(0, 80).map((issue) => (
-                      <div key={`${issue.album_id}-${issue.proposed_path}`} className="grid gap-1 rounded bg-panel px-2 py-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="truncate font-medium text-neutral-200">
-                            {issue.album_artist ? `${issue.album_artist} - ` : ""}{issue.album ?? `Album ${issue.album_id}`}
-                          </span>
-                          <span className="rounded border border-line px-1.5 py-0.5 text-[10px] uppercase text-muted">
-                            {issue.source}
-                          </span>
-                          {issue.repaired && (
-                            <span className="rounded border border-moss/40 bg-moss/10 px-1.5 py-0.5 text-[10px] uppercase text-moss">
-                              repaired
-                            </span>
-                          )}
-                        </div>
-                        <div className="truncate text-muted" title={issue.folder}>{issue.folder}</div>
-                        <div className="truncate text-muted" title={issue.shared_artwork_path ?? undefined}>
-                          Shared: {issue.shared_artwork_path ?? "embedded"}
-                        </div>
-                        <div className={issue.error ? "truncate text-ember" : "truncate text-moss"} title={issue.proposed_path}>
-                          {issue.error ? `Error: ${issue.error}` : `Album cover: ${issue.proposed_path}`}
-                        </div>
-                      </div>
-                    ))}
-                    {artworkCollisionPreview.issues.length === 0 && (
-                      <div className="rounded border border-line/70 bg-panel px-3 py-6 text-center text-muted">
-                        No folder-level artwork collisions found.
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          </DisclosureSection>
+          {showTool("optionalDependencies") && (
+            <OptionalDependenciesSection
+              audioConversionSetup={audioConversionSetup}
+              clapStatus={clapStatus}
+              clapInstallProgress={clapInstallProgress}
+              isClapInstalling={isClapInstalling}
+              defaultOpen={initialFocusToolId === "optionalDependencies"}
+              openSignal={openSignalFor("optionalDependencies") ?? undefined}
+              onRefreshAudioConversionSetup={onRefreshAudioConversionSetup}
+              onInstallAudioConversionFfmpeg={onInstallAudioConversionFfmpeg}
+              onRefreshClapStatus={onRefreshClapStatus}
+              onInstallClap={onInstallClap}
+              setStatus={setStatus}
+            />
           )}
 
           {showTool("filenameTags") && (
@@ -1542,6 +1364,143 @@ export function FileManagementPage({
           </DisclosureSection>
           )}
 
+          {showTool("writeMetadataFiles") && (
+          <DisclosureSection title="Write Database Tags To Files" description="Preview SQLite values, then write them into supported local audio tags">
+            <div className="grid gap-4 text-sm text-neutral-200">
+              <div className="rounded border border-line/70 bg-ink px-3 py-2 text-xs text-muted">
+                This is the reverse of Sync File Metadata. It writes FLAC Cafe's current library values into files, so use Preview first.
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-ink px-3 py-2">
+                  <span>
+                    <span className="block text-neutral-200">Write editable metadata</span>
+                    <span className="text-xs text-muted">Title, artist, album, album artist, track/disc, genre, and year.</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 accent-moss"
+                    checked={fileWriteIncludeMetadata}
+                    onChange={(event) => setFileWriteIncludeMetadata(event.target.checked)}
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-ink px-3 py-2">
+                  <span>
+                    <span className="block text-neutral-200">Write ratings</span>
+                    <span className="text-xs text-muted">Stores the SQLite star rating in supported file rating tags.</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 accent-ember"
+                    checked={fileWriteIncludeRatings}
+                    onChange={(event) => setFileWriteIncludeRatings(event.target.checked)}
+                  />
+                </label>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="text-xs text-muted">
+                  {scopedTrackIds.length
+                    ? `${scopedTrackIds.length.toLocaleString()} scoped track${scopedTrackIds.length === 1 ? "" : "s"}`
+                    : "Blank scope previews the 500 most recently edited music tracks"}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={fileWriteBusy}
+                    onClick={() => void previewDatabaseFileWrites(false)}
+                  >
+                    <Eye size={15} />
+                    Preview File Writes
+                  </button>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    disabled={fileWriteBusy || !fileWritePreview || pendingFileWriteIds().length === 0}
+                    onClick={() => void previewDatabaseFileWrites(true)}
+                    title={
+                      !fileWritePreview
+                        ? "Preview file writes first"
+                        : pendingFileWriteIds().length === 0
+                          ? "No pending file tag changes"
+                          : "Write pending SQLite values into file tags"
+                    }
+                  >
+                    <Save size={15} />
+                    Write Changed To Files
+                  </button>
+                </div>
+              </div>
+              {fileWritePreview && (
+                <div className="rounded border border-line bg-ink p-3 text-xs">
+                  <div className="mb-3 grid gap-2 sm:grid-cols-4">
+                    <div>
+                      <div className="font-semibold text-white">{fileWritePreview.total.toLocaleString()}</div>
+                      <div className="text-muted">Checked</div>
+                    </div>
+                    <div>
+                      <div className="font-semibold text-moss">{fileWritePreview.changed.toLocaleString()}</div>
+                      <div className="text-muted">Different</div>
+                    </div>
+                    <div>
+                      <div className="font-semibold text-ember">{fileWritePreview.applied.toLocaleString()}</div>
+                      <div className="text-muted">Written</div>
+                    </div>
+                    <div>
+                      <div className="font-semibold text-white">{pendingFileWriteIds().length.toLocaleString()}</div>
+                      <div className="text-muted">Pending</div>
+                    </div>
+                  </div>
+                  {fileWritePreview.changed === 0 && fileWritePreview.errors.length === 0 && (
+                    <div className="mb-3 rounded border border-moss/30 bg-moss/10 px-3 py-2 text-moss">
+                      These files already match the SQLite metadata for the selected options.
+                    </div>
+                  )}
+                  <div className="grid max-h-80 gap-1 overflow-auto pr-1">
+                    {fileWritePreview.previews.slice(0, 80).map((preview) => (
+                      <div key={preview.track_id} className="grid gap-1 rounded bg-panel px-2 py-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="min-w-0 truncate font-medium text-neutral-200">
+                            {preview.title || preview.path.split(/[\\/]/).pop()}
+                          </div>
+                          <span className={`rounded border px-1.5 py-0.5 text-[10px] uppercase ${
+                            preview.error
+                              ? "border-ember/40 text-ember"
+                              : preview.applied
+                                ? "border-moss/40 text-moss"
+                                : preview.changed_fields.length
+                                  ? "border-line text-muted"
+                                  : "border-line/60 text-muted"
+                          }`}
+                          >
+                            {preview.error ? "error" : preview.applied ? "written" : preview.changed_fields.length ? "pending" : "matched"}
+                          </span>
+                        </div>
+                        <div className="truncate text-muted">{preview.artist || preview.path}</div>
+                        <div className={preview.error ? "truncate text-ember" : preview.changed_fields.length ? "text-muted" : "truncate text-moss"}>
+                          {preview.error ??
+                            (preview.changed_fields.length
+                              ? fileWriteChangeDetails(preview).join("; ")
+                              : "No file tag changes")}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {fileWritePreview.errors.length > 0 && (
+                    <details className="mt-3 text-xs text-ember">
+                      <summary>File write errors</summary>
+                      <div className="mt-2 grid gap-1">
+                        {fileWritePreview.errors.slice(0, 20).map((error) => (
+                          <div key={error} className="truncate">{error}</div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                </div>
+              )}
+            </div>
+          </DisclosureSection>
+          )}
+
           {showTool("musicBrainz") && (
           <DisclosureSection
             title="MusicBrainz Auto-Tag"
@@ -1550,23 +1509,23 @@ export function FileManagementPage({
             openSignal={openSignalFor("musicBrainz")}
           >
             <div className="grid gap-4 text-sm text-neutral-200">
-              <div className="grid gap-3 md:grid-cols-2">
-                <label className="grid gap-2">
-                  <span className="text-xs uppercase text-muted">Match Mode</span>
-                  <select
-                    className="h-9 rounded border border-line bg-ink px-3 text-white outline-none ring-moss/40 focus:ring-2"
-                    value={autoTagMode}
-                    onChange={(event) => setAutoTagMode(event.target.value as "album" | "track")}
-                  >
-                    <option value="album">Album / release</option>
-                    <option value="track">Individual tracks</option>
-                  </select>
-                </label>
-                <div className="grid gap-2 sm:grid-cols-3">
-                  <label className="grid gap-1 rounded border border-line/70 bg-ink px-3 py-2">
+              <div className="grid gap-3">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="grid gap-2">
+                    <span className="text-xs uppercase text-muted">Match Mode</span>
+                    <select
+                      className="h-9 rounded border border-line bg-ink px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                      value={autoTagMode}
+                      onChange={(event) => setAutoTagMode(event.target.value as "album" | "track")}
+                    >
+                      <option value="album">Album / release</option>
+                      <option value="track">Individual tracks</option>
+                    </select>
+                  </label>
+                  <label className="grid gap-2">
                     <span className="text-xs uppercase text-muted">Write Mode</span>
                     <select
-                      className="h-7 rounded border border-line/70 bg-panel px-2 text-sm text-white outline-none ring-moss/40 focus:ring-2"
+                      className="h-9 rounded border border-line bg-ink px-3 text-white outline-none ring-moss/40 focus:ring-2"
                       value={autoTagMissingOnly ? "missing" : "replace"}
                       onChange={(event) => setAutoTagMissingOnly(event.target.value === "missing")}
                     >
@@ -1574,6 +1533,8 @@ export function FileManagementPage({
                       <option value="replace">Replace metadata</option>
                     </select>
                   </label>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-3">
                   <label className="flex items-center justify-between gap-3 rounded border border-line/70 bg-ink px-3 py-2">
                     <span className="text-muted">Find artwork</span>
                     <input
@@ -1592,13 +1553,25 @@ export function FileManagementPage({
                       onChange={(event) => setAutoTagSaveArtwork(event.target.checked)}
                     />
                   </label>
+                  <label className={`flex items-center justify-between gap-3 rounded border px-3 py-2 ${autoTagWriteToFiles ? "border-ember/40 bg-ember/10" : "border-line/70 bg-ink"}`}>
+                    <span>
+                      <span className="block text-neutral-200">Write tags to files</span>
+                      <span className="block text-xs text-muted">SQLite is always updated.</span>
+                    </span>
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-ember"
+                      checked={autoTagWriteToFiles}
+                      onChange={(event) => setAutoTagWriteToFiles(event.target.checked)}
+                    />
+                  </label>
                 </div>
               </div>
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="text-xs text-muted">
                   {scopedTrackIds.length
                     ? `${scopedTrackIds.length.toLocaleString()} scoped track${scopedTrackIds.length === 1 ? "" : "s"}`
-                    : "Blank scope uses recently added tracks with missing metadata"}
+                    : "Blank scope uses recently added tracks; fill-empty mode limits it to incomplete metadata"}
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <button
@@ -1641,6 +1614,11 @@ export function FileManagementPage({
                       <div className="text-muted">Accepted</div>
                     </div>
                   </div>
+                  {autoTagPreview.matched === 0 && (
+                    <div className="mb-3 rounded border border-ember/40 bg-ember/10 px-3 py-2 text-ember">
+                      No MusicBrainz matches were found. For singles or tracks with a wrong album tag, try Individual tracks and Replace metadata.
+                    </div>
+                  )}
                   <div className="grid max-h-96 gap-1 overflow-auto pr-1">
                     {autoTagPreview.previews.slice(0, 80).map((preview) => (
                       <label key={preview.track_id} className="grid grid-cols-[auto_52px_1fr] gap-3 rounded bg-panel px-2 py-2">
@@ -1648,7 +1626,7 @@ export function FileManagementPage({
                           type="checkbox"
                           className="mt-4 h-4 w-4 accent-moss"
                           checked={acceptedAutoTagTrackIds.has(preview.track_id)}
-                          disabled={Boolean(preview.error) || (preview.changed_fields.length === 0 && !preview.artwork_url)}
+                          disabled={Boolean(preview.error) || (preview.changed_fields.length === 0 && !preview.artwork_url && !preview.applied && !preview.artwork_saved)}
                           onChange={() => toggleAutoTagTrack(preview.track_id)}
                         />
                         <div className="h-12 w-12 overflow-hidden rounded border border-line bg-ink">
@@ -1669,6 +1647,11 @@ export function FileManagementPage({
                             <span className="rounded border border-line px-1.5 py-0.5 text-[10px] uppercase text-muted">
                               {preview.match_type}
                             </span>
+                            {(preview.applied || preview.artwork_saved) && (
+                              <span className="rounded border border-moss/40 bg-moss/10 px-1.5 py-0.5 text-[10px] uppercase text-moss">
+                                Applied
+                              </span>
+                            )}
                           </div>
                           <div className="truncate text-muted">
                             {[preview.proposed.artist, preview.proposed.album].filter(Boolean).map(String).join(" - ")}
@@ -1676,6 +1659,13 @@ export function FileManagementPage({
                           <div className={preview.error ? "truncate text-ember" : "truncate text-moss"}>
                             {autoTagFieldSummary(preview)}
                           </div>
+                          {preview.changed_fields.length > 0 && (
+                            <div className="mt-1 grid gap-0.5 text-[11px] text-muted">
+                              {autoTagChangeDetails(preview).map((detail) => (
+                                <div key={detail} className="truncate">{detail}</div>
+                              ))}
+                            </div>
+                          )}
                           {preview.release_title && (
                             <div className="truncate text-muted">
                               Release: {preview.release_title}
@@ -1812,8 +1802,21 @@ export function FileManagementPage({
           </DisclosureSection>
           )}
 
+          {showTool("volumeTags") && (
+          <VolumeTagsSection
+            scopedTrackIds={scopedTrackIds}
+            ffmpegSetup={audioConversionSetup}
+            defaultOpen={initialFocusToolId === "volumeTags"}
+            openSignal={openSignalFor("volumeTags") ?? undefined}
+            onRefreshFfmpeg={onRefreshAudioConversionSetup}
+            onInstallFfmpeg={onInstallAudioConversionFfmpeg}
+            onLibraryChanged={onAdvancedTagLibraryChanged}
+            setStatus={setStatus}
+          />
+          )}
+
           {showTool("organizer") && (
-          <DisclosureSection title="File Organizer" description="Preview tag-based moves and export a review report">
+          <DisclosureSection title="File Organizer" description="Preview tag-based renames/reorganization and export a review report">
             <div className="grid gap-4 text-sm text-neutral-200">
               <label className="grid gap-2">
                 <span className="text-xs uppercase text-muted">Template</span>
@@ -1857,21 +1860,21 @@ export function FileManagementPage({
               <div className="flex flex-wrap gap-2">
                 <button className="secondary-button" type="button" onClick={() => void onPreviewFileOrganization(organizeTemplate, organizeBaseFolder, organizationOptions())}>
                   <Eye size={15} />
-                  Preview Moves
+                  Preview Renames
                 </button>
                 <button className="secondary-button" type="button" onClick={() => void onExportFileOrganizationReport(organizeTemplate, organizeBaseFolder, organizationOptions())}>
                   <Download size={15} />
-                  Export Report
+                  Export Rename Report
                 </button>
-                <button className="primary-button" type="button" onClick={() => void onApplyFileOrganization(organizeTemplate, organizeBaseFolder, organizationOptions())}>
+                <button className="primary-button" type="button" onClick={() => void applyFileOrganization()}>
                   <FolderOpen size={15} />
-                  Move Files
+                  Rename/Reorganize
                 </button>
               </div>
               {fileOrganizationPreview && (
                 <div className="rounded border border-line bg-ink p-3 text-xs">
                   <div className="mb-2 text-neutral-200">
-                    {fileOrganizationPreview.changed_count.toLocaleString()} possible moves, {fileOrganizationPreview.applied.toLocaleString()} applied
+                    {fileOrganizationPreview.changed_count.toLocaleString()} possible renames, {fileOrganizationPreview.applied.toLocaleString()} applied
                     {fileOrganizationPreview.removed_empty_folders
                       ? `, ${fileOrganizationPreview.removed_empty_folders.toLocaleString()} empty folders removed`
                       : ""}
@@ -2143,7 +2146,14 @@ export function FileManagementPage({
           </DisclosureSection>
           )}
 
-          {showTool("cdRipper") && <CdRipperSection setStatus={setStatus} />}
+          {showTool("cdRipper") && (
+          <CdRipperSection
+            defaultTargetFolder={defaultCdRipTarget(folderPath)}
+            onBrowseTarget={onBrowseCdRipTarget}
+            onPlayPreviewTrack={onPlayCdPreviewTrack}
+            setStatus={setStatus}
+          />
+          )}
 
           {showTool("audioConversion") && (
           <AudioConversionSection
@@ -2151,8 +2161,9 @@ export function FileManagementPage({
             setup={audioConversionSetup}
             preview={audioConversionPreview}
             progress={audioConversionProgress}
-            onRefreshSetup={onRefreshAudioConversionSetup}
-            onSaveSetup={onSaveAudioConversionSetup}
+            defaultTargetFolder={defaultAudioConversionTarget(folderPath)}
+            onBrowseTarget={onBrowseAudioConversionTarget}
+            onOpenOptionalDependencies={openOptionalDependenciesSection}
             onPreview={onPreviewAudioConversion}
             onStart={onStartAudioConversion}
             onCancel={onCancelAudioConversion}
@@ -2379,7 +2390,7 @@ export function FileManagementPage({
                   onClick={() => void onRevealTracksByIds(duplicateScopeForAction())}
                 >
                   <FolderOpen size={15} />
-                  Reveal Selected
+                  Reveal One
                 </button>
                 <button
                   className="secondary-button"
@@ -2434,7 +2445,7 @@ export function FileManagementPage({
           {showTool("acousticFingerprints") && (
           <DisclosureSection
             title="Acoustic Fingerprints"
-            description="Optional Chromaprint fpcalc pass for stronger duplicate matching and fingerprint-assisted tagging"
+            description="Chromaprint fpcalc pass for duplicate matching and optional AcoustID-assisted tagging"
             defaultOpen={initialFocusToolId === "acousticFingerprints"}
             openSignal={openSignalFor("acousticFingerprints")}
           >
@@ -2448,7 +2459,24 @@ export function FileManagementPage({
                       : "Tool default target"}
                   </div>
                   <div className="mt-1 text-xs text-muted">
-                    Run fingerprints first, then build a MusicBrainz preview from the stronger match data.
+                    Run fingerprints first. With an AcoustID key in Settings, Auto-Tag can identify tracks from audio.
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-3">
+                    <button
+                      className="inline-flex items-center gap-1 text-xs text-moss hover:text-white"
+                      type="button"
+                      onClick={onOpenApiKeysSettings}
+                    >
+                      Manage API Keys
+                    </button>
+                    <button
+                      className="inline-flex items-center gap-1 text-xs text-moss hover:text-white"
+                      type="button"
+                      onClick={() => void openExternalUrl(ACOUSTID_API_KEY_URL, setStatus)}
+                    >
+                      Get AcoustID key
+                      <ExternalLink size={12} />
+                    </button>
                   </div>
                 </div>
                 <NumberField label="Fingerprint Limit" value={acousticLimit} min={1} max={10000} onChange={setAcousticLimit} />
@@ -2464,6 +2492,35 @@ export function FileManagementPage({
                   <span className="text-muted">Overwrite existing fingerprints</span>
                 </label>
                 <div className="flex flex-wrap gap-2">
+                  <label className="flex items-center gap-2 rounded border border-line/70 bg-ink px-3 py-2 text-xs text-muted">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-moss"
+                      checked={!fingerprintTagMissingOnly}
+                      onChange={(event) => setFingerprintTagMissingOnly(!event.target.checked)}
+                    />
+                    Replace metadata
+                  </label>
+                  <label className="flex items-center gap-2 rounded border border-line/70 bg-ink px-3 py-2 text-xs text-muted">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-ember"
+                      checked={fingerprintTagSaveArtwork}
+                      onChange={(event) => setFingerprintTagSaveArtwork(event.target.checked)}
+                    />
+                    Save cover
+                  </label>
+                  <label className="flex items-center gap-2 rounded border border-line/70 bg-ink px-3 py-2 text-xs text-muted">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-ember"
+                      checked={fingerprintTagWriteToFiles}
+                      onChange={(event) => setFingerprintTagWriteToFiles(event.target.checked)}
+                    />
+                    Write files
+                  </label>
+                </div>
+                <div className="flex flex-wrap gap-2">
                   <button
                     className="secondary-button"
                     type="button"
@@ -2478,10 +2535,91 @@ export function FileManagementPage({
                     onClick={() => void previewAcousticFingerprintTags()}
                   >
                     <Wand2 size={15} />
-                    Fingerprint Tag Preview
+                    Preview Fingerprint Tags
+                  </button>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    disabled={fingerprintAutoTagIds.length === 0}
+                    onClick={() => void applyAcousticFingerprintTags()}
+                  >
+                    <Save size={15} />
+                    Apply Accepted Fingerprint Tags
                   </button>
                 </div>
               </div>
+              <div className="rounded border border-line/70 bg-ink px-3 py-2 text-xs text-muted">
+                Fingerprint tag preview is AcoustID-only. It will not fall back to title, artist, or album text search.
+              </div>
+              {autoTagPreviewSource === "fingerprint" && autoTagPreview && (
+                <div className="rounded border border-line bg-ink p-3 text-xs">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="font-semibold text-white">Fingerprint tag preview</div>
+                      <div className="mt-1 text-muted">
+                        {autoTagPreview.matched.toLocaleString()} matched, {autoTagPreview.changed.toLocaleString()} with metadata changes,{" "}
+                        {acceptedAutoTagTrackIds.size.toLocaleString()} accepted
+                      </div>
+                    </div>
+                    <button
+                      className="primary-button h-8"
+                      type="button"
+                      disabled={fingerprintAutoTagIds.length === 0}
+                      onClick={() => void applyAcousticFingerprintTags()}
+                    >
+                      <Save size={14} />
+                      Apply Accepted
+                    </button>
+                  </div>
+                  {autoTagPreview.matched === 0 && (
+                    <div className="mb-3 rounded border border-ember/40 bg-ember/10 px-3 py-2 text-ember">
+                      No AcoustID fingerprint matches were found. Confirm the API key is saved, then run Analyze Fingerprints.
+                    </div>
+                  )}
+                  <div className="grid max-h-64 gap-1 overflow-auto pr-1">
+                    {autoTagPreview.previews.slice(0, 50).map((preview) => (
+                      <label key={preview.track_id} className="grid grid-cols-[auto_1fr_auto] gap-3 rounded bg-panel px-2 py-2">
+                        <input
+                          type="checkbox"
+                          className="mt-1 h-4 w-4 accent-moss"
+                          checked={acceptedAutoTagTrackIds.has(preview.track_id)}
+                          disabled={Boolean(preview.error) || (preview.changed_fields.length === 0 && !preview.artwork_url && !preview.applied && !preview.artwork_saved)}
+                          onChange={() => toggleAutoTagTrack(preview.track_id)}
+                        />
+                        <div className="min-w-0">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <span className="truncate font-medium text-neutral-200">
+                              {preview.proposed.title ? String(preview.proposed.title) : preview.path.split(/[\\/]/).pop()}
+                            </span>
+                            {(preview.applied || preview.artwork_saved) && (
+                              <span className="shrink-0 rounded border border-moss/40 bg-moss/10 px-1.5 py-0.5 text-[10px] uppercase text-moss">
+                                Applied
+                              </span>
+                            )}
+                          </div>
+                          <div className="truncate text-muted">
+                            {[preview.proposed.artist, preview.proposed.album].filter(Boolean).map(String).join(" - ")}
+                          </div>
+                          <div className={preview.error ? "truncate text-ember" : "truncate text-moss"}>
+                            {autoTagFieldSummary(preview)}
+                          </div>
+                          {preview.changed_fields.length > 0 && (
+                            <div className="mt-1 grid gap-0.5 text-[11px] text-muted">
+                              {autoTagChangeDetails(preview).map((detail) => (
+                                <div key={detail} className="truncate">{detail}</div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <div className="w-24 text-right text-[10px] uppercase text-muted">
+                          <div>{(preview.confidence * 100).toFixed(0)}%</div>
+                          <div className="truncate">{preview.source.includes("AcoustID") ? "AcoustID" : preview.source}</div>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
               {acousticFingerprintResult && (
                 <div className="rounded border border-line bg-ink px-3 py-2 text-xs text-muted">
                   <div>
@@ -2491,6 +2629,11 @@ export function FileManagementPage({
                   {acousticFingerprintResult.errors.map((error) => (
                     <div key={error} className="truncate text-ember">
                       {error}
+                    </div>
+                  ))}
+                  {acousticFingerprintResult.skipped_reasons?.map((reason) => (
+                    <div key={reason} className="truncate text-muted">
+                      {reason}
                     </div>
                   ))}
                 </div>
@@ -2526,14 +2669,10 @@ export function FileManagementPage({
                   <button className="secondary-button h-9" type="button" onClick={() => void onSaveChromaprintSetup(null)}>
                     Clear
                   </button>
-                  <button className="primary-button h-9" type="button" onClick={() => void onInstallChromaprintTool()}>
-                    <Download size={15} />
-                    Download
-                  </button>
                 </div>
                 {chromaprintSetup?.tool_directory && (
                   <div className="truncate">
-                    Portable option: put fpcalc.exe in {chromaprintSetup.tool_directory}; PATH is optional.
+                    Bundled by default. Custom option: put fpcalc.exe in {chromaprintSetup.tool_directory}; PATH is optional.
                   </div>
                 )}
                 {chromaprintSetup?.errors.map((error) => (
@@ -2541,12 +2680,6 @@ export function FileManagementPage({
                     {error}
                   </div>
                 ))}
-                {chromaprintInstallResult && (
-                  <div className={chromaprintInstallResult.installed ? "text-moss" : "text-ember"}>
-                    {chromaprintInstallResult.message}
-                    {chromaprintInstallResult.fpcalc_path ? ` ${chromaprintInstallResult.fpcalc_path}` : ""}
-                  </div>
-                )}
                 </div>
               </details>
             </div>

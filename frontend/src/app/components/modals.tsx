@@ -4,6 +4,8 @@ import {
   X,
 } from "lucide-react";
 import {
+  useEffect,
+  useRef,
   useState,
 } from "react";
 
@@ -19,16 +21,18 @@ import {
   supportsFileTagWriting,
 } from "../shared";
 
-type EditableMetadataKey = keyof Omit<TrackMetadataUpdate, "write_to_file">;
+export type EditableMetadataKey = keyof Omit<TrackMetadataUpdate, "write_to_file">;
 
 export function MetadataEditorModal({
   track,
+  initialField,
   writeToFiles,
   onWriteToFilesChange,
   onClose,
   onSave,
 }: {
   track: Track;
+  initialField?: EditableMetadataKey | null;
   writeToFiles: boolean;
   onWriteToFilesChange: (value: boolean) => void;
   onClose: () => void;
@@ -44,6 +48,19 @@ export function MetadataEditorModal({
     genre: track.genre ?? "",
     year: track.year?.toString() ?? "",
   });
+  const inputRefs = useRef<Partial<Record<EditableMetadataKey, HTMLInputElement | null>>>({});
+
+  useEffect(() => {
+    if (!initialField) {
+      return;
+    }
+    const handle = window.setTimeout(() => {
+      const input = inputRefs.current[initialField];
+      input?.focus();
+      input?.select();
+    }, 0);
+    return () => window.clearTimeout(handle);
+  }, [track.id, initialField]);
 
   function textValue(value: string): string | null {
     const cleaned = value.trim();
@@ -117,7 +134,12 @@ export function MetadataEditorModal({
               <label key={field} className="grid gap-2 text-sm text-neutral-200">
                 <span className="text-xs uppercase text-muted">{label}</span>
                 <input
-                  className="h-9 rounded border border-line bg-ink px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                  ref={(element) => {
+                    inputRefs.current[field] = element;
+                  }}
+                  className={`h-9 rounded border border-line bg-ink px-3 text-white outline-none ring-moss/40 focus:ring-2 ${
+                    initialField === field ? "border-moss/60" : ""
+                  }`}
                   inputMode={field === "year" || field === "track_number" || field === "disc_number" ? "numeric" : undefined}
                   value={form[field]}
                   onChange={(event) => updateField(field, event.target.value)}
@@ -360,7 +382,7 @@ export function DeleteTrackDialog({
               onChange={(event) => setRememberChoice(event.target.checked)}
             />
           </label>
-          <div className="text-xs text-muted">Deleting the file cannot be undone.</div>
+          <div className="text-xs text-muted">Deleted files are sent to the Windows Recycle Bin when possible.</div>
         </div>
         <div className="flex justify-end border-t border-line px-5 py-4">
           <button className="secondary-button" type="button" onClick={onCancel}>
