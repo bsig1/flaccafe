@@ -19,6 +19,7 @@ REQUIRED_PYTHON = f"{sys.version_info.major}.{sys.version_info.minor}"
 
 _ACTIVATED_RUNTIME: Path | None = None
 _DLL_DIRECTORIES: list[object] = []
+_CURRENT_ENV_DLLS_ADDED = False
 
 
 @dataclass(frozen=True)
@@ -284,10 +285,12 @@ def add_current_python_dll_directories() -> None:
 
 
 def activate_ml_runtime(force: bool = False) -> bool:
-    global _ACTIVATED_RUNTIME
+    global _ACTIVATED_RUNTIME, _CURRENT_ENV_DLLS_ADDED
 
     if not use_managed_ml_runtime():
-        add_current_python_dll_directories()
+        if force or not _CURRENT_ENV_DLLS_ADDED:
+            add_current_python_dll_directories()
+            _CURRENT_ENV_DLLS_ADDED = True
         return False
 
     root = ml_runtime_dir()

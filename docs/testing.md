@@ -15,7 +15,7 @@ npm run build
 powershell -ExecutionPolicy Bypass -File scripts\installer_smoke.ps1
 ```
 
-Run the Tauri Rust check separately. Tauri validates bundled resources during `cargo check`, so build the Python sidecar first on a fresh clone or CI runner:
+Run the Tauri Rust check separately. Tauri validates bundled resources during `cargo check`, so build the Python sidecar folder first on a fresh clone or CI runner:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\build_backend_sidecar.ps1
@@ -42,6 +42,8 @@ powershell -ExecutionPolicy Bypass -File scripts\ci_installer_roundtrip.ps1 -All
 - `scripts/installer_smoke.ps1` checks installer config, resources, and WiX cleanup wiring without installing.
 - `scripts/ci_installer_roundtrip.ps1` installs the MSI, checks the packaged backend `/health` route, uninstalls, and verifies app data cleanup. It is destructive to `%LOCALAPPDATA%\FLAC Cafe`, so keep it to CI or disposable profiles.
 - `frontend/e2e/packaged-tauri.playwright.ts` can launch a packaged Tauri executable when `FLAC_CAFE_TAURI_EXE` points at one; otherwise it skips.
+
+For backend startup work, run `backend\desktop_backend.py` on a throwaway port and check `/health`; startup timing breadcrumbs are written to `%LOCALAPPDATA%\FLAC Cafe\logs\backend.log`.
 
 ## Useful Manual Smoke Test
 

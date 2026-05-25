@@ -33,7 +33,7 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../dist-backend/flaccafe-backend.exe": "flaccafe-backend.exe",
+      "../dist-backend/flaccafe-backend": "flaccafe-backend",
       "../backend/tools/chromaprint/fpcalc.exe": "tools/chromaprint/fpcalc.exe",
       "../backend/tools/cd-rip/cdda2wav.exe": "tools/cd-rip/cdda2wav.exe",
       "../backend/tools/cd-rip/cdrecord.exe": "tools/cd-rip/cdrecord.exe",

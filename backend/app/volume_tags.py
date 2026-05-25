@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .audio_conversion_jobs import creation_flags, resolve_ffmpeg_path
-from .database import connect, get_setting, rows_to_dicts
+from .database import connect, get_setting, invalidate_library_query_cache, rows_to_dicts
 from .file_tags import write_replaygain_tags
 from .scanner import path_key
 
@@ -361,6 +361,8 @@ def build_volume_tag_response(
             preview["applied"] = True
             applied += 1
 
+        if applied:
+            invalidate_library_query_cache(conn)
         conn.commit()
 
     return {

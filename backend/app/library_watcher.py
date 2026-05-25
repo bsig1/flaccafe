@@ -8,7 +8,7 @@ from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Any, Literal
 
-from .database import connect, get_setting, set_setting
+from .database import connect, get_setting, invalidate_library_query_cache, set_setting
 from .scanner import (
     ensure_album,
     file_fingerprint,
@@ -571,6 +571,8 @@ def apply_folder_watch_changes(
                 counts[outcome] += 1
             except Exception as exc:
                 errors.append(f"{change.summary}: {exc}")
+        if counts["inserted"] or counts["updated"] or counts["removed"] or counts["moved"]:
+            invalidate_library_query_cache(conn)
         delete_orphan_albums(conn)
         set_setting(conn, "library_path", folder)
         conn.commit()

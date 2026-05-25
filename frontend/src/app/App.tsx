@@ -81,6 +81,7 @@ import {
   fetchSettings,
   fetchStartupDiagnostics,
   fetchTrack,
+  fetchTracksBatch,
   fetchTracks,
   fetchTrackPage,
   generateAutoDj,
@@ -269,6 +270,17 @@ import {
   writeRememberedDeleteChoice,
 } from "./shared";
 
+const BACKEND_STARTUP_GRACE_MS = 18_000;
+const BACKEND_STARTUP_POLL_MS = 650;
+const DEFAULT_LIBRARY_SORT: SortState = { key: "artist", direction: "asc" };
+
+interface StartupLibrarySnapshot {
+  queryKey: string;
+  total: number;
+  tracks: Track[];
+  savedAt: string;
+}
+
 function normalizeLinkMatchValue(value: string | number | null | undefined) {
   return String(value ?? "").trim().toLowerCase();
 }
@@ -311,6 +323,82 @@ function uniqueFolderPaths(paths: string[]) {
 
 function sourceFolderKey(path: string) {
   return path.trim().replace(/[\\/]+$/, "").toLowerCase();
+}
+
+function libraryTrackQueryKey(
+  searchValue: string,
+  advancedFilters: AdvancedTrackSearchFilters,
+  sort: SortState,
+) {
+  const normalizedFilters = Object.entries(advancedFilters)
+    .filter(([, value]) => value !== undefined && value !== null && value !== "")
+    .sort(([left], [right]) => left.localeCompare(right));
+  return JSON.stringify({
+    search: searchValue.trim(),
+    advancedFilters: normalizedFilters,
+    sortBy: sort.key,
+    sortDirection: sort.direction,
+  });
+}
+
+function defaultLibraryTrackQueryKey() {
+  return libraryTrackQueryKey("", {}, DEFAULT_LIBRARY_SORT);
+}
+
+function compactStartupTrack(track: Track): Track {
+  return {
+    ...track,
+    analysis_embedding: null,
+  };
+}
+
+function readStartupLibrarySnapshot(): StartupLibrarySnapshot | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const raw = window.localStorage.getItem(storageKeys.startupLibrarySnapshot);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as Partial<StartupLibrarySnapshot>;
+    if (
+      parsed.queryKey !== defaultLibraryTrackQueryKey() ||
+      !Array.isArray(parsed.tracks) ||
+      typeof parsed.total !== "number"
+    ) {
+      return null;
+    }
+    return {
+      queryKey: parsed.queryKey,
+      total: Math.max(0, parsed.total),
+      tracks: parsed.tracks.map((track) => compactStartupTrack(track as Track)).slice(0, LIBRARY_PAGE_SIZE),
+      savedAt: typeof parsed.savedAt === "string" ? parsed.savedAt : new Date(0).toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeStartupLibrarySnapshot(tracks: Track[], total: number) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    const snapshot: StartupLibrarySnapshot = {
+      queryKey: defaultLibraryTrackQueryKey(),
+      total: Math.max(0, total),
+      tracks: tracks.slice(0, LIBRARY_PAGE_SIZE).map(compactStartupTrack),
+      savedAt: new Date().toISOString(),
+    };
+    window.localStorage.setItem(storageKeys.startupLibrarySnapshot, JSON.stringify(snapshot));
+  } catch {
+    try {
+      window.localStorage.removeItem(storageKeys.startupLibrarySnapshot);
+    } catch {
+      // Ignore private/local storage failures; startup simply falls back to backend loading.
+    }
+  }
 }
 
 function defaultToolTarget(folderPath: string, folderName: string): string {
@@ -399,8 +487,9 @@ export default function App() {
   }
 
   useRangeWheelControls();
+  const [startupLibrarySnapshot] = useState<StartupLibrarySnapshot | null>(readStartupLibrarySnapshot);
   const [activePage, setActivePage] = useState<Page>(() => readUiPreferences().startupPage);
-  const [tracks, setTracks] = useState<Track[]>([]);
+  const [tracks, setTracks] = useState<Track[]>(() => startupLibrarySnapshot?.tracks ?? []);
   const [queue, setQueue] = useState<QueueTrack[]>([]);
   const [autoDjAvoidRules, setAutoDjAvoidRules] = useState<AutoDjAvoidRule[]>([]);
   const [recommendationProfiles, setRecommendationProfiles] = useState<RecommendationProfile[]>([]);
@@ -414,8 +503,8 @@ export default function App() {
   const [libraryFolders, setLibraryFolders] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
-  const [backendStatus, setBackendStatus] = useState<BackendStatus>("unknown");
-  const [backendMessage, setBackendMessage] = useState("Backend status has not been checked yet.");
+  const [backendStatus, setBackendStatus] = useState<BackendStatus>("starting");
+  const [backendMessage, setBackendMessage] = useState("Starting the local Python backend.");
   const [backendCheckedAt, setBackendCheckedAt] = useState<string | null>(null);
   const [startupDiagnostics, setStartupDiagnostics] = useState<StartupDiagnosticsResponse | null>(null);
   const [backendLog, setBackendLog] = useState<LogTailResponse | null>(null);
@@ -433,6 +522,9 @@ export default function App() {
   const [audioAnalysisEligibleTrackTotal, setAudioAnalysisEligibleTrackTotal] = useState<number | null>(null);
   const [audioAnalysisJobId, setAudioAnalysisJobId] = useState<string | null>(null);
   const [clapInstallProgress, setClapInstallProgress] = useState<ClapInstallProgress | null>(null);
+  const [isClapStatusLoading, setIsClapStatusLoading] = useState(false);
+  const [clapStatusLoadPercent, setClapStatusLoadPercent] = useState(0);
+  const [clapStatusLoadMessage, setClapStatusLoadMessage] = useState("Checking CLAP runtime");
   const [isClapInstalling, setIsClapInstalling] = useState(false);
   const [audioAnalysisLimit, setAudioAnalysisLimit] = useState(0);
   const [audioAnalysisOverwrite, setAudioAnalysisOverwrite] = useState(false);
@@ -465,11 +557,13 @@ export default function App() {
   const [queueHistory, setQueueHistory] = useState<Track[][]>([]);
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode>("normal");
   const continuousAutoDjInFlightRef = useRef(false);
-  const [libraryTotal, setLibraryTotal] = useState(0);
-  const [hasMoreTracks, setHasMoreTracks] = useState(true);
-  const [isLibraryLoading, setIsLibraryLoading] = useState(false);
-  const [hasLoadedInitialLibrary, setHasLoadedInitialLibrary] = useState(false);
-  const [librarySort, setLibrarySort] = useState<SortState>({ key: "artist", direction: "asc" });
+  const [libraryTotal, setLibraryTotal] = useState(() => startupLibrarySnapshot?.total ?? 0);
+  const [hasMoreTracks, setHasMoreTracks] = useState(() =>
+    startupLibrarySnapshot ? startupLibrarySnapshot.tracks.length < startupLibrarySnapshot.total : true,
+  );
+  const [isLibraryLoading, setIsLibraryLoading] = useState(() => !startupLibrarySnapshot);
+  const [hasLoadedInitialLibrary, setHasLoadedInitialLibrary] = useState(() => Boolean(startupLibrarySnapshot));
+  const [librarySort, setLibrarySort] = useState<SortState>(DEFAULT_LIBRARY_SORT);
   const [libraryView, setLibraryView] = useState<LibraryView>("tracks");
   const [albums, setAlbums] = useState<AlbumSummary[]>([]);
   const [artists, setArtists] = useState<ArtistSummary[]>([]);
@@ -526,6 +620,11 @@ export default function App() {
   const undoTimerRef = useRef<number | null>(null);
   const lastSessionWriteKeyRef = useRef<string | null>(null);
   const lastSessionRestoreFinishedRef = useRef(false);
+  const lastSessionRestoreAttemptedRef = useRef(false);
+  const startupBackgroundHydratedRef = useRef(false);
+  const priorityLibraryLoadStartedRef = useRef(false);
+  const priorityLibraryQueryKeyRef = useRef<string | null>(null);
+  const clapStatusRequestIdRef = useRef(0);
   const lastFolderWatchNotificationIdRef = useRef<string | null>(null);
   const hideFilePaths = uiPreferences.hideFilePaths;
   const libraryVisibleColumns = normalizeLibraryColumns(uiPreferences.libraryVisibleColumns);
@@ -654,14 +753,22 @@ export default function App() {
     });
   }
 
-  async function loadTracksPage(reset: boolean) {
+  function currentLibraryTrackQueryKey() {
+    return libraryTrackQueryKey(debouncedSearch, debouncedAdvancedTrackSearch, librarySort);
+  }
+
+  async function loadTracksPage(reset: boolean): Promise<boolean> {
     if (isLibraryLoading && !reset) {
-      return;
+      return false;
     }
     const requestId = ++libraryRequestId.current;
     const offset = reset ? 0 : tracks.length;
+    const queryKey = currentLibraryTrackQueryKey();
+    const preserveCurrentRows = reset && tracks.length > 0 && queryKey === defaultLibraryTrackQueryKey();
     if (reset) {
-      setTracks([]);
+      if (!preserveCurrentRows) {
+        setTracks([]);
+      }
       setHasMoreTracks(true);
     }
     setIsLibraryLoading(true);
@@ -675,15 +782,20 @@ export default function App() {
         advancedFilters: debouncedAdvancedTrackSearch,
       });
       if (requestId !== libraryRequestId.current) {
-        return;
+        return false;
       }
       setTracks((current) => (reset ? response.tracks : [...current, ...response.tracks]));
       setLibraryTotal(response.total);
       setHasMoreTracks(response.offset + response.tracks.length < response.total);
+      if (reset && queryKey === defaultLibraryTrackQueryKey()) {
+        writeStartupLibrarySnapshot(response.tracks, response.total);
+      }
+      return true;
     } catch (error) {
       if (requestId === libraryRequestId.current) {
         setStatus(error instanceof Error ? error.message : "Could not load tracks");
       }
+      return false;
     } finally {
       if (requestId === libraryRequestId.current) {
         setIsLibraryLoading(false);
@@ -692,6 +804,16 @@ export default function App() {
         }
       }
     }
+  }
+
+  async function loadPriorityLibraryTracks() {
+    if (priorityLibraryLoadStartedRef.current) {
+      return;
+    }
+    priorityLibraryLoadStartedRef.current = true;
+    const queryKey = currentLibraryTrackQueryKey();
+    const loaded = await loadTracksPage(true);
+    priorityLibraryQueryKeyRef.current = loaded ? queryKey : null;
   }
 
   async function refreshTracks() {
@@ -894,6 +1016,73 @@ export default function App() {
     }
   }
 
+  async function restoreLastPlaybackSession() {
+    if (lastSessionRestoreAttemptedRef.current) {
+      return;
+    }
+    lastSessionRestoreAttemptedRef.current = true;
+    try {
+      const raw = window.localStorage.getItem(storageKeys.lastSession) ?? window.localStorage.getItem(legacyStorageKeys.lastSession);
+      if (raw) {
+        const session = JSON.parse(raw) as StoredPlaybackSession;
+        const ids = Array.from(new Set([...(session.queueIds ?? []), session.currentTrackId].filter(Boolean) as number[]));
+        if (ids.length) {
+          try {
+            const restored = await fetchTracksBatch(ids.slice(0, 200));
+            const byId = new Map(restored.tracks.map((track) => [track.id, track]));
+            const queueItems = (session.queueIds ?? []).map((id) => byId.get(id)).filter((track): track is Track => Boolean(track));
+            const restoredCurrent = session.currentTrackId ? byId.get(session.currentTrackId) ?? null : null;
+            if (queueItems.length) {
+              setPlaybackQueue(queueItems);
+            }
+            if (restoredCurrent) {
+              setCurrentTrack(restoredCurrent);
+              setRestoredPlaybackPosition(
+                normalizePlaybackResumePosition(session.positionSeconds, restoredCurrent.duration_seconds),
+              );
+            }
+            return;
+          } catch {
+            window.localStorage.removeItem(storageKeys.lastSession);
+            window.localStorage.removeItem(legacyStorageKeys.lastSession);
+          }
+        }
+      }
+    } catch {
+      // Last-session restore is best effort only.
+    } finally {
+      lastSessionRestoreFinishedRef.current = true;
+    }
+  }
+
+  async function waitForBackendStartup() {
+    const deadline = Date.now() + BACKEND_STARTUP_GRACE_MS;
+    let lastErrorMessage = "Backend is not reachable";
+    setBackendStatus("starting");
+    setBackendMessage("Starting the local Python backend.");
+
+    while (Date.now() < deadline) {
+      try {
+        const response = await fetchBackendHealth();
+        setBackendMessage("Loading your library.");
+        void restoreLastPlaybackSession();
+        await loadPriorityLibraryTracks();
+        setBackendStatus("ok");
+        setBackendMessage(response.status === "ok" ? "Backend is responding normally." : `Backend responded: ${response.status}`);
+        setBackendCheckedAt(new Date().toLocaleTimeString());
+        return;
+      } catch (error) {
+        lastErrorMessage = error instanceof Error ? error.message : "Backend is not reachable";
+        setBackendMessage("Starting the local Python backend.");
+        await new Promise((resolve) => window.setTimeout(resolve, BACKEND_STARTUP_POLL_MS));
+      }
+    }
+
+    setBackendStatus("down");
+    setBackendMessage(lastErrorMessage);
+    setBackendCheckedAt(new Date().toLocaleTimeString());
+  }
+
   async function handleRestartBackend() {
     setBackendStatus("restarting");
     setBackendMessage("Restarting the bundled backend service.");
@@ -1055,11 +1244,72 @@ export default function App() {
     setClapMaxDuration(response.max_duration_seconds);
   }
 
-  async function loadClapStatus() {
+  async function loadClapStatus(
+    options: {
+      deep?: boolean;
+      showProgress?: boolean;
+      message?: string;
+    } = {},
+  ): Promise<ClapStatusResponse | null> {
+    const requestId = ++clapStatusRequestIdRef.current;
+    let progressTimer: number | null = null;
+    if (options.showProgress) {
+      setIsClapStatusLoading(true);
+      setClapStatusLoadPercent(options.deep ? 45 : 8);
+      setClapStatusLoadMessage(options.message ?? (options.deep ? "Verifying CLAP runtime" : "Reading CLAP setup"));
+      progressTimer = window.setInterval(() => {
+        setClapStatusLoadPercent((current) => Math.min(options.deep ? 92 : 45, current + (options.deep ? 4 : 10)));
+      }, 450);
+    }
     try {
-      applyClapStatus(await fetchClapStatus());
+      const response = await fetchClapStatus(Boolean(options.deep));
+      if (requestId === clapStatusRequestIdRef.current) {
+        applyClapStatus(response);
+        if (options.showProgress) {
+          setClapStatusLoadPercent(100);
+          setClapStatusLoadMessage(options.deep ? "CLAP verification complete" : "CLAP setup loaded");
+        }
+      }
+      return response;
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not load CLAP status");
+      return null;
+    } finally {
+      if (progressTimer !== null) {
+        window.clearInterval(progressTimer);
+      }
+      if (requestId === clapStatusRequestIdRef.current && options.showProgress) {
+        window.setTimeout(() => {
+          if (requestId === clapStatusRequestIdRef.current) {
+            setIsClapStatusLoading(false);
+          }
+        }, 450);
+      }
+    }
+  }
+
+  async function loadAnalysisClapReadiness(forceDeep = false) {
+    const quickStatus = await loadClapStatus({
+      deep: false,
+      showProgress: true,
+      message: "Reading CLAP setup",
+    });
+    void loadClapCoverage();
+    const quickDeps = Object.values(quickStatus?.dependencies ?? {});
+    const shouldVerifyDeep = Boolean(
+      quickStatus &&
+        (forceDeep ||
+          quickStatus.installed ||
+          quickStatus.runtime_exists ||
+          !quickStatus.runtime_managed ||
+          quickDeps.some(Boolean)),
+    );
+    if (shouldVerifyDeep) {
+      void loadClapStatus({
+        deep: true,
+        showProgress: true,
+        message: "Verifying CLAP runtime",
+      });
     }
   }
 
@@ -1150,7 +1400,11 @@ export default function App() {
         return;
       }
       setStatus("CLAP ML runtime installed");
-      await loadClapStatus();
+      await loadClapStatus({
+        deep: true,
+        showProgress: activePage === "analysis",
+        message: "Verifying installed CLAP runtime",
+      });
       await loadClapCoverage();
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "CLAP install failed");
@@ -3521,48 +3775,39 @@ export default function App() {
   }
 
   useEffect(() => {
-    void loadSettings();
-    void checkBackendStatus(false);
-    void loadStartupDiagnostics(false);
-    void loadClapStatus();
-    void loadClapCoverage();
-    try {
-      const raw = window.localStorage.getItem(storageKeys.lastSession) ?? window.localStorage.getItem(legacyStorageKeys.lastSession);
-      if (raw) {
-        const session = JSON.parse(raw) as StoredPlaybackSession;
-        const ids = Array.from(new Set([...(session.queueIds ?? []), session.currentTrackId].filter(Boolean) as number[]));
-        if (ids.length) {
-          void Promise.all(ids.slice(0, 200).map((id) => fetchTrack(id)))
-            .then((restored) => {
-              const byId = new Map(restored.map((track) => [track.id, track]));
-              const queueItems = (session.queueIds ?? []).map((id) => byId.get(id)).filter((track): track is Track => Boolean(track));
-              const restoredCurrent = session.currentTrackId ? byId.get(session.currentTrackId) ?? null : null;
-              if (queueItems.length) {
-                setPlaybackQueue(queueItems);
-              }
-              if (restoredCurrent) {
-                setCurrentTrack(restoredCurrent);
-                setRestoredPlaybackPosition(
-                  normalizePlaybackResumePosition(session.positionSeconds, restoredCurrent.duration_seconds),
-                );
-              }
-            })
-            .catch(() => {
-              window.localStorage.removeItem(storageKeys.lastSession);
-              window.localStorage.removeItem(legacyStorageKeys.lastSession);
-            })
-            .finally(() => {
-              lastSessionRestoreFinishedRef.current = true;
-            });
-          return;
-        }
-      }
-      lastSessionRestoreFinishedRef.current = true;
-    } catch {
-      // Last-session restore is best effort only.
-      lastSessionRestoreFinishedRef.current = true;
-    }
+    void waitForBackendStartup();
   }, []);
+
+  useEffect(() => {
+    if (backendStatus !== "ok") {
+      return;
+    }
+    void loadSettings();
+  }, [backendStatus]);
+
+  useEffect(() => {
+    if (backendStatus !== "ok" || startupBackgroundHydratedRef.current) {
+      return;
+    }
+    startupBackgroundHydratedRef.current = true;
+    const timers = [
+      window.setTimeout(() => void loadLibraryStats(), 1200),
+      window.setTimeout(() => void loadPlaylists(), 1700),
+      window.setTimeout(() => void loadRecommendationProfiles(), 2400),
+      window.setTimeout(() => void loadRecommendationHistory(), 3000),
+      window.setTimeout(() => void loadAutoDjAvoidRules(), 3600),
+      window.setTimeout(() => void loadFolderWatchStatus(), 4400),
+      window.setTimeout(() => void loadCdRipSetup(), 5200),
+    ];
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [backendStatus]);
+
+  useEffect(() => {
+    if (backendStatus !== "ok") {
+      return;
+    }
+    void restoreLastPlaybackSession();
+  }, [backendStatus]);
 
   useEffect(() => {
     const handle = window.setInterval(() => {
@@ -3702,6 +3947,13 @@ export default function App() {
   }, [status]);
 
   useEffect(() => {
+    if (!hasLoadedInitialLibrary || currentLibraryTrackQueryKey() !== defaultLibraryTrackQueryKey()) {
+      return;
+    }
+    writeStartupLibrarySnapshot(tracks, libraryTotal);
+  }, [tracks, libraryTotal, hasLoadedInitialLibrary, debouncedSearch, debouncedAdvancedTrackSearch, librarySort]);
+
+  useEffect(() => {
     function closeFloatingDetails(event: MouseEvent) {
       const target = event.target as Node | null;
       setAppContextMenu(null);
@@ -3731,6 +3983,33 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!detailTrack) {
+      return;
+    }
+
+    function closeTrackDetailsOnClickAway(event: PointerEvent) {
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest("[data-track-details-panel]")) {
+        return;
+      }
+      setDetailTrack(null);
+    }
+
+    function closeTrackDetailsOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setDetailTrack(null);
+      }
+    }
+
+    window.addEventListener("pointerdown", closeTrackDetailsOnClickAway, true);
+    window.addEventListener("keydown", closeTrackDetailsOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeTrackDetailsOnClickAway, true);
+      window.removeEventListener("keydown", closeTrackDetailsOnEscape);
+    };
+  }, [detailTrack]);
+
+  useEffect(() => {
     const handle = window.setTimeout(() => {
       setDebouncedSearch(search);
     }, 250);
@@ -3745,8 +4024,16 @@ export default function App() {
   }, [activePage, search]);
 
   useEffect(() => {
+    if (backendStatus !== "ok" || activePage !== "library" || libraryView !== "tracks") {
+      return;
+    }
+    const currentQueryKey = currentLibraryTrackQueryKey();
+    if (priorityLibraryQueryKeyRef.current === currentQueryKey) {
+      priorityLibraryQueryKeyRef.current = null;
+      return;
+    }
     void refreshTracks();
-  }, [debouncedSearch, debouncedAdvancedTrackSearch, librarySort]);
+  }, [backendStatus, activePage, libraryView, debouncedSearch, debouncedAdvancedTrackSearch, librarySort]);
 
   useEffect(() => {
     const handle = window.setTimeout(() => {
@@ -3756,40 +4043,56 @@ export default function App() {
   }, [advancedTrackSearch]);
 
   useEffect(() => {
-    void loadAlbums();
-    void loadArtists();
-  }, [debouncedSearch]);
+    if (backendStatus !== "ok" || activePage !== "library") {
+      return;
+    }
+    if (libraryView === "albums" || libraryView === "completion") {
+      void loadAlbums();
+    }
+    if (libraryView === "artists") {
+      void loadArtists();
+    }
+  }, [backendStatus, activePage, libraryView, debouncedSearch]);
 
   useEffect(() => {
+    if (backendStatus !== "ok" || activePage !== "library" || libraryView !== "playlists") {
+      return;
+    }
     void loadPlaylists();
-  }, []);
+  }, [backendStatus, activePage, libraryView]);
 
   useEffect(() => {
-    void loadLibraryStats();
-    void loadInbox();
-    void loadHistory();
-    void loadAutoDjAvoidRules();
-    void loadRecommendationProfiles();
-    void loadRecommendationHistory();
-    void loadBulkUndoLog();
-    void loadChromaprintSetup();
-    void loadAudioConversionSetup();
-    void loadCdRipSetup();
-    void loadFolderWatchStatus();
-  }, []);
-
-  useEffect(() => {
+    if (backendStatus !== "ok" || activePage !== "library") {
+      return;
+    }
     if (libraryView === "health") {
       void loadLibraryStats();
     }
     if (libraryView === "inbox") {
       void loadInbox();
     }
-  }, [libraryView]);
+  }, [backendStatus, activePage, libraryView]);
 
   useEffect(() => {
+    if (backendStatus !== "ok") {
+      return;
+    }
+    if (activePage === "analysis") {
+      void loadAnalysisClapReadiness(false);
+    }
     if (activePage === "history") {
       void loadHistory();
+    }
+    if (activePage === "autodj") {
+      void loadAutoDjAvoidRules();
+      void loadRecommendationProfiles();
+      void loadRecommendationHistory();
+    }
+    if (activePage === "sources") {
+      void loadFolderWatchStatus();
+    }
+    if (activePage === "cd") {
+      void loadCdRipSetup();
     }
     if (activePage === "fileManagement") {
       void loadBulkUndoLog();
@@ -3797,8 +4100,12 @@ export default function App() {
       void loadAudioConversionSetup();
       void loadCdRipSetup();
       void loadFolderWatchStatus();
+      void loadClapStatus();
     }
-  }, [activePage]);
+    if (activePage === "settings") {
+      void loadStartupDiagnostics(false);
+    }
+  }, [backendStatus, activePage]);
 
   useEffect(() => {
     setAppContextMenu(null);
@@ -3808,7 +4115,7 @@ export default function App() {
   }, [activePage]);
 
   useEffect(() => {
-    if (backendStatus === "down") {
+    if (backendStatus !== "ok") {
       return;
     }
     const handle = window.setInterval(() => {
@@ -3818,7 +4125,7 @@ export default function App() {
   }, [backendStatus]);
 
   useEffect(() => {
-    if (backendStatus === "down") {
+    if (backendStatus !== "ok") {
       return;
     }
     const handle = window.setInterval(() => {
@@ -4215,10 +4522,12 @@ export default function App() {
               clapMaxDuration={clapMaxDuration}
               setClapMaxDuration={setClapMaxDuration}
               installProgress={clapInstallProgress}
+              isClapStatusLoading={isClapStatusLoading}
+              clapStatusLoadPercent={clapStatusLoadPercent}
+              clapStatusLoadMessage={clapStatusLoadMessage}
               isClapInstalling={isClapInstalling}
               onRefresh={() => {
-                void loadClapStatus();
-                void loadClapCoverage();
+                void loadAnalysisClapReadiness(true);
               }}
               onInstallClap={(device, force) => void handleInstallClap(device, force)}
               onSaveClapConfig={handleSaveClapConfig}
@@ -4402,7 +4711,7 @@ export default function App() {
               clapStatus={clapStatus}
               clapInstallProgress={clapInstallProgress}
               isClapInstalling={isClapInstalling}
-              onRefreshClapStatus={loadClapStatus}
+              onRefreshClapStatus={() => void loadClapStatus()}
               onInstallClap={handleInstallClap}
               chromaprintSetup={chromaprintSetup}
               onRefreshChromaprintSetup={loadChromaprintSetup}

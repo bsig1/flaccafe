@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from .database import connect, rows_to_dicts
+from .database import connect, invalidate_library_query_cache, rows_to_dicts
 from .scanner import path_key
 
 
@@ -303,6 +303,8 @@ def import_library_stats(source: str, import_path: str, apply: bool, missing_onl
                     "error": error,
                 }
             )
+        if apply and applied:
+            invalidate_library_query_cache(conn)
         if apply:
             conn.commit()
 

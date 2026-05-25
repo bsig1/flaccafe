@@ -38,13 +38,27 @@ def _ensure_console_streams() -> None:
 
 _ensure_console_streams()
 
-import uvicorn
+if not getattr(sys, "frozen", False):
+    repo_root = Path(__file__).resolve().parents[1]
+    repo_root_text = str(repo_root)
+    if repo_root_text not in sys.path:
+        sys.path.insert(0, repo_root_text)
 
+from backend.app.startup_profile import mark
+
+mark("desktop backend streams ready")
+mark("uvicorn import starting")
+import uvicorn
+mark("uvicorn imported")
+
+mark("FastAPI app import starting")
 from backend.app.main import app
+mark("FastAPI app imported")
 
 
 def main() -> None:
     port = int(os.environ.get("FLAC_CAFE_PORT") or os.environ.get("LOCAL_AUTODJ_PORT", "8765"))
+    mark(f"uvicorn run starting on 127.0.0.1:{port}")
     uvicorn.run(
         app,
         host="127.0.0.1",
@@ -53,6 +67,7 @@ def main() -> None:
         log_level="warning",
         access_log=False,
     )
+    mark("uvicorn run exited")
 
 
 if __name__ == "__main__":

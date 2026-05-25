@@ -90,6 +90,29 @@ function Write-ReleaseNotes {
     $NotesDir = Join-Path $Root "docs\release-notes"
     New-Item -ItemType Directory -Force -Path $NotesDir | Out-Null
     $NotesPath = Join-Path $NotesDir ("v{0}.md" -f $ReleaseLabel)
+    $BuiltLine = "- Built: $((Get-Date).ToString("yyyy-MM-dd HH:mm:ss zzz"))"
+    $InstallerLine = "- Installer: $($Msi.FullName)"
+    $SizeLine = "- Size: $([math]::Round($Msi.Length / 1MB, 2)) MB"
+    $ProductVersionLine = "- Windows MSI product version: $($Config.version)"
+
+    if (Test-Path -LiteralPath $NotesPath) {
+        $ExistingNotes = Get-Content -LiteralPath $NotesPath -Raw
+        if ($ExistingNotes.Contains("## Highlights")) {
+            $ExistingNotes = [regex]::Replace($ExistingNotes, "(?m)^- Built: .+$", $BuiltLine)
+            $ExistingNotes = [regex]::Replace($ExistingNotes, "(?m)^- Installer: .+$", $InstallerLine)
+            $ExistingNotes = [regex]::Replace($ExistingNotes, "(?m)^- Size: .+$", $SizeLine)
+            if ($ReleaseLabel -ne $Config.version) {
+                if ($ExistingNotes -match "(?m)^- Windows MSI product version: .+$") {
+                    $ExistingNotes = [regex]::Replace($ExistingNotes, "(?m)^- Windows MSI product version: .+$", $ProductVersionLine)
+                } else {
+                    $ExistingNotes = [regex]::Replace($ExistingNotes, "(?m)^- Size: .+$", "$SizeLine`n$ProductVersionLine")
+                }
+            }
+            $ExistingNotes | Set-Content -LiteralPath $NotesPath -Encoding UTF8
+            Write-Host "Release notes updated: $NotesPath"
+            return
+        }
+    }
 
     $Changes = @()
     try {
@@ -136,12 +159,12 @@ function Write-ReleaseNotes {
     $ReleaseNotes = @(
         "# FLAC Cafe $ReleaseLabel"
         ""
-        "- Built: $((Get-Date).ToString("yyyy-MM-dd HH:mm:ss zzz"))"
-        "- Installer: $($Msi.FullName)"
-        "- Size: $([math]::Round($Msi.Length / 1MB, 2)) MB"
+        $BuiltLine
+        $InstallerLine
+        $SizeLine
     )
     if ($ReleaseLabel -ne $Config.version) {
-        $ReleaseNotes += "- Windows MSI product version: $($Config.version)"
+        $ReleaseNotes += $ProductVersionLine
     }
     foreach ($GroupName in $Groups.Keys) {
         if ($Groups[$GroupName].Count -eq 0) {

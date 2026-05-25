@@ -20,7 +20,7 @@ import type {
 
 export type Page = "library" | "analysis" | "nowPlaying" | "artist" | "history" | "autodj" | "audiobooks" | "podcasts" | "radio" | "scrobbling" | "cd" | "sources" | "fileManagement" | "settings";
 export type LibraryView = "tracks" | "artists" | "albums" | "playlists" | "completion" | "inbox" | "smart" | "health";
-export type BackendStatus = "unknown" | "ok" | "down" | "restarting";
+export type BackendStatus = "unknown" | "starting" | "ok" | "down" | "restarting";
 export type PlaybackMode = "normal" | "repeatOne" | "repeatQueue" | "stopAfterCurrent";
 export type PlaybackEngine = "webview" | "native";
 export type NativeOutputBackendMode = "cpalShared" | "wasapiExclusive" | "asio";
@@ -356,6 +356,7 @@ export const storageKeys = {
   lastSession: "flac-cafe-last-session",
   deleteChoice: "flac-cafe-delete-choice",
   quickStartDismissed: "flac-cafe-quick-start-dismissed",
+  startupLibrarySnapshot: "flac-cafe-startup-library-snapshot",
   autoDjTemplates: "flac-cafe-autodj-templates",
   miniPlayerSnapshot: "flac-cafe-mini-player-snapshot",
   miniPlayerAlwaysOnTop: "flac-cafe-mini-player-always-on-top",

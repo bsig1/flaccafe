@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-from .ml_runtime import activate_ml_runtime
-
-activate_ml_runtime()
-
 import base64
 import csv
 import json
@@ -15,12 +11,14 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import time
 import uuid
 import zipfile
 import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Thread
 from urllib import error as urlerror
 from urllib import parse, request as urlrequest
 
@@ -32,7 +30,7 @@ from mutagen.flac import Picture
 from mutagen.mp4 import MP4Cover
 
 from .config import APP_STORAGE_ROOT, EXPORT_DIR, MODEL_DIR, database_path
-from .database import connect, get_setting, init_db, rows_to_dicts, set_setting
+from .database import connect, get_setting, init_db, invalidate_library_query_cache, rows_to_dicts, set_setting
 from .extensions import discover_extensions
 from .file_tags import write_custom_tags, write_track_artwork, write_track_lyrics, write_track_metadata, write_track_rating
 from .gapless import gapless_validate
@@ -64,13 +62,6 @@ from .musicbrainz_autotag import (
     release_track_entries,
     search_releases,
     text_similarity,
-)
-from .analysis_jobs import (
-    cancel_audio_analysis_job,
-    get_audio_analysis_job,
-    pause_audio_analysis_job,
-    resume_audio_analysis_job,
-    start_audio_analysis_job,
 )
 from .audio_conversion_jobs import (
     cancel_audio_conversion_job,
@@ -109,9 +100,6 @@ from .device_sync_profiles import (
     list_device_sync_profiles,
     save_device_sync_profile,
 )
-from .clap_analysis import save_config as save_clap_config
-from .clap_analysis import status as clap_status
-from .clap_install_jobs import get_clap_install_job, start_clap_install_job
 from .playlist import export_m3u
 from .podcasts import (
     delete_episode_download as delete_podcast_episode_download,
@@ -363,6 +351,8 @@ from .schemas import (
     TrackLoveRequest,
     TrackLoveResponse,
     Track,
+    TrackBatchRequest,
+    TrackBatchResponse,
     TrackDeleteResponse,
     TrackFileMetadataWritePreview,
     TrackFileMetadataWriteRequest,
@@ -382,6 +372,9 @@ from .schemas import (
     VolumeTagRequest,
     VolumeTagResponse,
 )
+from .startup_profile import mark
+
+mark("backend.app.main imports ready")
 
 MEDIA_TYPES = {
     ".flac": "audio/flac",
@@ -513,6 +506,60 @@ WIKIPEDIA_USER_AGENT = "FLACCafe/0.1 (local desktop music app)"
 LOGGER = logging.getLogger("flac_cafe.backend")
 
 
+def clap_status(deep: bool = False) -> dict:
+    from .clap_analysis import status
+
+    return status(deep=deep)
+
+
+def save_clap_config(**kwargs):
+    from .clap_analysis import save_config
+
+    return save_config(**kwargs)
+
+
+def start_clap_install_job(*args, **kwargs) -> dict:
+    from .clap_install_jobs import start_clap_install_job as start_job
+
+    return start_job(*args, **kwargs)
+
+
+def get_clap_install_job(job_id: str) -> dict | None:
+    from .clap_install_jobs import get_clap_install_job as get_job
+
+    return get_job(job_id)
+
+
+def start_audio_analysis_job(*args, **kwargs) -> dict:
+    from .analysis_jobs import start_audio_analysis_job as start_job
+
+    return start_job(*args, **kwargs)
+
+
+def get_audio_analysis_job(job_id: str) -> dict | None:
+    from .analysis_jobs import get_audio_analysis_job as get_job
+
+    return get_job(job_id)
+
+
+def pause_audio_analysis_job(job_id: str) -> dict | None:
+    from .analysis_jobs import pause_audio_analysis_job as pause_job
+
+    return pause_job(job_id)
+
+
+def resume_audio_analysis_job(job_id: str) -> dict | None:
+    from .analysis_jobs import resume_audio_analysis_job as resume_job
+
+    return resume_job(job_id)
+
+
+def cancel_audio_analysis_job(job_id: str) -> dict | None:
+    from .analysis_jobs import cancel_audio_analysis_job as cancel_job
+
+    return cancel_job(job_id)
+
+
 def backend_log_path() -> Path:
     return APP_STORAGE_ROOT / "logs" / "backend.log"
 
@@ -533,6 +580,21 @@ def configure_backend_file_logging() -> Path:
     except OSError:
         LOGGER.exception("Could not initialize backend file logging")
     return log_path
+
+
+def start_folder_watcher_from_settings_in_background(delay_seconds: float = 8.0) -> None:
+    """Resume folder watching after the app is usable so large libraries do not slow startup."""
+
+    def worker() -> None:
+        time.sleep(delay_seconds)
+        mark("folder watcher resume starting")
+        try:
+            start_folder_watcher_from_settings()
+            mark("folder watcher resume finished")
+        except Exception:
+            LOGGER.exception("Could not resume folder watcher from saved settings")
+
+    Thread(target=worker, name="flac-cafe-folder-watch-resume", daemon=True).start()
 
 
 def suggested_music_path() -> str | None:
@@ -987,6 +1049,7 @@ def remove_library_source_rows(conn, source_path: str) -> LibrarySourceRemoveRes
 
     if removed_tracks:
         delete_orphan_albums(conn)
+        invalidate_library_query_cache(conn)
     save_library_paths(conn, remaining_sources)
     conn.commit()
 
@@ -1191,6 +1254,110 @@ def track_order_clause(sort_by: str, sort_direction: str) -> str:
     )
 
 
+DEFAULT_LIBRARY_PAGE_CACHE_PREFIX = "tracks.default-page.v1"
+DEFAULT_LIBRARY_COUNT_CACHE_KEY = "tracks.default-count.v1"
+
+
+def default_track_filters(filters: dict[str, object] | None) -> bool:
+    filters = filters or {}
+    text_fields = ("artist", "album", "genre", "path", "extension")
+    if any(str(filters.get(field) or "").strip() for field in text_fields):
+        return False
+    if str(filters.get("rating_state") or "any") != "any":
+        return False
+    if bool(filters.get("missing_metadata")):
+        return False
+    ranged_fields = ("min_rating", "max_rating", "year_from", "year_to", "min_duration", "max_duration")
+    return all(filters.get(field) is None for field in ranged_fields)
+
+
+def is_default_library_track_query(
+    search: str,
+    limit: int | None,
+    offset: int,
+    sort_by: str,
+    sort_direction: str,
+    filters: dict[str, object] | None,
+) -> bool:
+    return (
+        limit is not None
+        and offset == 0
+        and 1 <= limit <= 1000
+        and not search.strip()
+        and sort_by == "artist"
+        and sort_direction.lower() == "asc"
+        and default_track_filters(filters)
+    )
+
+
+def default_library_page_cache_key(limit: int) -> str:
+    return f"{DEFAULT_LIBRARY_PAGE_CACHE_PREFIX}:{limit}"
+
+
+def read_cached_default_library_count(conn) -> int | None:
+    row = conn.execute(
+        "SELECT total, payload_json FROM library_query_cache WHERE cache_key = ?",
+        (DEFAULT_LIBRARY_COUNT_CACHE_KEY,),
+    ).fetchone()
+    if row is None:
+        return None
+    if row["total"] is not None:
+        return int(row["total"])
+    try:
+        payload = json.loads(row["payload_json"])
+        return int(payload["total"])
+    except (TypeError, ValueError, KeyError, json.JSONDecodeError):
+        conn.execute("DELETE FROM library_query_cache WHERE cache_key = ?", (DEFAULT_LIBRARY_COUNT_CACHE_KEY,))
+        return None
+
+
+def read_cached_default_library_page(conn, limit: int) -> list[dict] | None:
+    row = conn.execute(
+        "SELECT payload_json FROM library_query_cache WHERE cache_key = ?",
+        (default_library_page_cache_key(limit),),
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        payload = json.loads(row["payload_json"])
+    except (TypeError, ValueError, json.JSONDecodeError):
+        conn.execute("DELETE FROM library_query_cache WHERE cache_key = ?", (default_library_page_cache_key(limit),))
+        return None
+    if not isinstance(payload, list):
+        conn.execute("DELETE FROM library_query_cache WHERE cache_key = ?", (default_library_page_cache_key(limit),))
+        return None
+    return [dict(track) for track in payload if isinstance(track, dict)]
+
+
+def write_default_library_cache(conn, limit: int, rows: list[dict], total: int) -> None:
+    conn.execute(
+        """
+        INSERT INTO library_query_cache(cache_key, payload_json, total, updated_at)
+        VALUES(?, ?, ?, datetime('now'))
+        ON CONFLICT(cache_key) DO UPDATE SET
+          payload_json = excluded.payload_json,
+          total = excluded.total,
+          updated_at = excluded.updated_at
+        """,
+        (DEFAULT_LIBRARY_COUNT_CACHE_KEY, json.dumps({"total": total}, ensure_ascii=True), total),
+    )
+    conn.execute(
+        """
+        INSERT INTO library_query_cache(cache_key, payload_json, total, updated_at)
+        VALUES(?, ?, ?, datetime('now'))
+        ON CONFLICT(cache_key) DO UPDATE SET
+          payload_json = excluded.payload_json,
+          total = excluded.total,
+          updated_at = excluded.updated_at
+        """,
+        (
+            default_library_page_cache_key(limit),
+            json.dumps(rows, ensure_ascii=True, sort_keys=True),
+            total,
+        ),
+    )
+
+
 def query_tracks(
     search: str,
     limit: int | None,
@@ -1210,9 +1377,23 @@ def query_tracks(
         query += " LIMIT -1 OFFSET ?"
         query_params.append(offset)
 
+    cacheable_default_query = is_default_library_track_query(search, limit, offset, sort_by, sort_direction, filters)
     with connect() as conn:
-        total = conn.execute(f"SELECT count(*) AS count FROM tracks {where_clause}", params).fetchone()["count"]
+        cached_total = read_cached_default_library_count(conn) if cacheable_default_query else None
+        if cacheable_default_query and limit is not None:
+            cached_rows = read_cached_default_library_page(conn, limit)
+            if cached_rows is not None and cached_total is not None:
+                return cached_rows, cached_total
+
+        total = (
+            cached_total
+            if cached_total is not None
+            else conn.execute(f"SELECT count(*) AS count FROM tracks {where_clause}", params).fetchone()["count"]
+        )
         rows = rows_to_dicts(conn.execute(query, query_params))
+        if cacheable_default_query and limit is not None:
+            write_default_library_cache(conn, limit, rows, int(total))
+            conn.commit()
     return rows, total
 
 
@@ -1566,6 +1747,7 @@ def apply_track_metadata_update(conn, track_id: int, updates: dict[str, object],
     )
     conn.execute("DELETE FROM track_metadata_cache WHERE path_key = ?", (path_key(Path(str(current["path"]))),))
     delete_orphan_albums(conn)
+    invalidate_library_query_cache(conn)
     return track_response(conn, track_id)
 
 
@@ -1604,6 +1786,7 @@ def apply_track_rating_update(conn, track_id: int, rating: float | None, record_
             """,
             (track_id, event_metadata(rating=rating)),
         )
+    invalidate_library_query_cache(conn)
     return track_response(conn, track_id)
 
 
@@ -2185,6 +2368,7 @@ def embed_artwork_for_album(
             errors.append(f"{path.name}: {exc}")
     if updated:
         conn.execute("DELETE FROM artwork_cache")
+        invalidate_library_query_cache(conn)
     return updated, errors
 
 
@@ -2945,12 +3129,17 @@ def save_artist_info(query_name: str, info: dict[str, str | None]) -> ArtistInfo
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    mark("FastAPI lifespan starting")
     configure_backend_file_logging()
+    mark("backend logging configured")
     init_db()
-    start_folder_watcher_from_settings()
+    mark("database initialized")
+    start_folder_watcher_from_settings_in_background()
+    mark("folder watcher resume scheduled")
     try:
         yield
     finally:
+        mark("FastAPI lifespan stopping")
         stop_folder_watcher(update_setting=False)
 
 
@@ -3020,7 +3209,7 @@ def get_settings() -> SettingsResponse:
         acoustid_api_key_configured=acoustid_api_key_configured,
         lastfm_api_credentials_configured=bool(lastfm_source),
         lastfm_api_credentials_source=lastfm_source,
-        extra={"clap": clap_status()},
+        extra={"clap": {"deferred": True}},
     )
 
 
@@ -3057,8 +3246,8 @@ def remove_library_source(request: LibrarySourceRemoveRequest) -> LibrarySourceR
 
 
 @app.get("/analysis/clap/status", response_model=ClapStatusResponse)
-def get_clap_status() -> dict:
-    return clap_status()
+def get_clap_status(deep: bool = Query(default=False)) -> dict:
+    return clap_status(deep=deep)
 
 
 @app.post("/analysis/clap/install", response_model=ClapInstallStartResponse)
@@ -3119,7 +3308,7 @@ def update_clap_config(request: ClapConfigRequest) -> dict:
 
 @app.post("/analysis/clap/start", response_model=AudioAnalysisStartResponse)
 def start_clap_audio_analysis(request: AudioAnalysisStartRequest) -> dict:
-    status = clap_status()
+    status = clap_status(deep=True)
     if not status["installed"]:
         raise HTTPException(status_code=400, detail=status["message"] or "CLAP is not ready")
     return start_audio_analysis_job(
@@ -3266,6 +3455,16 @@ def list_track_page(
     return TrackPage(tracks=tracks, total=total, limit=limit, offset=offset)
 
 
+@app.post("/tracks/batch", response_model=TrackBatchResponse)
+def get_tracks_batch(request: TrackBatchRequest) -> TrackBatchResponse:
+    unique_ids = list(dict.fromkeys(int(track_id) for track_id in request.track_ids if int(track_id) > 0))
+    if not unique_ids:
+        return TrackBatchResponse(tracks=[], missing_ids=[])
+    with connect() as conn:
+        rows, missing_ids = tracks_by_ids(conn, unique_ids)
+    return TrackBatchResponse(tracks=rows, missing_ids=missing_ids)
+
+
 @app.post("/library/tools/write-metadata-to-files", response_model=TrackFileMetadataWriteResponse)
 @app.post("/tracks/write-metadata-to-files", response_model=TrackFileMetadataWriteResponse)
 def write_track_metadata_to_files(request: TrackFileMetadataWriteRequest) -> TrackFileMetadataWriteResponse:
@@ -3359,6 +3558,8 @@ def write_track_metadata_to_files(request: TrackFileMetadataWriteRequest) -> Tra
                 errors.append(f"{track.get('title') or path.name}: {exc}")
             previews.append(preview)
 
+        if applied:
+            invalidate_library_query_cache(conn)
         conn.commit()
 
     return TrackFileMetadataWriteResponse(
@@ -3459,6 +3660,7 @@ def delete_track(track_id: int, delete_file: bool = False) -> TrackDeleteRespons
 
         conn.execute("DELETE FROM tracks WHERE id = ?", (track_id,))
         delete_orphan_albums(conn)
+        invalidate_library_query_cache(conn)
         conn.commit()
 
     return TrackDeleteResponse(
@@ -3521,6 +3723,7 @@ def sync_track_metadata_from_files(request: TrackMetadataSyncRequest) -> TrackMe
                 errors.append(f"{row.get('title') or path.name}: {exc}")
         if synced:
             delete_orphan_albums(conn)
+            invalidate_library_query_cache(conn)
         conn.commit()
 
     return TrackMetadataSyncResponse(
@@ -3552,6 +3755,7 @@ def restore_track(request: TrackRestoreRequest) -> dict:
                 "UPDATE tracks SET rating = ?, updated_at = datetime('now') WHERE id = ?",
                 (request.rating, track_id),
             )
+        invalidate_library_query_cache(conn)
         conn.commit()
         return track_response(conn, track_id)
 
@@ -5168,6 +5372,7 @@ def remove_tracks_for_action(
         placeholders = ",".join("?" for _ in chunk)
         conn.execute(f"DELETE FROM tracks WHERE id IN ({placeholders})", chunk)
     delete_orphan_albums(conn)
+    invalidate_library_query_cache(conn)
     return removed, deleted_files, errors
 
 
@@ -5515,6 +5720,7 @@ def apply_custom_tags_update(conn, track_id: int, updates: dict[str, object | No
         """,
         (file_modified_at, track_id),
     )
+    invalidate_library_query_cache(conn)
 
 
 def apply_tag_field_updates(
@@ -6530,6 +6736,8 @@ def organize_files_from_tags(request: FileOrganizationRequest) -> FileOrganizati
                         change.error = f"Could not rename/reorganize file: {exc}"
             changes.append(change)
         if request.apply:
+            if applied:
+                invalidate_library_query_cache(conn)
             conn.commit()
     return FileOrganizationResponse(
         template=request.template,
@@ -6938,6 +7146,8 @@ def run_acoustic_fingerprint_pass(request: AcousticFingerprintRequest) -> Acoust
                 ),
             )
             updated += 1
+        if updated:
+            invalidate_library_query_cache(conn)
         conn.commit()
     return AcousticFingerprintResponse(
         tool_available=True,
@@ -8112,6 +8322,7 @@ def mark_track_played(track_id: int) -> dict:
             """,
             (track_id, event_metadata(source="player")),
         )
+        invalidate_library_query_cache(conn)
         conn.commit()
         updated = conn.execute(
             f"""
@@ -8149,6 +8360,7 @@ def mark_track_skipped(track_id: int) -> dict:
             """,
             (track_id, event_metadata(source="player")),
         )
+        invalidate_library_query_cache(conn)
         conn.commit()
         updated = conn.execute(
             f"""

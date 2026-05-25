@@ -12,7 +12,7 @@ from typing import Any, Callable
 from mutagen import File as MutagenFile
 
 from .config import SUPPORTED_EXTENSIONS
-from .database import connect, set_setting
+from .database import connect, invalidate_library_query_cache, set_setting
 from .inbox import mark_track_for_inbox
 
 
@@ -376,6 +376,7 @@ def remove_missing_tracks(conn, folder: Path) -> int:
         conn.execute("DELETE FROM tracks WHERE id = ?", (track_id,))
 
     if missing_ids:
+        invalidate_library_query_cache(conn)
         conn.execute(
             """
             DELETE FROM albums
@@ -423,6 +424,8 @@ def scan_folder(
         if progress_callback:
             progress_callback(stats, len(files), len(files), None, "cleaning")
         stats.removed = remove_missing_tracks(conn, folder)
+        if stats.inserted or stats.updated or stats.removed:
+            invalidate_library_query_cache(conn)
         set_setting(conn, "library_path", str(folder))
         conn.commit()
 

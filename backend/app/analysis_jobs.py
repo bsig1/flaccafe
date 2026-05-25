@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from .audiobooks import audiobook_where_clause
 from .clap_analysis import ClapAnalyzer, load_config, model_cached, save_track_analysis
-from .database import connect, rows_to_dicts
+from .database import connect, invalidate_library_query_cache, rows_to_dicts
 from .podcasts import podcast_where_clause
 
 
@@ -244,6 +244,7 @@ def _run_job(
                         """,
                         (json.dumps({"error": message}, ensure_ascii=True), int(track["id"])),
                     )
+                    invalidate_library_query_cache(conn)
                     conn.commit()
                 with _lock:
                     job = _jobs[job_id]

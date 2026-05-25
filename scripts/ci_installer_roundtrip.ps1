@@ -25,7 +25,7 @@ if (-not $AllowAppDataCleanup -and -not $IsCi) {
 
 $InstallDir = Join-Path $env:ProgramFiles "FLAC Cafe"
 $AppExe = Join-Path $InstallDir "flac-cafe.exe"
-$BackendExe = Join-Path $InstallDir "flaccafe-backend.exe"
+$BackendExe = Join-Path $InstallDir "flaccafe-backend\flaccafe-backend.exe"
 $AppDataDir = Join-Path $env:LOCALAPPDATA "FLAC Cafe"
 $Marker = Join-Path $AppDataDir "ci-uninstall-marker.txt"
 $Port = 18765

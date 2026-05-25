@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+from importlib.machinery import PathFinder
 import importlib.util
 import json
 from dataclasses import dataclass
@@ -9,8 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from .config import MODEL_DIR
-from .database import connect, get_setting, set_setting
-from .ml_runtime import activate_ml_runtime, runtime_status, use_managed_ml_runtime
+from .database import connect, get_setting, invalidate_library_query_cache, set_setting
+from .ml_runtime import activate_ml_runtime, ml_runtime_site_packages, runtime_status, use_managed_ml_runtime
 
 
 DEFAULT_MODEL_ID = "laion/clap-htsat-fused"
@@ -49,6 +50,7 @@ GENRE_LABELS = [
     "reggae",
     "latin",
 ]
+DEPENDENCY_NAMES = ("torch", "transformers", "librosa", "soundfile", "soxr")
 
 
 @dataclass(frozen=True)
@@ -121,23 +123,21 @@ def save_config(
     return load_config()
 
 
+def quick_dependency_status() -> dict[str, bool]:
+    if use_managed_ml_runtime():
+        site_packages = ml_runtime_site_packages()
+        if site_packages is None or not site_packages.exists():
+            return {name: False for name in DEPENDENCY_NAMES}
+        return {name: PathFinder.find_spec(name, [str(site_packages)]) is not None for name in DEPENDENCY_NAMES}
+
+    return {name: importlib.util.find_spec(name) is not None for name in DEPENDENCY_NAMES}
+
+
 def dependency_status() -> dict[str, bool]:
     activated = activate_ml_runtime()
     if use_managed_ml_runtime() and not activated:
-        return {
-            "torch": False,
-            "transformers": False,
-            "librosa": False,
-            "soundfile": False,
-            "soxr": False,
-        }
-    return {
-        "torch": importlib.util.find_spec("torch") is not None,
-        "transformers": importlib.util.find_spec("transformers") is not None,
-        "librosa": importlib.util.find_spec("librosa") is not None,
-        "soundfile": importlib.util.find_spec("soundfile") is not None,
-        "soxr": importlib.util.find_spec("soxr") is not None,
-    }
+        return {name: False for name in DEPENDENCY_NAMES}
+    return {name: importlib.util.find_spec(name) is not None for name in DEPENDENCY_NAMES}
 
 
 def dependencies_installed() -> bool:
@@ -150,7 +150,7 @@ def dependency_errors() -> dict[str, str]:
     if use_managed_ml_runtime() and not activated:
         return {}
     errors: dict[str, str] = {}
-    for name in ("torch", "transformers", "librosa", "soundfile", "soxr"):
+    for name in DEPENDENCY_NAMES:
         if importlib.util.find_spec(name) is None:
             continue
         try:
@@ -185,19 +185,35 @@ def model_cached(config: ClapConfig) -> bool:
         return False
 
 
-def status() -> dict[str, Any]:
-    activate_ml_runtime()
+def quick_model_cached(config: ClapConfig) -> bool:
+    cache_dir = config.cache_dir.expanduser()
+    if not cache_dir.exists():
+        return False
+    model_cache = cache_dir / f"models--{config.model_id.replace('/', '--')}"
+    if (model_cache / "config.json").exists():
+        return True
+    if any(model_cache.glob("snapshots/*/config.json")):
+        return True
+    return False
+
+
+def status(deep: bool = False) -> dict[str, Any]:
     config = load_config()
-    deps, errors = _dependency_ready_status()
+    if deep:
+        activate_ml_runtime()
+        deps, errors = _dependency_ready_status()
+    else:
+        deps = quick_dependency_status()
+        errors = {}
     installed = all(deps.values())
-    runtime = runtime_status(include_bootstrap=not installed)
-    cached = model_cached(config) if deps.get("transformers") else False
+    runtime = runtime_status(include_bootstrap=deep and not installed)
+    cached = (model_cached(config) if deep else quick_model_cached(config)) if deps.get("transformers") else False
     torch_version = None
-    torch_device = None
+    torch_device = runtime.get("runtime_device") if not deep else None
     cuda_available = False
     cuda_device_name = None
 
-    if deps.get("torch"):
+    if deep and deps.get("torch"):
         try:
             torch = importlib.import_module("torch")
             torch_version = getattr(torch, "__version__", None)
@@ -225,6 +241,8 @@ def status() -> dict[str, Any]:
             message = f"{message} {first_name} import failed: {first_error}"
     elif cached:
         message = "CLAP audio analysis is ready."
+    elif not deep:
+        message = "CLAP runtime appears installed. Verifying details in the background."
     else:
         message = "CLAP dependencies are installed. The model will download on first analysis if it is not cached."
 
@@ -381,4 +399,5 @@ def save_track_analysis(track_id: int, analysis: AudioAnalysis) -> None:
                 track_id,
             ),
         )
+        invalidate_library_query_cache(conn)
         conn.commit()

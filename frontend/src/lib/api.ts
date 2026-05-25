@@ -154,6 +154,7 @@ import type {
   TagFieldCopySwapRequest,
   TagFieldCopySwapResponse,
   Track,
+  TrackBatchResponse,
   TrackDeleteResponse,
   TrackFileMetadataWriteRequest,
   TrackFileMetadataWriteResponse,
@@ -926,8 +927,8 @@ export function importLibraryStats(requestBody: LibraryStatsImportRequest): Prom
   });
 }
 
-export function fetchClapStatus(): Promise<ClapStatusResponse> {
-  return request<ClapStatusResponse>("/analysis/clap/status");
+export function fetchClapStatus(deep = false): Promise<ClapStatusResponse> {
+  return request<ClapStatusResponse>(`/analysis/clap/status${deep ? "?deep=true" : ""}`);
 }
 
 export function fetchClapCoverage(): Promise<AudioAnalysisCoverage> {
@@ -1038,6 +1039,13 @@ function appendAdvancedTrackSearchFilters(params: URLSearchParams, filters?: Adv
 
 export function fetchTrack(trackId: number): Promise<Track> {
   return request<Track>(`/tracks/${trackId}`);
+}
+
+export function fetchTracksBatch(trackIds: number[]): Promise<TrackBatchResponse> {
+  return request<TrackBatchResponse>("/tracks/batch", {
+    method: "POST",
+    body: JSON.stringify({ track_ids: trackIds }),
+  });
 }
 
 export function fetchSimilarTracks(trackId: number, limit = 12): Promise<SimilarTrack[]> {

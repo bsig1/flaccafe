@@ -256,7 +256,7 @@ fn start_packaged_backend(app: &tauri::AppHandle) -> Option<Child> {
 
     let backend_path = match app
         .path()
-        .resolve("flaccafe-backend.exe", BaseDirectory::Resource)
+        .resolve(r"flaccafe-backend\flaccafe-backend.exe", BaseDirectory::Resource)
     {
         Ok(path) => path,
         Err(error) => {
@@ -277,10 +277,7 @@ fn start_packaged_backend(app: &tauri::AppHandle) -> Option<Child> {
     command.creation_flags(0x08000000);
 
     match command.spawn() {
-        Ok(child) => {
-            let _ = wait_for_backend(Duration::from_secs(15));
-            Some(child)
-        }
+        Ok(child) => Some(child),
         Err(error) => {
             eprintln!("Could not start bundled backend: {error}");
             None
@@ -403,7 +400,7 @@ fn backend_restart(app: tauri::AppHandle) -> Result<String, String> {
             .child
             .lock()
             .map_err(|_| "Backend child lock poisoned".to_string())? = child;
-        if backend_is_running() {
+        if wait_for_backend(Duration::from_secs(15)) {
             Ok("Backend restarted".to_string())
         } else {
             Err("Backend did not start".to_string())

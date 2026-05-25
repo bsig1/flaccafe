@@ -171,7 +171,10 @@ export function TrackDetailsPanel({
   }
 
   return (
-    <aside className="flex w-96 max-w-96 shrink-0 flex-col overflow-hidden border-l border-line bg-[rgb(var(--color-strip))]">
+    <aside
+      data-track-details-panel
+      className="flex w-96 max-w-96 shrink-0 flex-col overflow-hidden border-l border-line bg-[rgb(var(--color-strip))]"
+    >
       <div className="flex h-14 items-center justify-between border-b border-line px-4">
         <div className="min-w-0">
           <div className="truncate text-sm font-semibold text-white">Track Details</div>

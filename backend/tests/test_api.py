@@ -186,6 +186,41 @@ class ApiTests(unittest.TestCase):
         self.assertNotIn(str(self.root), json.dumps(payload))
         bundle_path.unlink(missing_ok=True)
 
+    def test_default_track_page_cache_is_saved_and_invalidated_by_rating(self) -> None:
+        first_id = insert_track(self.root / "first.mp3", title="First", artist="Alpha", rating=3)
+        insert_track(self.root / "second.mp3", title="Second", artist="Beta", rating=4)
+
+        first_page = self.client.get("/tracks/page?limit=150&offset=0&sort_by=artist&sort_direction=asc")
+        self.assertEqual(first_page.status_code, 200)
+        self.assertEqual(first_page.json()["total"], 2)
+
+        with connect() as conn:
+            cache_rows = conn.execute("SELECT cache_key, total, payload_json FROM library_query_cache").fetchall()
+        cache_by_key = {row["cache_key"]: row for row in cache_rows}
+        self.assertEqual(cache_by_key["tracks.default-count.v1"]["total"], 2)
+        self.assertEqual(len(json.loads(cache_by_key["tracks.default-page.v1:150"]["payload_json"])), 2)
+
+        updated = self.client.patch(f"/tracks/{first_id}/rating", json={"rating": 4.5})
+        self.assertEqual(updated.status_code, 200)
+        with connect() as conn:
+            self.assertEqual(conn.execute("SELECT count(*) AS count FROM library_query_cache").fetchone()["count"], 0)
+
+        second_page = self.client.get("/tracks/page?limit=150&offset=0&sort_by=artist&sort_direction=asc")
+        self.assertEqual(second_page.status_code, 200)
+        self.assertEqual(second_page.json()["tracks"][0]["rating"], 4.5)
+        with connect() as conn:
+            self.assertGreater(conn.execute("SELECT count(*) AS count FROM library_query_cache").fetchone()["count"], 0)
+
+    def test_tracks_batch_restores_tracks_in_requested_order(self) -> None:
+        first_id = insert_track(self.root / "first.mp3", title="First", artist="Alpha")
+        second_id = insert_track(self.root / "second.mp3", title="Second", artist="Beta")
+
+        response = self.client.post("/tracks/batch", json={"track_ids": [second_id, first_id, second_id, 99999, -5]})
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual([track["id"] for track in body["tracks"]], [second_id, first_id])
+        self.assertEqual(body["missing_ids"], [99999])
+
     def test_scan_endpoint_rejects_missing_folder(self) -> None:
         response = self.client.post("/scan", json={"folder_path": str(self.root / "Missing")})
 

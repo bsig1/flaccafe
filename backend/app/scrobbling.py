@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib import parse, request as urlrequest
 
-from .database import connect, rows_to_dicts
+from .database import connect, invalidate_library_query_cache, rows_to_dicts
 
 
 LISTENBRAINZ_SUBMIT_URL = "https://api.listenbrainz.org/1/submit-listens"
@@ -495,6 +495,7 @@ def import_history_csv(path: str, apply: bool, limit: int) -> dict[str, Any]:
                             """,
                             (changes.get("play_count"), changes.get("rating"), track["id"]),
                         )
+                        invalidate_library_query_cache(conn)
                     if changes.get("loved"):
                         conn.execute(
                             """

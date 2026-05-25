@@ -137,6 +137,13 @@ CREATE TABLE IF NOT EXISTS track_metadata_cache (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS library_query_cache (
+  cache_key TEXT PRIMARY KEY,
+  payload_json TEXT NOT NULL,
+  total INTEGER,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS scan_error_samples (
   id INTEGER PRIMARY KEY,
   path_hash TEXT NOT NULL,
@@ -376,6 +383,7 @@ CREATE INDEX IF NOT EXISTS idx_smart_playlists_name ON smart_playlists(name);
 CREATE INDEX IF NOT EXISTS idx_artist_info_updated_at ON artist_info_cache(updated_at);
 CREATE INDEX IF NOT EXISTS idx_autodj_avoid_rules_scope ON autodj_avoid_rules(scope, target_key);
 CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_track_id ON recommendation_feedback(track_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_library_query_cache_updated_at ON library_query_cache(updated_at);
 CREATE INDEX IF NOT EXISTS idx_scan_error_samples_created_at ON scan_error_samples(created_at);
 CREATE INDEX IF NOT EXISTS idx_recommendation_profiles_default ON recommendation_profiles(is_default);
 CREATE INDEX IF NOT EXISTS idx_recommendation_runs_created_at ON recommendation_runs(created_at);
@@ -596,3 +604,13 @@ def set_setting(conn: sqlite3.Connection, key: str, value: str | None) -> None:
         """,
         (key, value),
     )
+
+
+def invalidate_library_query_cache(conn: sqlite3.Connection) -> None:
+    """Clear cached library list/count data after track rows change."""
+    try:
+        conn.execute("DELETE FROM library_query_cache")
+    except sqlite3.OperationalError:
+        # Older test databases may call mutation helpers before init_db has created
+        # the cache table. The next init_db call will create it.
+        pass

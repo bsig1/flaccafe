@@ -50,6 +50,15 @@ class TrackPage(BaseModel):
     offset: int
 
 
+class TrackBatchRequest(BaseModel):
+    track_ids: list[int] = Field(default_factory=list, max_length=500)
+
+
+class TrackBatchResponse(BaseModel):
+    tracks: list[Track] = Field(default_factory=list)
+    missing_ids: list[int] = Field(default_factory=list)
+
+
 class AlbumSummary(BaseModel):
     id: int
     album: str | None = None

@@ -57,6 +57,9 @@ export function AnalysisPage({
   clapMaxDuration,
   setClapMaxDuration,
   installProgress,
+  isClapStatusLoading,
+  clapStatusLoadPercent,
+  clapStatusLoadMessage,
   isClapInstalling,
   onRefresh,
   onInstallClap,
@@ -86,6 +89,9 @@ export function AnalysisPage({
   clapMaxDuration: number;
   setClapMaxDuration: (value: number) => void;
   installProgress: ClapInstallProgress | null;
+  isClapStatusLoading: boolean;
+  clapStatusLoadPercent: number;
+  clapStatusLoadMessage: string;
   isClapInstalling: boolean;
   onRefresh: () => void;
   onInstallClap: (device: ClapInstallDevice, force?: boolean) => void;
@@ -138,7 +144,9 @@ export function AnalysisPage({
   const progressPercent = Math.max(0, Math.min(100, activeProgress?.percent ?? displayCoverage?.coverage_percent ?? 0));
   const installPercent = Math.max(0, Math.min(100, installProgress?.percent ?? 0));
   const failures = progress?.failed_tracks ?? [];
-  const statusText = installProgress?.message ?? activeProgress?.message ?? clapStatus?.message ?? "CLAP status loading";
+  const statusText = isClapStatusLoading
+    ? clapStatusLoadMessage
+    : installProgress?.message ?? activeProgress?.message ?? clapStatus?.message ?? "CLAP status loading";
   const canPause = isAudioAnalyzing && progress?.status === "running";
   const canResume = isAudioAnalyzing && progress?.status === "paused";
   const torchRuntime = clapStatus?.torch_device
@@ -178,6 +186,20 @@ export function AnalysisPage({
           )}
         </div>
       </header>
+      {isClapStatusLoading && (
+        <div className="border-b border-line bg-panel/80 px-6 py-3">
+          <div className="mb-2 flex items-center justify-between gap-3 text-xs">
+            <span className="text-neutral-200">{clapStatusLoadMessage}</span>
+            <span className="text-muted">{Math.round(clapStatusLoadPercent)}%</span>
+          </div>
+          <div className="h-1.5 overflow-hidden rounded bg-ink">
+            <div
+              className="h-full rounded bg-moss transition-all duration-300"
+              style={{ width: `${Math.max(6, Math.min(100, clapStatusLoadPercent))}%` }}
+            />
+          </div>
+        </div>
+      )}
 
       <section className="min-h-0 flex-1 overflow-auto p-6">
         <div className="grid max-w-6xl gap-5">

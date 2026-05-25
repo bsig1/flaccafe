@@ -17,6 +17,7 @@ The app started with a local FastAPI backend because the scanner, metadata handl
 - `npm run desktop` runs the Tauri shell against the dev backend/frontend flow.
 - Packaged builds launch a bundled backend executable and hide the console window.
 - Optional CLAP/Torch dependencies live outside the bundled backend in an app-managed ML runtime.
+- Startup stays intentionally light: `/health` is available before optional CLAP/tool probes, folder watching resumes in the background, and startup timing breadcrumbs are appended to the backend log.
 
 ## Repo Layout
 
@@ -66,7 +67,7 @@ src-tauri/
 scripts/
   dev.ps1                 Windows-friendly dev server runner
   run_backend.ps1         backend-only runner
-  build_backend_sidecar.ps1 packaged Python backend resource builder
+  build_backend_sidecar.ps1 packaged Python backend folder builder
   build_msi.ps1           MSI packaging helper
   test_backend.ps1        backend test helper
 ```

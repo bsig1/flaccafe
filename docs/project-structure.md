@@ -73,7 +73,7 @@ backend/
 └── requirements-clap.txt    optional CLAP/Torch-side dependencies
 ```
 
-Add backend features by starting with the narrowest module that owns the behavior. Use `main.py` for route wiring, but keep reusable scanner, recommender, metadata, and file-operation logic in focused modules. Tests belong in `backend/tests/`.
+Add backend features by starting with the narrowest module that owns the behavior. Use `main.py` for route wiring, but keep reusable scanner, recommender, metadata, and file-operation logic in focused modules. Startup-sensitive optional systems should stay behind lazy imports or route-local helpers; `backend/app/startup_profile.py` records lightweight timing breadcrumbs for backend launch checks. Tests belong in `backend/tests/`.
 
 ## Frontend
 
@@ -143,7 +143,7 @@ scripts/
 ├── stop_dev.ps1              stops known dev server/backend processes
 ├── test_backend.ps1          backend unittest helper using `.venv` when available
 ├── check_backend_routes.py   verifies route docs against FastAPI decorators
-├── build_backend_sidecar.ps1 builds the packaged Python backend resource used by Tauri
+├── build_backend_sidecar.ps1 builds the packaged Python backend folder used by Tauri
 ├── build_msi.ps1             MSI packaging helper
 ├── ci_installer_roundtrip.ps1 installs, health-checks, and uninstalls the MSI in CI/disposable profiles
 ├── installer_smoke.ps1       installer smoke-test helper

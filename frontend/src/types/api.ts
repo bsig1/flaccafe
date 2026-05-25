@@ -49,6 +49,11 @@ export interface TrackPage {
   offset: number;
 }
 
+export interface TrackBatchResponse {
+  tracks: Track[];
+  missing_ids: number[];
+}
+
 export type AdvancedTrackRatingState = "any" | "rated" | "unrated";
 
 export interface AdvancedTrackSearchFilters {

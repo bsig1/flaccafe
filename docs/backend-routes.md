@@ -19,6 +19,7 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 
 - `GET /tracks` returns the legacy music track list, excluding audiobook-like and podcast-like rows.
 - `GET /tracks/page` returns paged, sorted music tracks for infinite scrolling, with optional advanced search filters, excluding audiobook-like and podcast-like rows.
+- `POST /tracks/batch` returns selected tracks in requested order for fast session restore.
 - `GET /tracks/{track_id}` returns one track.
 - `PATCH /tracks/{track_id}/metadata` updates editable tags in SQLite, and optionally audio files.
 - `PATCH /tracks/{track_id}/rating` updates a half-star rating in SQLite, and optionally audio files.

@@ -15,7 +15,7 @@ if (-not $Config.bundle.active) {
 }
 
 $BackendResource = $Config.bundle.resources.PSObject.Properties |
-    Where-Object { $_.Name -eq "../dist-backend/flaccafe-backend.exe" -and $_.Value -eq "flaccafe-backend.exe" }
+    Where-Object { $_.Name -eq "../dist-backend/flaccafe-backend" -and $_.Value -eq "flaccafe-backend" }
 if (-not $BackendResource) {
     throw "Bundled backend resource is missing from tauri.conf.json."
 }
@@ -39,7 +39,7 @@ foreach ($Needle in @('"--noconsole"', '"--exclude-module", "torch"', '"--exclud
     }
 }
 
-foreach ($Needle in @('"--onefile"', '"--name", "flaccafe-backend"', '"--distpath", "dist-backend"')) {
+foreach ($Needle in @('"--onedir"', '"--name", "flaccafe-backend"', '"--distpath", "dist-backend"')) {
     if (-not $SidecarBuildText.Contains($Needle)) {
         throw "Backend sidecar build script is missing expected output setting: $Needle"
     }
