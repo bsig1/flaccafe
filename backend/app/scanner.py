@@ -355,6 +355,7 @@ def upsert_track(conn, metadata: dict[str, Any]) -> str:
 def is_path_under_folder(path_text: str, folder: Path) -> bool:
     try:
         path = Path(path_text).expanduser().resolve(strict=False)
+        folder = folder.expanduser().resolve(strict=False)
     except OSError:
         return False
     folder_key = os.path.normcase(str(folder))

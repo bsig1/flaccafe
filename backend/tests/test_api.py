@@ -58,6 +58,11 @@ def insert_track(path: Path, **overrides: object) -> int:
         return int(cursor.lastrowid)
 
 
+def canonical_path(path: str | Path) -> Path:
+    """Normalize Windows short/long temp paths before comparing test paths."""
+    return Path(path).expanduser().resolve(strict=False)
+
+
 class ApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -628,7 +633,7 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(new_path.exists())
         with connect() as conn:
             row = conn.execute("SELECT path FROM tracks WHERE id = ?", (track_id,)).fetchone()
-        self.assertEqual(Path(row["path"]), new_path)
+        self.assertEqual(canonical_path(row["path"]), canonical_path(new_path))
 
         undo = self.client.get("/library/tools/undo-log")
         self.assertEqual(undo.status_code, 200)
@@ -646,7 +651,7 @@ class ApiTests(unittest.TestCase):
         self.assertFalse(new_path.exists())
         with connect() as conn:
             restored = conn.execute("SELECT path FROM tracks WHERE id = ?", (track_id,)).fetchone()
-        self.assertEqual(Path(restored["path"]), source)
+        self.assertEqual(canonical_path(restored["path"]), canonical_path(source))
 
     def test_organize_files_can_auto_rename_collisions_and_clean_empty_source_folders(self) -> None:
         music_dir = self.root / "Music"
@@ -692,7 +697,7 @@ class ApiTests(unittest.TestCase):
         self.assertFalse(source.parent.exists())
         with connect() as conn:
             row = conn.execute("SELECT path FROM tracks WHERE id = ?", (track_id,)).fetchone()
-        self.assertEqual(Path(row["path"]), renamed_target)
+        self.assertEqual(canonical_path(row["path"]), canonical_path(renamed_target))
 
     def test_file_organization_report_exports_preview_json(self) -> None:
         source = self.root / "report-me.mp3"
@@ -1650,7 +1655,7 @@ class ApiTests(unittest.TestCase):
         refreshed = self.client.post(f"/podcasts/subscriptions/{subscription_id}/refresh")
         self.assertEqual(refreshed.status_code, 200)
         self.assertEqual(refreshed.json()["subscription"]["title"], "Test Cast")
-        self.assertEqual(Path(refreshed.json()["subscription"]["effective_download_folder"]), download_folder / "Test Cast")
+        self.assertEqual(canonical_path(refreshed.json()["subscription"]["effective_download_folder"]), canonical_path(download_folder / "Test Cast"))
         self.assertEqual(refreshed.json()["total"], 1)
 
         episodes = self.client.get(f"/podcasts/episodes?subscription_id={subscription_id}")
@@ -1662,7 +1667,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(downloaded.status_code, 200)
         local_path = Path(downloaded.json()["local_path"])
         self.assertTrue(local_path.exists())
-        self.assertEqual(local_path.parent, download_folder / "Test Cast")
+        self.assertEqual(canonical_path(local_path.parent), canonical_path(download_folder / "Test Cast"))
         self.assertEqual(local_path.read_bytes(), b"podcast audio")
 
         deleted = self.client.delete(f"/podcasts/subscriptions/{subscription_id}?delete_files=true")
@@ -2415,7 +2420,7 @@ class ApiTests(unittest.TestCase):
         )
         self.assertEqual(setup.status_code, 200)
         self.assertTrue(setup.json()["available"])
-        self.assertEqual(Path(setup.json()["resolved_path"]), fake_fpcalc)
+        self.assertEqual(canonical_path(setup.json()["resolved_path"]), canonical_path(fake_fpcalc))
 
         with patch("backend.app.main.shutil.which", return_value=None), patch(
             "backend.app.main.acoustic_fingerprint_for_path",
@@ -2425,7 +2430,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(updated.status_code, 200)
         self.assertEqual(updated.json()["updated"], 1)
         fingerprint.assert_called_once()
-        self.assertEqual(Path(fingerprint.call_args.args[1]), fake_fpcalc)
+        self.assertEqual(canonical_path(fingerprint.call_args.args[1]), canonical_path(fake_fpcalc))
 
     def test_clear_library_caches_endpoint_removes_derived_rows(self) -> None:
         audio_file = self.root / "cached.mp3"
