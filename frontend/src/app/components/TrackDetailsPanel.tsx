@@ -1,6 +1,7 @@
 import {
   Album,
   BarChart3,
+  CheckCircle2,
   FolderOpen,
   MoreHorizontal,
   Pencil,
@@ -46,6 +47,8 @@ export function TrackDetailsPanel({
   playlists,
   isAudioAnalyzing,
   onClose,
+  onSelectTrack,
+  isTrackSelected,
   onPlayTrack,
   onRating,
   onAnalyzeTracks,
@@ -59,6 +62,8 @@ export function TrackDetailsPanel({
   playlists: PlaylistSummary[];
   isAudioAnalyzing: boolean;
   onClose: () => void;
+  onSelectTrack: (track: Track) => void;
+  isTrackSelected: boolean;
   onPlayTrack: (track: Track, queue: Track[]) => void;
   onRating: (trackId: number, rating: number | null) => void;
   onAnalyzeTracks: (trackIds: number[]) => void;
@@ -207,6 +212,15 @@ export function TrackDetailsPanel({
               <button className="primary-button h-8" type="button" onClick={() => onPlayTrack(track, queue.length ? queue : [track])}>
                 <Play size={14} />
                 Play
+              </button>
+              <button
+                className="secondary-button h-8"
+                type="button"
+                disabled={isTrackSelected}
+                onClick={() => onSelectTrack(track)}
+              >
+                <CheckCircle2 size={14} />
+                {isTrackSelected ? "Selected" : "Select"}
               </button>
               <div
                 className="relative"

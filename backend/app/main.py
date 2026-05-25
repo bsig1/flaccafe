@@ -5301,6 +5301,14 @@ def bundled_chromaprint_tool_dir() -> Path:
     return Path(sys.executable).resolve().parent / "tools" / "chromaprint"
 
 
+def bundled_resource_tool_dir() -> Path:
+    return Path(sys.executable).resolve().parent.parent / "tools" / "chromaprint"
+
+
+def hidden_subprocess_creation_flags() -> int:
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
 def fpcalc_candidate_paths(configured_path: str | None = None) -> list[Path]:
     executable = "fpcalc.exe" if os.name == "nt" else "fpcalc"
     backend_root = Path(__file__).resolve().parents[1]
@@ -5313,6 +5321,8 @@ def fpcalc_candidate_paths(configured_path: str | None = None) -> list[Path]:
         [
             bundled_chromaprint_tool_dir() / executable,
             bundled_chromaprint_tool_dir().parent / executable,
+            bundled_resource_tool_dir() / executable,
+            bundled_resource_tool_dir().parent / executable,
             chromaprint_tool_dir() / executable,
             APP_STORAGE_ROOT / "tools" / executable,
             backend_root / "tools" / "chromaprint" / executable,
@@ -5355,6 +5365,7 @@ def fpcalc_version(fpcalc_path: Path) -> str | None:
             text=True,
             timeout=10,
             check=False,
+            creationflags=hidden_subprocess_creation_flags(),
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -5498,6 +5509,7 @@ def acoustic_fingerprint_for_path(path: Path, fpcalc_path: str) -> str:
         text=True,
         timeout=60,
         check=False,
+        creationflags=hidden_subprocess_creation_flags(),
     )
     if completed.returncode != 0:
         message = completed.stderr.strip() or completed.stdout.strip() or "fpcalc failed"

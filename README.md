@@ -9,6 +9,22 @@ FLAC Cafe is an open-source, Windows-first desktop app for local music collectio
 
 This is beta software. The core app is usable, but release builds still need broad real-library testing.
 
+## Screenshots
+
+These screenshots use a small demo library so the public docs do not expose a real local collection.
+
+| Library | Albums |
+| --- | --- |
+| ![FLAC Cafe library track table](docs/screenshots/library-tracks.png) | ![FLAC Cafe album browse view](docs/screenshots/albums.png) |
+
+| AutoDJ | Now Playing |
+| --- | --- |
+| ![FLAC Cafe AutoDJ queue generation](docs/screenshots/autodj.png) | ![FLAC Cafe Now Playing lyrics view](docs/screenshots/now-playing-lyrics.png) |
+
+| File Management |
+| --- |
+| ![FLAC Cafe file management tools](docs/screenshots/file-management.png) |
+
 ## Download
 
 Windows beta installers are published on the [GitHub Releases page](https://github.com/bsig1/flaccafe/releases). The app is designed for local files first; no streaming account is required.

@@ -4,6 +4,7 @@ import csv
 import os
 import json
 import plistlib
+import subprocess
 import tempfile
 import time
 import unittest
@@ -2652,6 +2653,50 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(updated.json()["updated"], 1)
         fingerprint.assert_called_once()
         self.assertEqual(canonical_path(fingerprint.call_args.args[1]), canonical_path(fake_fpcalc))
+
+    def test_chromaprint_candidates_include_tauri_sibling_resource_folder(self) -> None:
+        from backend.app import main as main_module
+
+        packaged_backend = self.root / "Program Files" / "FLAC Cafe" / "flaccafe-backend" / "flaccafe-backend.exe"
+        packaged_backend.parent.mkdir(parents=True)
+        packaged_backend.write_bytes(b"exe")
+        expected = packaged_backend.parent.parent / "tools" / "chromaprint" / "fpcalc.exe"
+
+        with patch.object(main_module.sys, "executable", str(packaged_backend)):
+            candidates = main_module.fpcalc_candidate_paths()
+
+        self.assertIn(canonical_path(expected), [canonical_path(candidate) for candidate in candidates])
+
+    def test_chromaprint_subprocesses_run_without_console_window(self) -> None:
+        from backend.app import main as main_module
+
+        fake_fpcalc = self.root / "fpcalc.exe"
+        fake_track = self.root / "track.flac"
+        fake_fpcalc.write_bytes(b"exe")
+        fake_track.write_bytes(b"audio")
+
+        version_result = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="fpcalc version test\n",
+            stderr="",
+        )
+        fingerprint_result = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps({"fingerprint": "fingerprint-token"}),
+            stderr="",
+        )
+
+        with patch("backend.app.main.hidden_subprocess_creation_flags", return_value=12345), patch(
+            "backend.app.main.subprocess.run",
+            side_effect=[version_result, fingerprint_result],
+        ) as run:
+            self.assertEqual(main_module.fpcalc_version(fake_fpcalc), "fpcalc version test")
+            self.assertEqual(main_module.acoustic_fingerprint_for_path(fake_track, str(fake_fpcalc)), "fingerprint-token")
+
+        self.assertEqual(run.call_args_list[0].kwargs["creationflags"], 12345)
+        self.assertEqual(run.call_args_list[1].kwargs["creationflags"], 12345)
 
     def test_clear_library_caches_endpoint_removes_derived_rows(self) -> None:
         audio_file = self.root / "cached.mp3"

@@ -17,13 +17,13 @@ Run this before packaging or tagging a FLAC Cafe release.
 
 ## Screenshot Pass
 
-The README should get fresh screenshots once the FLAC Cafe theme stabilizes. For now, before a public release, capture at least:
+The README screenshots live in `docs/screenshots/`. Before a public release, refresh at least:
 
 - Library tracks view.
 - Album view.
 - AutoDJ simple mode.
 - Now Playing with lyrics.
-- Settings with Library Tools.
+- File Management tools.
 
 ## Release Notes Prompts
 

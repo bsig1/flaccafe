@@ -142,6 +142,8 @@ const TRACK_PLAYLIST_SUBMENU_WIDTH = 240;
 const TRACK_SUBMENU_CLOSE_DELAY_MS = 700;
 const TRACK_VIRTUALIZATION_THRESHOLD = 260;
 const TRACK_VIRTUALIZATION_OVERSCAN = 18;
+const LIBRARY_ACTIONS_MENU_WIDTH = 288;
+const LIBRARY_ACTIONS_MENU_HEIGHT = 270;
 type ContextSubmenuKey = "tagging" | "rating" | "avoid" | "playlist";
 
 function albumYearsLabel(album: AlbumSummary): string {
@@ -453,6 +455,7 @@ export function LibraryPage({
   const [columnWidths, setColumnWidths] = useState(defaultLibraryColumnWidths);
   const [contextMenu, setContextMenu] = useState<TrackContextMenu | null>(null);
   const [columnMenu, setColumnMenu] = useState<ColumnContextMenu | null>(null);
+  const [libraryActionsMenu, setLibraryActionsMenu] = useState<{ x: number; y: number } | null>(null);
   const [activeContextSubmenu, setActiveContextSubmenu] = useState<ContextSubmenuKey | null>(null);
   const [selectedTrackIds, setSelectedTrackIds] = useState<Set<number>>(() => new Set());
   const [selectedTrackCache, setSelectedTrackCache] = useState<Map<number, Track>>(() => new Map());
@@ -948,7 +951,7 @@ export function LibraryPage({
     }
     return (
       <button
-        className="sticky bottom-3 z-20 ml-auto mr-3 grid h-8 w-8 place-items-center rounded-full border border-line bg-panel/95 text-muted shadow-lg shadow-black/20 transition hover:border-moss/60 hover:text-white"
+        className="absolute bottom-4 right-4 z-30 grid h-9 w-9 place-items-center rounded-full border border-line bg-panel/95 text-muted shadow-lg shadow-black/30 backdrop-blur transition hover:border-moss/60 hover:text-white"
         type="button"
         title={label}
         onClick={() => scrollCollectionPaneToTop(ref, saveScrollTop)}
@@ -956,6 +959,22 @@ export function LibraryPage({
         <ArrowUp size={15} />
       </button>
     );
+  }
+
+  function renderActiveTopButton() {
+    if (libraryView === "artists") {
+      return renderPaneTopButton(artistScrollTop > 120, "Back to top", artistListRef, setArtistScrollTop);
+    }
+    if (libraryView === "albums" && albumMode === "completion") {
+      return renderPaneTopButton(completionScrollTop > 160, "Back to top", scrollRef, setCompletionScrollTop);
+    }
+    if (libraryView === "albums") {
+      return renderPaneTopButton(albumScrollTop > 120, "Back to top", albumListRef, setAlbumScrollTop);
+    }
+    if (libraryView === "playlists") {
+      return renderPaneTopButton(playlistScrollTop > PLAYLIST_TOOLBAR_HEIGHT + 80, "Back to top", playlistListRef, setPlaylistScrollTop);
+    }
+    return null;
   }
 
   function updateCompletionRowHeight(albumId: number, height: number) {
@@ -1043,6 +1062,7 @@ export function LibraryPage({
     function closeMenu() {
       setContextMenu(null);
       setColumnMenu(null);
+      setLibraryActionsMenu(null);
     }
 
     function handleKeyDown(event: KeyboardEvent) {
@@ -1194,6 +1214,19 @@ export function LibraryPage({
     });
   }
 
+  function selectSingleTrack(track: Track) {
+    selectionAnchorId.current = track.id;
+    setSelectedTrackIds(new Set([track.id]));
+    setSelectedTrackCache((current) => {
+      if (current.get(track.id) === track) {
+        return current;
+      }
+      const next = new Map(current);
+      next.set(track.id, track);
+      return next;
+    });
+  }
+
   function selectTrackLikeWindows(event: ReactMouseEvent, track: Track, list: Track[]) {
     setDetailTrack(track);
     const extendRange = event.shiftKey && selectionAnchorId.current !== null;
@@ -1220,7 +1253,7 @@ export function LibraryPage({
     if (keepExisting) {
       toggleTrackSelection(track.id);
     } else {
-      setSelectedTrackIds(new Set([track.id]));
+      selectSingleTrack(track);
     }
   }
 
@@ -1426,6 +1459,9 @@ export function LibraryPage({
     if (columnMenu) {
       setColumnMenu(null);
     }
+    if (libraryActionsMenu) {
+      setLibraryActionsMenu(null);
+    }
     if (libraryView === "tracks") {
       scheduleVirtualScrollUpdate(element.scrollTop);
     }
@@ -1462,6 +1498,7 @@ export function LibraryPage({
       setSelectedTrackIds(new Set([track.id]));
     }
     setColumnMenu(null);
+    setLibraryActionsMenu(null);
     const placement = placeFloatingMenu({
       cursorX: event.clientX,
       cursorY: event.clientY,
@@ -1488,6 +1525,7 @@ export function LibraryPage({
   function openColumnContextMenu(event: ReactMouseEvent) {
     event.preventDefault();
     setContextMenu(null);
+    setLibraryActionsMenu(null);
     const placement = placeFloatingMenu({
       cursorX: event.clientX,
       cursorY: event.clientY,
@@ -1500,6 +1538,29 @@ export function LibraryPage({
     setColumnMenu({
       x: placement.x,
       y: placement.y,
+    });
+  }
+
+  function toggleLibraryActionsMenu(event: ReactMouseEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenu(null);
+    setColumnMenu(null);
+    setLibraryActionsMenu((current) => {
+      if (current) {
+        return null;
+      }
+      const rect = event.currentTarget.getBoundingClientRect();
+      const placement = placeFloatingMenu({
+        cursorX: rect.right - LIBRARY_ACTIONS_MENU_WIDTH,
+        cursorY: rect.bottom + 8,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+        menuWidth: LIBRARY_ACTIONS_MENU_WIDTH,
+        menuHeight: LIBRARY_ACTIONS_MENU_HEIGHT,
+        margin: MENU_VIEWPORT_MARGIN,
+      });
+      return { x: placement.x, y: placement.y };
     });
   }
 
@@ -2251,7 +2312,6 @@ export function LibraryPage({
               )}
             </div>
           </div>
-          {renderPaneTopButton(completionScrollTop > 160, "Back to top", scrollRef, setCompletionScrollTop)}
         </div>
       </div>
     );
@@ -2527,60 +2587,19 @@ export function LibraryPage({
             <Wand2 size={16} />
             AutoDJ
           </button>
-          <details className="relative shrink-0" data-auto-close>
-            <summary className="icon-button cursor-pointer list-none [&::-webkit-details-marker]:hidden" title="Library actions">
-              <MoreHorizontal size={17} />
-            </summary>
-            <div className="absolute right-0 top-11 z-40 w-72 rounded border border-line bg-[rgb(var(--color-popover))] p-3 text-sm shadow-2xl">
-              <label className="grid gap-2 text-xs uppercase text-muted">
-                Playlist target
-                <select
-                  className="h-9 rounded border border-line bg-panel px-2 text-sm normal-case text-white outline-none ring-moss/40 focus:ring-2"
-                  value={targetPlaylistId ?? ""}
-                  onChange={(event) => setTargetPlaylistId(event.target.value ? Number(event.target.value) : null)}
-                >
-                  <option value="">Choose playlist...</option>
-                  {playlists.map((playlist) => (
-                    <option key={playlist.id} value={playlist.id}>
-                      {playlist.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="mt-3 grid gap-1 border-t border-line pt-2">
-                <button
-                  className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-neutral-200 hover:bg-white/10 disabled:text-muted"
-                  type="button"
-                  disabled={!targetPlaylistId || viewTracks.length === 0}
-                  onClick={() => onAddTracksToPlaylist(viewTracks.map((track) => track.id))}
-                >
-                  <Plus size={15} />
-                  Add current view to target
-                </button>
-                <button
-                  className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-neutral-200 hover:bg-white/10"
-                  type="button"
-                  onClick={refreshTracks}
-                >
-                  <RefreshCw size={15} />
-                  Refresh view
-                </button>
-                {libraryView === "albums" && activeAlbum && (
-                  <button
-                    className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-neutral-200 hover:bg-white/10"
-                    type="button"
-                    onClick={() => void openAlbumArtworkManager(activeAlbum.id)}
-                  >
-                    <Album size={15} />
-                    Album artwork
-                  </button>
-                )}
-              </div>
-            </div>
-          </details>
+          <button
+            className={`icon-button shrink-0 ${libraryActionsMenu ? "border-moss text-white" : ""}`}
+            type="button"
+            title="Library actions"
+            aria-haspopup="menu"
+            aria-expanded={Boolean(libraryActionsMenu)}
+            onClick={toggleLibraryActionsMenu}
+          >
+            <MoreHorizontal size={17} />
+          </button>
         </div>
       </div>
-      <div className="min-h-0 min-w-0 flex flex-1">
+      <div className="relative min-h-0 min-w-0 flex flex-1">
       <div
         ref={scrollRef}
         className="min-h-0 min-w-0 flex-1 overflow-auto"
@@ -2739,7 +2758,6 @@ export function LibraryPage({
                   </div>
                 )}
               </div>
-              {renderPaneTopButton(artistScrollTop > 120, "Back to top", artistListRef, setArtistScrollTop)}
             </section>
             <section className="min-h-0 min-w-0 overflow-auto">
               <table className="w-full table-fixed text-left text-sm" style={{ minWidth: tableWidth }}>
@@ -2844,7 +2862,6 @@ export function LibraryPage({
                   </div>
                 )}
               </div>
-              {renderPaneTopButton(albumScrollTop > 120, "Back to top", albumListRef, setAlbumScrollTop)}
             </section>
             <section className="min-h-0 min-w-0 overflow-auto">
               {activeAlbum && isAlbumArtworkOpen && (
@@ -3023,7 +3040,6 @@ export function LibraryPage({
                   </div>
                 )}
               </div>
-              {renderPaneTopButton(playlistScrollTop > PLAYLIST_TOOLBAR_HEIGHT + 80, "Back to top", playlistListRef, setPlaylistScrollTop)}
             </section>
             <section className="min-h-0 min-w-0 overflow-auto">
               <div className="sticky top-0 z-10 grid min-h-12 min-w-0 gap-2 border-b border-line bg-ink px-4 py-2 min-[1180px]:grid-cols-[minmax(0,1fr)_auto] min-[1180px]:items-center">
@@ -3484,12 +3500,15 @@ export function LibraryPage({
           </div>
         )}
       </div>
+      {renderActiveTopButton()}
       <TrackDetailsPanel
         track={detailTrack}
         queue={viewTracks}
         playlists={playlists}
         isAudioAnalyzing={isAudioAnalyzing}
         onClose={() => setDetailTrack(null)}
+        onSelectTrack={selectSingleTrack}
+        isTrackSelected={detailTrack ? selectedTrackIds.has(detailTrack.id) : false}
         onPlayTrack={onPlayTrack}
         onRating={onRating}
         onAnalyzeTracks={onAnalyzeTracks}
@@ -3511,6 +3530,69 @@ export function LibraryPage({
         />
       )}
       </div>
+      {libraryActionsMenu && (
+        <div
+          role="menu"
+          className="fixed z-50 w-72 rounded border border-line bg-[rgb(var(--color-popover))] p-3 text-sm shadow-2xl"
+          style={{ left: libraryActionsMenu.x, top: libraryActionsMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <label className="grid gap-2 text-xs uppercase text-muted">
+            Playlist target
+            <select
+              className="h-9 rounded border border-line bg-panel px-2 text-sm normal-case text-white outline-none ring-moss/40 focus:ring-2"
+              value={targetPlaylistId ?? ""}
+              onChange={(event) => setTargetPlaylistId(event.target.value ? Number(event.target.value) : null)}
+            >
+              <option value="">Choose playlist...</option>
+              {playlists.map((playlist) => (
+                <option key={playlist.id} value={playlist.id}>
+                  {playlist.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="mt-3 grid gap-1 border-t border-line pt-2">
+            <button
+              className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-neutral-200 hover:bg-white/10 disabled:text-muted"
+              type="button"
+              disabled={!targetPlaylistId || viewTracks.length === 0}
+              onClick={() => {
+                void onAddTracksToPlaylist(viewTracks.map((track) => track.id));
+                setLibraryActionsMenu(null);
+              }}
+            >
+              <Plus size={15} />
+              Add current view to target
+            </button>
+            <button
+              className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-neutral-200 hover:bg-white/10"
+              type="button"
+              onClick={() => {
+                void refreshTracks();
+                setLibraryActionsMenu(null);
+              }}
+            >
+              <RefreshCw size={15} />
+              Refresh view
+            </button>
+            {libraryView === "albums" && activeAlbum && (
+              <button
+                className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-neutral-200 hover:bg-white/10"
+                type="button"
+                onClick={() => {
+                  void openAlbumArtworkManager(activeAlbum.id);
+                  setLibraryActionsMenu(null);
+                }}
+              >
+                <Album size={15} />
+                Album artwork
+              </button>
+            )}
+          </div>
+        </div>
+      )}
       {columnMenu && (
         <div
           className="fixed z-50 max-h-[70vh] w-80 overflow-auto rounded border border-line bg-[rgb(var(--color-popover))] p-3 text-sm text-neutral-100 shadow-2xl"

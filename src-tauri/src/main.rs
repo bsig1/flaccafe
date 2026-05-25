@@ -64,10 +64,12 @@ fn chrome_candidates() -> Vec<PathBuf> {
         candidates.push(PathBuf::from(program_files).join(r"Google\Chrome\Application\chrome.exe"));
     }
     if let Ok(program_files_x86) = std::env::var("ProgramFiles(x86)") {
-        candidates.push(PathBuf::from(program_files_x86).join(r"Google\Chrome\Application\chrome.exe"));
+        candidates
+            .push(PathBuf::from(program_files_x86).join(r"Google\Chrome\Application\chrome.exe"));
     }
     if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-        candidates.push(PathBuf::from(local_app_data).join(r"Google\Chrome\Application\chrome.exe"));
+        candidates
+            .push(PathBuf::from(local_app_data).join(r"Google\Chrome\Application\chrome.exe"));
     }
 
     candidates
@@ -254,10 +256,10 @@ fn start_packaged_backend(app: &tauri::AppHandle) -> Option<Child> {
         }
     }
 
-    let backend_path = match app
-        .path()
-        .resolve(r"flaccafe-backend\flaccafe-backend.exe", BaseDirectory::Resource)
-    {
+    let backend_path = match app.path().resolve(
+        r"flaccafe-backend\flaccafe-backend.exe",
+        BaseDirectory::Resource,
+    ) {
         Ok(path) => path,
         Err(error) => {
             eprintln!("Could not resolve bundled backend path: {error}");

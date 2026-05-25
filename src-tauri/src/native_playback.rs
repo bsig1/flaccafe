@@ -188,7 +188,7 @@ const EQ_PREAMP_MAX_DB: f32 = 6.0;
 const DSP_SETTINGS_CHECK_SAMPLES: usize = 2048;
 const DIAGNOSTIC_LIMIT: usize = 50;
 const VISUALIZER_RING_SAMPLES: usize = 4096;
-const VISUALIZER_FLUSH_SAMPLES: usize = 256;
+const VISUALIZER_FLUSH_SAMPLES: usize = 1024;
 const VISUALIZER_ANALYSIS_SAMPLES: usize = 2048;
 const VISUALIZER_BINS: usize = 48;
 const VISUALIZER_WAVEFORM_POINTS: usize = 96;
@@ -1210,7 +1210,9 @@ where
             return;
         }
         self.check_countdown = DSP_SETTINGS_CHECK_SAMPLES;
-        let Ok(settings) = self.settings.lock() else {
+        // DSP setting updates are applied opportunistically so a settings write cannot
+        // hold up the real-time audio callback.
+        let Ok(settings) = self.settings.try_lock() else {
             return;
         };
         let normalized = settings.normalized();
@@ -1265,7 +1267,9 @@ where
         if self.visualizer_pending_samples.is_empty() {
             return;
         }
-        if let Ok(mut visualizer) = self.visualizer.lock() {
+        // Visualization is best-effort: the audio source must never wait for the UI
+        // thread while it is trying to draw a graph.
+        if let Ok(mut visualizer) = self.visualizer.try_lock() {
             visualizer.push_samples(
                 &self.visualizer_pending_samples,
                 self.input.sample_rate().get(),
@@ -1876,6 +1880,54 @@ pub fn native_list_output_devices(
 mod tests {
     use super::*;
 
+    struct VecSource {
+        samples: Vec<f32>,
+        index: usize,
+        channels: u16,
+        sample_rate: u32,
+    }
+
+    impl VecSource {
+        fn new(samples: Vec<f32>, channels: u16, sample_rate: u32) -> Self {
+            Self {
+                samples,
+                index: 0,
+                channels,
+                sample_rate,
+            }
+        }
+    }
+
+    impl Iterator for VecSource {
+        type Item = f32;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            let sample = self.samples.get(self.index).copied();
+            if sample.is_some() {
+                self.index += 1;
+            }
+            sample
+        }
+    }
+
+    impl Source for VecSource {
+        fn current_span_len(&self) -> Option<usize> {
+            Some(self.samples.len().saturating_sub(self.index))
+        }
+
+        fn channels(&self) -> ChannelCount {
+            ChannelCount::new(self.channels).unwrap()
+        }
+
+        fn sample_rate(&self) -> SampleRate {
+            SampleRate::new(self.sample_rate).unwrap()
+        }
+
+        fn total_duration(&self) -> Option<Duration> {
+            None
+        }
+    }
+
     #[test]
     fn native_dsp_settings_normalize_band_count_and_gain_limits() {
         let settings = NativeDspSettings {
@@ -1949,6 +2001,30 @@ mod tests {
         assert_eq!(frame.frequency_bins.len(), VISUALIZER_BINS);
         assert_eq!(frame.waveform.len(), VISUALIZER_WAVEFORM_POINTS);
         assert!(frame.frequency_bins.iter().any(|value| *value > 0.05));
+    }
+
+    #[test]
+    fn native_dsp_source_does_not_block_when_visualizer_is_busy() {
+        let channels = 2_u16;
+        let frames = VISUALIZER_FLUSH_SAMPLES + 32;
+        let samples: Vec<f32> = (0..frames * usize::from(channels))
+            .map(|index| ((index % 23) as f32 - 11.0) / 100.0)
+            .collect();
+        let visualizer = Arc::new(Mutex::new(NativeVisualizerState::default()));
+        let _held_visualizer_lock = visualizer.lock().unwrap();
+
+        let source = NativeDspSource::new(
+            VecSource::new(samples.clone(), channels, 48_000),
+            Arc::new(Mutex::new(NativeDspSettings::default())),
+            NativeGainControl::new(1.0),
+            visualizer.clone(),
+        );
+        let rendered: Vec<f32> = source.collect();
+
+        assert_eq!(rendered.len(), samples.len());
+        for (actual, expected) in rendered.iter().zip(samples.iter()) {
+            assert!((actual - expected).abs() < f32::EPSILON);
+        }
     }
 
     #[test]

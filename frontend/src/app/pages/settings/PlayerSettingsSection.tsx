@@ -265,6 +265,9 @@ export function PlayerSettingsSection({
                 </option>
               ))}
             </select>
+            <span className="text-xs text-muted">
+              If native playback skips, try Stable 2048 or Very stable 4096. Larger buffers add a little latency but are safer for decoding, fading, and DSP.
+            </span>
           </label>
           {nativeDeviceMessage && <div className="text-xs text-muted">{nativeDeviceMessage}</div>}
           <div className="rounded border border-line/70 bg-panel px-3 py-2 text-xs text-muted">

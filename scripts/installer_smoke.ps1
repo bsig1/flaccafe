@@ -20,11 +20,22 @@ if (-not $BackendResource) {
     throw "Bundled backend resource is missing from tauri.conf.json."
 }
 
+$FpcalcResource = $Config.bundle.resources.PSObject.Properties |
+    Where-Object { $_.Name -eq "../backend/tools/chromaprint/fpcalc.exe" -and $_.Value -eq "tools/chromaprint/fpcalc.exe" }
+if (-not $FpcalcResource) {
+    throw "Bundled Chromaprint fpcalc resource is missing from tauri.conf.json."
+}
+
 foreach ($Icon in $Config.bundle.icon) {
     $IconPath = Join-Path $Root "src-tauri\$Icon"
     if (-not (Test-Path $IconPath)) {
         throw "Missing app icon: $IconPath"
     }
+}
+
+$FpcalcPath = Join-Path $Root "backend\tools\chromaprint\fpcalc.exe"
+if (-not (Test-Path $FpcalcPath)) {
+    throw "Missing bundled Chromaprint fpcalc executable: $FpcalcPath"
 }
 
 $BuildText = Get-Content $BuildScript -Raw
