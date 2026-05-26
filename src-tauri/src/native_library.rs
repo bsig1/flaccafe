@@ -3605,6 +3605,24 @@ fn duplicate_group_from_native_tracks(
                 .is_some_and(|value| !value.is_empty())
         })
         .count() as i64;
+    let mut similarity_total = 0.0f64;
+    let mut similarity_pairs = 0i64;
+    for left_index in 0..tracks.len() {
+        for right_index in (left_index + 1)..tracks.len() {
+            if let Some(score) = cosine_similarity(
+                tracks[left_index].analysis_embedding.as_deref(),
+                tracks[right_index].analysis_embedding.as_deref(),
+            ) {
+                similarity_total += score;
+                similarity_pairs += 1;
+            }
+        }
+    }
+    let average_audio_similarity = if similarity_pairs > 0 {
+        Some((similarity_total / similarity_pairs as f64 * 10_000.0).round() / 10_000.0)
+    } else {
+        None
+    };
     NativeDuplicateGroup {
         ignore_key: format!("native:{key}"),
         key,
@@ -3617,7 +3635,7 @@ fn duplicate_group_from_native_tracks(
         shared_fingerprint: fingerprints.len() == 1 && !fingerprints.is_empty(),
         shared_acoustic_fingerprint: acoustic_fingerprints.len() == 1
             && !acoustic_fingerprints.is_empty(),
-        average_audio_similarity: None,
+        average_audio_similarity,
         path_roots: path_roots.into_iter().collect(),
         analyzed_tracks,
     }
