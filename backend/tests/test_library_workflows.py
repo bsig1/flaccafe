@@ -72,6 +72,26 @@ class LibraryWorkflowTests(unittest.TestCase):
         self.assertEqual([int(row["id"]) for row in rows], [existing_id])
         self.assertNotEqual(existing_id, missing_id)
 
+    def test_remove_missing_tracks_can_use_native_snapshot_keys(self) -> None:
+        music_dir = self.root / "Music"
+        music_dir.mkdir()
+        kept_file = music_dir / "kept.mp3"
+        removed_file = music_dir / "removed.mp3"
+        kept_file.write_bytes(b"kept")
+        removed_file.write_bytes(b"still-present")
+        kept_id = insert_track(kept_file)
+        removed_id = insert_track(removed_file)
+
+        with connect() as conn:
+            removed = remove_missing_tracks(conn, music_dir, current_path_keys={path_key(kept_file)})
+            conn.commit()
+            rows = conn.execute("SELECT id FROM tracks ORDER BY id").fetchall()
+
+        self.assertEqual(removed, 1)
+        self.assertEqual([int(row["id"]) for row in rows], [kept_id])
+        self.assertTrue(removed_file.exists())
+        self.assertNotEqual(kept_id, removed_id)
+
     def test_delete_track_can_remove_the_database_row_and_audio_file(self) -> None:
         from backend.app.main import delete_track
 

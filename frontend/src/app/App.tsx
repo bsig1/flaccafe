@@ -150,6 +150,7 @@ import {
   isNativeUnavailable,
   nativePathInfo,
   nativeRecyclePaths,
+  nativeScanAudioPaths,
   type NativeRecycleResponse,
 } from "../lib/nativePath";
 import type {
@@ -199,6 +200,7 @@ import type {
   LyricsLookupRequest,
   LyricsResponse,
   LyricsUpdateRequest,
+  NativeScanSnapshot,
   PlayEventEntry,
   PlaylistSummary,
   QueueTrack,
@@ -828,6 +830,27 @@ export default function App() {
     } catch (error) {
       if (isNativeUnavailable(error)) {
         return;
+      }
+      throw error;
+    }
+  }
+
+  async function buildNativeScanSnapshot(paths: string[], statusLabel = "Finding audio files"): Promise<NativeScanSnapshot | null> {
+    try {
+      setStatus(statusLabel);
+      const snapshot = await nativeScanAudioPaths({
+        paths,
+        includeFiles: true,
+        limit: null,
+      });
+      const suffix = snapshot.errors.length
+        ? ` (${snapshot.errors.length.toLocaleString()} folder error${snapshot.errors.length === 1 ? "" : "s"})`
+        : "";
+      setStatus(`Found ${snapshot.total_files.toLocaleString()} audio file${snapshot.total_files === 1 ? "" : "s"} with the native scanner${suffix}`);
+      return snapshot;
+    } catch (error) {
+      if (isNativeUnavailable(error)) {
+        return null;
       }
       throw error;
     }
@@ -1777,7 +1800,8 @@ export default function App() {
     try {
       await validateMusicFoldersWithNative(targetPaths);
       const savePaths = pathOverride ? uniqueFolderPaths([...libraryFolders, ...targetPaths]) : targetPaths;
-      const started = await startScanLibrary(targetPaths, savePaths);
+      const nativeSnapshot = await buildNativeScanSnapshot(targetPaths);
+      const started = await startScanLibrary(targetPaths, savePaths, nativeSnapshot);
       let latest: ScanProgress | null = null;
 
       while (true) {
@@ -1833,7 +1857,10 @@ export default function App() {
       await loadClapCoverage();
       await loadSettings();
       try {
-        applyFolderWatchStatus(await startFolderWatch(result.folder_paths[0] ?? result.folder_path, folderWatchStatus?.interval_seconds ?? 45), false);
+        applyFolderWatchStatus(
+          await startFolderWatch(result.folder_paths[0] ?? result.folder_path, folderWatchStatus?.interval_seconds ?? 45, 300, nativeSnapshot),
+          false,
+        );
       } catch {
         await loadFolderWatchStatus();
       }
@@ -1902,7 +1929,8 @@ export default function App() {
       return;
     }
     try {
-      const response = await startFolderWatch(targetPath, intervalSeconds);
+      const nativeSnapshot = await buildNativeScanSnapshot([targetPath], "Checking watched folder");
+      const response = await startFolderWatch(targetPath, intervalSeconds, 300, nativeSnapshot);
       applyFolderWatchStatus(response, false);
       setStatus("Folder watch is running. Pending changes will wait for your review.");
     } catch (error) {
@@ -1922,7 +1950,9 @@ export default function App() {
 
   async function handleRefreshFolderWatch() {
     try {
-      const response = await refreshFolderWatch(uniqueFolderPaths([...libraryFolders, folderPath])[0] || settings?.library_path || null);
+      const targetPath = uniqueFolderPaths([...libraryFolders, folderPath])[0] || settings?.library_path || null;
+      const nativeSnapshot = targetPath ? await buildNativeScanSnapshot([targetPath], "Checking watched folder") : null;
+      const response = await refreshFolderWatch(targetPath, 300, nativeSnapshot);
       applyFolderWatchStatus(response, false);
       setStatus(
         response.pending_count

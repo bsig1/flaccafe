@@ -304,6 +304,39 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(settings.status_code, 200)
         self.assertEqual(settings.json()["library_paths"], [str(folder_a.resolve()), str(folder_b.resolve())])
 
+    def test_scan_endpoint_accepts_native_file_snapshot(self) -> None:
+        folder = self.root / "Music"
+        folder.mkdir()
+        audio_file = folder / "Song.mp3"
+        audio_file.write_bytes(b"audio")
+
+        def fake_scan(folder_path: str, file_snapshots=None) -> ScanStats:
+            self.assertEqual(Path(folder_path), folder.resolve())
+            self.assertIsNotNone(file_snapshots)
+            self.assertEqual([snapshot.path for snapshot in file_snapshots], [audio_file])
+            self.assertEqual(file_snapshots[0].file_size, 5)
+            return ScanStats(folder_path=str(folder.resolve()), scanned_files=len(file_snapshots), inserted=1)
+
+        with patch("backend.app.main.scan_folder", side_effect=fake_scan):
+            response = self.client.post(
+                "/scan",
+                json={
+                    "folder_path": str(folder),
+                    "native_snapshot": {
+                        "folders": [str(folder)],
+                        "total_files": 1,
+                        "total_bytes": 5,
+                        "elapsed_ms": 3,
+                        "files": [{"path": str(audio_file), "modified_ms": 1_700_000_000_000, "size_bytes": 5}],
+                        "errors": [],
+                    },
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["scanned_files"], 1)
+        self.assertEqual(response.json()["inserted"], 1)
+
     def test_remove_library_source_removes_tracks_but_keeps_files(self) -> None:
         folder_a = self.root / "Music A"
         folder_b = self.root / "Music B"
@@ -3162,6 +3195,34 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(ack.status_code, 200)
         acknowledged = {notification["id"]: notification["acknowledged"] for notification in ack.json()["notifications"]}
         self.assertTrue(acknowledged[latest_notification["id"]])
+
+    def test_folder_watch_refresh_accepts_native_file_snapshot(self) -> None:
+        audio_file = self.root / "tracked.mp3"
+        audio_file.write_bytes(b"still-on-disk")
+        insert_track(audio_file, title="Tracked Song")
+
+        with connect() as conn:
+            set_setting(conn, "library_path", str(self.root))
+            conn.commit()
+
+        response = self.client.post(
+            "/library/watch/refresh",
+            json={
+                "folder_path": str(self.root),
+                "native_snapshot": {
+                    "folders": [str(self.root)],
+                    "total_files": 0,
+                    "total_bytes": 0,
+                    "elapsed_ms": 1,
+                    "files": [],
+                    "errors": [],
+                },
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["counts"]["removed"], 1)
+        self.assertTrue(audio_file.exists())
 
     def test_folder_watch_apply_removes_missing_track(self) -> None:
         audio_file = self.root / "gone.mp3"

@@ -11,10 +11,12 @@ from typing import Any, Literal
 from .database import connect, get_setting, invalidate_library_query_cache, set_setting
 from .scanner import (
     ensure_album,
+    AudioFileSnapshot,
     file_fingerprint,
     file_state,
     is_path_under_folder,
     iter_audio_files,
+    native_file_snapshots,
     path_key,
     read_metadata_cached,
     upsert_track,
@@ -218,11 +220,25 @@ def change_summary(change_type: ChangeType, row: dict[str, Any] | None, path: Pa
     return track_text(row or {}, "title") or "Pending library change"
 
 
-def file_states_for_folder(folder: Path) -> dict[str, tuple[Path, str, int]]:
+def file_states_for_folder(
+    folder: Path,
+    file_snapshots: list[AudioFileSnapshot] | None = None,
+) -> dict[str, tuple[Path, str, int]]:
     states: dict[str, tuple[Path, str, int]] = {}
-    for audio_path in sorted(iter_audio_files(folder), key=lambda item: str(item).lower()):
+    if file_snapshots is None:
+        candidates = [(audio_path, None, None) for audio_path in sorted(iter_audio_files(folder), key=lambda item: str(item).lower())]
+    else:
+        candidates = [
+            (snapshot.path, snapshot.modified_at, snapshot.file_size)
+            for snapshot in sorted(file_snapshots, key=lambda item: str(item.path).lower())
+            if is_path_under_folder(str(snapshot.path), folder)
+        ]
+    for audio_path, snapshot_modified_at, snapshot_file_size in candidates:
         try:
-            modified_at, file_size = file_state(audio_path)
+            if snapshot_modified_at is not None and snapshot_file_size is not None:
+                modified_at, file_size = snapshot_modified_at, snapshot_file_size
+            else:
+                modified_at, file_size = file_state(audio_path)
             states[path_key(audio_path)] = (audio_path, modified_at, file_size)
         except OSError:
             continue
@@ -269,22 +285,26 @@ def new_change(
     )
 
 
-def detect_folder_changes(folder_path: str) -> list[FolderWatchChange]:
+def detect_folder_changes(
+    folder_path: str,
+    file_snapshots: list[AudioFileSnapshot] | None = None,
+) -> list[FolderWatchChange]:
     folder = Path(folder_path).expanduser().resolve()
     if not folder.exists() or not folder.is_dir():
         raise ValueError(f"Folder does not exist: {folder}")
 
     detected_at = utc_now()
-    file_states = file_states_for_folder(folder)
+    file_states = file_states_for_folder(folder, file_snapshots=file_snapshots)
 
     with connect() as conn:
         tracked_rows = library_tracks_under_folder(conn, folder)
 
     rows_by_key = {row["path_key"]: row for row in tracked_rows}
     missing_rows: list[dict[str, Any]] = []
+    snapshot_is_authoritative = file_snapshots is not None
     for row in tracked_rows:
         row_key = row["path_key"]
-        if row_key not in file_states or not Path(row["path"]).exists():
+        if row_key not in file_states or (not snapshot_is_authoritative and not Path(row["path"]).exists()):
             missing_rows.append(row)
 
     added_keys = set(file_states) - set(rows_by_key)
@@ -492,7 +512,11 @@ def acknowledge_folder_watch_notifications(
         return _state.snapshot(limit)
 
 
-def refresh_folder_watch_now(folder_path: str | None = None, limit: int = WATCHER_DEFAULT_LIMIT) -> dict[str, Any]:
+def refresh_folder_watch_now(
+    folder_path: str | None = None,
+    limit: int = WATCHER_DEFAULT_LIMIT,
+    native_files: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     with _lock:
         folder = folder_path or _state.folder_path
         interval_seconds = _state.interval_seconds
@@ -514,7 +538,7 @@ def refresh_folder_watch_now(folder_path: str | None = None, limit: int = WATCHE
             return _state.snapshot(limit)
 
     try:
-        changes = detect_folder_changes(folder)
+        changes = detect_folder_changes(folder, file_snapshots=native_file_snapshots(native_files))
         checked_at = utc_now()
         next_check = datetime.fromtimestamp(time.time() + interval_seconds, timezone.utc).replace(microsecond=0).isoformat()
         with _lock:
@@ -602,7 +626,12 @@ def _watch_loop() -> None:
             break
 
 
-def start_folder_watcher(folder_path: str, interval_seconds: int | None = None, limit: int = WATCHER_DEFAULT_LIMIT) -> dict[str, Any]:
+def start_folder_watcher(
+    folder_path: str,
+    interval_seconds: int | None = None,
+    limit: int = WATCHER_DEFAULT_LIMIT,
+    native_files: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     global _thread
     folder = str(Path(folder_path).expanduser().resolve())
     interval = clamp_interval(interval_seconds)
@@ -619,7 +648,7 @@ def start_folder_watcher(folder_path: str, interval_seconds: int | None = None, 
 
     _thread = Thread(target=_watch_loop, name="flac-cafe-folder-watch", daemon=True)
     _thread.start()
-    refresh_folder_watch_now(folder, limit)
+    refresh_folder_watch_now(folder, limit, native_files=native_files)
     return get_folder_watch_status(limit)
 
 

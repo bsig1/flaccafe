@@ -134,7 +134,7 @@ from .recommender import (
     track_is_exploratory,
     track_is_familiar,
 )
-from .scanner import ScanStats, file_state, is_path_under_folder, path_key, read_metadata, scan_folder, upsert_track
+from .scanner import ScanStats, file_state, is_path_under_folder, native_file_snapshots, path_key, read_metadata, scan_folder, upsert_track
 from .scan_jobs import get_scan_job, start_scan_job
 from .scrobbling import (
     complete_lastfm_login,
@@ -4292,7 +4292,8 @@ def start_folder_watch(request: FolderWatchStartRequest) -> dict:
         conn.commit()
 
     try:
-        return start_folder_watcher(folder_path, request.interval_seconds, request.limit)
+        native_files, _native_scan_errors = native_snapshot_files_and_errors(request)
+        return start_folder_watcher(folder_path, request.interval_seconds, request.limit, native_files=native_files)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -4309,7 +4310,8 @@ def refresh_folder_watch(request: FolderWatchRefreshRequest) -> dict:
         with connect() as conn:
             folder_path = get_setting(conn, "library_path")
     try:
-        return refresh_folder_watch_now(folder_path, request.limit)
+        native_files, _native_scan_errors = native_snapshot_files_and_errors(request)
+        return refresh_folder_watch_now(folder_path, request.limit, native_files=native_files)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -8348,12 +8350,32 @@ def import_playlist(request: PlaylistImportRequest) -> dict:
     return dict(row)
 
 
-def scan_library_paths(paths: list[str], save_paths: list[str] | None = None) -> ScanStats:
+def native_snapshot_files_and_errors(request) -> tuple[list[dict] | None, list[str]]:
+    if request.native_snapshot is None:
+        return None, []
+    return (
+        [file.model_dump() for file in request.native_snapshot.files],
+        list(request.native_snapshot.errors),
+    )
+
+
+def scan_library_paths(
+    paths: list[str],
+    save_paths: list[str] | None = None,
+    native_files: list[dict] | None = None,
+    native_scan_errors: list[str] | None = None,
+) -> ScanStats:
     if not paths:
         raise ValueError("Choose at least one music folder")
     combined = ScanStats(folder_path="; ".join(paths))
+    combined.errors.extend(native_scan_errors or [])
+    file_snapshots = native_file_snapshots(native_files)
     for folder_path in paths:
-        result = scan_folder(folder_path)
+        result = (
+            scan_folder(folder_path, file_snapshots=file_snapshots)
+            if file_snapshots is not None
+            else scan_folder(folder_path)
+        )
         combined.scanned_files += result.scanned_files
         combined.inserted += result.inserted
         combined.updated += result.updated
@@ -8370,7 +8392,13 @@ def scan_library_paths(paths: list[str], save_paths: list[str] | None = None) ->
 def scan_library(request: ScanRequest) -> ScanResult:
     try:
         paths = request_library_paths(request)
-        result = scan_library_paths(paths, request_saved_library_paths(request, paths))
+        native_files, native_scan_errors = native_snapshot_files_and_errors(request)
+        result = scan_library_paths(
+            paths,
+            request_saved_library_paths(request, paths),
+            native_files=native_files,
+            native_scan_errors=native_scan_errors,
+        )
         return ScanResult(**result.__dict__, folder_paths=paths)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -8382,7 +8410,13 @@ def start_scan_library(request: ScanRequest) -> dict:
         paths = request_library_paths(request)
         if not paths:
             raise ValueError("Choose at least one music folder")
-        job = start_scan_job(paths, save_library_paths=request_saved_library_paths(request, paths))
+        native_files, native_scan_errors = native_snapshot_files_and_errors(request)
+        job = start_scan_job(
+            paths,
+            save_library_paths=request_saved_library_paths(request, paths),
+            native_files=native_files,
+            native_scan_errors=native_scan_errors,
+        )
         return {
             "job_id": job["job_id"],
             "folder_path": job["folder_path"],

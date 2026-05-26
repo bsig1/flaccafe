@@ -1004,6 +1004,21 @@ export interface ReportFileResponse {
   error: string | null;
 }
 
+export interface NativeScanFile {
+  path: string;
+  modified_ms: number | null;
+  size_bytes: number | null;
+}
+
+export interface NativeScanSnapshot {
+  folders: string[];
+  total_files: number;
+  total_bytes: number;
+  elapsed_ms: number;
+  files: NativeScanFile[];
+  errors: string[];
+}
+
 export interface AudioAnalysisCoverage {
   total_tracks: number;
   analyzed_tracks: number;

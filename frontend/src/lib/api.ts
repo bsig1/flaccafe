@@ -138,6 +138,7 @@ import type {
   RegexTagPresetRequest,
   ReportFileRequest,
   ReportFileResponse,
+  NativeScanSnapshot,
   ScanProgress,
   ScanResult,
   ScanStartResponse,
@@ -590,13 +591,14 @@ export function fetchFolderWatchStatus(limit = 300): Promise<FolderWatchStatus> 
   return request<FolderWatchStatus>(`/library/watch?limit=${limit}`);
 }
 
-export function startFolderWatch(folderPath?: string | null, intervalSeconds = 45, limit = 300): Promise<FolderWatchStatus> {
+export function startFolderWatch(folderPath?: string | null, intervalSeconds = 45, limit = 300, nativeSnapshot?: NativeScanSnapshot | null): Promise<FolderWatchStatus> {
   return request<FolderWatchStatus>("/library/watch/start", {
     method: "POST",
     body: JSON.stringify({
       folder_path: folderPath || null,
       interval_seconds: intervalSeconds,
       limit,
+      native_snapshot: nativeSnapshot ?? null,
     }),
   });
 }
@@ -605,12 +607,13 @@ export function stopFolderWatch(limit = 300): Promise<FolderWatchStatus> {
   return request<FolderWatchStatus>(`/library/watch/stop?limit=${limit}`, { method: "POST" });
 }
 
-export function refreshFolderWatch(folderPath?: string | null, limit = 300): Promise<FolderWatchStatus> {
+export function refreshFolderWatch(folderPath?: string | null, limit = 300, nativeSnapshot?: NativeScanSnapshot | null): Promise<FolderWatchStatus> {
   return request<FolderWatchStatus>("/library/watch/refresh", {
     method: "POST",
     body: JSON.stringify({
       folder_path: folderPath || null,
       limit,
+      native_snapshot: nativeSnapshot ?? null,
     }),
   });
 }
@@ -1344,23 +1347,28 @@ export function importPlaylist(playlistPath: string, name?: string): Promise<Pla
   });
 }
 
-function scanRequestBody(folderPaths: string | string[], saveLibraryPaths?: string[]) {
+function scanRequestBody(folderPaths: string | string[], saveLibraryPaths?: string[], nativeSnapshot?: NativeScanSnapshot | null) {
   const paths = (Array.isArray(folderPaths) ? folderPaths : [folderPaths]).map((path) => path.trim()).filter(Boolean);
   const savedPaths = (saveLibraryPaths ?? paths).map((path) => path.trim()).filter(Boolean);
-  return { folder_path: paths[0] ?? "", folder_paths: paths, save_library_paths: savedPaths };
+  return {
+    folder_path: paths[0] ?? "",
+    folder_paths: paths,
+    save_library_paths: savedPaths,
+    native_snapshot: nativeSnapshot ?? null,
+  };
 }
 
-export function scanLibrary(folderPath: string | string[], saveLibraryPaths?: string[]): Promise<ScanResult> {
+export function scanLibrary(folderPath: string | string[], saveLibraryPaths?: string[], nativeSnapshot?: NativeScanSnapshot | null): Promise<ScanResult> {
   return request<ScanResult>("/scan", {
     method: "POST",
-    body: JSON.stringify(scanRequestBody(folderPath, saveLibraryPaths)),
+    body: JSON.stringify(scanRequestBody(folderPath, saveLibraryPaths, nativeSnapshot)),
   });
 }
 
-export function startScanLibrary(folderPath: string | string[], saveLibraryPaths?: string[]): Promise<ScanStartResponse> {
+export function startScanLibrary(folderPath: string | string[], saveLibraryPaths?: string[], nativeSnapshot?: NativeScanSnapshot | null): Promise<ScanStartResponse> {
   return request<ScanStartResponse>("/scan/start", {
     method: "POST",
-    body: JSON.stringify(scanRequestBody(folderPath, saveLibraryPaths)),
+    body: JSON.stringify(scanRequestBody(folderPath, saveLibraryPaths, nativeSnapshot)),
   });
 }
 

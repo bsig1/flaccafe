@@ -5,10 +5,11 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 from threading import Lock, Thread
+from typing import Any
 from uuid import uuid4
 
 from .database import connect, set_setting
-from .scanner import ScanStats, scan_folder
+from .scanner import ScanStats, native_file_snapshots, scan_folder
 
 
 def utc_now() -> datetime:
@@ -25,6 +26,8 @@ class ScanJob:
     folder_path: str
     folder_paths: list[str] = field(default_factory=list)
     save_library_paths: list[str] = field(default_factory=list)
+    native_files: list[dict[str, Any]] | None = None
+    native_scan_errors: list[str] = field(default_factory=list)
     status: str = "pending"
     total_files: int = 0
     processed_files: int = 0
@@ -117,10 +120,19 @@ def _run_scan(job_id: str) -> None:
         job = _jobs[job_id]
         job.status = "counting"
         paths = job.folder_paths[:]
+        native_files = None if job.native_files is None else list(job.native_files)
+        native_scan_errors = list(job.native_scan_errors)
+        completed.errors.extend(native_scan_errors)
+        job.errors = native_scan_errors[-25:]
 
     try:
+        file_snapshots = native_file_snapshots(native_files)
         for folder_path in paths:
-            result = scan_folder(folder_path, progress_callback=update_from_scan)
+            result = (
+                scan_folder(folder_path, progress_callback=update_from_scan, file_snapshots=file_snapshots)
+                if file_snapshots is not None
+                else scan_folder(folder_path, progress_callback=update_from_scan)
+            )
             completed.scanned_files += result.scanned_files
             completed.inserted += result.inserted
             completed.updated += result.updated
@@ -148,7 +160,12 @@ def _run_scan(job_id: str) -> None:
             job.current_path = None
 
 
-def start_scan_job(folder_paths: str | list[str], save_library_paths: list[str] | None = None) -> dict:
+def start_scan_job(
+    folder_paths: str | list[str],
+    save_library_paths: list[str] | None = None,
+    native_files: list[dict[str, Any]] | None = None,
+    native_scan_errors: list[str] | None = None,
+) -> dict:
     paths = [folder_paths] if isinstance(folder_paths, str) else folder_paths
     paths = [str(Path(path).expanduser().resolve()) for path in paths if str(path).strip()]
     if not paths:
@@ -165,6 +182,8 @@ def start_scan_job(folder_paths: str | list[str], save_library_paths: list[str] 
             folder_path="; ".join(paths),
             folder_paths=paths,
             save_library_paths=saved_paths,
+            native_files=native_files,
+            native_scan_errors=list(native_scan_errors or []),
         )
 
     thread = Thread(target=_run_scan, args=(job_id,), daemon=True)

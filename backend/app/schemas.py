@@ -1100,10 +1100,26 @@ class ReportFileResponse(BaseModel):
     error: str | None = None
 
 
+class NativeScanFile(BaseModel):
+    path: str
+    modified_ms: int | None = None
+    size_bytes: int | None = None
+
+
+class NativeScanSnapshot(BaseModel):
+    folders: list[str] = Field(default_factory=list)
+    total_files: int = 0
+    total_bytes: int = 0
+    elapsed_ms: int = 0
+    files: list[NativeScanFile] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
 class ScanRequest(BaseModel):
     folder_path: str | None = None
     folder_paths: list[str] = Field(default_factory=list)
     save_library_paths: list[str] = Field(default_factory=list)
+    native_snapshot: NativeScanSnapshot | None = None
 
 
 class ScanResult(BaseModel):
@@ -1189,11 +1205,13 @@ class FolderWatchStartRequest(BaseModel):
     folder_path: str | None = None
     interval_seconds: int = Field(default=45, ge=10, le=3600)
     limit: int = Field(default=300, ge=1, le=5000)
+    native_snapshot: NativeScanSnapshot | None = None
 
 
 class FolderWatchRefreshRequest(BaseModel):
     folder_path: str | None = None
     limit: int = Field(default=300, ge=1, le=5000)
+    native_snapshot: NativeScanSnapshot | None = None
 
 
 class FolderWatchApplyRequest(BaseModel):

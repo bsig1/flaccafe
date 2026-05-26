@@ -163,8 +163,14 @@ def read_metadata(path: Path) -> dict[str, Any]:
     }
 
 
-def read_metadata_cached(conn, path: Path) -> dict[str, Any]:
-    modified_at, file_size = file_state(path)
+def read_metadata_cached(
+    conn,
+    path: Path,
+    modified_at: str | None = None,
+    file_size: int | None = None,
+) -> dict[str, Any]:
+    if modified_at is None or file_size is None:
+        modified_at, file_size = file_state(path)
     key = path_key(path)
     row = conn.execute(
         """
@@ -185,6 +191,7 @@ def read_metadata_cached(conn, path: Path) -> dict[str, Any]:
             conn.execute("DELETE FROM track_metadata_cache WHERE path_key = ?", (key,))
 
     metadata = read_metadata(path)
+    metadata["file_modified_at"] = modified_at
     conn.execute(
         """
         INSERT INTO track_metadata_cache(path_key, path, file_modified_at, file_size, metadata_json, updated_at)
@@ -249,12 +256,72 @@ class ScanStats:
 ScanProgressCallback = Callable[[ScanStats, int, int, Path | None, str], None]
 
 
+@dataclass(frozen=True)
+class AudioFileSnapshot:
+    path: Path
+    modified_at: str | None = None
+    file_size: int | None = None
+
+
+def modified_ms_to_iso(value: Any) -> str | None:
+    if value is None:
+        return None
+    try:
+        milliseconds = int(value)
+    except (TypeError, ValueError):
+        return None
+    try:
+        return datetime.fromtimestamp(milliseconds / 1000, timezone.utc).replace(microsecond=0).isoformat()
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def native_file_snapshots(files: list[Any] | None) -> list[AudioFileSnapshot] | None:
+    if files is None:
+        return None
+    snapshots: list[AudioFileSnapshot] = []
+    for item in files:
+        payload = dict(item) if isinstance(item, dict) else {}
+        raw_path = str(payload.get("path") or "").strip()
+        if not raw_path:
+            continue
+        size_value = payload.get("size_bytes")
+        try:
+            file_size = int(size_value) if size_value is not None else None
+        except (TypeError, ValueError):
+            file_size = None
+        snapshots.append(
+            AudioFileSnapshot(
+                path=Path(raw_path).expanduser(),
+                modified_at=modified_ms_to_iso(payload.get("modified_ms")),
+                file_size=file_size,
+            )
+        )
+    return snapshots
+
+
 def iter_audio_files(folder: Path) -> list[Path]:
     return [
         path
         for path in folder.rglob("*")
         if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS
     ]
+
+
+def audio_snapshots_under_folder(
+    folder: Path,
+    file_snapshots: list[AudioFileSnapshot] | None,
+) -> list[AudioFileSnapshot]:
+    if file_snapshots is None:
+        return [AudioFileSnapshot(path=path) for path in iter_audio_files(folder)]
+    return sorted(
+        (
+            snapshot
+            for snapshot in file_snapshots
+            if snapshot.path.suffix.lower() in SUPPORTED_EXTENSIONS and is_path_under_folder(str(snapshot.path), folder)
+        ),
+        key=lambda snapshot: str(snapshot.path).lower(),
+    )
 
 
 def ensure_album(conn, metadata: dict[str, Any]) -> int | None:
@@ -363,13 +430,17 @@ def is_path_under_folder(path_text: str, folder: Path) -> bool:
     return path_key_text == folder_key or path_key_text.startswith(folder_key + os.sep)
 
 
-def remove_missing_tracks(conn, folder: Path) -> int:
-    rows = conn.execute("SELECT id, path FROM tracks").fetchall()
+def remove_missing_tracks(conn, folder: Path, current_path_keys: set[str] | None = None) -> int:
+    rows = conn.execute("SELECT id, path, path_key FROM tracks").fetchall()
     missing_ids: list[int] = []
     for row in rows:
         if not is_path_under_folder(row["path"], folder):
             continue
-        if not Path(row["path"]).exists():
+        if current_path_keys is not None:
+            is_missing = row["path_key"] not in current_path_keys
+        else:
+            is_missing = not Path(row["path"]).exists()
+        if is_missing:
             missing_ids.append(int(row["id"]))
 
     for track_id in missing_ids:
@@ -391,23 +462,34 @@ def remove_missing_tracks(conn, folder: Path) -> int:
 def scan_folder(
     folder_path: str,
     progress_callback: ScanProgressCallback | None = None,
+    file_snapshots: list[AudioFileSnapshot] | None = None,
 ) -> ScanStats:
     folder = Path(folder_path).expanduser().resolve()
     if not folder.exists() or not folder.is_dir():
         raise ValueError(f"Folder does not exist: {folder}")
 
     stats = ScanStats(folder_path=str(folder))
-    files = iter_audio_files(folder)
+    files = audio_snapshots_under_folder(folder, file_snapshots)
+    current_path_keys = {path_key(snapshot.path) for snapshot in files} if file_snapshots is not None else None
     stats.scanned_files = len(files)
     if progress_callback:
         progress_callback(stats, 0, len(files), None, "scanning")
 
     with connect() as conn:
-        for index, audio_path in enumerate(files, start=1):
+        for index, snapshot in enumerate(files, start=1):
+            audio_path = snapshot.path
             if progress_callback:
                 progress_callback(stats, index - 1, len(files), audio_path, "scanning")
             try:
-                result = upsert_track(conn, read_metadata_cached(conn, audio_path))
+                result = upsert_track(
+                    conn,
+                    read_metadata_cached(
+                        conn,
+                        audio_path,
+                        modified_at=snapshot.modified_at,
+                        file_size=snapshot.file_size,
+                    ),
+                )
                 if result == "inserted":
                     stats.inserted += 1
                 else:
@@ -423,7 +505,7 @@ def scan_folder(
                 progress_callback(stats, index, len(files), audio_path, "scanning")
         if progress_callback:
             progress_callback(stats, len(files), len(files), None, "cleaning")
-        stats.removed = remove_missing_tracks(conn, folder)
+        stats.removed = remove_missing_tracks(conn, folder, current_path_keys=current_path_keys)
         if stats.inserted or stats.updated or stats.removed:
             invalidate_library_query_cache(conn)
         set_setting(conn, "library_path", str(folder))

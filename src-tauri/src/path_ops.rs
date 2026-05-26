@@ -105,7 +105,7 @@ pub fn native_scan_audio_paths(
     let started = Instant::now();
     let extensions = normalized_extensions(extensions);
     let include_files = include_files.unwrap_or(false);
-    let limit = limit.unwrap_or(5000);
+    let limit = limit.unwrap_or(usize::MAX);
     let mut files = Vec::new();
     let mut total_files = 0usize;
     let mut total_bytes = 0u64;

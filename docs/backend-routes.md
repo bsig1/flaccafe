@@ -114,6 +114,7 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `GET /tracks/{track_id}/artwork` returns embedded or cached artwork.
 - `GET /tracks/{track_id}/lyrics` returns embedded/database lyrics.
 - `POST /tracks/{track_id}/lyrics/fetch` attempts online lyric lookup.
+- `POST /lyrics/lookup` attempts online lyric lookup from supplied title, artist, album, and optional path metadata.
 - `PATCH /tracks/{track_id}/lyrics` updates database lyrics or writes embedded lyrics when requested.
 - `GET /artists` lists local artist summaries for the Library artist view.
 - `GET /artists/info` fetches cached artist biography data.
