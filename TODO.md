@@ -34,7 +34,6 @@
 ## Rust Native Migration Backlog
 - Consider moving ListenBrainz and Last.fm HTTP submission to Rust because signing and JSON/form posts are not Python-specialist work.
 - Keep CLAP inference in Python, but move analysis job state, candidate selection, pause/resume/cancel, progress, DB writes, and genre-tag application into Rust.
-- Move device sync detected-drive probing, preview, copy jobs, and playlist export into Rust where Windows APIs or filesystem operations are involved.
 - Consider moving LRCLIB HTTP lookup to Rust; keep embedded lyrics reads/writes in Python until Rust tag-writing safety is proven.
 - Move album artwork sidecar discovery, cache lookup, cache storage, local image serving, and simple cover-art downloads into Rust; keep embedded artwork extraction/writes in Python until Rust tag-writing safety is proven.
 - Move AcoustID/fpcalc process invocation and fingerprint job state into Rust. Keep MusicBrainz matching heuristics in Python until the matching code is decomposed and covered by golden tests.
@@ -77,6 +76,7 @@
 - Moved lyric database reads/writes into Rust; embedded lyric reads/writes and online lyric fetches remain Python-owned.
 - Moved fetched lyric sidecar cache writes into Rust while keeping LRCLIB matching in the Python expert worker.
 - Moved duplicate embedding similarity math into Rust duplicate review groups.
+- Moved device sync drive probing, preview, file copy, target path generation, and playlist export into Rust.
 - Added `flaccafe-media://localhost/python-bytes/...` for Python-owned byte responses such as album art and CD live audio.
 - Switched `npm run dev` to desktop dev so local development exercises the same Rust-to-Python worker path as packaged builds.
 

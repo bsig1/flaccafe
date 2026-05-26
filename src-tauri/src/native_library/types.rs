@@ -431,6 +431,60 @@ pub struct NativeDeviceSyncProfilesResponse {
 }
 
 #[derive(Serialize)]
+pub struct NativeDeviceSyncChange {
+    pub(crate) track_id: i64,
+    pub(crate) title: Option<String>,
+    pub(crate) artist: Option<String>,
+    pub(crate) source_path: String,
+    pub(crate) target_path: String,
+    pub(crate) changed: bool,
+    pub(crate) applied: bool,
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct NativeDeviceSyncPlaylistExport {
+    pub(crate) playlist_id: i64,
+    pub(crate) name: String,
+    pub(crate) playlist_path: String,
+    pub(crate) track_count: i64,
+    pub(crate) applied: bool,
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct NativeDeviceSyncResponse {
+    pub(crate) target_folder: String,
+    pub(crate) total_tracks: i64,
+    pub(crate) changed_files: i64,
+    pub(crate) copied_files: i64,
+    pub(crate) skipped_files: i64,
+    pub(crate) playlists_written: i64,
+    pub(crate) changes: Vec<NativeDeviceSyncChange>,
+    pub(crate) playlist_exports: Vec<NativeDeviceSyncPlaylistExport>,
+}
+
+#[derive(Serialize)]
+pub struct NativeDeviceSyncDetectedDevice {
+    pub(crate) id: String,
+    pub(crate) label: String,
+    pub(crate) root_path: String,
+    pub(crate) device_kind: String,
+    pub(crate) drive_type: Option<i64>,
+    pub(crate) size_bytes: Option<i64>,
+    pub(crate) free_bytes: Option<i64>,
+    pub(crate) writable: bool,
+    pub(crate) hint: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct NativeDeviceSyncDevicesResponse {
+    pub(crate) devices: Vec<NativeDeviceSyncDetectedDevice>,
+    pub(crate) mtp_supported: bool,
+    pub(crate) message: String,
+}
+
+#[derive(Serialize)]
 pub struct NativeBulkUndoLogEntry {
     pub(crate) id: i64,
     pub(crate) batch_id: Option<String>,

@@ -429,6 +429,28 @@ pub(super) fn try_handle_native_json(
         "get_device_sync_profiles" => Some(to_json(
             native_library::library_tools::native_device_sync_profiles(state)?,
         )?),
+        "get_device_sync_devices" => Some(to_json(
+            native_library::library_tools::native_device_sync_devices(),
+        )?),
+        "sync_device_folder" => Some(to_json(
+            native_library::library_tools::native_sync_device_folder(
+                required_body_string(&body, "target_folder")
+                    .or_else(|_| required_body_string(&body, "targetFolder"))?,
+                body_i64_vec(&body, "playlist_ids").or_else(|| body_i64_vec(&body, "playlistIds")),
+                body_i64_vec(&body, "track_ids").or_else(|| body_i64_vec(&body, "trackIds")),
+                body_string(&body, "music_subfolder")
+                    .or_else(|| body_string(&body, "musicSubfolder")),
+                body_string(&body, "playlist_subfolder")
+                    .or_else(|| body_string(&body, "playlistSubfolder")),
+                body_bool(&body, "copy_files").or_else(|| body_bool(&body, "copyFiles")),
+                body_bool(&body, "export_playlists")
+                    .or_else(|| body_bool(&body, "exportPlaylists")),
+                body_bool(&body, "preserve_structure")
+                    .or_else(|| body_bool(&body, "preserveStructure")),
+                body_bool(&body, "apply"),
+                body_usize(&body, "limit"),
+            )?,
+        )?),
         "create_device_sync_profile" => Some(to_json(
             native_library::library_tools::native_save_device_sync_profile(
                 state,
