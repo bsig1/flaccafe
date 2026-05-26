@@ -52,7 +52,7 @@ fn usage_now() -> String {
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
-fn record_python_worker_action(action: &str) {
+pub(crate) fn record_python_worker_action(action: &str) {
     let lock = PYTHON_WORKER_USAGE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(mut usage) = lock.lock() {
         let entry = usage.entry(action.to_string()).or_default();
@@ -134,6 +134,20 @@ fn worker_command() -> Result<Command, String> {
         .ok_or_else(|| "Could not resolve project root for Python worker".to_string())?;
     let mut command = Command::new(dev_python_exe(&root));
     command.current_dir(root).args(["-m", "backend.app.worker"]);
+    Ok(command)
+}
+
+pub(crate) fn python_module_command(module: &str, packaged_arg: &str) -> Result<Command, String> {
+    if let Some(exe) = packaged_backend_exe() {
+        let mut command = Command::new(exe);
+        command.arg(packaged_arg);
+        return Ok(command);
+    }
+
+    let root = repo_root()
+        .ok_or_else(|| "Could not resolve project root for Python worker".to_string())?;
+    let mut command = Command::new(dev_python_exe(&root));
+    command.current_dir(root).args(["-m", module]);
     Ok(command)
 }
 

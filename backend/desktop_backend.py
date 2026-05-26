@@ -48,10 +48,14 @@ from backend.app.startup_profile import mark
 
 mark("desktop backend streams ready")
 
-from backend.app.worker import main as worker_main
-
-
 def main() -> int:
+    if "--clap-worker" in sys.argv:
+        from backend.app.clap_worker import main as clap_worker_main
+
+        return clap_worker_main()
+
+    from backend.app.worker import main as worker_main
+
     return worker_main()
 
 

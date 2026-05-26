@@ -62,6 +62,29 @@ pub(super) fn try_handle_native_json(
             required_body_string(&body, "path")?,
         )?)?),
         "get_clap_coverage" => Some(to_json(native_library::native_clap_coverage(state)?)?),
+        "start_clap_audio_analysis" => Some(to_json(
+            native_library::analysis::native_start_clap_analysis(body.clone())?,
+        )?),
+        "get_clap_audio_analysis" => Some(to_json(
+            native_library::analysis::native_get_clap_analysis(required_param_string(
+                params, "job_id",
+            )?)?,
+        )?),
+        "pause_clap_audio_analysis" => Some(to_json(
+            native_library::analysis::native_pause_clap_analysis(required_param_string(
+                params, "job_id",
+            )?)?,
+        )?),
+        "resume_clap_audio_analysis" => Some(to_json(
+            native_library::analysis::native_resume_clap_analysis(required_param_string(
+                params, "job_id",
+            )?)?,
+        )?),
+        "cancel_clap_audio_analysis" => Some(to_json(
+            native_library::analysis::native_cancel_clap_analysis(required_param_string(
+                params, "job_id",
+            )?)?,
+        )?),
         "list_track_page" => Some(to_json(native_library::native_tracks_page(
             state,
             param_string(params, "search"),

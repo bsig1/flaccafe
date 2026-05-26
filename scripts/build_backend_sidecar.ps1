@@ -45,6 +45,7 @@ $Arguments = @(
     "--hidden-import", "backend.app.analysis_jobs",
     "--hidden-import", "backend.app.clap_analysis",
     "--hidden-import", "backend.app.clap_install_jobs",
+    "--hidden-import", "backend.app.clap_worker",
     "--hidden-import", "backend.app.worker_types",
     "--hidden-import", "backend.app.worker",
     "--exclude-module", "fastapi",

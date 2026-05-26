@@ -60,6 +60,36 @@ pub struct NativeAudioAnalysisCoverage {
     pub(crate) provider: String,
 }
 
+#[derive(Clone, Serialize)]
+pub struct NativeAudioAnalysisError {
+    pub(crate) track_id: Option<i64>,
+    pub(crate) path: Option<String>,
+    pub(crate) title: Option<String>,
+    pub(crate) message: String,
+}
+
+#[derive(Clone, Serialize)]
+pub struct NativeAudioAnalysisProgress {
+    pub(crate) job_id: String,
+    pub(crate) status: String,
+    pub(crate) phase: Option<String>,
+    pub(crate) message: Option<String>,
+    pub(crate) total_tracks: i64,
+    pub(crate) processed_tracks: i64,
+    pub(crate) analyzed: i64,
+    pub(crate) skipped: i64,
+    pub(crate) errors: Vec<String>,
+    pub(crate) failed_tracks: Vec<NativeAudioAnalysisError>,
+    pub(crate) current_track: Option<String>,
+    pub(crate) model_cached_at_start: Option<bool>,
+    pub(crate) started_at: String,
+    pub(crate) finished_at: Option<String>,
+    pub(crate) elapsed_seconds: f64,
+    pub(crate) eta_seconds: Option<f64>,
+    pub(crate) percent: f64,
+    pub(crate) error: Option<String>,
+}
+
 #[derive(Serialize)]
 pub struct NativeStatusResponse {
     pub(crate) status: String,
