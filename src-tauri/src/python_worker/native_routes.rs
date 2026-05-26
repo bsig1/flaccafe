@@ -304,6 +304,9 @@ pub(super) fn try_handle_native_json(
                 body_string(&body, "ffmpeg_path"),
             )?,
         )?),
+        "preview_audio_conversion" => Some(to_json(
+            native_library::audio_conversion::native_audio_conversion_preview(body.clone())?,
+        )?),
         "get_chromaprint_setup" => {
             Some(to_json(native_library::tools::native_chromaprint_setup(state)?)?)
         }

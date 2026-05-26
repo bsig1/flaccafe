@@ -495,6 +495,37 @@ pub struct NativeAcousticFingerprintResponse {
 }
 
 #[derive(Serialize)]
+pub struct NativeAudioConversionChange {
+    pub(crate) track_id: i64,
+    pub(crate) title: Option<String>,
+    pub(crate) artist: Option<String>,
+    pub(crate) source_path: String,
+    pub(crate) target_path: String,
+    pub(crate) source_size_bytes: Option<i64>,
+    pub(crate) estimated_output_size_bytes: Option<i64>,
+    pub(crate) estimated_size_change_bytes: Option<i64>,
+    pub(crate) estimated_size_ratio: Option<f64>,
+    pub(crate) estimate_note: Option<String>,
+    pub(crate) changed: bool,
+    pub(crate) collision: bool,
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct NativeAudioConversionPreviewResponse {
+    pub(crate) target_folder: String,
+    pub(crate) total: i64,
+    pub(crate) changed_count: i64,
+    pub(crate) collisions: i64,
+    pub(crate) source_size_bytes: Option<i64>,
+    pub(crate) estimated_output_size_bytes: Option<i64>,
+    pub(crate) estimated_size_change_bytes: Option<i64>,
+    pub(crate) estimated_size_ratio: Option<f64>,
+    pub(crate) estimated_tracks: i64,
+    pub(crate) changes: Vec<NativeAudioConversionChange>,
+}
+
+#[derive(Serialize)]
 pub struct NativeBulkUndoLogEntry {
     pub(crate) id: i64,
     pub(crate) batch_id: Option<String>,
