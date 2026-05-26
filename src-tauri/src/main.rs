@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 use std::os::windows::process::CommandExt;
 
 mod native_playback;
+mod path_ops;
 mod smtc;
 
 #[derive(Default)]
@@ -441,6 +442,9 @@ fn main() {
             native_playback::native_prepare_next_file,
             native_playback::native_output_backends,
             native_playback::native_list_output_devices,
+            path_ops::native_path_info,
+            path_ops::native_scan_audio_paths,
+            path_ops::native_recycle_paths,
             smtc::smtc_update_state,
             smtc::smtc_clear
         ])

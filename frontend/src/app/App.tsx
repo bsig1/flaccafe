@@ -146,6 +146,12 @@ import {
 import {
   openExternalUrl,
 } from "../lib/externalLinks";
+import {
+  isNativeUnavailable,
+  nativePathInfo,
+  nativeRecyclePaths,
+  type NativeRecycleResponse,
+} from "../lib/nativePath";
 import type {
   AlbumSummary,
   AcousticFingerprintResponse,
@@ -764,6 +770,67 @@ export default function App() {
       }
     }
     return trackIds.map((trackId) => found.get(trackId)).filter((track): track is Track => Boolean(track));
+  }
+
+  async function resolveTracksForAction(trackIds: number[]): Promise<Track[]> {
+    const uniqueIds = Array.from(new Set(trackIds));
+    const cachedTracks = findTracksByIds(uniqueIds);
+    if (cachedTracks.length === uniqueIds.length) {
+      return cachedTracks;
+    }
+
+    const cachedById = new Map(cachedTracks.map((track) => [track.id, track]));
+    const missingIds = uniqueIds.filter((trackId) => !cachedById.has(trackId));
+    try {
+      const response = await fetchTracksBatch(missingIds);
+      for (const track of response.tracks) {
+        cachedById.set(track.id, track);
+      }
+    } catch {
+      // If the backend is unavailable here, callers can still fall back to the
+      // older backend-only delete path. This keeps browser/dev mode usable.
+    }
+    return uniqueIds.map((trackId) => cachedById.get(trackId)).filter((track): track is Track => Boolean(track));
+  }
+
+  async function recycleFilesWithNative(tracksToRecycle: Track[]): Promise<NativeRecycleResponse | null> {
+    const paths = Array.from(new Set(tracksToRecycle.map((track) => track.path).filter(Boolean)));
+    if (paths.length === 0) {
+      return {
+        requested: 0,
+        recycled: 0,
+        missing: 0,
+        errors: [],
+      };
+    }
+
+    try {
+      const response = await nativeRecyclePaths(paths);
+      if (response.errors.length > 0) {
+        throw new Error(response.errors.slice(0, 3).join("; "));
+      }
+      return response;
+    } catch (error) {
+      if (isNativeUnavailable(error)) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  async function validateMusicFoldersWithNative(paths: string[]) {
+    try {
+      const infos = await Promise.all(paths.map((path) => nativePathInfo(path)));
+      const invalid = infos.find((info) => !info.exists || !info.is_dir);
+      if (invalid) {
+        throw new Error(`${invalid.input_path} is not an available folder`);
+      }
+    } catch (error) {
+      if (isNativeUnavailable(error)) {
+        return;
+      }
+      throw error;
+    }
   }
 
   function commitTrackIndexCache(next: Map<number, Track>) {
@@ -1708,6 +1775,7 @@ export default function App() {
     setScanResult(null);
     setScanProgress(null);
     try {
+      await validateMusicFoldersWithNative(targetPaths);
       const savePaths = pathOverride ? uniqueFolderPaths([...libraryFolders, ...targetPaths]) : targetPaths;
       const started = await startScanLibrary(targetPaths, savePaths);
       let latest: ScanProgress | null = null;
@@ -2077,17 +2145,20 @@ export default function App() {
   }
 
   async function handleDeleteTrack(trackId: number, deleteFile: boolean) {
-    const snapshot = findTracksByIds([trackId]);
+    const snapshot = await resolveTracksForAction([trackId]);
     try {
-      const response = await deleteTrack(trackId, deleteFile);
+      const nativeRecycle = deleteFile && snapshot.length === 1 ? await recycleFilesWithNative(snapshot) : null;
+      const response = await deleteTrack(trackId, deleteFile && nativeRecycle === null);
       removeTrackEverywhere(trackId);
       await Promise.all([loadAlbums(), loadArtists(), loadPlaylists(), loadLibraryStats(), loadInbox(), loadClapCoverage()]);
-      if (response.deleted_file) {
+      if (nativeRecycle?.recycled) {
         setStatus("Deleted file to Recycle Bin and removed track from library");
-      } else if (response.file_missing) {
+      } else if (response.deleted_file) {
+        setStatus("Deleted file to Recycle Bin and removed track from library");
+      } else if (response.file_missing || nativeRecycle?.missing) {
         setStatus("Removed missing track from library");
       } else {
-        if (snapshot.length > 0) {
+        if (!deleteFile && snapshot.length > 0) {
           showUndoAction({
             type: "library-remove",
             label: display(snapshot[0].title, "track"),
@@ -2106,9 +2177,10 @@ export default function App() {
     if (!uniqueIds.length) {
       return;
     }
-    const snapshot = findTracksByIds(uniqueIds);
+    const snapshot = await resolveTracksForAction(uniqueIds);
     try {
-      const response = await deleteTracks(uniqueIds, deleteFile);
+      const nativeRecycle = deleteFile && snapshot.length === uniqueIds.length ? await recycleFilesWithNative(snapshot) : null;
+      const response = await deleteTracks(uniqueIds, deleteFile && nativeRecycle === null);
       for (const trackId of response.removed_track_ids) {
         removeTrackEverywhere(trackId);
       }
@@ -2120,11 +2192,12 @@ export default function App() {
           tracks: snapshot,
         });
       }
-      const skipped = response.missing_track_ids.length + response.errors.length;
+      const deletedFileCount = response.deleted_files + (nativeRecycle?.recycled ?? 0);
+      const skipped = response.missing_track_ids.length + response.errors.length + (nativeRecycle?.missing ?? 0);
       const warning = skipped ? ` (${skipped.toLocaleString()} skipped)` : "";
       setStatus(
-        response.deleted_files > 0
-          ? `Deleted ${response.deleted_files.toLocaleString()} files to Recycle Bin and removed ${response.removed_count.toLocaleString()} tracks${warning}`
+        deletedFileCount > 0
+          ? `Deleted ${deletedFileCount.toLocaleString()} files to Recycle Bin and removed ${response.removed_count.toLocaleString()} tracks${warning}`
           : `Removed ${response.removed_count.toLocaleString()} tracks from library${warning}`,
       );
     } catch (error) {
