@@ -1,6 +1,6 @@
 # Backend Route Reference
 
-The Python backend is a local FastAPI service. The React UI calls these routes through `frontend/src/lib/api.ts`; Tauri is responsible for starting the bundled backend in desktop builds.
+Rust owns the app-facing API shape in `src-tauri/src/python_worker/routes.rs`. The React UI calls through `frontend/src/lib/api.ts`; desktop flows use Tauri commands first, including native SQLite paths, the `flaccafe-media://` local media protocol, and a Rust-to-Python JSON worker bridge for Python-owned actions. The bridge now checks `src-tauri/src/python_worker/native_routes.rs` before spawning Python, so HTTP-shaped fallbacks for library browsing, playlists, inbox, history, local tools, podcast/scrobble state, and AutoDJ stay native. Packaged desktop builds invoke the bundled Python executable per worker request instead of bundling or starting FastAPI, and Python receives named actions instead of HTTP methods or paths.
 
 ## Diagnostics And Settings
 
@@ -123,13 +123,6 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `POST /tracks/{track_id}/played` records a play.
 - `POST /tracks/{track_id}/skipped` records a skip.
 - `GET /history` returns recent play, skip, and rating events.
-- `GET /audiobooks` lists audiobook-like local tracks with resume/bookmark/chapter counts.
-- `PATCH /audiobooks/{track_id}/progress` saves an audiobook resume position.
-- `GET /audiobooks/{track_id}/bookmarks` lists audiobook bookmarks.
-- `POST /audiobooks/{track_id}/bookmarks` creates an audiobook bookmark.
-- `DELETE /audiobooks/bookmarks/{bookmark_id}` deletes an audiobook bookmark.
-- `GET /audiobooks/{track_id}/chapters` lists saved or generated audiobook chapters.
-- `PUT /audiobooks/{track_id}/chapters` replaces saved audiobook chapters.
 - `POST /audiobooks/sync-export` writes audiobook progress/bookmark/chapter metadata for device sync workflows.
 - `GET /podcasts/subscriptions` lists saved podcast feed subscriptions.
 - `POST /podcasts/subscriptions` creates or replaces a podcast subscription.
@@ -141,11 +134,6 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `POST /podcasts/episodes/{episode_id}/download` downloads an episode to the subscription or app podcast folder.
 - `DELETE /podcasts/episodes/{episode_id}/download` deletes a downloaded podcast file and clears its generated local track.
 - `POST /podcasts/episodes/{episode_id}/track` adds a downloaded episode to SQLite as a `Podcast` track and returns it for playback.
-- `GET /radio/stations` lists web radio stream bookmarks.
-- `POST /radio/stations` creates or replaces a web radio bookmark by stream URL.
-- `PATCH /radio/stations/{station_id}` updates a web radio bookmark.
-- `DELETE /radio/stations/{station_id}` deletes a web radio bookmark.
-- `POST /radio/stations/{station_id}/played` records that a web radio bookmark was started.
 - `GET /history/stats` returns aggregate listening history totals and top played/skipped tracks.
 - `GET /scrobbling/accounts` lists ListenBrainz and Last.fm account settings.
 - `PATCH /scrobbling/accounts/{service}` updates a scrobbling account.
@@ -154,8 +142,6 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `GET /scrobbling/outbox` lists queued, submitted, and failed scrobble events.
 - `POST /scrobbling/outbox/queue-history` queues local played events for a service.
 - `POST /scrobbling/outbox/submit` submits queued scrobbles to ListenBrainz or Last.fm.
-- `GET /scrobbling/loved` lists locally loved tracks.
-- `PATCH /scrobbling/tracks/{track_id}/love` toggles local loved-track state and queues Last.fm love sync.
 - `POST /scrobbling/import-history` previews or applies a CSV import of historical play counts, ratings, and loved tracks.
 - `POST /playback/gapless/validate` inspects adjacent tracks for codec/output metadata compatibility before gapless playback claims.
 
@@ -190,7 +176,6 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `POST /analysis/clap/jobs/{job_id}/pause` pauses analysis.
 - `POST /analysis/clap/jobs/{job_id}/resume` resumes analysis.
 - `POST /analysis/clap/jobs/{job_id}/cancel` cancels analysis.
-- `GET /tracks/{track_id}/similar` returns similar local tracks.
 - `POST /autodj/generate` generates a recommendation queue.
 - `GET /autodj/profiles` lists saved recommendation profiles.
 - `POST /autodj/profiles` saves a profile.

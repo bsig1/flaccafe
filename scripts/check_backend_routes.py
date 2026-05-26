@@ -6,9 +6,14 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MAIN_PATH = ROOT / "backend" / "app" / "main.py"
+ROUTES_PATH = ROOT / "src-tauri" / "src" / "python_worker" / "routes.rs"
 DOC_PATH = ROOT / "docs" / "backend-routes.md"
-ROUTE_RE = re.compile(r"@app\.(get|post|patch|delete|head)\(\s*[\"']([^\"']+)[\"']")
+ROUTE_RE = re.compile(
+    r'PythonRoute\s*\{\s*method:\s*"(?P<method>[^"]+)",\s*'
+    r'template:\s*"(?P<path>[^"]+)",\s*'
+    r'action:\s*"(?P<action>[^"]+)",\s*\}',
+    re.S,
+)
 DOC_ROUTE_RE = re.compile(r"`(GET|POST|PATCH|DELETE|HEAD)\s+([^`]+)`")
 
 
@@ -18,8 +23,8 @@ def route_key(method: str, path: str) -> str:
 
 def main() -> int:
     source_routes = {
-        route_key(method, path)
-        for method, path in ROUTE_RE.findall(MAIN_PATH.read_text(encoding="utf-8"))
+        route_key(match.group("method"), match.group("path"))
+        for match in ROUTE_RE.finditer(ROUTES_PATH.read_text(encoding="utf-8"))
     }
     documented_routes = {
         route_key(method, path.strip())
@@ -37,7 +42,7 @@ def main() -> int:
         for route in missing:
             print(f"  - {route}")
     if stale:
-        print("Documented but not present in backend/app/main.py:")
+        print("Documented but not present in src-tauri/src/python_worker/routes.rs:")
         for route in stale:
             print(f"  - {route}")
     return 1

@@ -1,0 +1,307 @@
+use super::types::*;
+use super::{app_storage_root, get_setting, open_database, repo_root, set_setting};
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use tauri::State;
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[cfg(not(windows))]
+const CREATE_NO_WINDOW: u32 = 0;
+
+fn executable_name(base: &str) -> &'static str {
+    match (cfg!(windows), base) {
+        (true, "ffmpeg") => "ffmpeg.exe",
+        (true, "fpcalc") => "fpcalc.exe",
+        (_, "ffmpeg") => "ffmpeg",
+        _ => "fpcalc",
+    }
+}
+
+fn tool_dir(tool: &str) -> PathBuf {
+    app_storage_root().join("tools").join(tool)
+}
+
+fn maybe_file(path: PathBuf, executable: &str) -> PathBuf {
+    if path.is_dir() {
+        path.join(executable)
+    } else {
+        path
+    }
+}
+
+fn path_candidates_from_env(executable: &str) -> Vec<PathBuf> {
+    std::env::var_os("PATH")
+        .map(|path| {
+            std::env::split_paths(&path)
+                .map(|folder| folder.join(executable))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn dedupe_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    let mut unique = Vec::new();
+    for path in paths {
+        let key = path
+            .canonicalize()
+            .unwrap_or_else(|_| path.clone())
+            .to_string_lossy()
+            .to_ascii_lowercase();
+        if seen.insert(key) {
+            unique.push(path);
+        }
+    }
+    unique
+}
+
+fn current_exe_tool_candidates(tool: &str, executable: &str) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(folder) = exe.parent() {
+            candidates.push(folder.join("tools").join(tool).join(executable));
+            candidates.push(folder.join("tools").join(executable));
+            if let Some(parent) = folder.parent() {
+                candidates.push(parent.join("tools").join(tool).join(executable));
+                candidates.push(parent.join("tools").join(executable));
+            }
+        }
+    }
+    candidates
+}
+
+fn ffmpeg_candidates(configured_path: Option<&str>) -> Vec<PathBuf> {
+    let executable = executable_name("ffmpeg");
+    let mut candidates = Vec::new();
+    if let Some(configured_path) = configured_path.filter(|value| !value.trim().is_empty()) {
+        candidates.push(maybe_file(
+            PathBuf::from(configured_path.trim()),
+            executable,
+        ));
+    }
+    candidates.push(tool_dir("ffmpeg").join(executable));
+    candidates.push(app_storage_root().join("tools").join(executable));
+    if let Some(root) = repo_root() {
+        candidates.push(root.join("tools").join("ffmpeg").join(executable));
+        candidates.push(root.join("tools").join(executable));
+    }
+    candidates.extend(path_candidates_from_env(executable));
+    dedupe_paths(candidates)
+}
+
+fn chromaprint_candidates(configured_path: Option<&str>) -> Vec<PathBuf> {
+    let executable = executable_name("fpcalc");
+    let mut candidates = Vec::new();
+    if let Some(configured_path) = configured_path.filter(|value| !value.trim().is_empty()) {
+        candidates.push(maybe_file(
+            PathBuf::from(configured_path.trim()),
+            executable,
+        ));
+    }
+    candidates.extend(current_exe_tool_candidates("chromaprint", executable));
+    candidates.push(tool_dir("chromaprint").join(executable));
+    candidates.push(app_storage_root().join("tools").join(executable));
+    if let Some(root) = repo_root() {
+        candidates.push(
+            root.join("backend")
+                .join("tools")
+                .join("chromaprint")
+                .join(executable),
+        );
+        candidates.push(root.join("backend").join("tools").join(executable));
+        candidates.push(root.join("tools").join("chromaprint").join(executable));
+        candidates.push(root.join("tools").join(executable));
+    }
+    candidates.extend(path_candidates_from_env(executable));
+    dedupe_paths(candidates)
+}
+
+fn resolve_tool(candidates: &[PathBuf]) -> Option<PathBuf> {
+    candidates
+        .iter()
+        .find(|path| path.exists() && path.is_file())
+        .and_then(|path| path.canonicalize().ok().or_else(|| Some(path.clone())))
+}
+
+fn tool_version(path: &Path, arg: &str, timeout_label: &str) -> Option<String> {
+    let mut command = Command::new(path);
+    command.arg(arg);
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    let output = command.output().ok()?;
+    let text = String::from_utf8_lossy(if output.stdout.is_empty() {
+        &output.stderr
+    } else {
+        &output.stdout
+    });
+    text.lines()
+        .next()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .or_else(|| Some(format!("{timeout_label} is available")))
+}
+
+fn status_response(
+    configured_path: Option<String>,
+    candidates: Vec<PathBuf>,
+    resolved: Option<PathBuf>,
+    version: Option<String>,
+    tool_directory: PathBuf,
+    ready_message: &str,
+    missing_message: String,
+) -> NativeToolSetupResponse {
+    let mut errors = Vec::new();
+    if configured_path
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        && resolved.is_none()
+    {
+        errors.push(format!(
+            "Saved tool path was not found: {}",
+            configured_path.as_deref().unwrap_or_default()
+        ));
+    }
+    NativeToolSetupResponse {
+        available: resolved.is_some(),
+        configured_path,
+        resolved_path: resolved.map(|path| path.to_string_lossy().to_string()),
+        version,
+        tool_directory: tool_directory.to_string_lossy().to_string(),
+        checked_paths: candidates
+            .into_iter()
+            .take(24)
+            .map(|path| path.to_string_lossy().to_string())
+            .collect(),
+        message: if errors.is_empty() {
+            ready_message.to_string()
+        } else {
+            missing_message
+        },
+        errors,
+    }
+}
+
+fn ffmpeg_status() -> Result<NativeToolSetupResponse, String> {
+    let connection = open_database()?;
+    let configured = get_setting(&connection, "ffmpeg_path");
+    let candidates = ffmpeg_candidates(configured.as_deref());
+    let resolved = resolve_tool(&candidates);
+    let version = resolved
+        .as_deref()
+        .and_then(|path| tool_version(path, "-version", "FFmpeg"));
+    Ok(status_response(
+        configured,
+        candidates,
+        resolved,
+        version,
+        tool_dir("ffmpeg"),
+        "FFmpeg is ready for audio conversion.",
+        "FFmpeg was not found. Save an ffmpeg.exe path or place it in the FLAC Cafe tool folder."
+            .to_string(),
+    ))
+}
+
+fn chromaprint_status() -> Result<NativeToolSetupResponse, String> {
+    let connection = open_database()?;
+    let configured = get_setting(&connection, "chromaprint_fpcalc_path");
+    let candidates = chromaprint_candidates(configured.as_deref());
+    let resolved = resolve_tool(&candidates);
+    let version = resolved
+        .as_deref()
+        .and_then(|path| tool_version(path, "-version", "fpcalc"));
+    Ok(status_response(
+        configured,
+        candidates,
+        resolved,
+        version,
+        tool_dir("chromaprint"),
+        "Chromaprint fpcalc is ready for acoustic fingerprint analysis.",
+        format!(
+            "fpcalc was not found in the bundled tools, saved path, or PATH. You can still place fpcalc.exe in {}.",
+            tool_dir("chromaprint").display()
+        ),
+    ))
+}
+
+fn save_tool_path(
+    setting_key: &str,
+    raw_path: Option<String>,
+    executable: &str,
+    invalid_message: &str,
+    status: fn() -> Result<NativeToolSetupResponse, String>,
+) -> Result<NativeToolSetupResponse, String> {
+    let connection = open_database()?;
+    let text = raw_path.unwrap_or_default().trim().to_string();
+    if text.is_empty() {
+        set_setting(&connection, setting_key, None)?;
+        return status();
+    }
+    let candidate = maybe_file(PathBuf::from(&text), executable);
+    if !candidate.exists() || !candidate.is_file() {
+        let mut response = status()?;
+        response.configured_path = Some(text);
+        response.errors.push(format!(
+            "{} was not found at {}",
+            executable.trim_end_matches(".exe"),
+            candidate.display()
+        ));
+        response.message = invalid_message.to_string();
+        return Ok(response);
+    }
+    let resolved = candidate.canonicalize().unwrap_or(candidate);
+    set_setting(
+        &connection,
+        setting_key,
+        Some(resolved.to_string_lossy().as_ref()),
+    )?;
+    Ok(status()?)
+}
+
+#[tauri::command]
+pub fn native_audio_conversion_setup(
+    _state: State<'_, NativeLibraryState>,
+) -> Result<NativeToolSetupResponse, String> {
+    ffmpeg_status()
+}
+
+#[tauri::command]
+pub fn native_save_audio_conversion_setup(
+    _state: State<'_, NativeLibraryState>,
+    ffmpeg_path: Option<String>,
+) -> Result<NativeToolSetupResponse, String> {
+    save_tool_path(
+        "ffmpeg_path",
+        ffmpeg_path,
+        executable_name("ffmpeg"),
+        "The saved path was not valid. Choose ffmpeg.exe or put it in the FLAC Cafe tool folder.",
+        ffmpeg_status,
+    )
+}
+
+#[tauri::command]
+pub fn native_chromaprint_setup(
+    _state: State<'_, NativeLibraryState>,
+) -> Result<NativeToolSetupResponse, String> {
+    chromaprint_status()
+}
+
+#[tauri::command]
+pub fn native_save_chromaprint_setup(
+    _state: State<'_, NativeLibraryState>,
+    fpcalc_path: Option<String>,
+) -> Result<NativeToolSetupResponse, String> {
+    save_tool_path(
+        "chromaprint_fpcalc_path",
+        fpcalc_path,
+        executable_name("fpcalc"),
+        "The saved path was not valid. Choose fpcalc.exe or put it in the FLAC Cafe tool folder.",
+        chromaprint_status,
+    )
+}

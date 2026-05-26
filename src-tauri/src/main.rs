@@ -5,18 +5,10 @@ use tauri::Manager;
 #[cfg(not(debug_assertions))]
 use tauri::path::BaseDirectory;
 
-#[cfg(not(debug_assertions))]
-use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
-use std::process::Child;
 use std::process::Command;
 #[cfg(not(debug_assertions))]
 use std::process::Stdio;
-use std::sync::Mutex;
-#[cfg(not(debug_assertions))]
-use std::thread;
-#[cfg(not(debug_assertions))]
-use std::time::{Duration, Instant};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -26,12 +18,8 @@ mod native_library;
 mod native_playback;
 mod path_ops;
 mod process_runner;
+mod python_worker;
 mod smtc;
-
-#[derive(Default)]
-struct BackendState {
-    child: Mutex<Option<Child>>,
-}
 
 #[cfg(windows)]
 fn explorer_compatible_path(path: &std::path::Path) -> String {
@@ -104,28 +92,6 @@ fn open_url_in_chrome(url: &str) -> bool {
         return true;
     }
 
-    false
-}
-
-#[cfg(not(debug_assertions))]
-fn backend_addr() -> SocketAddr {
-    SocketAddr::from(([127, 0, 0, 1], 8765))
-}
-
-#[cfg(not(debug_assertions))]
-fn backend_is_running() -> bool {
-    TcpStream::connect_timeout(&backend_addr(), Duration::from_millis(250)).is_ok()
-}
-
-#[cfg(not(debug_assertions))]
-fn wait_for_backend(timeout: Duration) -> bool {
-    let started = Instant::now();
-    while started.elapsed() < timeout {
-        if backend_is_running() {
-            return true;
-        }
-        thread::sleep(Duration::from_millis(200));
-    }
     false
 }
 
@@ -242,66 +208,7 @@ mod tests {
 #[cfg(all(not(windows), not(debug_assertions)))]
 fn stop_backend_processes_on_port() {}
 
-#[cfg(debug_assertions)]
-fn start_packaged_backend(_app: &tauri::AppHandle) -> Option<Child> {
-    None
-}
-
-#[cfg(not(debug_assertions))]
-fn start_packaged_backend(app: &tauri::AppHandle) -> Option<Child> {
-    if backend_is_running() {
-        stop_backend_processes_on_port();
-        let started = Instant::now();
-        while backend_is_running() && started.elapsed() < Duration::from_secs(3) {
-            thread::sleep(Duration::from_millis(100));
-        }
-        if backend_is_running() {
-            return None;
-        }
-    }
-
-    let backend_path = match app.path().resolve(
-        r"flaccafe-backend\flaccafe-backend.exe",
-        BaseDirectory::Resource,
-    ) {
-        Ok(path) => path,
-        Err(error) => {
-            eprintln!("Could not resolve bundled backend path: {error}");
-            return None;
-        }
-    };
-
-    let mut command = Command::new(backend_path);
-    command
-        .env("FLAC_CAFE_PACKAGED", "1")
-        .env("FLAC_CAFE_PORT", "8765")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-
-    #[cfg(windows)]
-    command.creation_flags(0x08000000);
-
-    match command.spawn() {
-        Ok(child) => Some(child),
-        Err(error) => {
-            eprintln!("Could not start bundled backend: {error}");
-            None
-        }
-    }
-}
-
-fn stop_packaged_backend(app: &tauri::AppHandle) {
-    let backend_state = app.state::<BackendState>();
-    let mut child_guard = backend_state
-        .child
-        .lock()
-        .expect("backend child lock poisoned");
-    if let Some(mut child) = child_guard.take() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-
+fn stop_legacy_backend_server() {
     #[cfg(not(debug_assertions))]
     {
         stop_backend_processes_on_port();
@@ -396,26 +303,9 @@ fn open_source_folder(kind: Option<String>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn backend_restart(app: tauri::AppHandle) -> Result<String, String> {
-    stop_packaged_backend(&app);
-    #[cfg(not(debug_assertions))]
-    {
-        let child = start_packaged_backend(&app);
-        let backend_state = app.state::<BackendState>();
-        *backend_state
-            .child
-            .lock()
-            .map_err(|_| "Backend child lock poisoned".to_string())? = child;
-        if wait_for_backend(Duration::from_secs(15)) {
-            Ok("Backend restarted".to_string())
-        } else {
-            Err("Backend did not start".to_string())
-        }
-    }
-    #[cfg(debug_assertions)]
-    {
-        Err("Backend restart is only available in the packaged desktop app".to_string())
-    }
+fn backend_restart(_app: tauri::AppHandle) -> Result<String, String> {
+    stop_legacy_backend_server();
+    Ok("Python worker state cleared; it will start on the next Python-owned request.".to_string())
 }
 
 fn main() {
@@ -424,13 +314,14 @@ fn main() {
         .manage(native_playback::NativePlaybackState::default())
         .manage(folder_watch::NativeFolderWatchState::default())
         .manage(native_library::NativeLibraryState::default())
-        .manage(BackendState::default())
+        .register_uri_scheme_protocol("flaccafe-media", native_library::media_protocol::handle_media_protocol)
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             backend_restart,
             open_source_folder,
             open_external_url,
             reveal_in_file_explorer,
+            python_worker::native_backend_json,
             native_playback::native_play_file,
             native_playback::native_crossfade_to_file,
             native_playback::native_resume,
@@ -454,6 +345,7 @@ fn main() {
             native_library::native_health,
             native_library::native_settings,
             native_library::native_update_settings,
+            native_library::native_clap_coverage,
             native_library::native_tracks_page,
             native_library::native_track,
             native_library::native_tracks_batch,
@@ -474,9 +366,9 @@ fn main() {
             native_library::native_update_track_rating,
             native_library::native_mark_track_played,
             native_library::native_mark_track_skipped,
-            native_library::native_autodj_avoid_rules,
-            native_library::native_create_autodj_avoid_rule,
-            native_library::native_delete_autodj_avoid_rule,
+            native_library::recommendations::native_autodj_avoid_rules,
+            native_library::recommendations::native_create_autodj_avoid_rule,
+            native_library::recommendations::native_delete_autodj_avoid_rule,
             native_library::native_albums,
             native_library::native_artists,
             native_library::native_playlists,
@@ -487,14 +379,65 @@ fn main() {
             native_library::native_move_playlist_track,
             native_library::native_album_tracks,
             native_library::native_playlist_tracks,
-            native_library::native_history,
-            native_library::native_history_stats,
+            native_library::history::native_history,
+            native_library::history::native_history_stats,
             native_library::native_library_stats,
+            native_library::inbox::native_inbox,
+            native_library::inbox::native_update_inbox_note,
+            native_library::inbox::native_review_inbox,
+            native_library::inbox::native_inbox_auto_review_rules,
+            native_library::inbox::native_create_inbox_auto_review_rule,
+            native_library::inbox::native_update_inbox_auto_review_rule,
+            native_library::inbox::native_delete_inbox_auto_review_rule,
+            native_library::library_tools::native_regex_tag_presets,
+            native_library::library_tools::native_save_regex_tag_preset,
+            native_library::library_tools::native_delete_regex_tag_preset,
+            native_library::library_tools::native_virtual_tags,
+            native_library::library_tools::native_save_virtual_tag,
+            native_library::library_tools::native_delete_virtual_tag,
+            native_library::library_tools::native_infer_filename_tags,
+            native_library::library_tools::native_custom_tags,
+            native_library::library_tools::native_virtual_tag_preview,
+            native_library::library_tools::native_copy_swap_tags,
+            native_library::library_tools::native_regex_tags,
+            native_library::library_tools::native_device_sync_profiles,
+            native_library::library_tools::native_save_device_sync_profile,
+            native_library::library_tools::native_delete_device_sync_profile,
+            native_library::podcasts::native_podcast_subscriptions,
+            native_library::podcasts::native_save_podcast_subscription,
+            native_library::podcasts::native_delete_podcast_subscription,
+            native_library::podcasts::native_podcast_subscription_folder,
+            native_library::podcasts::native_podcast_episodes,
+            native_library::scrobbling::native_scrobble_accounts,
+            native_library::scrobbling::native_save_scrobble_account,
+            native_library::scrobbling::native_scrobble_outbox,
+            native_library::scrobbling::native_queue_scrobble_history,
+            native_library::tools::native_audio_conversion_setup,
+            native_library::tools::native_save_audio_conversion_setup,
+            native_library::tools::native_chromaprint_setup,
+            native_library::tools::native_save_chromaprint_setup,
             native_library::native_clear_library_caches,
             native_library::native_bulk_undo_log,
             native_library::native_bulk_undo_batches,
+            native_library::native_restore_bulk_undo_batch,
+            native_library::native_restore_bulk_undo_entry,
             native_library::native_library_health,
-            native_library::native_generate_autodj,
+            native_library::native_duplicate_review,
+            native_library::native_artist_info,
+            native_library::native_artist_local_tracks,
+            native_library::native_clear_artist_cache,
+            native_library::recommendations::native_generate_autodj,
+            native_library::recommendation_profiles::native_recommendation_profiles,
+            native_library::recommendation_profiles::native_recommendation_history,
+            native_library::recommendation_profiles::native_save_recommendation_profile,
+            native_library::recommendation_profiles::native_set_default_recommendation_profile,
+            native_library::recommendation_profiles::native_delete_recommendation_profile,
+            native_library::recommendation_profiles::native_record_recommendation_feedback,
+            native_library::recommendation_profiles::native_create_recommendation_ab_test,
+            native_library::recommendation_profiles::native_choose_recommendation_ab_test,
+            native_library::recommendation_profiles::native_compare_recommendation_profiles,
+            native_library::recommendation_profiles::native_export_recommendation_profile_comparison,
+            native_library::recommendation_profiles::native_import_recommendation_profile_comparison,
             native_library::native_library_reconcile_preview,
             native_library::native_file_organization_preview,
             native_library::native_parse_playlist,
@@ -512,16 +455,18 @@ fn main() {
             smtc::smtc_clear
         ])
         .setup(|app| {
+            #[cfg(not(debug_assertions))]
+            if let Ok(path) = app.path().resolve(
+                r"flaccafe-backend\flaccafe-backend.exe",
+                BaseDirectory::Resource,
+            ) {
+                std::env::set_var("FLAC_CAFE_BACKEND_EXE", path);
+            }
+
             let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png"))?;
             if let Some(window) = app.get_webview_window("main") {
                 window.set_icon(icon)?;
             }
-            let backend_child = start_packaged_backend(app.handle());
-            let backend_state = app.state::<BackendState>();
-            *backend_state
-                .child
-                .lock()
-                .expect("backend child lock poisoned") = backend_child;
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -533,7 +478,6 @@ fn main() {
             tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
         ) {
             folder_watch::stop_native_folder_watch(app_handle);
-            stop_packaged_backend(app_handle);
         }
     });
 }

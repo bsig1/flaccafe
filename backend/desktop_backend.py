@@ -47,28 +47,13 @@ if not getattr(sys, "frozen", False):
 from backend.app.startup_profile import mark
 
 mark("desktop backend streams ready")
-mark("uvicorn import starting")
-import uvicorn
-mark("uvicorn imported")
 
-mark("FastAPI app import starting")
-from backend.app.main import app
-mark("FastAPI app imported")
+from backend.app.worker import main as worker_main
 
 
-def main() -> None:
-    port = int(os.environ.get("FLAC_CAFE_PORT") or os.environ.get("LOCAL_AUTODJ_PORT", "8765"))
-    mark(f"uvicorn run starting on 127.0.0.1:{port}")
-    uvicorn.run(
-        app,
-        host="127.0.0.1",
-        port=port,
-        log_config=None,
-        log_level="warning",
-        access_log=False,
-    )
-    mark("uvicorn run exited")
+def main() -> int:
+    return worker_main()
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

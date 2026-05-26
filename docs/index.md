@@ -5,7 +5,7 @@ Start here when you need the maintainer or user docs without hunting through the
 ## User Guides
 
 - [Keyboard Shortcuts](keyboard-shortcuts.md): default page and playback shortcuts, plus where to customize them.
-- [Troubleshooting](troubleshooting.md): backend startup, codec support, installer, and optional ML runtime checks.
+- [Troubleshooting](troubleshooting.md): Python runtime startup, codec support, installer, and optional ML runtime checks.
 - [Themes](themes.md): JSON theme files, fonts, and where local theme folders live.
 - [Extensions And Skins](extensions.md): manifest package shape for skins and future plugins.
 - [Playback](playback.md): WebView playback, experimental native playback, fades, queue behavior, and diagnostics.
@@ -15,9 +15,9 @@ Start here when you need the maintainer or user docs without hunting through the
 
 ## Maintainer Guides
 
-- [Architecture](architecture.md): runtime boundaries and the React -> API -> Python -> SQLite shape.
+- [Architecture](architecture.md): runtime boundaries and the React -> Rust -> Python worker -> SQLite shape.
 - [Project Structure](project-structure.md): where new files belong and which generated paths stay ignored.
-- [Backend Routes](backend-routes.md): local FastAPI route reference.
+- [Backend Routes](backend-routes.md): app endpoint reference and Rust-to-Python worker dispatch notes.
 - [Database Maintenance](database-maintenance.md): SQLite storage, backups, cleanup, and generated data.
 - [Testing](testing.md): frontend, backend, browser, and package-oriented checks.
 - [Release Checklist](release-checklist.md): MSI release validation.

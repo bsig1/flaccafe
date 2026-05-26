@@ -124,170 +124,35 @@ import {
   normalizeLibraryColumns,
   trackGenre,
 } from "../shared";
-
-const COLLECTION_VIRTUAL_OVERSCAN = 8;
-const COMPLETION_COLLAPSED_ROW_HEIGHT = 92;
-const COMPLETION_EXPANDED_ROW_ESTIMATE = 360;
-const ARTIST_ROW_HEIGHT = 68;
-const ALBUM_LIST_ROW_HEIGHT = 68;
-const ALBUM_GRID_ROW_HEIGHT = 236;
-const PLAYLIST_ROW_HEIGHT = 66;
-const PLAYLIST_TOOLBAR_HEIGHT = 118;
-const TRACK_CONTEXT_ROW_HEIGHT = 36;
-const TRACK_CONTEXT_HEADER_HEIGHT = 34;
-const TRACK_CONTEXT_DIVIDER_HEIGHT = 9;
-const TRACK_TAGGING_SUBMENU_HEIGHT = 260;
-const TRACK_RATING_SUBMENU_HEIGHT = 218;
-const TRACK_RATING_SUBMENU_WIDTH = 192;
-const TRACK_PLAYLIST_SUBMENU_WIDTH = 240;
-const TRACK_SUBMENU_CLOSE_DELAY_MS = 700;
-const TRACK_VIRTUALIZATION_THRESHOLD = 260;
-const TRACK_VIRTUALIZATION_OVERSCAN = 18;
-const LIBRARY_ACTIONS_MENU_WIDTH = 288;
-const LIBRARY_ACTIONS_MENU_HEIGHT = 270;
-type ContextSubmenuKey = "tagging" | "rating" | "avoid" | "playlist";
-
-function albumYearsLabel(album: AlbumSummary): string {
-  const years = Array.from(new Set(album.years ?? (album.year ? [album.year] : []))).sort((a, b) => a - b);
-  if (years.length === 0) {
-    return "";
-  }
-  return years.length <= 3 ? years.join(", ") : `${years[0]}-${years[years.length - 1]}`;
-}
-
-function albumEditionLabel(album: AlbumSummary): string {
-  const count = album.edition_count ?? album.album_ids?.length ?? 1;
-  return count > 1 ? `${count} editions` : "";
-}
-
-function albumMetaLabel(album: AlbumSummary): string {
-  return [display(album.album_artist), `${album.track_count} tracks`, formatDuration(album.duration_seconds), albumYearsLabel(album), albumEditionLabel(album)]
-    .filter(Boolean)
-    .join(" - ");
-}
-
-function artistYearsLabel(artist: ArtistSummary): string {
-  if (!artist.first_year && !artist.last_year) {
-    return "";
-  }
-  if (artist.first_year && artist.last_year && artist.first_year !== artist.last_year) {
-    return `${artist.first_year}-${artist.last_year}`;
-  }
-  return String(artist.first_year ?? artist.last_year);
-}
-
-function artistMetaLabel(artist: ArtistSummary): string {
-  return [
-    `${artist.track_count} track${artist.track_count === 1 ? "" : "s"}`,
-    `${artist.album_count} album${artist.album_count === 1 ? "" : "s"}`,
-    formatDuration(artist.duration_seconds),
-    artistYearsLabel(artist),
-  ]
-    .filter(Boolean)
-    .join(" - ");
-}
-
-const missingMetadataFilters = [
-  { id: "all", label: "All" },
-  { id: "title", label: "Title" },
-  { id: "artist", label: "Artist" },
-  { id: "album", label: "Album" },
-  { id: "album_artist", label: "Album Artist" },
-  { id: "track", label: "Track #" },
-  { id: "genre", label: "Genre" },
-  { id: "year", label: "Year" },
-  { id: "duration", label: "Duration" },
-] as const;
-
-type MissingMetadataFilter = (typeof missingMetadataFilters)[number]["id"];
-
-function missingMetadataFields(track: Track): Array<{ id: MissingMetadataFilter; label: string }> {
-  const fields: Array<{ id: MissingMetadataFilter; label: string }> = [];
-  if (!track.title?.trim()) {
-    fields.push({ id: "title", label: "Title" });
-  }
-  if (!track.artist?.trim()) {
-    fields.push({ id: "artist", label: "Artist" });
-  }
-  if (!track.album?.trim()) {
-    fields.push({ id: "album", label: "Album" });
-  }
-  if (!track.album_artist?.trim()) {
-    fields.push({ id: "album_artist", label: "Album Artist" });
-  }
-  if (track.track_number === null || track.track_number === undefined) {
-    fields.push({ id: "track", label: "Track #" });
-  }
-  if (!trackGenre(track)?.trim()) {
-    fields.push({ id: "genre", label: "Genre" });
-  }
-  if (track.year === null || track.year === undefined) {
-    fields.push({ id: "year", label: "Year" });
-  }
-  if (track.duration_seconds === null || track.duration_seconds === undefined) {
-    fields.push({ id: "duration", label: "Duration" });
-  }
-  return fields;
-}
-
-function virtualCollectionWindow(
-  itemCount: number,
-  scrollTop: number,
-  viewportHeight: number,
-  rowHeight: number,
-  columns = 1,
-) {
-  const safeColumns = Math.max(1, columns);
-  const rowCount = Math.ceil(itemCount / safeColumns);
-  const visibleRows = Math.ceil(Math.max(1, viewportHeight) / rowHeight) + COLLECTION_VIRTUAL_OVERSCAN * 2;
-  const maxStartRow = Math.max(0, rowCount - visibleRows);
-  const startRow = Math.min(Math.max(0, Math.floor(scrollTop / rowHeight) - COLLECTION_VIRTUAL_OVERSCAN), maxStartRow);
-  const endRow = Math.min(rowCount, startRow + visibleRows);
-  const startIndex = startRow * safeColumns;
-  const endIndex = Math.min(itemCount, endRow * safeColumns);
-  return {
-    startIndex,
-    endIndex,
-    topSpacerHeight: startRow * rowHeight,
-    bottomSpacerHeight: Math.max(0, (rowCount - endRow) * rowHeight),
-  };
-}
-
-function virtualVariableCollectionWindow<T>(
-  items: T[],
-  scrollTop: number,
-  viewportHeight: number,
-  rowHeight: (item: T) => number,
-) {
-  const heights = items.map((item) => Math.max(1, rowHeight(item)));
-  const offsets: number[] = [];
-  let totalHeight = 0;
-  for (const height of heights) {
-    offsets.push(totalHeight);
-    totalHeight += height;
-  }
-
-  const startTarget = Math.max(0, scrollTop);
-  const endTarget = startTarget + Math.max(1, viewportHeight);
-  let firstVisibleIndex = offsets.findIndex((offset, index) => offset + heights[index] >= startTarget);
-  if (firstVisibleIndex < 0) {
-    firstVisibleIndex = Math.max(0, items.length - COLLECTION_VIRTUAL_OVERSCAN);
-  }
-  const startIndex = Math.max(0, firstVisibleIndex - COLLECTION_VIRTUAL_OVERSCAN);
-  let endIndex = startIndex;
-  while (endIndex < items.length && offsets[endIndex] <= endTarget) {
-    endIndex += 1;
-  }
-  endIndex = Math.min(items.length, endIndex + COLLECTION_VIRTUAL_OVERSCAN);
-
-  return {
-    startIndex,
-    endIndex,
-    topSpacerHeight: offsets[startIndex] ?? 0,
-    bottomSpacerHeight: Math.max(0, totalHeight - (offsets[endIndex] ?? totalHeight)),
-    totalHeight,
-  };
-}
+import {
+  ALBUM_GRID_ROW_HEIGHT,
+  ALBUM_LIST_ROW_HEIGHT,
+  ARTIST_ROW_HEIGHT,
+  COMPLETION_COLLAPSED_ROW_HEIGHT,
+  COMPLETION_EXPANDED_ROW_ESTIMATE,
+  ContextSubmenuKey,
+  LIBRARY_ACTIONS_MENU_HEIGHT,
+  LIBRARY_ACTIONS_MENU_WIDTH,
+  MissingMetadataFilter,
+  PLAYLIST_ROW_HEIGHT,
+  PLAYLIST_TOOLBAR_HEIGHT,
+  TRACK_CONTEXT_DIVIDER_HEIGHT,
+  TRACK_CONTEXT_HEADER_HEIGHT,
+  TRACK_CONTEXT_ROW_HEIGHT,
+  TRACK_PLAYLIST_SUBMENU_WIDTH,
+  TRACK_RATING_SUBMENU_HEIGHT,
+  TRACK_RATING_SUBMENU_WIDTH,
+  TRACK_SUBMENU_CLOSE_DELAY_MS,
+  TRACK_TAGGING_SUBMENU_HEIGHT,
+  TRACK_VIRTUALIZATION_OVERSCAN,
+  TRACK_VIRTUALIZATION_THRESHOLD,
+  albumMetaLabel,
+  artistMetaLabel,
+  missingMetadataFields,
+  missingMetadataFilters,
+  virtualCollectionWindow,
+  virtualVariableCollectionWindow,
+} from "./library/libraryViewUtils";
 
 export function LibraryPage({
   tracks,

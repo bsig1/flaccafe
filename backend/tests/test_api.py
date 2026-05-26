@@ -13,14 +13,29 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
+from backend.tests.worker_test_client import TestClient
 
 from backend.app import main as main_module
+from backend.app.audiobooks import (
+    add_bookmark as add_audiobook_bookmark,
+    delete_bookmark as delete_audiobook_bookmark,
+    list_audiobooks,
+    list_bookmarks as list_audiobook_bookmarks,
+    replace_chapters as replace_audiobook_chapters,
+    upsert_audiobook_progress,
+)
 from backend.app.database import connect, init_db, set_setting
 from backend.app.extensions import discover_extensions
 from backend.app.cd_ripping import disc_id_info_from_toc_entries
-from backend.app.main import app, fetch_artist_info_from_wikipedia, recent_backend_error_summary, recommendation_drift
+from backend.app.main import fetch_artist_info_from_wikipedia, recent_backend_error_summary, recommendation_drift
+from backend.app.radio import (
+    delete_radio_station,
+    list_radio_stations,
+    mark_radio_station_played,
+    save_radio_station,
+)
 from backend.app.scanner import ScanStats, file_fingerprint, file_modified_at, path_key
+from backend.app.scrobbling import loved_tracks, set_loved
 from backend.app.schemas import LyricsResponse
 
 
@@ -73,7 +88,7 @@ class ApiTests(unittest.TestCase):
         self.root = Path(self.temp_dir.name)
         os.environ["MUSIC_REC_DB"] = str(self.root / "music.sqlite3")
         init_db()
-        self.client = TestClient(app)
+        self.client = TestClient()
 
     def tearDown(self) -> None:
         self.client.close()
@@ -779,10 +794,9 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(legacy_tracks.status_code, 200)
         self.assertEqual([track["id"] for track in legacy_tracks.json()], [music_id])
 
-        audiobooks = self.client.get("/audiobooks")
-        self.assertEqual(audiobooks.status_code, 200)
-        self.assertEqual(audiobooks.json()["total"], 1)
-        self.assertEqual(audiobooks.json()["tracks"][0]["id"], book_id)
+        audiobooks = list_audiobooks(200, 0)
+        self.assertEqual(audiobooks["total"], 1)
+        self.assertEqual(audiobooks["tracks"][0]["id"], book_id)
 
     def test_track_page_supports_advanced_search_filters(self) -> None:
         music_dir = self.root / "Advanced Search"
@@ -1209,6 +1223,13 @@ class ApiTests(unittest.TestCase):
         presets = self.client.get("/library/tools/regex-presets")
         self.assertEqual(presets.status_code, 200)
         self.assertEqual(len(presets.json()), 1)
+        self.assertEqual(
+            self.client.post(
+                "/library/tools/regex-presets",
+                json={"name": "   ", "field": "artist", "pattern": "x"},
+            ).status_code,
+            422,
+        )
 
         custom = self.client.post(
             "/library/tools/custom-tags",
@@ -1228,6 +1249,20 @@ class ApiTests(unittest.TestCase):
             json={"name": "Listening Shelf", "expression": "<Album Artist> / <Custom:Mood> / <Decade>"},
         )
         self.assertEqual(virtual.status_code, 200)
+        self.assertEqual(
+            self.client.post(
+                "/library/tools/virtual-tags",
+                json={"name": "   ", "expression": "x"},
+            ).status_code,
+            422,
+        )
+        self.assertEqual(
+            self.client.post(
+                "/library/tools/virtual-tags",
+                json={"name": "Blank Expression", "expression": "   "},
+            ).status_code,
+            422,
+        )
         preview_virtual = self.client.post(
             "/library/tools/virtual-tags/preview",
             json={"expression": "<Album Artist> / <Custom:Mood> / <Decade>", "track_ids": [track_id]},
@@ -2289,39 +2324,29 @@ class ApiTests(unittest.TestCase):
             duration_seconds=3600,
         )
 
-        listing = self.client.get("/audiobooks")
-        self.assertEqual(listing.status_code, 200)
-        self.assertEqual(listing.json()["total"], 1)
-        self.assertEqual(listing.json()["tracks"][0]["id"], track_id)
+        listing = list_audiobooks(200, 0)
+        self.assertEqual(listing["total"], 1)
+        self.assertEqual(listing["tracks"][0]["id"], track_id)
 
-        progress = self.client.patch(
-            f"/audiobooks/{track_id}/progress",
-            json={"position_seconds": 120, "duration_seconds": 3600},
-        )
-        self.assertEqual(progress.status_code, 200)
-        self.assertEqual(progress.json()["position_seconds"], 120)
+        progress = upsert_audiobook_progress(track_id, 120, 3600)
+        self.assertIsNotNone(progress)
+        self.assertEqual(progress["position_seconds"], 120)
 
-        bookmark = self.client.post(
-            f"/audiobooks/{track_id}/bookmarks",
-            json={"position_seconds": 125, "label": "Good part", "note": "Remember this"},
-        )
-        self.assertEqual(bookmark.status_code, 200)
-        bookmark_id = bookmark.json()["id"]
-        bookmarks = self.client.get(f"/audiobooks/{track_id}/bookmarks")
-        self.assertEqual(bookmarks.status_code, 200)
-        self.assertEqual(bookmarks.json()[0]["label"], "Good part")
+        bookmark = add_audiobook_bookmark(track_id, 125, "Good part", "Remember this")
+        self.assertIsNotNone(bookmark)
+        bookmark_id = bookmark["id"]
+        bookmarks = list_audiobook_bookmarks(track_id)
+        self.assertEqual(bookmarks[0]["label"], "Good part")
 
-        chapters = self.client.put(
-            f"/audiobooks/{track_id}/chapters",
-            json={
-                "chapters": [
-                    {"chapter_index": 1, "title": "Opening", "start_seconds": 0, "end_seconds": 600},
-                    {"chapter_index": 2, "title": "Middle", "start_seconds": 600, "end_seconds": None},
-                ],
-            },
+        chapters = replace_audiobook_chapters(
+            track_id,
+            [
+                {"chapter_index": 1, "title": "Opening", "start_seconds": 0, "end_seconds": 600},
+                {"chapter_index": 2, "title": "Middle", "start_seconds": 600, "end_seconds": None},
+            ],
         )
-        self.assertEqual(chapters.status_code, 200)
-        self.assertEqual(len(chapters.json()), 2)
+        self.assertIsNotNone(chapters)
+        self.assertEqual(len(chapters), 2)
 
         export = self.client.post("/audiobooks/sync-export", json={"track_ids": [track_id]})
         self.assertEqual(export.status_code, 200)
@@ -2332,9 +2357,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(payload["tracks"][0]["bookmarks"][0]["label"], "Good part")
         export_path.unlink(missing_ok=True)
 
-        deleted = self.client.delete(f"/audiobooks/bookmarks/{bookmark_id}")
-        self.assertEqual(deleted.status_code, 200)
-        self.assertTrue(deleted.json()["deleted"])
+        self.assertTrue(delete_audiobook_bookmark(bookmark_id))
 
     def test_podcast_subscription_refresh_and_download(self) -> None:
         media = self.root / "episode.mp3"
@@ -2453,41 +2476,37 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(missing_track.status_code, 404)
 
     def test_radio_station_bookmarks_and_played_timestamp(self) -> None:
-        created = self.client.post(
-            "/radio/stations",
-            json={
+        created = save_radio_station(
+            {
                 "name": "Test Radio",
                 "stream_url": "https://example.test/live.mp3",
                 "homepage_url": "https://example.test",
                 "genre": "Jazz",
                 "notes": "Late night",
-            },
+            }
         )
-        self.assertEqual(created.status_code, 200)
-        station_id = created.json()["id"]
+        self.assertIsNotNone(created)
+        station_id = created["id"]
 
-        stations = self.client.get("/radio/stations")
-        self.assertEqual(stations.status_code, 200)
-        self.assertEqual(stations.json()[0]["name"], "Test Radio")
+        stations = list_radio_stations()
+        self.assertEqual(stations[0]["name"], "Test Radio")
 
-        played = self.client.post(f"/radio/stations/{station_id}/played")
-        self.assertEqual(played.status_code, 200)
-        self.assertIsNotNone(played.json()["last_played_at"])
+        played = mark_radio_station_played(station_id)
+        self.assertIsNotNone(played)
+        self.assertIsNotNone(played["last_played_at"])
 
-        updated = self.client.patch(
-            f"/radio/stations/{station_id}",
-            json={
+        updated = save_radio_station(
+            {
                 "name": "Updated Radio",
                 "stream_url": "https://example.test/live.mp3",
                 "genre": "Ambient",
             },
+            station_id,
         )
-        self.assertEqual(updated.status_code, 200)
-        self.assertEqual(updated.json()["name"], "Updated Radio")
+        self.assertIsNotNone(updated)
+        self.assertEqual(updated["name"], "Updated Radio")
 
-        deleted = self.client.delete(f"/radio/stations/{station_id}")
-        self.assertEqual(deleted.status_code, 200)
-        self.assertTrue(deleted.json()["deleted"])
+        self.assertTrue(delete_radio_station(station_id))
 
     def test_lastfm_login_start_returns_authorization_url(self) -> None:
         with patch("backend.app.scrobbling.lastfm_api_post", return_value={"token": "token-123"}):
@@ -2599,12 +2618,11 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(submitted.json()["submitted"], 1)
         submit.assert_called_once()
 
-        love = self.client.patch(f"/scrobbling/tracks/{track_id}/love", json={"loved": True})
-        self.assertEqual(love.status_code, 200)
-        self.assertTrue(love.json()["loved"])
-        loved = self.client.get("/scrobbling/loved")
-        self.assertEqual(loved.status_code, 200)
-        self.assertEqual(loved.json()[0]["track_id"], track_id)
+        love = set_loved(track_id, True)
+        self.assertIsNotNone(love)
+        self.assertTrue(love["loved"])
+        loved = loved_tracks(100)
+        self.assertEqual(loved[0]["track_id"], track_id)
 
         history_csv = self.root / "history.csv"
         history_csv.write_text("artist,title,play_count,rating,loved\nScrobble Artist,Scrobble Song,7,4.5,true\n", encoding="utf-8")
@@ -3887,36 +3905,6 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(duplicate["shared_acoustic_fingerprint"])
         self.assertEqual(duplicate["bitrate_spread"], 192000)
         self.assertEqual({track["id"] for track in duplicate["tracks"]}, {first_id, second_id})
-
-    def test_similar_tracks_endpoint_ranks_audio_neighbor(self) -> None:
-        seed_file = self.root / "seed.mp3"
-        close_file = self.root / "close.mp3"
-        far_file = self.root / "far.mp3"
-        for audio_file in (seed_file, close_file, far_file):
-            audio_file.write_bytes(b"audio")
-        seed_id = insert_track(seed_file, title="Seed", artist="Seed Artist", analysis_embedding=json.dumps([1.0, 0.0]))
-        close_id = insert_track(
-            close_file,
-            title="Close",
-            artist="Different Artist",
-            genre="Rock",
-            analysis_embedding=json.dumps([0.98, 0.02]),
-        )
-        insert_track(
-            far_file,
-            title="Far",
-            artist="Other Artist",
-            genre="Jazz",
-            analysis_embedding=json.dumps([0.0, 1.0]),
-        )
-
-        response = self.client.get(f"/tracks/{seed_id}/similar")
-
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertGreaterEqual(len(body), 1)
-        self.assertEqual(body[0]["id"], close_id)
-        self.assertGreater(body[0]["audio_similarity"], 0.9)
 
     def test_autodj_generate_returns_drift_summary(self) -> None:
         seed_track_id = None

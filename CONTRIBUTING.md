@@ -1,6 +1,6 @@
 # Contributing to FLAC Cafe
 
-FLAC Cafe is split into a React/Tauri desktop UI and a Python backend. Keep music-library behavior in Python and keep React focused on presentation, interaction state, and API calls.
+FLAC Cafe is split into a React/Tauri desktop UI, a Rust app-facing controller, and a Python expert worker. Keep music-library behavior in Python when it depends on mutagen, network services, or optional ML, and keep React focused on presentation, interaction state, and typed API calls.
 
 ## Local Checks
 
@@ -44,7 +44,7 @@ New scoring features should preserve these goals:
 
 ## UI Conventions
 
-Frontend source lives in `frontend/src`. Use API helpers from `frontend/src/api.ts`; do not put scanning, recommendation, or tag-writing logic in React components.
+Frontend source lives in `frontend/src`. Use API helpers from `frontend/src/lib/api.ts`; do not put scanning, recommendation, or tag-writing logic in React components.
 
 For UI changes:
 

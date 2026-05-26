@@ -11,10 +11,13 @@ if (Test-Path $VenvPython) {
 
 Set-Location $Root
 
-$DefaultMlRuntime = Join-Path $env:LOCALAPPDATA "FLAC Cafe\ml-runtime"
-if (-not $env:FLAC_CAFE_ML_RUNTIME_DIR) {
-  $env:FLAC_CAFE_ML_RUNTIME_DIR = $DefaultMlRuntime
-}
-$env:FLAC_CAFE_USE_ML_RUNTIME = "1"
+$payload = '{"action":"health","params":{},"body":null}'
+$output = $payload | & $Python -m backend.app.worker
+$response = $output | ConvertFrom-Json
 
-& $Python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8765 --reload
+if (-not $response.ok -or $response.code -ne 200 -or $response.body.status -ne "ok") {
+  throw "Python worker health check failed: $output"
+}
+
+Write-Host "Python worker health check passed."
+Write-Host 'FLAC Cafe no longer starts a Python HTTP backend. Use `npm run desktop` for the Rust-to-Python worker path.'

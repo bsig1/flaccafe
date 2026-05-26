@@ -1,557 +1,36 @@
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection};
-use serde::Serialize;
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
 
-#[derive(Default)]
-pub struct NativeLibraryState;
+pub(crate) mod history;
+pub(crate) mod inbox;
+pub(crate) mod library_tools;
+pub(crate) mod media_protocol;
+pub(crate) mod podcasts;
+pub(crate) mod recommendation_profiles;
+pub(crate) mod recommendations;
+pub(crate) mod scrobbling;
+mod search;
+mod storage;
+pub(crate) mod tools;
+mod types;
 
-#[derive(Clone, Serialize)]
-pub struct NativeTrack {
-    id: i64,
-    path: String,
-    title: Option<String>,
-    artist: Option<String>,
-    album: Option<String>,
-    album_artist: Option<String>,
-    track_number: Option<i64>,
-    disc_number: Option<i64>,
-    genre: Option<String>,
-    analysis_provider: Option<String>,
-    analysis_model: Option<String>,
-    analysis_genre: Option<String>,
-    analysis_genre_confidence: Option<f64>,
-    analysis_genre_tags: Option<String>,
-    analysis_embedding: Option<String>,
-    analysis_updated_at: Option<String>,
-    year: Option<i64>,
-    duration_seconds: Option<f64>,
-    bitrate: Option<i64>,
-    replaygain_track_gain_db: Option<f64>,
-    replaygain_album_gain_db: Option<f64>,
-    replaygain_track_peak: Option<f64>,
-    replaygain_album_peak: Option<f64>,
-    audio_fingerprint: Option<String>,
-    acoustic_fingerprint: Option<String>,
-    acoustic_fingerprint_updated_at: Option<String>,
-    rating: Option<f64>,
-    play_count: i64,
-    skip_count: i64,
-    last_played_at: Option<String>,
-    last_skipped_at: Option<String>,
-    date_added: String,
-    file_modified_at: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct NativeTrackPage {
-    tracks: Vec<NativeTrack>,
-    total: i64,
-    limit: usize,
-    offset: usize,
-    source: String,
-}
-
-#[derive(Serialize)]
-pub struct NativeStatusResponse {
-    status: String,
-}
-
-#[derive(Serialize)]
-pub struct NativeSettingsResponse {
-    library_path: Option<String>,
-    library_paths: Vec<String>,
-    database_path: String,
-    suggested_music_path: Option<String>,
-    write_ratings_to_files: bool,
-    auto_write_fetched_lyrics_sidecars: bool,
-    cd_auto_lookup_metadata: bool,
-    acoustid_api_key_configured: bool,
-    lastfm_api_credentials_configured: bool,
-    lastfm_api_credentials_source: Option<String>,
-    extra: serde_json::Value,
-}
-
-#[derive(Serialize)]
-pub struct NativeTrackBatchResponse {
-    tracks: Vec<NativeTrack>,
-    missing_ids: Vec<i64>,
-}
-
-#[derive(Clone, Serialize)]
-pub struct NativeSimilarTrack {
-    #[serde(flatten)]
-    track: NativeTrack,
-    similarity_score: f64,
-    similarity_reason: String,
-    audio_similarity: Option<f64>,
-}
-
-#[derive(Clone, Serialize)]
-pub struct NativeAudiobookTrack {
-    #[serde(flatten)]
-    track: NativeTrack,
-    position_seconds: f64,
-    progress_percent: f64,
-    bookmark_count: i64,
-    chapter_count: i64,
-    progress_updated_at: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct NativeAudiobookListResponse {
-    total: i64,
-    tracks: Vec<NativeAudiobookTrack>,
-}
-
-#[derive(Serialize)]
-pub struct NativeAudiobookProgressResponse {
-    track_id: i64,
-    position_seconds: f64,
-    duration_seconds: Option<f64>,
-    updated_at: String,
-}
-
-#[derive(Serialize)]
-pub struct NativeAudiobookBookmark {
-    id: i64,
-    track_id: i64,
-    position_seconds: f64,
-    label: String,
-    note: Option<String>,
-    created_at: String,
-}
-
-#[derive(Serialize)]
-pub struct NativeAudiobookChapter {
-    id: Option<i64>,
-    track_id: Option<i64>,
-    chapter_index: i64,
-    title: String,
-    start_seconds: f64,
-    end_seconds: Option<f64>,
-    created_at: Option<String>,
-    updated_at: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct NativeRadioStation {
-    id: i64,
-    name: String,
-    stream_url: String,
-    homepage_url: Option<String>,
-    genre: Option<String>,
-    notes: Option<String>,
-    last_played_at: Option<String>,
-    created_at: String,
-    updated_at: String,
-}
-
-#[derive(Serialize)]
-pub struct NativeDeletedResponse {
-    deleted: bool,
-}
-
-#[derive(Serialize)]
-pub struct NativeLovedTrack {
-    track_id: i64,
-    loved: bool,
-    source: String,
-    updated_at: String,
-    title: Option<String>,
-    artist: Option<String>,
-    album: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct NativeTrackLoveResponse {
-    track_id: i64,
-    loved: bool,
-    source: String,
-    updated_at: String,
-}
-
-#[derive(Serialize)]
-pub struct NativeLibrarySourceRemoveResponse {
-    path: String,
-    library_paths: Vec<String>,
-    removed_tracks: i64,
-    removed_metadata_cache: i64,
-    removed_artwork_cache: i64,
-    message: String,
-}
-
-#[derive(Serialize)]
-pub struct NativeAlbumSummary {
-    id: i64,
-    album: Option<String>,
-    album_artist: Option<String>,
-    year: Option<i64>,
-    years: Vec<i64>,
-    album_ids: Vec<i64>,
-    edition_count: i64,
-    artwork_path: Option<String>,
-    track_count: i64,
-    expected_track_count: Option<i64>,
-    missing_track_count: i64,
-    duration_seconds: Option<f64>,
-    average_rating: Option<f64>,
-    artwork_track_id: Option<i64>,
-    completion_expected_track_count: Option<i64>,
-    completion_source: Option<String>,
-    completion_release_id: Option<String>,
-    completion_release_title: Option<String>,
-    completion_checked_at: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct NativeArtistSummary {
-    name: String,
-    track_count: i64,
-    album_count: i64,
-    duration_seconds: Option<f64>,
-    average_rating: Option<f64>,
-    play_count: i64,
-    skip_count: i64,
-    first_year: Option<i64>,
-    last_year: Option<i64>,
-    artwork_track_id: Option<i64>,
-}
-
-#[derive(Serialize)]
-pub struct NativePlaylistSummary {
-    id: i64,
-    name: String,
-    track_count: i64,
-    duration_seconds: Option<f64>,
-    created_at: String,
-    updated_at: String,
-}
-
-#[derive(Serialize)]
-pub struct NativePlayEventEntry {
-    id: i64,
-    track_id: Option<i64>,
-    event_type: String,
-    timestamp: String,
-    metadata: serde_json::Value,
-    track: Option<NativeTrack>,
-}
-
-#[derive(Serialize)]
-pub struct NativeHistoryTrackStat {
-    track: NativeTrack,
-    play_count: i64,
-    skip_count: i64,
-    listened_seconds: f64,
-}
-
-#[derive(Serialize)]
-pub struct NativeHistoryStatsResponse {
-    total_play_count: i64,
-    total_skip_count: i64,
-    total_play_events: i64,
-    total_skip_events: i64,
-    total_rated_events: i64,
-    unique_played_tracks: i64,
-    unique_skipped_tracks: i64,
-    total_listened_seconds: f64,
-    top_played: Vec<NativeHistoryTrackStat>,
-    top_skipped: Vec<NativeHistoryTrackStat>,
-}
-
-#[derive(Serialize)]
-pub struct NativeLibraryStatsResponse {
-    total_tracks: i64,
-    total_albums: i64,
-    total_artists: i64,
-    total_playlists: i64,
-    rated_tracks: i64,
-    unrated_tracks: i64,
-    total_duration_seconds: Option<f64>,
-    played_events: i64,
-    skipped_events: i64,
-}
-
-#[derive(Serialize)]
-pub struct NativeCacheClearResponse {
-    cleared: BTreeMap<String, i64>,
-}
-
-#[derive(Serialize)]
-pub struct NativeBulkUndoLogEntry {
-    id: i64,
-    batch_id: Option<String>,
-    action_type: String,
-    summary: String,
-    payload: serde_json::Value,
-    created_at: String,
-}
-
-#[derive(Serialize)]
-pub struct NativeBulkUndoBatchEntry {
-    batch_id: String,
-    action_type: String,
-    entries: i64,
-    summary: String,
-    first_created_at: String,
-    last_created_at: String,
-}
-
-#[derive(Serialize)]
-pub struct NativeAutoDjAvoidRule {
-    id: i64,
-    scope: String,
-    target_key: String,
-    label: String,
-    created_at: String,
-    updated_at: String,
-}
-
-#[derive(Clone, Serialize)]
-pub struct NativeAutoDjSettings {
-    queue_length: usize,
-    temperature: f64,
-    artist_cooldown: usize,
-    album_cooldown: usize,
-    unrated_exploration_percent: f64,
-    target_unrated_percent: Option<f64>,
-    target_exploration_percent: Option<f64>,
-    max_repeat_artist_percent: Option<f64>,
-    minimum_rating: Option<f64>,
-    recently_played_cooldown_days: i64,
-    seed_track_id: Option<i64>,
-    similarity_weight: f64,
-    rating_weight: f64,
-    recency_weight: f64,
-    skip_weight: f64,
-    exploration_weight: f64,
-    play_history_weight: f64,
-    feedback_weight: f64,
-    audio_similarity_weight: f64,
-    artist_similarity_weight: f64,
-    album_similarity_weight: f64,
-    genre_similarity_weight: f64,
-    year_similarity_weight: f64,
-    rating_similarity_weight: f64,
-    seed: Option<i64>,
-}
-
-#[derive(Clone, Serialize)]
-pub struct NativeQueueTrack {
-    #[serde(flatten)]
-    track: NativeTrack,
-    score: f64,
-    reason: String,
-    score_breakdown: BTreeMap<String, f64>,
-}
-
-#[derive(Clone, Serialize)]
-pub struct NativeRecommendationDrift {
-    total_tracks: i64,
-    familiar_percent: f64,
-    exploration_percent: f64,
-    repeat_artist_percent: f64,
-    unrated_percent: f64,
-    clap_percent: f64,
-    average_rating: Option<f64>,
-    unique_artists: i64,
-    unique_albums: i64,
-    warnings: Vec<String>,
-}
-
-impl Default for NativeRecommendationDrift {
-    fn default() -> Self {
-        Self {
-            total_tracks: 0,
-            familiar_percent: 0.0,
-            exploration_percent: 0.0,
-            repeat_artist_percent: 0.0,
-            unrated_percent: 0.0,
-            clap_percent: 0.0,
-            average_rating: None,
-            unique_artists: 0,
-            unique_albums: 0,
-            warnings: Vec::new(),
-        }
-    }
-}
-
-#[derive(Serialize)]
-pub struct NativeAutoDjResponse {
-    tracks: Vec<NativeQueueTrack>,
-    settings: NativeAutoDjSettings,
-    drift: NativeRecommendationDrift,
-    source: String,
-}
-
-#[derive(Serialize)]
-pub struct NativeLibraryReconcilePreview {
-    folders: Vec<String>,
-    scanned_files: i64,
-    database_tracks: i64,
-    new_files: i64,
-    missing_tracks: i64,
-    modified_tracks: i64,
-    sample_new_files: Vec<String>,
-    sample_missing_tracks: Vec<String>,
-    sample_modified_tracks: Vec<String>,
-    elapsed_ms: u128,
-    errors: Vec<String>,
-}
-
-#[derive(Serialize)]
-pub struct NativeDuplicateGroup {
-    key: String,
-    ignore_key: String,
-    tracks: Vec<NativeTrack>,
-    match_reason: String,
-    recommended_keep_id: Option<i64>,
-    recommendation_reason: Option<String>,
-    duration_spread_seconds: Option<f64>,
-    bitrate_spread: Option<i64>,
-    shared_fingerprint: bool,
-    shared_acoustic_fingerprint: bool,
-    average_audio_similarity: Option<f64>,
-    path_roots: Vec<String>,
-    analyzed_tracks: i64,
-}
-
-#[derive(Serialize)]
-pub struct NativeLibraryHealthResponse {
-    missing_files: Vec<NativeTrack>,
-    missing_metadata: Vec<NativeTrack>,
-    duplicate_groups: Vec<NativeDuplicateGroup>,
-    unrated_tracks: Vec<NativeTrack>,
-    missing_metadata_total: i64,
-    duplicate_group_total: i64,
-    ignored_duplicate_group_total: i64,
-}
-
-#[derive(Serialize)]
-pub struct NativeFileOrganizationChange {
-    track_id: i64,
-    title: Option<String>,
-    artist: Option<String>,
-    current_path: String,
-    target_path: String,
-    changed: bool,
-    collision: bool,
-    applied: bool,
-    error: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct NativeFileOrganizationResponse {
-    template: String,
-    base_folder: String,
-    total: i64,
-    changes: Vec<NativeFileOrganizationChange>,
-    changed_count: i64,
-    applied: i64,
-    removed_empty_folders: i64,
-}
-
-#[derive(Serialize)]
-pub struct NativePlaylistParseResponse {
-    playlist_path: String,
-    base_folder: String,
-    entries: Vec<String>,
-    local_paths: Vec<String>,
-    errors: Vec<String>,
-}
-
-#[derive(Serialize)]
-pub struct NativeExportResponse {
-    playlist_path: String,
-    track_count: i64,
-}
-
-#[derive(Serialize)]
-pub struct NativeVolumeTagPreview {
-    track_id: i64,
-    path: String,
-    title: Option<String>,
-    artist: Option<String>,
-    album: Option<String>,
-    current_track_gain_db: Option<f64>,
-    proposed_track_gain_db: Option<f64>,
-    current_track_peak: Option<f64>,
-    proposed_track_peak: Option<f64>,
-    current_album_gain_db: Option<f64>,
-    proposed_album_gain_db: Option<f64>,
-    current_album_peak: Option<f64>,
-    proposed_album_peak: Option<f64>,
-    changed: bool,
-    applied: bool,
-    error: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct NativeVolumeTagResponse {
-    total: i64,
-    changed: i64,
-    applied: i64,
-    errors: Vec<String>,
-    previews: Vec<NativeVolumeTagPreview>,
-    ffmpeg_path: Option<String>,
-    checked_paths: Vec<String>,
-}
-
-#[derive(Serialize)]
-pub struct NativeBulkFileMove {
-    source_path: String,
-    target_path: String,
-    changed: bool,
-    applied: bool,
-    error: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct NativeBulkFileMoveResponse {
-    total: i64,
-    changed: i64,
-    applied: i64,
-    moves: Vec<NativeBulkFileMove>,
-}
-
-#[derive(Serialize)]
-pub struct NativeGaplessAudioShape {
-    codec: Option<String>,
-    sample_rate: Option<i64>,
-    channels: Option<i64>,
-    bits_per_sample: Option<i64>,
-    duration_seconds: Option<f64>,
-    estimated_samples: Option<i64>,
-    error: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct NativeGaplessPairValidation {
-    left_track_id: i64,
-    right_track_id: i64,
-    left_title: Option<String>,
-    right_title: Option<String>,
-    left_shape: NativeGaplessAudioShape,
-    right_shape: NativeGaplessAudioShape,
-    metadata_compatible: bool,
-    sample_accurate_ready: bool,
-    warnings: Vec<String>,
-}
-
-#[derive(Serialize)]
-pub struct NativeGaplessValidationResponse {
-    track_count: i64,
-    pair_count: i64,
-    sample_accurate_ready_count: i64,
-    pairs: Vec<NativeGaplessPairValidation>,
-    message: String,
-}
+use self::recommendations::{
+    cosine_similarity, native_autodj_settings, normalize_token, round4, similarity_adjustment,
+};
+use self::search::{
+    csv_ints, fuzzy_sql_parts, music_only_clause, sort_expression, track_where_clause,
+};
+pub(super) use self::storage::{
+    app_storage_root, database_path, get_setting, local_app_data, open_database, repo_root,
+    set_setting, suggested_music_path, truthy_setting,
+};
+pub use self::types::*;
 
 const TRACK_COLUMNS: &str = "
     id, path, title, artist, album, album_artist,
@@ -574,90 +53,7 @@ fn qualified_track_columns(alias: &str) -> String {
         .join(", ")
 }
 
-fn repo_root() -> Option<PathBuf> {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .map(Path::to_path_buf)
-}
-
-fn local_app_data(app_name: &str) -> Option<PathBuf> {
-    env::var_os("LOCALAPPDATA").map(|root| PathBuf::from(root).join(app_name))
-}
-
-fn database_path() -> PathBuf {
-    if let Ok(configured) = env::var("MUSIC_REC_DB") {
-        return PathBuf::from(configured);
-    }
-
-    #[cfg(debug_assertions)]
-    {
-        if let Some(root) = repo_root() {
-            return root.join("backend").join("data").join("music.sqlite3");
-        }
-    }
-
-    let current = local_app_data("FLAC Cafe");
-    let legacy = local_app_data("Local AutoDJ");
-    match (current, legacy) {
-        (Some(current), Some(legacy)) if legacy.exists() && !current.exists() => {
-            legacy.join("data").join("music.sqlite3")
-        }
-        (Some(current), _) => current.join("data").join("music.sqlite3"),
-        _ => PathBuf::from("backend").join("data").join("music.sqlite3"),
-    }
-}
-
-fn open_database() -> Result<Connection, String> {
-    let path = database_path();
-    let connection = Connection::open(&path).map_err(|error| {
-        format!(
-            "Could not open library database at {}: {error}",
-            path.display()
-        )
-    })?;
-    connection
-        .busy_timeout(Duration::from_secs(3))
-        .map_err(|error| format!("Could not configure SQLite busy timeout: {error}"))?;
-    Ok(connection)
-}
-
-fn get_setting(connection: &Connection, key: &str) -> Option<String> {
-    connection
-        .query_row(
-            "SELECT value FROM settings WHERE key = ?",
-            params![key],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .ok()
-        .flatten()
-}
-
-fn set_setting(connection: &Connection, key: &str, value: Option<&str>) -> Result<(), String> {
-    connection
-        .execute(
-            "INSERT INTO settings(key, value, updated_at) VALUES(?, ?, datetime('now'))
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-            params![key, value],
-        )
-        .map_err(|error| format!("Could not save setting {key}: {error}"))?;
-    Ok(())
-}
-
-fn truthy_setting(connection: &Connection, key: &str, default_value: bool) -> bool {
-    match get_setting(connection, key).as_deref().map(str::trim) {
-        Some("1") | Some("true") | Some("True") | Some("yes") | Some("on") => true,
-        Some("0") | Some("false") | Some("False") | Some("no") | Some("off") => false,
-        _ => default_value,
-    }
-}
-
-fn suggested_music_path() -> Option<String> {
-    env::var_os("USERPROFILE")
-        .map(PathBuf::from)
-        .map(|path| path.join("Music").to_string_lossy().to_string())
-}
-
-fn track_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NativeTrack> {
+pub(super) fn track_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NativeTrack> {
     Ok(NativeTrack {
         id: row.get("id")?,
         path: row.get("path")?,
@@ -789,272 +185,6 @@ fn clean_optional_text(value: Option<String>) -> Option<String> {
         .filter(|text| !text.is_empty())
 }
 
-fn compact_sql_expression(expression: &str) -> String {
-    let mut compact = format!("lower({expression})");
-    for character in [
-        " ", "-", "_", ".", "'", "\"", "/", "\\", "(", ")", "[", "]", "{", "}", ":", ";", ",", "&",
-        "+",
-    ] {
-        let escaped = character.replace('\'', "''");
-        compact = format!("replace({compact}, '{escaped}', '')");
-    }
-    compact
-}
-
-fn search_terms(search: &str) -> Vec<String> {
-    search
-        .split(|character: char| character.is_whitespace() || "/\\,;:_()[]{}|".contains(character))
-        .map(|term| term.trim().to_lowercase())
-        .filter(|term| !term.is_empty())
-        .take(8)
-        .collect()
-}
-
-fn fuzzy_sql_parts(expression: &str, search: &str) -> (Vec<String>, Vec<Value>) {
-    let compact_expression = compact_sql_expression(expression);
-    let mut clauses = Vec::new();
-    let mut params = Vec::new();
-    for term in search_terms(search) {
-        let compact_term: String = term
-            .chars()
-            .filter(|character| character.is_ascii_alphanumeric())
-            .collect();
-        clauses.push(format!(
-            "(lower({expression}) LIKE ? OR {compact_expression} LIKE ?)"
-        ));
-        params.push(Value::Text(format!("%{term}%")));
-        params.push(Value::Text(format!(
-            "%{}%",
-            if compact_term.is_empty() {
-                &term
-            } else {
-                &compact_term
-            }
-        )));
-    }
-    (clauses, params)
-}
-
-fn csv_ints(value: Option<String>) -> Vec<i64> {
-    let mut values: Vec<i64> = value
-        .unwrap_or_default()
-        .split(',')
-        .filter_map(|item| item.trim().parse::<i64>().ok())
-        .collect();
-    values.sort_unstable();
-    values.dedup();
-    values
-}
-
-fn number_setting(
-    settings: &serde_json::Value,
-    key: &str,
-    default: f64,
-    min: f64,
-    max: f64,
-) -> f64 {
-    settings
-        .get(key)
-        .and_then(serde_json::Value::as_f64)
-        .unwrap_or(default)
-        .clamp(min, max)
-}
-
-fn int_setting(settings: &serde_json::Value, key: &str, default: i64, min: i64, max: i64) -> i64 {
-    settings
-        .get(key)
-        .and_then(serde_json::Value::as_i64)
-        .unwrap_or(default)
-        .clamp(min, max)
-}
-
-fn optional_number_setting(
-    settings: &serde_json::Value,
-    key: &str,
-    min: f64,
-    max: f64,
-) -> Option<f64> {
-    settings
-        .get(key)
-        .and_then(serde_json::Value::as_f64)
-        .map(|value| value.clamp(min, max))
-}
-
-fn optional_int_setting(settings: &serde_json::Value, key: &str) -> Option<i64> {
-    settings.get(key).and_then(serde_json::Value::as_i64)
-}
-
-fn native_autodj_settings(settings: serde_json::Value) -> NativeAutoDjSettings {
-    NativeAutoDjSettings {
-        queue_length: int_setting(&settings, "queue_length", 25, 1, 200) as usize,
-        temperature: number_setting(&settings, "temperature", 0.8, 0.05, 5.0),
-        artist_cooldown: int_setting(&settings, "artist_cooldown", 6, 0, 50) as usize,
-        album_cooldown: int_setting(&settings, "album_cooldown", 10, 0, 100) as usize,
-        unrated_exploration_percent: number_setting(
-            &settings,
-            "unrated_exploration_percent",
-            12.0,
-            0.0,
-            80.0,
-        ),
-        target_unrated_percent: optional_number_setting(
-            &settings,
-            "target_unrated_percent",
-            0.0,
-            80.0,
-        ),
-        target_exploration_percent: optional_number_setting(
-            &settings,
-            "target_exploration_percent",
-            0.0,
-            100.0,
-        ),
-        max_repeat_artist_percent: optional_number_setting(
-            &settings,
-            "max_repeat_artist_percent",
-            0.0,
-            95.0,
-        ),
-        minimum_rating: optional_number_setting(&settings, "minimum_rating", 0.5, 5.0),
-        recently_played_cooldown_days: int_setting(
-            &settings,
-            "recently_played_cooldown_days",
-            14,
-            0,
-            3650,
-        ),
-        seed_track_id: optional_int_setting(&settings, "seed_track_id"),
-        similarity_weight: number_setting(&settings, "similarity_weight", 0.0, 0.0, 5.0),
-        rating_weight: number_setting(&settings, "rating_weight", 1.0, 0.0, 5.0),
-        recency_weight: number_setting(&settings, "recency_weight", 1.0, 0.0, 5.0),
-        skip_weight: number_setting(&settings, "skip_weight", 1.0, 0.0, 5.0),
-        exploration_weight: number_setting(&settings, "exploration_weight", 1.0, 0.0, 5.0),
-        play_history_weight: number_setting(&settings, "play_history_weight", 0.7, 0.0, 5.0),
-        feedback_weight: number_setting(&settings, "feedback_weight", 0.8, 0.0, 5.0),
-        audio_similarity_weight: number_setting(
-            &settings,
-            "audio_similarity_weight",
-            2.2,
-            0.0,
-            5.0,
-        ),
-        artist_similarity_weight: number_setting(
-            &settings,
-            "artist_similarity_weight",
-            1.6,
-            0.0,
-            5.0,
-        ),
-        album_similarity_weight: number_setting(
-            &settings,
-            "album_similarity_weight",
-            0.9,
-            0.0,
-            5.0,
-        ),
-        genre_similarity_weight: number_setting(
-            &settings,
-            "genre_similarity_weight",
-            0.85,
-            0.0,
-            5.0,
-        ),
-        year_similarity_weight: number_setting(&settings, "year_similarity_weight", 0.45, 0.0, 5.0),
-        rating_similarity_weight: number_setting(
-            &settings,
-            "rating_similarity_weight",
-            0.25,
-            0.0,
-            5.0,
-        ),
-        seed: optional_int_setting(&settings, "seed"),
-    }
-}
-
-fn music_only_clause() -> &'static str {
-    "
-    NOT (
-      lower(coalesce(genre, '')) LIKE '%audiobook%'
-      OR lower(coalesce(genre, '')) LIKE '%audio book%'
-      OR lower(path) LIKE '%audiobook%'
-      OR lower(path) LIKE '%audio book%'
-      OR lower(path) LIKE '%\\books\\%'
-      OR lower(path) LIKE '%/books/%'
-    )
-    AND NOT (
-      lower(coalesce(genre, '')) LIKE '%podcast%'
-      OR lower(path) LIKE '%podcast%'
-      OR lower(path) LIKE '%\\podcasts\\%'
-      OR lower(path) LIKE '%/podcasts/%'
-      OR EXISTS (
-        SELECT 1
-        FROM podcast_episodes
-        WHERE podcast_episodes.track_id = tracks.id
-           OR (
-             podcast_episodes.local_path IS NOT NULL
-             AND lower(podcast_episodes.local_path) = lower(tracks.path)
-           )
-      )
-    )
-    "
-}
-
-fn track_where_clause(search: &str) -> (String, Vec<Value>) {
-    let expression = "coalesce(title, '') || ' ' || coalesce(artist, '') || ' ' ||
-                    coalesce(album, '') || ' ' || coalesce(album_artist, '') || ' ' ||
-                    coalesce(genre, '') || ' ' || coalesce(analysis_genre, '') || ' ' ||
-                    coalesce(path, '')";
-    let compact_expression = compact_sql_expression(expression);
-    let mut clauses = vec![music_only_clause().to_string()];
-    let mut params = Vec::new();
-    for term in search_terms(search) {
-        let compact_term: String = term
-            .chars()
-            .filter(|character| character.is_ascii_alphanumeric())
-            .collect();
-        clauses.push(format!(
-            "(lower({expression}) LIKE ? OR {compact_expression} LIKE ?)"
-        ));
-        params.push(Value::Text(format!("%{term}%")));
-        params.push(Value::Text(format!(
-            "%{}%",
-            if compact_term.is_empty() {
-                &term
-            } else {
-                &compact_term
-            }
-        )));
-    }
-    (format!("WHERE {}", clauses.join(" AND ")), params)
-}
-
-fn sort_expression(sort_by: &str) -> &'static str {
-    match sort_by {
-        "path" => "lower(coalesce(path, ''))",
-        "title" => "lower(coalesce(title, ''))",
-        "album" => "lower(coalesce(album, ''))",
-        "album_artist" => "lower(coalesce(album_artist, ''))",
-        "track_number" => "coalesce(track_number, -1)",
-        "disc_number" => "coalesce(disc_number, -1)",
-        "genre" => "lower(coalesce(analysis_genre, genre, ''))",
-        "analysis_genre" => "lower(coalesce(analysis_genre, ''))",
-        "analysis_genre_confidence" => "coalesce(analysis_genre_confidence, -1)",
-        "analysis_provider" => "lower(coalesce(analysis_provider, ''))",
-        "analysis_updated_at" => "coalesce(analysis_updated_at, '')",
-        "year" => "coalesce(year, -1)",
-        "bitrate" => "coalesce(bitrate, -1)",
-        "rating" => "coalesce(rating, -1)",
-        "duration_seconds" => "coalesce(duration_seconds, -1)",
-        "play_count" => "coalesce(play_count, 0)",
-        "skip_count" => "coalesce(skip_count, 0)",
-        "last_played_at" => "coalesce(last_played_at, '')",
-        "last_skipped_at" => "coalesce(last_skipped_at, '')",
-        "date_added" => "coalesce(date_added, '')",
-        "file_modified_at" => "coalesce(file_modified_at, '')",
-        _ => "lower(coalesce(artist, ''))",
-    }
-}
-
 #[tauri::command]
 pub fn native_tracks_page(
     _state: State<'_, NativeLibraryState>,
@@ -1063,12 +193,40 @@ pub fn native_tracks_page(
     offset: Option<usize>,
     sort_by: Option<String>,
     sort_direction: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    genre: Option<String>,
+    path: Option<String>,
+    extension: Option<String>,
+    rating_state: Option<String>,
+    min_rating: Option<f64>,
+    max_rating: Option<f64>,
+    year_from: Option<i64>,
+    year_to: Option<i64>,
+    min_duration: Option<f64>,
+    max_duration: Option<f64>,
+    missing_metadata: Option<bool>,
 ) -> Result<NativeTrackPage, String> {
     let connection = open_database()?;
-    let limit = limit.unwrap_or(150).clamp(1, 1000);
+    let limit = limit.unwrap_or(150).clamp(1, 100_000);
     let offset = offset.unwrap_or(0);
     let search = search.unwrap_or_default();
-    let (where_clause, mut params) = track_where_clause(&search);
+    let (where_clause, mut params) = track_where_clause(
+        &search,
+        artist.as_deref(),
+        album.as_deref(),
+        genre.as_deref(),
+        path.as_deref(),
+        extension.as_deref(),
+        rating_state.as_deref(),
+        min_rating,
+        max_rating,
+        year_from,
+        year_to,
+        min_duration,
+        max_duration,
+        missing_metadata,
+    );
     let direction = if sort_direction
         .unwrap_or_default()
         .eq_ignore_ascii_case("desc")
@@ -1109,6 +267,57 @@ pub fn native_tracks_page(
         limit,
         offset,
         source: "rust-sqlite".to_string(),
+    })
+}
+
+#[tauri::command]
+pub fn native_clap_coverage(
+    _state: State<'_, NativeLibraryState>,
+) -> Result<NativeAudioAnalysisCoverage, String> {
+    let connection = open_database()?;
+    let row = connection
+        .query_row(
+            &format!(
+                r#"
+                SELECT
+                    count(*) AS total_tracks,
+                    sum(
+                        CASE
+                            WHEN analysis_provider = 'clap'
+                             AND analysis_embedding IS NOT NULL
+                             AND trim(analysis_embedding) <> ''
+                            THEN 1 ELSE 0
+                        END
+                    ) AS analyzed_tracks,
+                    sum(CASE WHEN analysis_provider = 'clap_failed' THEN 1 ELSE 0 END) AS failed_tracks
+                FROM tracks
+                WHERE {music_filter}
+                "#,
+                music_filter = music_only_clause()
+            ),
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, Option<i64>>("total_tracks")?.unwrap_or(0),
+                    row.get::<_, Option<i64>>("analyzed_tracks")?.unwrap_or(0),
+                    row.get::<_, Option<i64>>("failed_tracks")?.unwrap_or(0),
+                ))
+            },
+        )
+        .map_err(|error| format!("Could not read native CLAP coverage: {error}"))?;
+    let (total_tracks, analyzed_tracks, failed_tracks) = row;
+    let coverage_percent = if total_tracks > 0 {
+        ((analyzed_tracks as f64 / total_tracks as f64) * 10_000.0).round() / 100.0
+    } else {
+        0.0
+    };
+    Ok(NativeAudioAnalysisCoverage {
+        total_tracks,
+        analyzed_tracks,
+        unanalyzed_tracks: (total_tracks - analyzed_tracks).max(0),
+        failed_tracks,
+        coverage_percent,
+        provider: "clap".to_string(),
     })
 }
 
@@ -1720,186 +929,6 @@ pub fn native_move_playlist_track(
 }
 
 #[tauri::command]
-pub fn native_history(
-    _state: State<'_, NativeLibraryState>,
-    limit: Option<usize>,
-) -> Result<Vec<NativePlayEventEntry>, String> {
-    let connection = open_database()?;
-    let limit = limit.unwrap_or(200).clamp(1, 1000);
-    let track_columns = qualified_track_columns("tracks");
-    let mut statement = connection
-        .prepare(&format!(
-            r#"
-            SELECT
-                play_events.id AS event_id,
-                play_events.track_id AS event_track_id,
-                play_events.event_type,
-                play_events.timestamp,
-                play_events.metadata_json,
-                {track_columns}
-            FROM play_events
-            LEFT JOIN tracks ON tracks.id = play_events.track_id
-            ORDER BY datetime(play_events.timestamp) DESC, play_events.id DESC
-            LIMIT ?
-            "#
-        ))
-        .map_err(|error| format!("Could not prepare native history query: {error}"))?;
-    let rows = statement
-        .query_map(params![limit as i64], |row| {
-            let track_id: Option<i64> = row.get("id")?;
-            let metadata_text = row
-                .get::<_, Option<String>>("metadata_json")?
-                .unwrap_or_else(|| "{}".to_string());
-            let metadata = serde_json::from_str(&metadata_text).unwrap_or_else(|_| json!({}));
-            Ok(NativePlayEventEntry {
-                id: row.get("event_id")?,
-                track_id: row.get("event_track_id")?,
-                event_type: row
-                    .get::<_, Option<String>>("event_type")?
-                    .unwrap_or_default(),
-                timestamp: row
-                    .get::<_, Option<String>>("timestamp")?
-                    .unwrap_or_default(),
-                metadata,
-                track: if track_id.is_some() {
-                    Some(track_from_row(row)?)
-                } else {
-                    None
-                },
-            })
-        })
-        .map_err(|error| format!("Could not read native history: {error}"))?;
-    rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native history: {error}"))
-}
-
-fn history_track_stat_from_row(
-    row: &rusqlite::Row<'_>,
-) -> rusqlite::Result<NativeHistoryTrackStat> {
-    Ok(NativeHistoryTrackStat {
-        track: track_from_row(row)?,
-        play_count: row.get::<_, Option<i64>>("play_count")?.unwrap_or(0),
-        skip_count: row.get::<_, Option<i64>>("skip_count")?.unwrap_or(0),
-        listened_seconds: row
-            .get::<_, Option<f64>>("listened_seconds")?
-            .unwrap_or(0.0),
-    })
-}
-
-#[tauri::command]
-pub fn native_history_stats(
-    _state: State<'_, NativeLibraryState>,
-    limit: Option<usize>,
-) -> Result<NativeHistoryStatsResponse, String> {
-    let connection = open_database()?;
-    let limit = limit.unwrap_or(10).clamp(1, 50);
-    let totals = connection
-        .query_row(
-            r#"
-            SELECT
-                coalesce(sum(play_count), 0) AS total_play_count,
-                coalesce(sum(skip_count), 0) AS total_skip_count,
-                coalesce(sum(coalesce(duration_seconds, 0) * coalesce(play_count, 0)), 0) AS total_listened_seconds,
-                sum(CASE WHEN play_count > 0 THEN 1 ELSE 0 END) AS unique_played_tracks,
-                sum(CASE WHEN skip_count > 0 THEN 1 ELSE 0 END) AS unique_skipped_tracks
-            FROM tracks
-            "#,
-            [],
-            |row| {
-                Ok((
-                    row.get::<_, Option<i64>>("total_play_count")?.unwrap_or(0),
-                    row.get::<_, Option<i64>>("total_skip_count")?.unwrap_or(0),
-                    row.get::<_, Option<f64>>("total_listened_seconds")?
-                        .unwrap_or(0.0),
-                    row.get::<_, Option<i64>>("unique_played_tracks")?
-                        .unwrap_or(0),
-                    row.get::<_, Option<i64>>("unique_skipped_tracks")?
-                        .unwrap_or(0),
-                ))
-            },
-        )
-        .map_err(|error| format!("Could not read native history totals: {error}"))?;
-    let mut event_counts: HashMap<String, i64> = HashMap::new();
-    let mut event_statement = connection
-        .prepare("SELECT event_type, count(*) AS count FROM play_events GROUP BY event_type")
-        .map_err(|error| format!("Could not prepare native history event totals: {error}"))?;
-    let event_rows = event_statement
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, Option<String>>("event_type")?
-                    .unwrap_or_default(),
-                row.get::<_, Option<i64>>("count")?.unwrap_or(0),
-            ))
-        })
-        .map_err(|error| format!("Could not read native history event totals: {error}"))?;
-    for row in event_rows {
-        let (event_type, count) =
-            row.map_err(|error| format!("Could not decode native history event totals: {error}"))?;
-        event_counts.insert(event_type, count);
-    }
-
-    let top_played = read_history_track_stats(
-        &connection,
-        r#"
-        WHERE play_count > 0
-        ORDER BY play_count DESC,
-                 listened_seconds DESC,
-                 lower(coalesce(artist, '')) ASC,
-                 lower(coalesce(title, '')) ASC
-        LIMIT ?
-        "#,
-        limit,
-    )?;
-    let top_skipped = read_history_track_stats(
-        &connection,
-        r#"
-        WHERE skip_count > 0
-        ORDER BY skip_count DESC,
-                 play_count DESC,
-                 lower(coalesce(artist, '')) ASC,
-                 lower(coalesce(title, '')) ASC
-        LIMIT ?
-        "#,
-        limit,
-    )?;
-
-    Ok(NativeHistoryStatsResponse {
-        total_play_count: totals.0,
-        total_skip_count: totals.1,
-        total_play_events: *event_counts.get("played").unwrap_or(&0),
-        total_skip_events: *event_counts.get("skipped").unwrap_or(&0),
-        total_rated_events: *event_counts.get("rated").unwrap_or(&0),
-        unique_played_tracks: totals.3,
-        unique_skipped_tracks: totals.4,
-        total_listened_seconds: totals.2,
-        top_played,
-        top_skipped,
-    })
-}
-
-fn read_history_track_stats(
-    connection: &Connection,
-    clause: &str,
-    limit: usize,
-) -> Result<Vec<NativeHistoryTrackStat>, String> {
-    let mut statement = connection
-        .prepare(&format!(
-            r#"
-            SELECT {TRACK_COLUMNS},
-                   coalesce(duration_seconds, 0) * coalesce(play_count, 0) AS listened_seconds
-            FROM tracks
-            {clause}
-            "#
-        ))
-        .map_err(|error| format!("Could not prepare native history stats query: {error}"))?;
-    let rows = statement
-        .query_map(params![limit as i64], history_track_stat_from_row)
-        .map_err(|error| format!("Could not read native history stats: {error}"))?;
-    rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native history stats: {error}"))
-}
-
-#[tauri::command]
 pub fn native_library_stats(
     _state: State<'_, NativeLibraryState>,
 ) -> Result<NativeLibraryStatsResponse, String> {
@@ -2088,6 +1117,608 @@ pub fn native_bulk_undo_batches(
         .map_err(|error| format!("Could not read native undo batches: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|error| format!("Could not decode native undo batches: {error}"))
+}
+
+fn json_sql_value(value: Option<&serde_json::Value>) -> Value {
+    match value {
+        Some(serde_json::Value::Null) | None => Value::Null,
+        Some(serde_json::Value::Bool(value)) => Value::Integer(if *value { 1 } else { 0 }),
+        Some(serde_json::Value::Number(value)) => {
+            if let Some(integer) = value.as_i64() {
+                Value::Integer(integer)
+            } else if let Some(float) = value.as_f64() {
+                Value::Real(float)
+            } else {
+                Value::Null
+            }
+        }
+        Some(serde_json::Value::String(value)) => {
+            if value.trim().is_empty() {
+                Value::Null
+            } else {
+                Value::Text(value.clone())
+            }
+        }
+        Some(value) => Value::Text(value.to_string()),
+    }
+}
+
+fn json_i64(value: Option<&serde_json::Value>) -> Option<i64> {
+    value.and_then(|value| {
+        value
+            .as_i64()
+            .or_else(|| value.as_f64().map(|number| number.round() as i64))
+            .or_else(|| {
+                value
+                    .as_str()
+                    .and_then(|text| text.trim().parse::<i64>().ok())
+            })
+    })
+}
+
+fn json_f64(value: Option<&serde_json::Value>) -> Option<f64> {
+    value.and_then(|value| {
+        value.as_f64().or_else(|| {
+            value
+                .as_str()
+                .and_then(|text| text.trim().parse::<f64>().ok())
+        })
+    })
+}
+
+fn json_text(value: Option<&serde_json::Value>) -> Option<String> {
+    value.and_then(|value| match value {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(text) => {
+            Some(text.trim().to_string()).filter(|text| !text.is_empty())
+        }
+        _ => Some(value.to_string()),
+    })
+}
+
+fn update_track_metadata_field(
+    connection: &Connection,
+    track_id: i64,
+    field: &str,
+    value: Option<&serde_json::Value>,
+) -> Result<(), String> {
+    match field {
+        "title" | "artist" | "album" | "album_artist" | "genre" => {
+            let sql = match field {
+                "title" => "UPDATE tracks SET title = ?, updated_at = datetime('now') WHERE id = ?",
+                "artist" => {
+                    "UPDATE tracks SET artist = ?, updated_at = datetime('now') WHERE id = ?"
+                }
+                "album" => "UPDATE tracks SET album = ?, updated_at = datetime('now') WHERE id = ?",
+                "album_artist" => {
+                    "UPDATE tracks SET album_artist = ?, updated_at = datetime('now') WHERE id = ?"
+                }
+                _ => "UPDATE tracks SET genre = ?, updated_at = datetime('now') WHERE id = ?",
+            };
+            connection
+                .execute(sql, params![json_text(value), track_id])
+                .map_err(|error| format!("Could not restore metadata field {field}: {error}"))?;
+        }
+        "track_number" | "disc_number" | "year" => {
+            let sql = match field {
+                "track_number" => {
+                    "UPDATE tracks SET track_number = ?, updated_at = datetime('now') WHERE id = ?"
+                }
+                "disc_number" => {
+                    "UPDATE tracks SET disc_number = ?, updated_at = datetime('now') WHERE id = ?"
+                }
+                _ => "UPDATE tracks SET year = ?, updated_at = datetime('now') WHERE id = ?",
+            };
+            connection
+                .execute(sql, params![json_i64(value), track_id])
+                .map_err(|error| format!("Could not restore metadata field {field}: {error}"))?;
+        }
+        "rating" => {
+            let rating = json_f64(value).filter(|rating| (0.5..=5.0).contains(rating));
+            connection
+                .execute(
+                    "UPDATE tracks SET rating = ?, updated_at = datetime('now') WHERE id = ?",
+                    params![rating, track_id],
+                )
+                .map_err(|error| format!("Could not restore rating: {error}"))?;
+        }
+        _ => return Err(format!("Undo does not support metadata field {field}")),
+    }
+    Ok(())
+}
+
+fn update_track_custom_tag(
+    connection: &Connection,
+    track_id: i64,
+    tag_key: &str,
+    value: Option<&serde_json::Value>,
+) -> Result<(), String> {
+    let key = tag_key.trim();
+    if key.is_empty() {
+        return Err("Custom tag name is required".to_string());
+    }
+    connection
+        .execute(
+            "DELETE FROM track_custom_tags WHERE track_id = ? AND lower(tag_key) = lower(?)",
+            params![track_id, key],
+        )
+        .map_err(|error| format!("Could not clear restored custom tag: {error}"))?;
+    if let Some(value) = json_text(value) {
+        connection
+            .execute(
+                "INSERT INTO track_custom_tags(track_id, tag_key, tag_value, updated_at) VALUES(?, ?, ?, datetime('now'))",
+                params![track_id, key, value],
+            )
+            .map_err(|error| format!("Could not restore custom tag: {error}"))?;
+    }
+    Ok(())
+}
+
+fn restore_metadata_snapshot(
+    connection: &Connection,
+    track: &serde_json::Map<String, serde_json::Value>,
+    fields: &[String],
+) -> Result<Vec<i64>, Vec<String>> {
+    let track_id = json_i64(track.get("id")).unwrap_or(0);
+    if track_id <= 0 {
+        return Err(vec!["Undo payload is missing track id".to_string()]);
+    }
+    let exists = connection
+        .query_row(
+            "SELECT id FROM tracks WHERE id = ?",
+            params![track_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .ok()
+        .is_some();
+    if !exists {
+        return Err(vec![format!(
+            "Track {track_id} is no longer in the library"
+        )]);
+    }
+    let mut errors = Vec::new();
+    for field in fields {
+        if let Some(custom_key) = field.strip_prefix("custom:") {
+            if let Some(custom_tags) = track
+                .get("custom_tags")
+                .and_then(serde_json::Value::as_object)
+            {
+                if let Err(error) = update_track_custom_tag(
+                    connection,
+                    track_id,
+                    custom_key,
+                    custom_tags.get(custom_key),
+                ) {
+                    errors.push(error);
+                }
+            }
+            continue;
+        }
+        if let Err(error) =
+            update_track_metadata_field(connection, track_id, field, track.get(field))
+        {
+            errors.push(error);
+        }
+    }
+    if errors.is_empty() {
+        clear_library_query_cache(connection);
+        Ok(vec![track_id])
+    } else {
+        Err(errors)
+    }
+}
+
+fn restore_advanced_snapshot(
+    connection: &Connection,
+    payload: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Vec<i64>, Vec<String>> {
+    let Some(track) = payload.get("track").and_then(serde_json::Value::as_object) else {
+        return Err(vec!["Undo payload is missing track metadata".to_string()]);
+    };
+    let custom_tags = payload
+        .get("custom_tags")
+        .and_then(serde_json::Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut merged = track.clone();
+    merged.insert(
+        "custom_tags".to_string(),
+        serde_json::Value::Object(custom_tags),
+    );
+    let fields = payload
+        .get("changed_fields")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .filter(|items| !items.is_empty())
+        .unwrap_or_else(|| {
+            vec![
+                "title".to_string(),
+                "artist".to_string(),
+                "album".to_string(),
+                "album_artist".to_string(),
+                "track_number".to_string(),
+                "disc_number".to_string(),
+                "genre".to_string(),
+                "year".to_string(),
+                "rating".to_string(),
+            ]
+        });
+    restore_metadata_snapshot(connection, &merged, &fields)
+}
+
+fn restore_changed_metadata(
+    connection: &Connection,
+    payload: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Vec<i64>, Vec<String>> {
+    let Some(track) = payload.get("track").and_then(serde_json::Value::as_object) else {
+        return Err(vec!["Undo payload is missing track metadata".to_string()]);
+    };
+    let Some(changes) = payload
+        .get("changes")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return Err(vec!["Undo payload is missing changed fields".to_string()]);
+    };
+    let fields = changes.keys().cloned().collect::<Vec<_>>();
+    restore_metadata_snapshot(connection, track, &fields)
+}
+
+fn restore_file_organization_native(
+    connection: &Connection,
+    payload: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Vec<i64>, Vec<String>> {
+    let track_id = json_i64(payload.get("track_id")).unwrap_or(0);
+    let source = json_text(payload.get("to")).unwrap_or_default();
+    let target = json_text(payload.get("from")).unwrap_or_default();
+    if track_id <= 0 || source.is_empty() || target.is_empty() {
+        return Err(vec!["Undo payload is missing file move details".to_string()]);
+    }
+    let source_path = PathBuf::from(&source);
+    let target_path = PathBuf::from(&target);
+    if !source_path.exists() {
+        return Err(vec![format!(
+            "Moved file is missing: {}",
+            source_path.display()
+        )]);
+    }
+    if target_path.exists() {
+        return Err(vec![format!(
+            "Original path already exists: {}",
+            target_path.display()
+        )]);
+    }
+    if !connection
+        .query_row(
+            "SELECT id FROM tracks WHERE id = ?",
+            params![track_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .ok()
+        .is_some()
+    {
+        return Err(vec![format!(
+            "Track {track_id} is no longer in the library"
+        )]);
+    }
+    if let Some(parent) = target_path.parent() {
+        if let Err(error) = std::fs::create_dir_all(parent) {
+            return Err(vec![format!("Could not create original folder: {error}")]);
+        }
+    }
+    if let Err(error) = std::fs::rename(&source_path, &target_path) {
+        return Err(vec![format!("Could not move file back: {error}")]);
+    }
+    let old_key =
+        json_text(payload.get("new_path_key")).unwrap_or_else(|| normalized_path_key(&source));
+    let restored_key =
+        json_text(payload.get("previous_path_key")).unwrap_or_else(|| normalized_path_key(&target));
+    connection
+        .execute(
+            "UPDATE tracks SET path = ?, path_key = ?, file_modified_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
+            params![target_path.to_string_lossy().to_string(), restored_key, track_id],
+        )
+        .map_err(|error| vec![format!("Could not restore organized track path: {error}")])?;
+    let _ = connection.execute(
+        "DELETE FROM track_metadata_cache WHERE path_key IN (?, ?)",
+        params![old_key, normalized_path_key(&target_path.to_string_lossy())],
+    );
+    clear_library_query_cache(connection);
+    Ok(vec![track_id])
+}
+
+fn restore_removed_track_native(
+    connection: &Connection,
+    payload: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Vec<i64>, Vec<String>> {
+    let Some(track) = payload.get("track").and_then(serde_json::Value::as_object) else {
+        return Err(vec![
+            "Undo payload is missing removed track data".to_string()
+        ]);
+    };
+    let track_id = json_i64(track.get("id")).unwrap_or(0);
+    let path = json_text(track.get("path")).unwrap_or_default();
+    if track_id <= 0 || path.is_empty() {
+        return Err(vec![
+            "Undo payload is missing removed track id or path".to_string()
+        ]);
+    }
+    let track_path = PathBuf::from(&path);
+    if !track_path.exists() {
+        return Err(vec![format!(
+            "Audio file no longer exists: {}",
+            track_path.display()
+        )]);
+    }
+    let restored_key =
+        json_text(track.get("path_key")).unwrap_or_else(|| normalized_path_key(&path));
+    if connection
+        .query_row(
+            "SELECT id FROM tracks WHERE id = ? OR path_key = ?",
+            params![track_id, restored_key],
+            |row| row.get::<_, i64>(0),
+        )
+        .ok()
+        .is_some()
+    {
+        return Err(vec![format!(
+            "Track id or path is already present in the library: {track_id}"
+        )]);
+    }
+    const RESTORE_COLUMNS: &[&str] = &[
+        "id",
+        "path",
+        "path_key",
+        "title",
+        "artist",
+        "album",
+        "album_artist",
+        "album_id",
+        "track_number",
+        "disc_number",
+        "genre",
+        "analysis_provider",
+        "analysis_model",
+        "analysis_genre",
+        "analysis_genre_confidence",
+        "analysis_genre_tags",
+        "analysis_embedding",
+        "analysis_updated_at",
+        "year",
+        "duration_seconds",
+        "bitrate",
+        "replaygain_track_gain_db",
+        "replaygain_album_gain_db",
+        "replaygain_track_peak",
+        "replaygain_album_peak",
+        "audio_fingerprint",
+        "acoustic_fingerprint",
+        "acoustic_fingerprint_updated_at",
+        "rating",
+        "play_count",
+        "skip_count",
+        "last_played_at",
+        "last_skipped_at",
+        "date_added",
+        "file_modified_at",
+        "updated_at",
+    ];
+    let placeholders = vec!["?"; RESTORE_COLUMNS.len()].join(",");
+    let values = RESTORE_COLUMNS
+        .iter()
+        .map(|column| {
+            if *column == "path_key" {
+                Value::Text(restored_key.clone())
+            } else {
+                json_sql_value(track.get(*column))
+            }
+        })
+        .collect::<Vec<_>>();
+    connection
+        .execute(
+            &format!(
+                "INSERT INTO tracks({}) VALUES({})",
+                RESTORE_COLUMNS.join(", "),
+                placeholders
+            ),
+            params_from_iter(values),
+        )
+        .map_err(|error| vec![format!("Could not restore removed track: {error}")])?;
+    clear_library_query_cache(connection);
+    Ok(vec![track_id])
+}
+
+fn restore_bulk_undo_entry_native(
+    connection: &Connection,
+    action_type: &str,
+    payload: &serde_json::Value,
+) -> Result<Vec<i64>, Vec<String>> {
+    let Some(payload) = payload.as_object() else {
+        return Err(vec!["Undo payload is invalid".to_string()]);
+    };
+    match action_type {
+        "csv_metadata_import" | "regex_metadata_replace" | "musicbrainz_auto_tag" => {
+            restore_changed_metadata(connection, payload)
+        }
+        "advanced_tag_edit" | "tag_backup_restore" => {
+            restore_advanced_snapshot(connection, payload)
+        }
+        "file_organization" => restore_file_organization_native(connection, payload),
+        "track_remove" => restore_removed_track_native(connection, payload),
+        "sqlite_file_tag_write" => Err(vec![
+            "Restoring audio-file tag writes still requires the Python tag writer".to_string(),
+        ]),
+        _ => Err(vec![format!("Undo is not supported for {action_type}")]),
+    }
+}
+
+#[tauri::command]
+pub fn native_restore_bulk_undo_batch(
+    _state: State<'_, NativeLibraryState>,
+    batch_id: String,
+) -> Result<NativeBulkUndoRestoreResponse, String> {
+    let mut connection = open_database()?;
+    let rows = {
+        let mut statement = connection
+            .prepare(
+                "SELECT id, batch_id, action_type, summary, payload_json, created_at
+                 FROM bulk_action_undo_log
+                 WHERE batch_id = ?
+                   AND action_type IN (
+                     'csv_metadata_import', 'regex_metadata_replace', 'musicbrainz_auto_tag',
+                     'file_organization', 'track_remove', 'advanced_tag_edit', 'tag_backup_restore'
+                   )
+                 ORDER BY id DESC",
+            )
+            .map_err(|error| format!("Could not prepare native undo batch restore: {error}"))?;
+        let rows = statement
+            .query_map(params![batch_id.trim()], |row| {
+                Ok((
+                    row.get::<_, i64>("id")?,
+                    row.get::<_, Option<String>>("action_type")?
+                        .unwrap_or_default(),
+                    row.get::<_, Option<String>>("payload_json")?
+                        .unwrap_or_default(),
+                ))
+            })
+            .map_err(|error| format!("Could not read native undo batch: {error}"))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| format!("Could not decode native undo batch: {error}"))?
+    };
+    if rows.is_empty() {
+        return Err("Undo batch was not found".to_string());
+    }
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Could not start native undo batch restore: {error}"))?;
+    let mut affected = Vec::<i64>::new();
+    let mut errors = Vec::<String>::new();
+    let action_type = rows
+        .first()
+        .map(|(_, action_type, _)| action_type.clone())
+        .unwrap_or_default();
+    for (entry_id, row_action, payload_text) in rows {
+        let payload = match serde_json::from_str::<serde_json::Value>(&payload_text) {
+            Ok(payload) => payload,
+            Err(_) => {
+                errors.push(format!("Entry {entry_id}: invalid payload"));
+                continue;
+            }
+        };
+        match restore_bulk_undo_entry_native(&transaction, &row_action, &payload) {
+            Ok(track_ids) => affected.extend(track_ids),
+            Err(entry_errors) => {
+                errors.extend(
+                    entry_errors
+                        .into_iter()
+                        .map(|error| format!("Entry {entry_id}: {error}")),
+                );
+            }
+        }
+    }
+    let restored = errors.is_empty();
+    if !affected.is_empty() {
+        let unique = affected
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let payload = json!({
+            "restored_batch_id": batch_id,
+            "restored_action_type": action_type,
+            "affected_track_ids": unique,
+            "errors": errors,
+        });
+        let _ = transaction.execute(
+            "INSERT INTO bulk_action_undo_log(action_type, summary, payload_json)
+             VALUES('undo_restore', ?, ?)",
+            params![format!("Restored batch {batch_id}"), payload.to_string()],
+        );
+    }
+    transaction
+        .commit()
+        .map_err(|error| format!("Could not commit native undo batch restore: {error}"))?;
+    let mut unique = Vec::new();
+    for track_id in affected {
+        if !unique.contains(&track_id) {
+            unique.push(track_id);
+        }
+    }
+    Ok(NativeBulkUndoRestoreResponse {
+        entry_id: 0,
+        batch_id: Some(batch_id),
+        action_type,
+        restored,
+        affected_track_ids: unique,
+        errors: errors.into_iter().take(100).collect(),
+    })
+}
+
+#[tauri::command]
+pub fn native_restore_bulk_undo_entry(
+    _state: State<'_, NativeLibraryState>,
+    entry_id: i64,
+) -> Result<NativeBulkUndoRestoreResponse, String> {
+    let mut connection = open_database()?;
+    let (batch_id, action_type, summary, payload_text) = connection
+        .query_row(
+            "SELECT batch_id, action_type, summary, payload_json
+             FROM bulk_action_undo_log
+             WHERE id = ?",
+            params![entry_id],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>("batch_id")?,
+                    row.get::<_, Option<String>>("action_type")?
+                        .unwrap_or_default(),
+                    row.get::<_, Option<String>>("summary")?.unwrap_or_default(),
+                    row.get::<_, Option<String>>("payload_json")?
+                        .unwrap_or_default(),
+                ))
+            },
+        )
+        .map_err(|_| "Undo log entry was not found".to_string())?;
+    let payload = serde_json::from_str::<serde_json::Value>(&payload_text)
+        .map_err(|_| "Undo log entry payload is invalid".to_string())?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Could not start native undo restore: {error}"))?;
+    let (affected, errors) =
+        match restore_bulk_undo_entry_native(&transaction, &action_type, &payload) {
+            Ok(track_ids) => (track_ids, Vec::new()),
+            Err(errors) => (Vec::new(), errors),
+        };
+    let restored = errors.is_empty();
+    if restored {
+        let payload = json!({
+            "restored_entry_id": entry_id,
+            "restored_batch_id": batch_id,
+            "restored_action_type": action_type,
+            "affected_track_ids": affected,
+        });
+        let _ = transaction.execute(
+            "INSERT INTO bulk_action_undo_log(action_type, summary, payload_json)
+             VALUES('undo_restore', ?, ?)",
+            params![format!("Restored {summary}"), payload.to_string()],
+        );
+    }
+    transaction
+        .commit()
+        .map_err(|error| format!("Could not commit native undo restore: {error}"))?;
+    Ok(NativeBulkUndoRestoreResponse {
+        entry_id,
+        batch_id,
+        action_type,
+        restored,
+        affected_track_ids: affected,
+        errors,
+    })
 }
 
 fn track_by_id(connection: &Connection, track_id: i64) -> Result<NativeTrack, String> {
@@ -2965,6 +2596,12 @@ pub fn native_update_track_rating(
     track_id: i64,
     rating: Option<f64>,
 ) -> Result<NativeTrack, String> {
+    if let Some(value) = rating {
+        let is_half_star = ((value * 2.0).round() - (value * 2.0)).abs() < f64::EPSILON;
+        if !(0.5..=5.0).contains(&value) || !is_half_star {
+            return Err("Rating must be a half-star value from 0.5 to 5.".to_string());
+        }
+    }
     let mut connection = open_database()?;
     if truthy_setting(&connection, "write_ratings_to_files", false) {
         return Err(
@@ -3066,1091 +2703,6 @@ pub fn native_mark_track_skipped(
     track_id: i64,
 ) -> Result<NativeTrack, String> {
     native_mark_track_event(track_id, "skipped")
-}
-
-fn native_autodj_avoid_rules_for_connection(
-    connection: &Connection,
-) -> Result<Vec<NativeAutoDjAvoidRule>, String> {
-    let mut statement = connection
-        .prepare(
-            "SELECT id, scope, target_key, label, created_at, updated_at
-             FROM autodj_avoid_rules
-             ORDER BY scope, lower(label)",
-        )
-        .map_err(|error| format!("Could not prepare native AutoDJ avoid query: {error}"))?;
-    let rows = statement
-        .query_map([], |row| {
-            Ok(NativeAutoDjAvoidRule {
-                id: row.get("id")?,
-                scope: row.get::<_, Option<String>>("scope")?.unwrap_or_default(),
-                target_key: row
-                    .get::<_, Option<String>>("target_key")?
-                    .unwrap_or_default(),
-                label: row.get::<_, Option<String>>("label")?.unwrap_or_default(),
-                created_at: row
-                    .get::<_, Option<String>>("created_at")?
-                    .unwrap_or_default(),
-                updated_at: row
-                    .get::<_, Option<String>>("updated_at")?
-                    .unwrap_or_default(),
-            })
-        })
-        .map_err(|error| format!("Could not read native AutoDJ avoid rules: {error}"))?;
-    rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native AutoDJ avoid rules: {error}"))
-}
-
-fn avoid_key_and_label(
-    connection: &Connection,
-    scope: &str,
-    track_id: Option<i64>,
-    value: Option<String>,
-) -> Result<(String, String), String> {
-    let track = match track_id {
-        Some(track_id) => Some(track_by_id(connection, track_id)?),
-        None => None,
-    };
-    let value = value.unwrap_or_default().trim().to_string();
-    match scope {
-        "track" => {
-            let track = track.ok_or_else(|| "Track avoid rules require track_id".to_string())?;
-            let label = format!(
-                "{} - {}",
-                track.title.as_deref().unwrap_or("Untitled"),
-                track.artist.as_deref().unwrap_or("Unknown artist")
-            );
-            Ok((track.id.to_string(), label))
-        }
-        "artist" => {
-            let label = if value.is_empty() {
-                track
-                    .as_ref()
-                    .and_then(|track| track.artist.clone())
-                    .unwrap_or_default()
-            } else {
-                value
-            };
-            let key = split_artist_tokens(Some(&label))
-                .into_iter()
-                .min()
-                .unwrap_or_else(|| normalize_token(Some(&label)));
-            if key.is_empty() {
-                return Err("No artist value available".to_string());
-            }
-            Ok((key, label))
-        }
-        "album" => {
-            let label = if value.is_empty() {
-                track
-                    .as_ref()
-                    .and_then(|track| track.album.clone())
-                    .unwrap_or_default()
-            } else {
-                value
-            };
-            let key = album_key(Some(&label));
-            if key.is_empty() {
-                return Err("No album value available".to_string());
-            }
-            Ok((key, label))
-        }
-        "genre" => {
-            let label = if value.is_empty() {
-                track
-                    .as_ref()
-                    .and_then(|track| track.analysis_genre.clone().or(track.genre.clone()))
-                    .unwrap_or_default()
-            } else {
-                value
-            };
-            let key = split_text_tokens(Some(&label))
-                .into_iter()
-                .min()
-                .unwrap_or_else(|| normalize_token(Some(&label)));
-            if key.is_empty() {
-                return Err("No genre value available".to_string());
-            }
-            Ok((key, label))
-        }
-        _ => Err("Unsupported AutoDJ avoid scope".to_string()),
-    }
-}
-
-#[tauri::command]
-pub fn native_autodj_avoid_rules(
-    _state: State<'_, NativeLibraryState>,
-) -> Result<Vec<NativeAutoDjAvoidRule>, String> {
-    let connection = open_database()?;
-    native_autodj_avoid_rules_for_connection(&connection)
-}
-
-#[tauri::command]
-pub fn native_create_autodj_avoid_rule(
-    _state: State<'_, NativeLibraryState>,
-    scope: String,
-    track_id: Option<i64>,
-    value: Option<String>,
-) -> Result<NativeAutoDjAvoidRule, String> {
-    let mut connection = open_database()?;
-    let (key, label) = avoid_key_and_label(&connection, &scope, track_id, value)?;
-    let transaction = connection
-        .transaction()
-        .map_err(|error| format!("Could not start native AutoDJ avoid update: {error}"))?;
-    transaction
-        .execute(
-            "INSERT INTO autodj_avoid_rules(scope, target_key, label)
-             VALUES(?, ?, ?)
-             ON CONFLICT(scope, target_key) DO UPDATE SET label = excluded.label, updated_at = datetime('now')",
-            params![scope, key, label],
-        )
-        .map_err(|error| format!("Could not save native AutoDJ avoid rule: {error}"))?;
-    let row = transaction
-        .query_row(
-            "SELECT id, scope, target_key, label, created_at, updated_at
-             FROM autodj_avoid_rules
-             WHERE scope = ? AND target_key = ?",
-            params![scope, key],
-            |row| {
-                Ok(NativeAutoDjAvoidRule {
-                    id: row.get("id")?,
-                    scope: row.get::<_, Option<String>>("scope")?.unwrap_or_default(),
-                    target_key: row
-                        .get::<_, Option<String>>("target_key")?
-                        .unwrap_or_default(),
-                    label: row.get::<_, Option<String>>("label")?.unwrap_or_default(),
-                    created_at: row
-                        .get::<_, Option<String>>("created_at")?
-                        .unwrap_or_default(),
-                    updated_at: row
-                        .get::<_, Option<String>>("updated_at")?
-                        .unwrap_or_default(),
-                })
-            },
-        )
-        .map_err(|error| format!("Could not read native AutoDJ avoid rule: {error}"))?;
-    transaction
-        .commit()
-        .map_err(|error| format!("Could not save native AutoDJ avoid transaction: {error}"))?;
-    Ok(row)
-}
-
-#[tauri::command]
-pub fn native_delete_autodj_avoid_rule(
-    _state: State<'_, NativeLibraryState>,
-    rule_id: i64,
-) -> Result<Vec<NativeAutoDjAvoidRule>, String> {
-    let mut connection = open_database()?;
-    let transaction = connection
-        .transaction()
-        .map_err(|error| format!("Could not start native AutoDJ avoid delete: {error}"))?;
-    transaction
-        .execute(
-            "DELETE FROM autodj_avoid_rules WHERE id = ?",
-            params![rule_id],
-        )
-        .map_err(|error| format!("Could not delete native AutoDJ avoid rule: {error}"))?;
-    transaction
-        .commit()
-        .map_err(|error| format!("Could not save native AutoDJ avoid delete: {error}"))?;
-    native_autodj_avoid_rules_for_connection(&connection)
-}
-
-#[derive(Clone)]
-struct NativeCandidateTrack {
-    track: NativeTrack,
-    feedback_score: f64,
-    days_since_played: Option<f64>,
-    days_since_skipped: Option<f64>,
-}
-
-#[derive(Clone)]
-struct NativeCandidate {
-    item: NativeCandidateTrack,
-    score: f64,
-    reason: String,
-    breakdown: BTreeMap<String, f64>,
-    artist_keys: HashSet<String>,
-    album_key: String,
-    is_unrated: bool,
-    is_exploratory: bool,
-}
-
-struct NativeRng {
-    state: u64,
-}
-
-impl NativeRng {
-    fn new(seed: Option<i64>) -> Self {
-        let fallback = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos() as u64)
-            .unwrap_or(0x9e37_79b9_7f4a_7c15);
-        Self {
-            state: (seed.map(|value| value as u64).unwrap_or(fallback) ^ 0x9e37_79b9_7f4a_7c15)
-                .max(1),
-        }
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        let mut value = self.state;
-        value ^= value >> 12;
-        value ^= value << 25;
-        value ^= value >> 27;
-        self.state = value;
-        value.wrapping_mul(0x2545_f491_4f6c_dd1d)
-    }
-
-    fn next_f64(&mut self) -> f64 {
-        (self.next_u64() >> 11) as f64 / ((1u64 << 53) as f64)
-    }
-
-    fn uniform(&mut self, min: f64, max: f64) -> f64 {
-        min + (max - min) * self.next_f64()
-    }
-}
-
-fn round3(value: f64) -> f64 {
-    (value * 1000.0).round() / 1000.0
-}
-
-fn round4(value: f64) -> f64 {
-    (value * 10000.0).round() / 10000.0
-}
-
-fn round2(value: f64) -> f64 {
-    (value * 100.0).round() / 100.0
-}
-
-fn normalize_token(value: Option<&str>) -> String {
-    value
-        .unwrap_or_default()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
-}
-
-fn split_artist_tokens(value: Option<&str>) -> HashSet<String> {
-    let mut cleaned = value.unwrap_or_default().replace('|', ";");
-    for marker in [" feat. ", " feat ", " featuring ", " with "] {
-        cleaned = cleaned.replace(marker, ";");
-    }
-    cleaned
-        .split(|character| matches!(character, ';' | '/' | ',' | '+' | '&'))
-        .map(|part| normalize_token(Some(part)))
-        .filter(|part| !part.is_empty())
-        .collect()
-}
-
-fn split_text_tokens(value: Option<&str>) -> HashSet<String> {
-    value
-        .unwrap_or_default()
-        .split(|character| matches!(character, ';' | '/' | ',' | '|'))
-        .map(|part| normalize_token(Some(part)))
-        .filter(|part| !part.is_empty())
-        .collect()
-}
-
-fn album_key(value: Option<&str>) -> String {
-    normalize_token(value)
-}
-
-fn combined_genre(track: &NativeTrack) -> Option<String> {
-    let mut values = Vec::new();
-    for value in [&track.genre, &track.analysis_genre] {
-        if let Some(value) = value {
-            let trimmed = value.trim();
-            if !trimmed.is_empty() && !values.iter().any(|existing: &String| existing == trimmed) {
-                values.push(trimmed.to_string());
-            }
-        }
-    }
-    if values.is_empty() {
-        None
-    } else {
-        Some(values.join("; "))
-    }
-}
-
-fn base_rating_score(rating: Option<f64>) -> f64 {
-    let Some(value) = rating else {
-        return 0.2;
-    };
-    let anchors = [
-        (0.5, -4.8),
-        (1.0, -4.0),
-        (2.0, -1.4),
-        (3.0, 0.35),
-        (4.0, 1.3),
-        (5.0, 2.15),
-    ];
-    for window in anchors.windows(2) {
-        let (left_rating, left_score) = window[0];
-        let (right_rating, right_score) = window[1];
-        if value >= left_rating && value <= right_rating {
-            let progress = (value - left_rating) / (right_rating - left_rating);
-            return left_score + (right_score - left_score) * progress;
-        }
-    }
-    if value > anchors[anchors.len() - 1].0 {
-        anchors[anchors.len() - 1].1
-    } else {
-        anchors[0].1
-    }
-}
-
-fn track_is_longform(track: &NativeTrack) -> bool {
-    let genre = track.genre.as_deref().unwrap_or_default().to_lowercase();
-    let path = track.path.replace('\\', "/").to_lowercase();
-    genre.contains("podcast")
-        || path.contains("podcast")
-        || genre.contains("audiobook")
-        || genre.contains("audio book")
-        || path.contains("audiobook")
-        || path.contains("audio book")
-        || path.contains("/books/")
-}
-
-fn track_is_familiar(track: &NativeTrack) -> bool {
-    track.rating.is_some() || track.play_count > 0
-}
-
-fn track_is_exploratory(track: &NativeTrack) -> bool {
-    !track_is_familiar(track) && (track.rating.is_none() || track.play_count == 0)
-}
-
-fn track_matches_avoid(
-    track: &NativeTrack,
-    avoid_rules: &HashMap<String, HashSet<String>>,
-) -> bool {
-    if avoid_rules
-        .get("track")
-        .is_some_and(|rules| rules.contains(&track.id.to_string()))
-    {
-        return true;
-    }
-    if avoid_rules
-        .get("artist")
-        .is_some_and(|rules| !rules.is_disjoint(&split_artist_tokens(track.artist.as_deref())))
-    {
-        return true;
-    }
-    if avoid_rules
-        .get("album")
-        .is_some_and(|rules| rules.contains(&album_key(track.album.as_deref())))
-    {
-        return true;
-    }
-    if avoid_rules.get("genre").is_some_and(|rules| {
-        !rules.is_disjoint(&split_text_tokens(combined_genre(track).as_deref()))
-    }) {
-        return true;
-    }
-    false
-}
-
-fn parse_embedding(value: Option<&str>) -> Option<Vec<f64>> {
-    let raw = value?;
-    let parsed = serde_json::from_str::<Vec<f64>>(raw).ok()?;
-    if parsed.is_empty() {
-        None
-    } else {
-        Some(parsed)
-    }
-}
-
-fn cosine_similarity(left: Option<&str>, right: Option<&str>) -> Option<f64> {
-    let left = parse_embedding(left)?;
-    let right = parse_embedding(right)?;
-    if left.len() != right.len() {
-        return None;
-    }
-    let dot: f64 = left.iter().zip(&right).map(|(a, b)| a * b).sum();
-    let left_norm = left.iter().map(|value| value * value).sum::<f64>().sqrt();
-    let right_norm = right.iter().map(|value| value * value).sum::<f64>().sqrt();
-    if left_norm <= 0.0 || right_norm <= 0.0 {
-        None
-    } else {
-        Some(dot / (left_norm * right_norm))
-    }
-}
-
-fn similarity_adjustment(
-    track: &NativeTrack,
-    seed_track: Option<&NativeTrack>,
-    settings: &NativeAutoDjSettings,
-) -> (f64, String) {
-    let Some(seed_track) = seed_track else {
-        return (0.0, String::new());
-    };
-    if track.id == seed_track.id || settings.similarity_weight <= 0.0 {
-        return (0.0, String::new());
-    }
-    let mut score = 0.0;
-    let mut reasons = Vec::new();
-    if let Some(similarity) = cosine_similarity(
-        track.analysis_embedding.as_deref(),
-        seed_track.analysis_embedding.as_deref(),
-    ) {
-        if similarity > 0.0 {
-            score += similarity * settings.audio_similarity_weight;
-            reasons.push(format!("audio similarity {similarity:.2}"));
-        }
-    }
-    if !split_artist_tokens(track.artist.as_deref())
-        .is_disjoint(&split_artist_tokens(seed_track.artist.as_deref()))
-    {
-        score += settings.artist_similarity_weight;
-        reasons.push("similar artist".to_string());
-    }
-    let album = album_key(track.album.as_deref());
-    if !album.is_empty() && album == album_key(seed_track.album.as_deref()) {
-        score += settings.album_similarity_weight;
-        reasons.push("same album".to_string());
-    }
-    if !split_text_tokens(combined_genre(track).as_deref())
-        .is_disjoint(&split_text_tokens(combined_genre(seed_track).as_deref()))
-    {
-        score += settings.genre_similarity_weight;
-        reasons.push("similar genre".to_string());
-    }
-    if let (Some(year), Some(seed_year)) = (track.year, seed_track.year) {
-        let distance = (year - seed_year).abs();
-        if distance <= 2 {
-            score += settings.year_similarity_weight;
-            reasons.push("same era".to_string());
-        } else if distance <= 6 {
-            score += settings.year_similarity_weight * (0.2 / 0.45);
-            reasons.push("nearby era".to_string());
-        }
-    }
-    if let (Some(rating), Some(seed_rating)) = (track.rating, seed_track.rating) {
-        if (rating - seed_rating).abs() <= 1.0 {
-            score += settings.rating_similarity_weight;
-            reasons.push("rating match".to_string());
-        }
-    }
-    if reasons.is_empty() {
-        (score, String::new())
-    } else {
-        (score, format!("seed {}", reasons.join("/")))
-    }
-}
-
-fn score_candidate(
-    item: NativeCandidateTrack,
-    settings: &NativeAutoDjSettings,
-    rng: &mut NativeRng,
-    seed_track: Option<&NativeTrack>,
-) -> NativeCandidate {
-    let track = &item.track;
-    let mut breakdown = BTreeMap::new();
-    let mut score = base_rating_score(track.rating) * settings.rating_weight;
-    breakdown.insert("rating".to_string(), round3(score));
-    let mut reasons = vec![format!(
-        "rating {}",
-        track
-            .rating
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "unrated".to_string())
-    )];
-
-    let recency_score = if settings.recently_played_cooldown_days <= 0 {
-        0.55
-    } else if let Some(days) = item.days_since_played {
-        if days < settings.recently_played_cooldown_days as f64 {
-            -3.0 * (1.0 - (days / settings.recently_played_cooldown_days as f64))
-        } else {
-            0.55
-        }
-    } else {
-        0.55
-    };
-    let recency_delta = recency_score * settings.recency_weight;
-    score += recency_delta;
-    breakdown.insert("recency".to_string(), round3(recency_delta));
-    reasons.push(if recency_delta < 0.0 {
-        "recently played penalty".to_string()
-    } else {
-        "not recently played".to_string()
-    });
-
-    if track.skip_count > 0 {
-        let skip_delta = -((track.skip_count as f64) * 0.25).min(1.75) * settings.skip_weight;
-        score += skip_delta;
-        breakdown.insert("skips".to_string(), round3(skip_delta));
-        reasons.push("skip penalty".to_string());
-    }
-    if let Some(days) = item.days_since_skipped {
-        if days < 14.0 {
-            let delta = -1.2 * (1.0 - days / 14.0) * settings.skip_weight;
-            score += delta;
-            breakdown.insert("recent_skip".to_string(), round3(delta));
-            reasons.push("recent skip".to_string());
-        }
-    }
-    if track.play_count > 0 {
-        let delta = (track.play_count as f64)
-            .ln_1p()
-            .mul_add(0.18, 0.0)
-            .min(0.9)
-            * settings.play_history_weight;
-        score += delta;
-        breakdown.insert("plays".to_string(), round3(delta));
-        reasons.push("play history".to_string());
-    }
-    if item.feedback_score > 0.0 {
-        let delta = item
-            .feedback_score
-            .max(0.0)
-            .ln_1p()
-            .mul_add(0.45, 0.0)
-            .min(1.4)
-            * settings.feedback_weight;
-        score += delta;
-        breakdown.insert("manual_queue".to_string(), round3(delta));
-        reasons.push("manual queue memory".to_string());
-    }
-    if track.rating.is_none() {
-        let delta = 0.65 * settings.exploration_weight;
-        score += delta;
-        breakdown.insert("exploration".to_string(), round3(delta));
-        reasons.push("exploration".to_string());
-    }
-    let (similarity, similarity_reason) = similarity_adjustment(track, seed_track, settings);
-    if similarity != 0.0 {
-        let delta = similarity * settings.similarity_weight;
-        score += delta;
-        breakdown.insert("similarity".to_string(), round3(delta));
-        if !similarity_reason.is_empty() {
-            reasons.push(similarity_reason);
-        }
-    }
-    let random_delta = rng.uniform(-0.35, 0.35);
-    score += random_delta;
-    breakdown.insert("random".to_string(), round3(random_delta));
-    breakdown.insert("total".to_string(), round3(score));
-
-    NativeCandidate {
-        artist_keys: split_artist_tokens(track.artist.as_deref()),
-        album_key: album_key(track.album.as_deref()),
-        is_unrated: track.rating.is_none(),
-        is_exploratory: track_is_exploratory(track),
-        item,
-        score,
-        reason: reasons.join(", "),
-        breakdown,
-    }
-}
-
-fn candidate_conflicts(
-    candidate: &NativeCandidate,
-    recent_artists: &[HashSet<String>],
-    recent_albums: &[String],
-) -> bool {
-    let artist_conflict = !candidate.artist_keys.is_empty()
-        && recent_artists
-            .iter()
-            .any(|recent| !recent.is_disjoint(&candidate.artist_keys));
-    let album_conflict = !candidate.album_key.is_empty()
-        && recent_albums
-            .iter()
-            .any(|recent| recent == &candidate.album_key);
-    artist_conflict || album_conflict
-}
-
-fn repeat_artist_percent_for_tracks(tracks: &[NativeQueueTrack]) -> f64 {
-    if tracks.is_empty() {
-        return 0.0;
-    }
-    let unique_artists: HashSet<String> = tracks
-        .iter()
-        .flat_map(|track| {
-            let tokens = split_artist_tokens(track.track.artist.as_deref());
-            if tokens.is_empty() {
-                HashSet::from([normalize_token(track.track.artist.as_deref())])
-            } else {
-                tokens
-            }
-        })
-        .filter(|token| !token.is_empty())
-        .collect();
-    if unique_artists.is_empty() {
-        0.0
-    } else {
-        ((tracks.len().saturating_sub(unique_artists.len())) as f64 / tracks.len() as f64) * 100.0
-    }
-}
-
-fn target_drift_adjustment(
-    selected: &[NativeQueueTrack],
-    track: &NativeTrack,
-    settings: &NativeAutoDjSettings,
-) -> (f64, String) {
-    let mut score = 0.0;
-    let mut reasons = Vec::new();
-    if let Some(target) = settings.target_unrated_percent {
-        let target_fraction = target / 100.0;
-        let current_unrated = selected
-            .iter()
-            .filter(|item| item.track.rating.is_none())
-            .count();
-        let current_fraction = if selected.is_empty() {
-            0.0
-        } else {
-            current_unrated as f64 / selected.len() as f64
-        };
-        if track.rating.is_none() && current_fraction < target_fraction {
-            score += 0.75;
-            reasons.push("unrated target");
-        } else if track.rating.is_some() && current_fraction < target_fraction {
-            score -= 0.45;
-            reasons.push("unrated target");
-        }
-    }
-    if let Some(target) = settings.target_exploration_percent {
-        let target_fraction = target / 100.0;
-        let current = selected
-            .iter()
-            .filter(|item| track_is_exploratory(&item.track))
-            .count();
-        let current_fraction = if selected.is_empty() {
-            0.0
-        } else {
-            current as f64 / selected.len() as f64
-        };
-        if track_is_exploratory(track) && current_fraction < target_fraction {
-            score += 0.6;
-            reasons.push("exploration target");
-        } else if !track_is_exploratory(track) && current_fraction < target_fraction {
-            score -= 0.35;
-            reasons.push("exploration target");
-        }
-    }
-    if let Some(max_repeat) = settings.max_repeat_artist_percent {
-        let mut projected = selected.to_vec();
-        projected.push(NativeQueueTrack {
-            track: track.clone(),
-            score: 0.0,
-            reason: String::new(),
-            score_breakdown: BTreeMap::new(),
-        });
-        let overage = repeat_artist_percent_for_tracks(&projected) - max_repeat;
-        if overage > 0.0 {
-            score -= (0.16 * overage).min(4.0);
-            reasons.push("repeat artist target");
-        }
-    }
-    (score, reasons.join(", "))
-}
-
-fn adjusted_candidate_for_queue(
-    base: &NativeCandidate,
-    queue: &[NativeQueueTrack],
-    settings: &NativeAutoDjSettings,
-    recent_artists: &[HashSet<String>],
-    recent_albums: &[String],
-    cooldown_penalty: bool,
-) -> NativeCandidate {
-    let mut adjusted = base.clone();
-    let (drift_delta, drift_reason) =
-        target_drift_adjustment(queue, &adjusted.item.track, settings);
-    if drift_delta != 0.0 {
-        adjusted.score += drift_delta;
-        adjusted
-            .breakdown
-            .insert("targets".to_string(), round3(drift_delta));
-        if !drift_reason.is_empty() {
-            adjusted.reason.push_str(&format!(", {drift_reason}"));
-        }
-    }
-    if cooldown_penalty && candidate_conflicts(base, recent_artists, recent_albums) {
-        adjusted.score -= 2.0;
-        adjusted.reason.push_str(", cooldown penalty");
-    }
-    adjusted
-        .breakdown
-        .insert("total".to_string(), round3(adjusted.score));
-    adjusted
-}
-
-fn weighted_choice(candidates: &[NativeCandidate], temperature: f64, rng: &mut NativeRng) -> usize {
-    let max_score = candidates
-        .iter()
-        .map(|candidate| candidate.score)
-        .fold(f64::NEG_INFINITY, f64::max);
-    let weights: Vec<f64> = candidates
-        .iter()
-        .map(|candidate| ((candidate.score - max_score) / temperature.max(0.05)).exp())
-        .collect();
-    let total: f64 = weights.iter().sum();
-    let mut pick = rng.next_f64() * total;
-    for (index, weight) in weights.iter().enumerate() {
-        pick -= weight;
-        if pick <= 0.0 {
-            return index;
-        }
-    }
-    candidates.len().saturating_sub(1)
-}
-
-fn candidate_to_queue_track(candidate: NativeCandidate) -> NativeQueueTrack {
-    NativeQueueTrack {
-        track: candidate.item.track,
-        score: round3(candidate.score),
-        reason: candidate.reason,
-        score_breakdown: candidate.breakdown,
-    }
-}
-
-fn read_autodj_candidates(connection: &Connection) -> Result<Vec<NativeCandidateTrack>, String> {
-    let track_columns = qualified_track_columns("tracks");
-    let mut statement = connection
-        .prepare(&format!(
-            r#"
-            SELECT {track_columns},
-                   COALESCE(SUM(recommendation_feedback.weight), 0) AS feedback_score,
-                   julianday('now') - julianday(tracks.last_played_at) AS days_since_played,
-                   julianday('now') - julianday(tracks.last_skipped_at) AS days_since_skipped
-            FROM tracks
-            LEFT JOIN recommendation_feedback ON recommendation_feedback.track_id = tracks.id
-            GROUP BY tracks.id
-            ORDER BY tracks.artist, tracks.album, tracks.disc_number, tracks.track_number, tracks.title
-            "#
-        ))
-        .map_err(|error| format!("Could not prepare native AutoDJ candidates: {error}"))?;
-    let rows = statement
-        .query_map([], |row| {
-            Ok(NativeCandidateTrack {
-                track: track_from_row(row)?,
-                feedback_score: row.get::<_, Option<f64>>("feedback_score")?.unwrap_or(0.0),
-                days_since_played: row.get("days_since_played")?,
-                days_since_skipped: row.get("days_since_skipped")?,
-            })
-        })
-        .map_err(|error| format!("Could not read native AutoDJ candidates: {error}"))?;
-    rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native AutoDJ candidates: {error}"))
-}
-
-fn read_autodj_avoid_rules(
-    connection: &Connection,
-) -> Result<HashMap<String, HashSet<String>>, String> {
-    let mut avoid_rules: HashMap<String, HashSet<String>> = HashMap::from([
-        ("track".to_string(), HashSet::new()),
-        ("artist".to_string(), HashSet::new()),
-        ("album".to_string(), HashSet::new()),
-        ("genre".to_string(), HashSet::new()),
-    ]);
-    let mut statement = connection
-        .prepare("SELECT scope, target_key FROM autodj_avoid_rules")
-        .map_err(|error| format!("Could not prepare native AutoDJ avoid rules: {error}"))?;
-    let rows = statement
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, Option<String>>("scope")?.unwrap_or_default(),
-                row.get::<_, Option<String>>("target_key")?
-                    .unwrap_or_default(),
-            ))
-        })
-        .map_err(|error| format!("Could not read native AutoDJ avoid rules: {error}"))?;
-    for row in rows {
-        let (scope, target_key) =
-            row.map_err(|error| format!("Could not decode native AutoDJ avoid rules: {error}"))?;
-        avoid_rules.entry(scope).or_default().insert(target_key);
-    }
-    Ok(avoid_rules)
-}
-
-fn native_recommendation_drift(tracks: &[NativeQueueTrack]) -> NativeRecommendationDrift {
-    let total = tracks.len();
-    if total == 0 {
-        return NativeRecommendationDrift::default();
-    }
-    let ratings: Vec<f64> = tracks
-        .iter()
-        .filter_map(|track| track.track.rating)
-        .collect();
-    let familiar = tracks
-        .iter()
-        .filter(|track| track_is_familiar(&track.track))
-        .count();
-    let exploratory = tracks
-        .iter()
-        .filter(|track| track_is_exploratory(&track.track))
-        .count();
-    let unique_artists: HashSet<String> = tracks
-        .iter()
-        .flat_map(|track| {
-            let tokens = split_artist_tokens(track.track.artist.as_deref());
-            if tokens.is_empty() {
-                HashSet::from([normalize_token(track.track.artist.as_deref())])
-            } else {
-                tokens
-            }
-        })
-        .filter(|token| !token.is_empty())
-        .collect();
-    let unique_albums: HashSet<String> = tracks
-        .iter()
-        .map(|track| album_key(track.track.album.as_deref()))
-        .filter(|album| !album.is_empty())
-        .collect();
-    let clap_count = tracks
-        .iter()
-        .filter(|track| {
-            track.track.analysis_provider.as_deref() == Some("clap")
-                && track
-                    .track
-                    .analysis_embedding
-                    .as_deref()
-                    .is_some_and(|value| !value.is_empty())
-        })
-        .count();
-    let repeat_artist_percent = if unique_artists.is_empty() {
-        0.0
-    } else {
-        ((total.saturating_sub(unique_artists.len())) as f64 / total as f64) * 100.0
-    };
-    let mut drift = NativeRecommendationDrift {
-        total_tracks: total as i64,
-        familiar_percent: round2((familiar as f64 / total as f64) * 100.0),
-        exploration_percent: round2((exploratory as f64 / total as f64) * 100.0),
-        repeat_artist_percent: round2(repeat_artist_percent),
-        unrated_percent: round2(
-            (tracks
-                .iter()
-                .filter(|track| track.track.rating.is_none())
-                .count() as f64
-                / total as f64)
-                * 100.0,
-        ),
-        clap_percent: round2((clap_count as f64 / total as f64) * 100.0),
-        average_rating: if ratings.is_empty() {
-            None
-        } else {
-            Some(round2(ratings.iter().sum::<f64>() / ratings.len() as f64))
-        },
-        unique_artists: unique_artists.len() as i64,
-        unique_albums: unique_albums.len() as i64,
-        warnings: Vec::new(),
-    };
-    if drift.repeat_artist_percent >= 35.0 {
-        drift.warnings.push(
-            "This queue leans repetitive by artist. Increase artist cooldown or temperature."
-                .to_string(),
-        );
-    }
-    if drift.exploration_percent >= 85.0 {
-        drift
-            .warnings
-            .push("This queue is highly exploratory. Lower temperature or unrated exploration for a safer mix.".to_string());
-    }
-    if drift.familiar_percent >= 90.0 && drift.unrated_percent <= 5.0 {
-        drift.warnings.push(
-            "This queue is very familiar. Add a little unrated exploration for discovery."
-                .to_string(),
-        );
-    }
-    if drift.clap_percent <= 10.0 && drift.total_tracks >= 10 {
-        drift
-            .warnings
-            .push("Few tracks use CLAP similarity. Analyze more music to improve sound-based recommendations.".to_string());
-    }
-    drift
-}
-
-fn record_native_recommendation_run(
-    connection: &Connection,
-    settings: &NativeAutoDjSettings,
-    drift: &NativeRecommendationDrift,
-    tracks: &[NativeQueueTrack],
-) {
-    let track_ids: Vec<i64> = tracks.iter().map(|track| track.track.id).collect();
-    let _ = connection.execute(
-        r#"
-        INSERT INTO recommendation_runs(settings_json, drift_json, track_ids_json)
-        VALUES(?, ?, ?)
-        "#,
-        params![
-            serde_json::to_string(settings).unwrap_or_else(|_| "{}".to_string()),
-            serde_json::to_string(drift).unwrap_or_else(|_| "{}".to_string()),
-            serde_json::to_string(&track_ids).unwrap_or_else(|_| "[]".to_string())
-        ],
-    );
-    let _ = connection.execute(
-        r#"
-        DELETE FROM recommendation_runs
-        WHERE id NOT IN (
-          SELECT id FROM recommendation_runs ORDER BY datetime(created_at) DESC, id DESC LIMIT 100
-        )
-        "#,
-        [],
-    );
-}
-
-#[tauri::command]
-pub fn native_generate_autodj(
-    _state: State<'_, NativeLibraryState>,
-    settings: serde_json::Value,
-) -> Result<NativeAutoDjResponse, String> {
-    const MAX_DYNAMIC_CANDIDATES: usize = 8_000;
-    let settings = native_autodj_settings(settings);
-    let connection = open_database()?;
-    let mut rng = NativeRng::new(settings.seed);
-    let avoid_rules = read_autodj_avoid_rules(&connection)?;
-    let candidates = read_autodj_candidates(&connection)?;
-    let seed_track = settings.seed_track_id.and_then(|seed_id| {
-        candidates
-            .iter()
-            .find(|candidate| candidate.track.id == seed_id)
-            .map(|candidate| candidate.track.clone())
-    });
-    let mut remaining: Vec<NativeCandidate> = candidates
-        .into_iter()
-        .filter(|candidate| !track_is_longform(&candidate.track))
-        .filter(|candidate| !track_matches_avoid(&candidate.track, &avoid_rules))
-        .filter(|candidate| match settings.minimum_rating {
-            Some(minimum) => candidate
-                .track
-                .rating
-                .is_some_and(|rating| rating >= minimum),
-            None => true,
-        })
-        .map(|candidate| score_candidate(candidate, &settings, &mut rng, seed_track.as_ref()))
-        .collect();
-    if remaining.is_empty() && settings.minimum_rating.is_some() {
-        remaining = read_autodj_candidates(&connection)?
-            .into_iter()
-            .filter(|candidate| !track_is_longform(&candidate.track))
-            .filter(|candidate| !track_matches_avoid(&candidate.track, &avoid_rules))
-            .map(|candidate| score_candidate(candidate, &settings, &mut rng, seed_track.as_ref()))
-            .collect();
-    }
-    remaining.sort_by(|left, right| right.score.total_cmp(&left.score));
-
-    let target_unrated_percent = settings
-        .target_unrated_percent
-        .unwrap_or(settings.unrated_exploration_percent);
-    let target_unrated =
-        ((settings.queue_length as f64 * target_unrated_percent / 100.0).round()) as usize;
-    let target_exploratory = settings
-        .target_exploration_percent
-        .map(|value| ((settings.queue_length as f64 * value / 100.0).round()) as usize);
-    let mut chosen_unrated = 0usize;
-    let mut chosen_exploratory = 0usize;
-    let mut queue = Vec::<NativeQueueTrack>::new();
-    let mut recent_artists = Vec::<HashSet<String>>::new();
-    let mut recent_albums = Vec::<String>::new();
-
-    if let Some(seed_track) = seed_track {
-        if settings.queue_length > 0 {
-            let seed_item = NativeCandidateTrack {
-                track: seed_track.clone(),
-                feedback_score: 0.0,
-                days_since_played: None,
-                days_since_skipped: None,
-            };
-            let mut seed_candidate =
-                score_candidate(seed_item, &settings, &mut rng, Some(&seed_track));
-            seed_candidate.breakdown.insert("seed".to_string(), 1.0);
-            seed_candidate
-                .breakdown
-                .insert("total".to_string(), round3(seed_candidate.score));
-            seed_candidate.reason = format!("seed track, {}", seed_candidate.reason);
-            if seed_track.rating.is_none() {
-                chosen_unrated += 1;
-            }
-            if track_is_exploratory(&seed_track) {
-                chosen_exploratory += 1;
-            }
-            recent_artists.insert(0, split_artist_tokens(seed_track.artist.as_deref()));
-            recent_albums.insert(0, album_key(seed_track.album.as_deref()));
-            queue.push(candidate_to_queue_track(seed_candidate));
-            remaining.retain(|candidate| candidate.item.track.id != seed_track.id);
-        }
-    }
-
-    while !remaining.is_empty() && queue.len() < settings.queue_length {
-        let slots_left = settings.queue_length - queue.len();
-        let must_pick_unrated = target_unrated.saturating_sub(chosen_unrated) >= slots_left;
-        let must_pick_exploratory = target_exploratory
-            .map(|target| target.saturating_sub(chosen_exploratory) >= slots_left)
-            .unwrap_or(false);
-        let mut pool: Vec<usize> = remaining
-            .iter()
-            .enumerate()
-            .filter_map(|(index, candidate)| {
-                if (!must_pick_unrated || candidate.is_unrated)
-                    && (!must_pick_exploratory || candidate.is_exploratory)
-                {
-                    Some(index)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        if pool.is_empty() {
-            pool = (0..remaining.len()).collect();
-        }
-        let strict_pool: Vec<usize> = pool
-            .iter()
-            .copied()
-            .filter(|index| {
-                !candidate_conflicts(
-                    &remaining[*index],
-                    &recent_artists[..recent_artists.len().min(settings.artist_cooldown)],
-                    &recent_albums[..recent_albums.len().min(settings.album_cooldown)],
-                )
-            })
-            .collect();
-        let apply_cooldown_penalty = strict_pool.is_empty();
-        if !strict_pool.is_empty() {
-            pool = strict_pool;
-        }
-        let shortlist: Vec<usize> = pool.into_iter().take(MAX_DYNAMIC_CANDIDATES).collect();
-        let adjusted: Vec<NativeCandidate> = shortlist
-            .iter()
-            .map(|index| {
-                adjusted_candidate_for_queue(
-                    &remaining[*index],
-                    &queue,
-                    &settings,
-                    &recent_artists[..recent_artists.len().min(settings.artist_cooldown)],
-                    &recent_albums[..recent_albums.len().min(settings.album_cooldown)],
-                    apply_cooldown_penalty,
-                )
-            })
-            .collect();
-        if adjusted.is_empty() {
-            break;
-        }
-        let picked_adjusted_index =
-            weighted_choice(&adjusted, settings.temperature, &mut rng).min(shortlist.len() - 1);
-        let picked_remaining_index = shortlist[picked_adjusted_index];
-        let picked = adjusted[picked_adjusted_index].clone();
-        if picked.is_unrated {
-            chosen_unrated += 1;
-        }
-        if picked.is_exploratory {
-            chosen_exploratory += 1;
-        }
-        recent_artists.insert(0, picked.artist_keys.clone());
-        recent_albums.insert(0, picked.album_key.clone());
-        recent_artists.truncate(settings.artist_cooldown.max(1));
-        recent_albums.truncate(settings.album_cooldown.max(1));
-        queue.push(candidate_to_queue_track(picked));
-        remaining.remove(picked_remaining_index);
-    }
-
-    let drift = native_recommendation_drift(&queue);
-    record_native_recommendation_run(&connection, &settings, &drift, &queue);
-    Ok(NativeAutoDjResponse {
-        tracks: queue,
-        settings,
-        drift,
-        source: "rust-sqlite".to_string(),
-    })
 }
 
 fn is_supported_audio_path(path: &Path, extensions: &HashSet<String>) -> bool {
@@ -4745,6 +3297,329 @@ pub fn native_library_health(
     })
 }
 
+fn duplicate_group_from_native_tracks(
+    key: String,
+    mut tracks: Vec<NativeTrack>,
+) -> NativeDuplicateGroup {
+    tracks.sort_by(|left, right| {
+        right
+            .bitrate
+            .unwrap_or(0)
+            .cmp(&left.bitrate.unwrap_or(0))
+            .then_with(|| {
+                right
+                    .rating
+                    .unwrap_or(0.0)
+                    .total_cmp(&left.rating.unwrap_or(0.0))
+            })
+    });
+    let recommended_keep_id = tracks.first().map(|track| track.id);
+    let durations: Vec<f64> = tracks
+        .iter()
+        .filter_map(|track| track.duration_seconds)
+        .collect();
+    let duration_spread_seconds = if durations.len() >= 2 {
+        Some(
+            durations.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+                - durations.iter().copied().fold(f64::INFINITY, f64::min),
+        )
+    } else {
+        None
+    };
+    let bitrates: Vec<i64> = tracks.iter().filter_map(|track| track.bitrate).collect();
+    let bitrate_spread = if bitrates.len() >= 2 {
+        Some(bitrates.iter().max().unwrap_or(&0) - bitrates.iter().min().unwrap_or(&0))
+    } else {
+        None
+    };
+    let fingerprints: HashSet<String> = tracks
+        .iter()
+        .filter_map(|track| track.audio_fingerprint.clone())
+        .filter(|value| !value.trim().is_empty())
+        .collect();
+    let acoustic_fingerprints: HashSet<String> = tracks
+        .iter()
+        .filter_map(|track| track.acoustic_fingerprint.clone())
+        .filter(|value| !value.trim().is_empty())
+        .collect();
+    let path_roots: HashSet<String> = tracks
+        .iter()
+        .map(|track| file_path_root(&track.path))
+        .collect();
+    let analyzed_tracks = tracks
+        .iter()
+        .filter(|track| {
+            track
+                .analysis_embedding
+                .as_deref()
+                .is_some_and(|value| !value.is_empty())
+        })
+        .count() as i64;
+    NativeDuplicateGroup {
+        ignore_key: format!("native:{key}"),
+        key,
+        tracks,
+        match_reason: "same normalized artist and title".to_string(),
+        recommended_keep_id,
+        recommendation_reason: Some("highest bitrate/rating".to_string()),
+        duration_spread_seconds,
+        bitrate_spread,
+        shared_fingerprint: fingerprints.len() == 1 && !fingerprints.is_empty(),
+        shared_acoustic_fingerprint: acoustic_fingerprints.len() == 1
+            && !acoustic_fingerprints.is_empty(),
+        average_audio_similarity: None,
+        path_roots: path_roots.into_iter().collect(),
+        analyzed_tracks,
+    }
+}
+
+fn tracks_by_id_map(
+    connection: &Connection,
+    ids: &[i64],
+) -> Result<(HashMap<i64, NativeTrack>, Vec<i64>), String> {
+    if ids.is_empty() {
+        return Ok((HashMap::new(), Vec::new()));
+    }
+    let placeholders = vec!["?"; ids.len()].join(",");
+    let mut statement = connection
+        .prepare(&format!(
+            "SELECT {TRACK_COLUMNS} FROM tracks WHERE id IN ({placeholders})"
+        ))
+        .map_err(|error| {
+            format!("Could not prepare native duplicate review track query: {error}")
+        })?;
+    let rows = statement
+        .query_map(params_from_iter(ids.iter()), track_from_row)
+        .map_err(|error| format!("Could not read native duplicate review tracks: {error}"))?;
+    let tracks = rows
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| format!("Could not decode native duplicate review tracks: {error}"))?;
+    let map: HashMap<i64, NativeTrack> =
+        tracks.into_iter().map(|track| (track.id, track)).collect();
+    let missing = ids
+        .iter()
+        .copied()
+        .filter(|id| !map.contains_key(id))
+        .collect();
+    Ok((map, missing))
+}
+
+#[tauri::command]
+pub fn native_duplicate_review(
+    _state: State<'_, NativeLibraryState>,
+    track_ids: Option<Vec<i64>>,
+    groups: Option<Vec<Vec<i64>>>,
+    limit: Option<usize>,
+) -> Result<NativeDuplicateReviewResponse, String> {
+    let connection = open_database()?;
+    let limit = limit.unwrap_or(300).clamp(1, 2_000);
+    let requested_groups = groups.unwrap_or_default();
+    let mut requested_ids: Vec<i64> = track_ids.unwrap_or_default();
+    for group in &requested_groups {
+        requested_ids.extend(group.iter().copied());
+    }
+    requested_ids.retain(|id| *id > 0);
+    requested_ids.sort_unstable();
+    requested_ids.dedup();
+
+    let (track_map, missing_track_ids) = tracks_by_id_map(&connection, &requested_ids)?;
+    let mut tracks: Vec<NativeTrack> = track_map.values().cloned().collect();
+    tracks.sort_by(|left, right| left.id.cmp(&right.id));
+
+    let mut duplicate_groups = Vec::new();
+    if !requested_groups.is_empty() {
+        for group in requested_groups {
+            let group_tracks: Vec<NativeTrack> = group
+                .into_iter()
+                .filter_map(|id| track_map.get(&id).cloned())
+                .collect();
+            if group_tracks.len() >= 2 {
+                let key = group_tracks
+                    .first()
+                    .and_then(|track| {
+                        Some(format!(
+                            "{} - {}",
+                            track.artist.as_deref().unwrap_or("Unknown Artist"),
+                            track.title.as_deref().unwrap_or("Untitled")
+                        ))
+                    })
+                    .unwrap_or_else(|| "Selected duplicate group".to_string());
+                duplicate_groups.push(duplicate_group_from_native_tracks(key, group_tracks));
+            }
+        }
+    } else {
+        let source_tracks = if tracks.is_empty() {
+            let mut statement = connection
+                .prepare(&format!(
+                    "SELECT {TRACK_COLUMNS} FROM tracks WHERE {music_filter} ORDER BY lower(coalesce(artist, '')), lower(coalesce(title, '')) LIMIT ?",
+                    music_filter = music_only_clause()
+                ))
+                .map_err(|error| format!("Could not prepare native duplicate candidate query: {error}"))?;
+            let rows = statement
+                .query_map(params![limit as i64], track_from_row)
+                .map_err(|error| format!("Could not read native duplicate candidates: {error}"))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|error| {
+                    format!("Could not decode native duplicate candidates: {error}")
+                })?;
+            rows
+        } else {
+            tracks.clone()
+        };
+        let mut grouped: HashMap<String, Vec<NativeTrack>> = HashMap::new();
+        for track in source_tracks {
+            let title = normalize_token(track.title.as_deref());
+            let artist = normalize_token(track.artist.as_deref());
+            if title.is_empty() || artist.is_empty() {
+                continue;
+            }
+            grouped
+                .entry(format!("{artist} - {title}"))
+                .or_default()
+                .push(track);
+        }
+        for (key, group_tracks) in grouped.into_iter().filter(|(_, tracks)| tracks.len() >= 2) {
+            duplicate_groups.push(duplicate_group_from_native_tracks(key, group_tracks));
+            if duplicate_groups.len() >= limit {
+                break;
+            }
+        }
+    }
+
+    Ok(NativeDuplicateReviewResponse {
+        tracks,
+        groups: duplicate_groups,
+        missing_track_ids,
+    })
+}
+
+fn primary_artist_name(value: &str) -> String {
+    let separators = [';', '|'];
+    let mut artist = value
+        .split(|character| separators.contains(&character))
+        .next()
+        .unwrap_or(value)
+        .trim()
+        .to_string();
+    let lowered = artist.to_ascii_lowercase();
+    for marker in [" feat.", " feat ", " featuring ", " with "] {
+        if let Some(index) = lowered.find(marker) {
+            artist = artist[..index].trim().to_string();
+            break;
+        }
+    }
+    if artist.is_empty() {
+        value.trim().to_string()
+    } else {
+        artist
+    }
+}
+
+fn artist_cache_key(value: &str) -> String {
+    format!("v3:{}", primary_artist_name(value).to_lowercase())
+}
+
+#[tauri::command]
+pub fn native_artist_info(
+    _state: State<'_, NativeLibraryState>,
+    name: String,
+    refresh: Option<bool>,
+) -> Result<NativeArtistInfoResponse, String> {
+    let query = primary_artist_name(&name);
+    if query.trim().is_empty() {
+        return Err("Artist name is required".to_string());
+    }
+    let connection = open_database()?;
+    let refresh = refresh.unwrap_or(false);
+    let sql = if refresh {
+        "SELECT artist_name, summary, image_url, page_url, source, updated_at
+         FROM artist_info_cache
+         WHERE artist_key = ?"
+    } else {
+        "SELECT artist_name, summary, image_url, page_url, source, updated_at
+         FROM artist_info_cache
+         WHERE artist_key = ? AND updated_at >= datetime('now', '-30 days')"
+    };
+    connection
+        .query_row(sql, params![artist_cache_key(&query)], |row| {
+            let summary: Option<String> = row.get("summary")?;
+            Ok(NativeArtistInfoResponse {
+                artist_name: row
+                    .get::<_, Option<String>>("artist_name")?
+                    .unwrap_or_else(|| query.clone()),
+                query: query.clone(),
+                summary: summary.clone(),
+                image_url: row.get("image_url")?,
+                page_url: row.get("page_url")?,
+                source: row.get("source")?,
+                found: summary
+                    .as_deref()
+                    .is_some_and(|value| !value.trim().is_empty()),
+                from_cache: true,
+                updated_at: row.get("updated_at")?,
+                error: None,
+            })
+        })
+        .map_err(|_| "Artist info cache miss".to_string())
+}
+
+#[tauri::command]
+pub fn native_artist_local_tracks(
+    _state: State<'_, NativeLibraryState>,
+    name: String,
+    limit: Option<usize>,
+) -> Result<Vec<NativeTrack>, String> {
+    let artist = primary_artist_name(&name);
+    if artist.trim().is_empty() {
+        return Err("Artist name is required".to_string());
+    }
+    let limit = limit.unwrap_or(100).clamp(1, 20_000);
+    let connection = open_database()?;
+    let artist_expr = "
+        trim(
+          CASE
+            WHEN instr(coalesce(tracks.artist, ''), ';') > 0 THEN substr(coalesce(tracks.artist, ''), 1, instr(coalesce(tracks.artist, ''), ';') - 1)
+            WHEN instr(coalesce(tracks.artist, ''), '|') > 0 THEN substr(coalesce(tracks.artist, ''), 1, instr(coalesce(tracks.artist, ''), '|') - 1)
+            ELSE coalesce(tracks.artist, '')
+          END
+        )
+    ";
+    let mut statement = connection
+        .prepare(&format!(
+            r#"
+            SELECT {track_columns}
+            FROM tracks
+            WHERE lower({artist_expr}) = lower(?)
+              AND {music_filter}
+            ORDER BY coalesce(year, 9999) ASC,
+                     lower(coalesce(album, '')) ASC,
+                     coalesce(disc_number, 0) ASC,
+                     coalesce(track_number, 0) ASC,
+                     lower(coalesce(title, '')) ASC
+            LIMIT ?
+            "#,
+            track_columns = TRACK_COLUMNS,
+            music_filter = music_only_clause()
+        ))
+        .map_err(|error| format!("Could not prepare native artist track query: {error}"))?;
+    let rows = statement
+        .query_map(params![artist, limit as i64], track_from_row)
+        .map_err(|error| format!("Could not read native artist tracks: {error}"))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| format!("Could not decode native artist tracks: {error}"))
+}
+
+#[tauri::command]
+pub fn native_clear_artist_cache(
+    _state: State<'_, NativeLibraryState>,
+) -> Result<serde_json::Value, String> {
+    let connection = open_database()?;
+    let deleted = connection
+        .execute("DELETE FROM artist_info_cache", [])
+        .map_err(|error| format!("Could not clear native artist cache: {error}"))?;
+    Ok(json!({ "deleted": deleted as i64 }))
+}
+
 #[tauri::command]
 pub fn native_file_organization_preview(
     _state: State<'_, NativeLibraryState>,
@@ -5046,12 +3921,16 @@ pub fn native_volume_tags_preview(
     manual_track_peak: Option<f64>,
     manual_album_gain_db: Option<f64>,
     manual_album_peak: Option<f64>,
+    apply: Option<bool>,
     limit: Option<usize>,
 ) -> Result<NativeVolumeTagResponse, String> {
     let connection = open_database()?;
     let tracks =
         select_tracks_by_ids_or_limit(&connection, track_ids, limit.unwrap_or(200).clamp(1, 2000))?;
     let mut previews = Vec::new();
+    let apply = apply.unwrap_or(false);
+    let mut applied = 0i64;
+    let mut errors = Vec::new();
     for track in tracks {
         let mut preview = NativeVolumeTagPreview {
             track_id: track.id,
@@ -5072,14 +3951,47 @@ pub fn native_volume_tags_preview(
             error: None,
         };
         preview.changed = volume_changed(&preview);
+        if apply && preview.changed {
+            match connection.execute(
+                r#"
+                UPDATE tracks
+                SET replaygain_track_gain_db = ?,
+                    replaygain_track_peak = ?,
+                    replaygain_album_gain_db = ?,
+                    replaygain_album_peak = ?,
+                    updated_at = datetime('now')
+                WHERE id = ?
+                "#,
+                params![
+                    preview.proposed_track_gain_db,
+                    preview.proposed_track_peak,
+                    preview.proposed_album_gain_db,
+                    preview.proposed_album_peak,
+                    preview.track_id
+                ],
+            ) {
+                Ok(_) => {
+                    preview.applied = true;
+                    applied += 1;
+                }
+                Err(error) => {
+                    let message = format!("{}: {error}", preview.path);
+                    preview.error = Some(message.clone());
+                    errors.push(message);
+                }
+            }
+        }
         previews.push(preview);
+    }
+    if applied > 0 {
+        clear_library_query_cache(&connection);
     }
     let changed = previews.iter().filter(|preview| preview.changed).count() as i64;
     Ok(NativeVolumeTagResponse {
         total: previews.len() as i64,
         changed,
-        applied: 0,
-        errors: Vec::new(),
+        applied,
+        errors,
         previews,
         ffmpeg_path: None,
         checked_paths: Vec::new(),
@@ -5328,7 +4240,7 @@ pub fn native_remove_library_source(
 
 #[cfg(test)]
 mod tests {
-    use super::{search_terms, sort_expression};
+    use super::{search::search_terms, sort_expression};
 
     #[test]
     fn native_search_terms_split_messy_text() {

@@ -181,17 +181,22 @@ import {
   nativeFetchAudiobookChapters,
   nativeFetchAudiobooks,
   nativeFetchBackendHealth,
+  nativeFetchClapCoverage,
   nativeFetchHistory,
   nativeFetchHistoryStats,
+  nativeFetchLibraryInbox,
   nativeFetchLibraryHealth,
   nativeFetchLibraryStats,
   nativeFetchLovedTracks,
   nativeFetchPlaylistTracks,
   nativeFetchPlaylists,
+  nativeFetchRecommendationHistory,
+  nativeFetchRecommendationProfiles,
   nativeFetchRadioStations,
   nativeFetchSimilarTracks,
   nativeFetchSettings,
   nativeFetchTrack,
+  nativeFetchTrackPage,
   nativeFetchTracksBatch,
   nativeFileOrganizationPreview,
   nativeGaplessValidate,
@@ -203,110 +208,110 @@ import {
   nativeCreateAutoDjAvoidRule,
   nativeDeleteAutoDjAvoidRule,
   nativeDeleteAudiobookBookmark,
+  nativeDeleteDeviceSyncProfile,
   nativeDeleteRadioStation,
+  nativeDeleteRegexTagPreset,
+  nativeDeleteVirtualTag,
   nativeFetchAutoDjAvoidRules,
   nativeClearLibraryCaches,
   nativeFetchBulkUndoBatches,
   nativeFetchBulkUndoLog,
+  nativeFetchDeviceSyncProfiles,
   nativeMarkTrackPlayed,
   nativeMarkTrackSkipped,
   nativeMarkRadioStationPlayed,
   nativeMoveTrackInPlaylist,
+  nativeRecordRecommendationFeedback,
   nativeRemoveTrackFromPlaylist,
   nativeRemoveLibrarySource,
+  nativeReviewInbox,
   nativeSaveAudiobookChapters,
+  nativeSaveDeviceSyncProfile,
   nativeSaveRadioStation,
+  nativeSaveRegexTagPreset,
+  nativeSaveRecommendationProfile,
+  nativeSaveVirtualTag,
+  nativeSetDefaultRecommendationProfile,
+  nativeDeleteRecommendationProfile,
   nativeUpdateAudiobookProgress,
+  nativeUpdateInboxNote,
   nativeUpdateSettings,
   nativeUpdateTrackLove,
   nativeUpdateTrackRating,
   nativeVolumeTagsPreview,
+  nativeFetchRegexTagPresets,
+  nativeFetchVirtualTags,
+  nativeCreateInboxAutoReviewRule,
+  nativeUpdateInboxAutoReviewRule,
+  nativeDeleteInboxAutoReviewRule,
+  nativeCustomTags,
+  nativeVirtualTagPreview,
+  nativeCopySwapTags,
+  nativeRegexTags,
+  nativeFetchPodcastSubscriptions,
+  nativeSavePodcastSubscription,
+  nativeDeletePodcastSubscription,
+  nativeEnsurePodcastSubscriptionFolder,
+  nativeFetchPodcastEpisodes,
+  nativeFetchScrobbleAccounts,
+  nativeSaveScrobbleAccount,
+  nativeFetchScrobbleOutbox,
+  nativeFetchDuplicateReview,
+  nativeFetchArtistLocalTracks,
+  nativeClearArtistCache,
+  nativeChooseRecommendationAbTest,
+  nativeCompareRecommendationProfiles,
+  nativeCreateRecommendationAbTest,
+  nativeExportRecommendationProfileComparison,
+  nativeFetchArtistInfo,
+  nativeFetchAudioConversionSetup,
+  nativeFetchChromaprintSetup,
+  nativeImportRecommendationProfileComparison,
+  nativeInferFilenameTags,
+  nativeQueueScrobbleHistory,
+  nativeRestoreBulkUndoBatch,
+  nativeRestoreBulkUndoEntry,
+  nativeSaveAudioConversionSetup,
+  nativeBackendJson,
+  nativeSaveChromaprintSetup,
 } from "./nativeLibrary";
 
-export const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8765";
 const ARTWORK_URL_SESSION_VERSION = Date.now().toString(36);
-let fastApiCallCount = 0;
 
-function notifyFastApiCall(path: string, init?: RequestInit) {
-  if (typeof window === "undefined") {
-    return;
-  }
-  fastApiCallCount += 1;
-  window.dispatchEvent(
-    new CustomEvent("flac-cafe:fast-api-call", {
-      detail: {
-        count: fastApiCallCount,
-        method: init?.method ?? "GET",
-        path,
-      },
-    }),
-  );
-}
-
-function formatApiErrorDetail(detail: unknown, fallback: string): string {
-  if (typeof detail === "string") {
-    return detail;
-  }
-  if (Array.isArray(detail)) {
-    const messages = detail
-      .map((entry) => {
-        if (typeof entry === "string") {
-          return entry;
-        }
-        if (!entry || typeof entry !== "object") {
-          return "";
-        }
-        const value = entry as { loc?: unknown; msg?: unknown; message?: unknown };
-        const message = typeof value.msg === "string" ? value.msg : typeof value.message === "string" ? value.message : "";
-        const location = Array.isArray(value.loc)
-          ? value.loc.filter((part) => typeof part === "string" || typeof part === "number").join(".")
-          : "";
-        return message ? (location ? `${location}: ${message}` : message) : "";
-      })
-      .filter(Boolean);
-    return messages.length ? messages.join("; ") : fallback;
-  }
-  if (detail && typeof detail === "object") {
-    const value = detail as { msg?: unknown; message?: unknown; error?: unknown };
-    if (typeof value.message === "string") {
-      return value.message;
-    }
-    if (typeof value.msg === "string") {
-      return value.msg;
-    }
-    if (typeof value.error === "string") {
-      return value.error;
-    }
-    try {
-      return JSON.stringify(detail);
-    } catch {
-      return fallback;
-    }
-  }
-  return fallback;
+function isTauriDesktop() {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  notifyFastApiCall(path, init);
-  const response = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-    ...init,
-  });
+  return requestViaPythonWorker<T>(path, init);
+}
 
-  if (!response.ok) {
-    let message = `${response.status} ${response.statusText}`;
-    try {
-      const body = await response.json();
-      message = formatApiErrorDetail(body.detail ?? body.message ?? body.error, message);
-    } catch {
-      // Keep the HTTP status message when the backend does not return JSON.
-    }
-    throw new Error(message);
+function requestBodyJson(init?: RequestInit): unknown {
+  if (!init?.body) {
+    return null;
   }
-  return response.json() as Promise<T>;
+  if (typeof init.body === "string") {
+    return init.body.trim() ? JSON.parse(init.body) : null;
+  }
+  return null;
+}
+
+function requestViaPythonWorker<T>(path: string, init?: RequestInit): Promise<T> {
+  if (!isTauriDesktop()) {
+    return Promise.reject(new Error("FLAC Cafe desktop APIs require the Tauri shell."));
+  }
+  return nativeBackendJson<T>(init?.method ?? "GET", path, requestBodyJson(init));
+}
+
+function desktopMediaUrl(path: string): string | null {
+  if (!isTauriDesktop()) {
+    return null;
+  }
+  return `flaccafe-media://localhost${path}`;
+}
+
+function pythonWorkerMediaUrl(path: string): string | null {
+  return desktopMediaUrl(`/python-bytes/${encodeURIComponent(path)}`);
 }
 
 export function fetchSettings(): Promise<SettingsResponse> {
@@ -318,26 +323,39 @@ export function fetchBackendHealth(): Promise<{ status: string }> {
 }
 
 export function fetchStartupDiagnostics(): Promise<StartupDiagnosticsResponse> {
-  return request<StartupDiagnosticsResponse>("/diagnostics/startup");
+  return requestViaPythonWorker<StartupDiagnosticsResponse>("/diagnostics/startup").catch(() =>
+    request<StartupDiagnosticsResponse>("/diagnostics/startup"),
+  );
 }
 
 export function fetchBackendLog(limit = 200): Promise<LogTailResponse> {
-  return request<LogTailResponse>(`/diagnostics/logs/backend?limit=${limit}`);
+  return requestViaPythonWorker<LogTailResponse>(`/diagnostics/logs/backend?limit=${limit}`).catch(() =>
+    request<LogTailResponse>(`/diagnostics/logs/backend?limit=${limit}`),
+  );
 }
 
 export function createSupportBundle(): Promise<SupportBundleResponse> {
-  return request<SupportBundleResponse>("/diagnostics/support-bundle", { method: "POST" });
+  const init = { method: "POST" };
+  return requestViaPythonWorker<SupportBundleResponse>("/diagnostics/support-bundle", init).catch(() =>
+    request<SupportBundleResponse>("/diagnostics/support-bundle", init),
+  );
 }
 
 export function backupDatabase(): Promise<BackupResponse> {
-  return request<BackupResponse>("/settings/backup", { method: "POST" });
+  const init = { method: "POST" };
+  return requestViaPythonWorker<BackupResponse>("/settings/backup", init).catch(() =>
+    request<BackupResponse>("/settings/backup", init),
+  );
 }
 
 export function resetLocalData(confirmation: string): Promise<LocalDataResetResponse> {
-  return request<LocalDataResetResponse>("/settings/reset-local-data", {
+  const init = {
     method: "POST",
     body: JSON.stringify({ confirmation }),
-  });
+  };
+  return requestViaPythonWorker<LocalDataResetResponse>("/settings/reset-local-data", init).catch(() =>
+    request<LocalDataResetResponse>("/settings/reset-local-data", init),
+  );
 }
 
 export function updateSettings(settings: SettingsUpdateRequest): Promise<SettingsResponse> {
@@ -375,49 +393,63 @@ export function fetchLibraryHealth(limit = 300): Promise<LibraryHealthResponse> 
 }
 
 export function fetchLibraryInbox(limit = 200, offset = 0): Promise<InboxResponse> {
-  return request<InboxResponse>(`/library/inbox?limit=${limit}&offset=${offset}`);
+  return nativeFetchLibraryInbox(limit, offset).catch(() =>
+    request<InboxResponse>(`/library/inbox?limit=${limit}&offset=${offset}`),
+  );
 }
 
 export function updateInboxNote(trackId: number, note: string | null): Promise<InboxTrackNote | null> {
-  return request<InboxTrackNote | null>(`/library/inbox/notes/${trackId}`, {
-    method: "PATCH",
-    body: JSON.stringify({ note }),
-  });
+  return nativeUpdateInboxNote(trackId, note).catch(() =>
+    request<InboxTrackNote | null>(`/library/inbox/notes/${trackId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ note }),
+    }),
+  );
 }
 
 export function reviewInboxTracks(trackIds: number[]): Promise<InboxReviewResponse> {
-  return request<InboxReviewResponse>("/library/inbox/review", {
-    method: "POST",
-    body: JSON.stringify({ track_ids: trackIds }),
-  });
+  return nativeReviewInbox(trackIds, false).catch(() =>
+    request<InboxReviewResponse>("/library/inbox/review", {
+      method: "POST",
+      body: JSON.stringify({ track_ids: trackIds }),
+    }),
+  );
 }
 
 export function reviewAllInboxTracks(): Promise<InboxReviewResponse> {
-  return request<InboxReviewResponse>("/library/inbox/review", {
-    method: "POST",
-    body: JSON.stringify({ all_new: true }),
-  });
+  return nativeReviewInbox(null, true).catch(() =>
+    request<InboxReviewResponse>("/library/inbox/review", {
+      method: "POST",
+      body: JSON.stringify({ all_new: true }),
+    }),
+  );
 }
 
 export function createInboxAutoReviewRule(requestBody: InboxAutoReviewRuleRequest): Promise<InboxAutoReviewRuleApplyResponse> {
-  return request<InboxAutoReviewRuleApplyResponse>("/library/inbox/auto-review-rules", {
-    method: "POST",
-    body: JSON.stringify(requestBody),
-  });
+  return nativeCreateInboxAutoReviewRule(requestBody).catch(() =>
+    request<InboxAutoReviewRuleApplyResponse>("/library/inbox/auto-review-rules", {
+      method: "POST",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function updateInboxAutoReviewRule(
   ruleId: number,
   requestBody: InboxAutoReviewRuleRequest,
 ): Promise<InboxAutoReviewRuleApplyResponse> {
-  return request<InboxAutoReviewRuleApplyResponse>(`/library/inbox/auto-review-rules/${ruleId}`, {
-    method: "PATCH",
-    body: JSON.stringify(requestBody),
-  });
+  return nativeUpdateInboxAutoReviewRule(ruleId, requestBody).catch(() =>
+    request<InboxAutoReviewRuleApplyResponse>(`/library/inbox/auto-review-rules/${ruleId}`, {
+      method: "PATCH",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function deleteInboxAutoReviewRule(ruleId: number): Promise<InboxAutoReviewRuleDeleteResponse> {
-  return request<InboxAutoReviewRuleDeleteResponse>(`/library/inbox/auto-review-rules/${ruleId}`, { method: "DELETE" });
+  return nativeDeleteInboxAutoReviewRule(ruleId).catch(() =>
+    request<InboxAutoReviewRuleDeleteResponse>(`/library/inbox/auto-review-rules/${ruleId}`, { method: "DELETE" }),
+  );
 }
 
 export function clearLibraryCaches(targets: CacheClearTarget[]): Promise<CacheClearResponse> {
@@ -430,63 +462,73 @@ export function clearLibraryCaches(targets: CacheClearTarget[]): Promise<CacheCl
 }
 
 export function inferFilenameTags(requestBody: FilenameTagInferenceRequest): Promise<FilenameTagInferenceResponse> {
-  return request<FilenameTagInferenceResponse>("/library/tools/infer-tags", {
-    method: "POST",
-    body: JSON.stringify(requestBody),
-  });
+  return nativeInferFilenameTags(requestBody).catch(() =>
+    request<FilenameTagInferenceResponse>("/library/tools/infer-tags", {
+      method: "POST",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function organizeFiles(requestBody: FileOrganizationRequest): Promise<FileOrganizationResponse> {
-  if (!requestBody.apply) {
-    return nativeFileOrganizationPreview(requestBody).catch(() =>
-      request<FileOrganizationResponse>("/library/tools/organize-files", {
-        method: "POST",
-        body: JSON.stringify(requestBody),
-      }),
-    );
-  }
-  return request<FileOrganizationResponse>("/library/tools/organize-files", {
-    method: "POST",
-    body: JSON.stringify(requestBody),
-  });
+  return nativeFileOrganizationPreview(requestBody).catch(() =>
+    request<FileOrganizationResponse>("/library/tools/organize-files", {
+      method: "POST",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function syncDeviceFolder(requestBody: DeviceSyncRequest): Promise<DeviceSyncResponse> {
-  return request<DeviceSyncResponse>("/library/tools/device-sync", {
+  const init = {
     method: "POST",
     body: JSON.stringify(requestBody),
-  });
+  };
+  return requestViaPythonWorker<DeviceSyncResponse>("/library/tools/device-sync", init).catch(() =>
+    request<DeviceSyncResponse>("/library/tools/device-sync", init),
+  );
 }
 
 export function fetchDeviceSyncDevices(): Promise<DeviceSyncDevicesResponse> {
-  return request<DeviceSyncDevicesResponse>("/library/tools/device-sync/devices");
+  return requestViaPythonWorker<DeviceSyncDevicesResponse>("/library/tools/device-sync/devices").catch(() =>
+    request<DeviceSyncDevicesResponse>("/library/tools/device-sync/devices"),
+  );
 }
 
 export function fetchDeviceSyncProfiles(): Promise<DeviceSyncProfilesResponse> {
-  return request<DeviceSyncProfilesResponse>("/library/tools/device-sync/profiles");
+  return nativeFetchDeviceSyncProfiles().catch(() =>
+    request<DeviceSyncProfilesResponse>("/library/tools/device-sync/profiles"),
+  );
 }
 
 export function saveDeviceSyncProfile(requestBody: DeviceSyncProfilePayload, profileId?: number | null): Promise<DeviceSyncProfile> {
-  return request<DeviceSyncProfile>(
-    profileId ? `/library/tools/device-sync/profiles/${profileId}` : "/library/tools/device-sync/profiles",
-    {
-      method: profileId ? "PATCH" : "POST",
-      body: JSON.stringify(requestBody),
-    },
+  return nativeSaveDeviceSyncProfile(requestBody, profileId).catch(() =>
+    request<DeviceSyncProfile>(
+      profileId ? `/library/tools/device-sync/profiles/${profileId}` : "/library/tools/device-sync/profiles",
+      {
+        method: profileId ? "PATCH" : "POST",
+        body: JSON.stringify(requestBody),
+      },
+    ),
   );
 }
 
 export function deleteDeviceSyncProfile(profileId: number): Promise<{ deleted: boolean }> {
-  return request<{ deleted: boolean }>(`/library/tools/device-sync/profiles/${profileId}`, { method: "DELETE" });
+  return nativeDeleteDeviceSyncProfile(profileId).catch(() =>
+    request<{ deleted: boolean }>(`/library/tools/device-sync/profiles/${profileId}`, { method: "DELETE" }),
+  );
 }
 
 export function exportFileOrganizationReport(
   requestBody: FileOrganizationReportRequest,
 ): Promise<FileOrganizationReportResponse> {
-  return request<FileOrganizationReportResponse>("/library/tools/organize-files/report", {
+  const init = {
     method: "POST",
     body: JSON.stringify(requestBody),
-  });
+  };
+  return requestViaPythonWorker<FileOrganizationReportResponse>("/library/tools/organize-files/report", init).catch(() =>
+    request<FileOrganizationReportResponse>("/library/tools/organize-files/report", init),
+  );
 }
 
 export function exportMetadataCsv(requestBody: CsvMetadataExportRequest = {}): Promise<CsvMetadataExportResponse> {
@@ -504,61 +546,77 @@ export function importMetadataCsv(requestBody: CsvMetadataImportRequest): Promis
 }
 
 export function replaceTagsWithRegex(requestBody: TagRegexReplaceRequest): Promise<TagRegexReplaceResponse> {
-  return request<TagRegexReplaceResponse>("/library/tools/regex-tags", {
-    method: "POST",
-    body: JSON.stringify(requestBody),
-  });
+  return nativeRegexTags(requestBody).catch(() =>
+    request<TagRegexReplaceResponse>("/library/tools/regex-tags", {
+      method: "POST",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function fetchRegexTagPresets(): Promise<RegexTagPreset[]> {
-  return request<RegexTagPreset[]>("/library/tools/regex-presets");
+  return nativeFetchRegexTagPresets().catch(() => request<RegexTagPreset[]>("/library/tools/regex-presets"));
 }
 
 export function saveRegexTagPreset(requestBody: RegexTagPresetRequest): Promise<RegexTagPreset> {
-  return request<RegexTagPreset>("/library/tools/regex-presets", {
-    method: "POST",
-    body: JSON.stringify(requestBody),
-  });
+  return nativeSaveRegexTagPreset(requestBody).catch(() =>
+    request<RegexTagPreset>("/library/tools/regex-presets", {
+      method: "POST",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function deleteRegexTagPreset(presetId: number): Promise<{ deleted: boolean }> {
-  return request<{ deleted: boolean }>(`/library/tools/regex-presets/${presetId}`, { method: "DELETE" });
+  return nativeDeleteRegexTagPreset(presetId).catch(() =>
+    request<{ deleted: boolean }>(`/library/tools/regex-presets/${presetId}`, { method: "DELETE" }),
+  );
 }
 
 export function batchCustomTags(requestBody: CustomTagBatchRequest): Promise<CustomTagBatchResponse> {
-  return request<CustomTagBatchResponse>("/library/tools/custom-tags", {
-    method: "POST",
-    body: JSON.stringify(requestBody),
-  });
+  return nativeCustomTags(requestBody).catch(() =>
+    request<CustomTagBatchResponse>("/library/tools/custom-tags", {
+      method: "POST",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function fetchVirtualTags(): Promise<VirtualTagDefinition[]> {
-  return request<VirtualTagDefinition[]>("/library/tools/virtual-tags");
+  return nativeFetchVirtualTags().catch(() => request<VirtualTagDefinition[]>("/library/tools/virtual-tags"));
 }
 
 export function saveVirtualTag(requestBody: VirtualTagDefinitionRequest): Promise<VirtualTagDefinition> {
-  return request<VirtualTagDefinition>("/library/tools/virtual-tags", {
-    method: "POST",
-    body: JSON.stringify(requestBody),
-  });
+  return nativeSaveVirtualTag(requestBody).catch(() =>
+    request<VirtualTagDefinition>("/library/tools/virtual-tags", {
+      method: "POST",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function deleteVirtualTag(definitionId: number): Promise<{ deleted: boolean }> {
-  return request<{ deleted: boolean }>(`/library/tools/virtual-tags/${definitionId}`, { method: "DELETE" });
+  return nativeDeleteVirtualTag(definitionId).catch(() =>
+    request<{ deleted: boolean }>(`/library/tools/virtual-tags/${definitionId}`, { method: "DELETE" }),
+  );
 }
 
 export function previewVirtualTag(requestBody: VirtualTagPreviewRequest): Promise<VirtualTagPreviewResponse> {
-  return request<VirtualTagPreviewResponse>("/library/tools/virtual-tags/preview", {
-    method: "POST",
-    body: JSON.stringify(requestBody),
-  });
+  return nativeVirtualTagPreview(requestBody).catch(() =>
+    request<VirtualTagPreviewResponse>("/library/tools/virtual-tags/preview", {
+      method: "POST",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function copyOrSwapTags(requestBody: TagFieldCopySwapRequest): Promise<TagFieldCopySwapResponse> {
-  return request<TagFieldCopySwapResponse>("/library/tools/copy-swap-tags", {
-    method: "POST",
-    body: JSON.stringify(requestBody),
-  });
+  return nativeCopySwapTags(requestBody).catch(() =>
+    request<TagFieldCopySwapResponse>("/library/tools/copy-swap-tags", {
+      method: "POST",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function createTagBackup(requestBody: TagBackupRequest = {}): Promise<TagBackupResponse> {
@@ -594,7 +652,7 @@ export function clapGenreTags(requestBody: ClapGenreTagRequest): Promise<ClapGen
 }
 
 export function volumeTags(requestBody: VolumeTagRequest): Promise<VolumeTagResponse> {
-  if ((requestBody.mode ?? "analyze") === "manual" && !requestBody.apply && !requestBody.write_to_file) {
+  if ((requestBody.mode ?? "analyze") === "manual" && !requestBody.write_to_file) {
     return nativeVolumeTagsPreview(requestBody).catch(() =>
       request<VolumeTagResponse>("/library/tools/volume-tags", {
         method: "POST",
@@ -625,21 +683,27 @@ export function applyDuplicateAction(requestBody: DuplicateActionRequest): Promi
 }
 
 export function fetchDuplicateReview(requestBody: DuplicateReviewRequest): Promise<DuplicateReviewResponse> {
-  return request<DuplicateReviewResponse>("/library/duplicates/review", {
-    method: "POST",
-    body: JSON.stringify(requestBody),
-  });
+  return nativeFetchDuplicateReview(requestBody).catch(() =>
+    request<DuplicateReviewResponse>("/library/duplicates/review", {
+      method: "POST",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function fetchChromaprintSetup(): Promise<ChromaprintStatusResponse> {
-  return request<ChromaprintStatusResponse>("/library/tools/acoustic-fingerprints/setup");
+  return nativeFetchChromaprintSetup().catch(() =>
+    request<ChromaprintStatusResponse>("/library/tools/acoustic-fingerprints/setup"),
+  );
 }
 
 export function saveChromaprintSetup(requestBody: ChromaprintConfigRequest): Promise<ChromaprintStatusResponse> {
-  return request<ChromaprintStatusResponse>("/library/tools/acoustic-fingerprints/setup", {
-    method: "PATCH",
-    body: JSON.stringify(requestBody),
-  });
+  return nativeSaveChromaprintSetup(requestBody).catch(() =>
+    request<ChromaprintStatusResponse>("/library/tools/acoustic-fingerprints/setup", {
+      method: "PATCH",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function runAcousticFingerprintPass(
@@ -662,26 +726,37 @@ export function fetchBulkUndoBatches(limit = 30): Promise<BulkUndoBatchEntry[]> 
 }
 
 export function restoreBulkUndoEntry(entryId: number): Promise<BulkUndoRestoreResponse> {
-  return request<BulkUndoRestoreResponse>(`/library/tools/undo-log/${entryId}/restore`, { method: "POST" });
+  return nativeRestoreBulkUndoEntry(entryId).catch(() =>
+    request<BulkUndoRestoreResponse>(`/library/tools/undo-log/${entryId}/restore`, { method: "POST" }),
+  );
 }
 
 export function restoreBulkUndoBatch(batchId: string): Promise<BulkUndoRestoreResponse> {
-  return request<BulkUndoRestoreResponse>(`/library/tools/undo-batches/${encodeURIComponent(batchId)}/restore`, { method: "POST" });
+  return nativeRestoreBulkUndoBatch(batchId).catch(() =>
+    request<BulkUndoRestoreResponse>(`/library/tools/undo-batches/${encodeURIComponent(batchId)}/restore`, {
+      method: "POST",
+    }),
+  );
 }
 
 export function readReportFile(requestBody: ReportFileRequest): Promise<ReportFileResponse> {
-  return request<ReportFileResponse>("/library/tools/reports/read", {
+  const init = {
     method: "POST",
     body: JSON.stringify(requestBody),
-  });
+  };
+  return requestViaPythonWorker<ReportFileResponse>("/library/tools/reports/read", init).catch(() =>
+    request<ReportFileResponse>("/library/tools/reports/read", init),
+  );
 }
 
 export function fetchFolderWatchStatus(limit = 300): Promise<FolderWatchStatus> {
-  return request<FolderWatchStatus>(`/library/watch?limit=${limit}`);
+  return requestViaPythonWorker<FolderWatchStatus>(`/library/watch?limit=${limit}`).catch(() =>
+    request<FolderWatchStatus>(`/library/watch?limit=${limit}`),
+  );
 }
 
 export function startFolderWatch(folderPath?: string | null, intervalSeconds = 45, limit = 300, nativeSnapshot?: NativeScanSnapshot | null): Promise<FolderWatchStatus> {
-  return request<FolderWatchStatus>("/library/watch/start", {
+  const init = {
     method: "POST",
     body: JSON.stringify({
       folder_path: folderPath || null,
@@ -689,54 +764,73 @@ export function startFolderWatch(folderPath?: string | null, intervalSeconds = 4
       limit,
       native_snapshot: nativeSnapshot ?? null,
     }),
-  });
+  };
+  return requestViaPythonWorker<FolderWatchStatus>("/library/watch/start", init).catch(() =>
+    request<FolderWatchStatus>("/library/watch/start", init),
+  );
 }
 
 export function stopFolderWatch(limit = 300): Promise<FolderWatchStatus> {
-  return request<FolderWatchStatus>(`/library/watch/stop?limit=${limit}`, { method: "POST" });
+  const init = { method: "POST" };
+  return requestViaPythonWorker<FolderWatchStatus>(`/library/watch/stop?limit=${limit}`, init).catch(() =>
+    request<FolderWatchStatus>(`/library/watch/stop?limit=${limit}`, init),
+  );
 }
 
 export function refreshFolderWatch(folderPath?: string | null, limit = 300, nativeSnapshot?: NativeScanSnapshot | null): Promise<FolderWatchStatus> {
-  return request<FolderWatchStatus>("/library/watch/refresh", {
+  const init = {
     method: "POST",
     body: JSON.stringify({
       folder_path: folderPath || null,
       limit,
       native_snapshot: nativeSnapshot ?? null,
     }),
-  });
+  };
+  return requestViaPythonWorker<FolderWatchStatus>("/library/watch/refresh", init).catch(() =>
+    request<FolderWatchStatus>("/library/watch/refresh", init),
+  );
 }
 
 export function applyFolderWatchChanges(changeIds: string[], applyAll = false, limit = 300): Promise<FolderWatchApplyResponse> {
-  return request<FolderWatchApplyResponse>("/library/watch/apply", {
+  const init = {
     method: "POST",
     body: JSON.stringify({
       change_ids: changeIds,
       apply_all: applyAll,
       limit,
     }),
-  });
+  };
+  return requestViaPythonWorker<FolderWatchApplyResponse>("/library/watch/apply", init).catch(() =>
+    request<FolderWatchApplyResponse>("/library/watch/apply", init),
+  );
 }
 
 export function acknowledgeFolderWatchNotifications(notificationIds: string[] = [], allNotifications = false): Promise<FolderWatchStatus> {
-  return request<FolderWatchStatus>("/library/watch/notifications/ack", {
+  const init = {
     method: "POST",
     body: JSON.stringify({
       notification_ids: notificationIds,
       all_notifications: allNotifications,
     }),
-  });
+  };
+  return requestViaPythonWorker<FolderWatchStatus>("/library/watch/notifications/ack", init).catch(() =>
+    request<FolderWatchStatus>("/library/watch/notifications/ack", init),
+  );
 }
 
 export function fetchAudioConversionSetup(): Promise<AudioConversionSetupResponse> {
-  return request<AudioConversionSetupResponse>("/library/tools/audio-conversion/setup");
+  return nativeFetchAudioConversionSetup().catch(() =>
+    request<AudioConversionSetupResponse>("/library/tools/audio-conversion/setup"),
+  );
 }
 
 export function saveAudioConversionSetup(requestBody: AudioConversionSetupRequest): Promise<AudioConversionSetupResponse> {
-  return request<AudioConversionSetupResponse>("/library/tools/audio-conversion/setup", {
-    method: "PATCH",
-    body: JSON.stringify(requestBody),
-  });
+  return nativeSaveAudioConversionSetup(requestBody).catch(() =>
+    request<AudioConversionSetupResponse>("/library/tools/audio-conversion/setup", {
+      method: "PATCH",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function installAudioConversionFfmpeg(
@@ -833,7 +927,7 @@ export async function playCdTrack(
     }),
   });
   if (response.track?.audio_url?.startsWith("/")) {
-    response.track.audio_url = `${API_BASE}${response.track.audio_url}`;
+    response.track.audio_url = pythonWorkerMediaUrl(response.track.audio_url) ?? response.track.audio_url;
   }
   return response;
 }
@@ -843,96 +937,85 @@ export function stopCdPlayback(): Promise<CdPlaybackResponse> {
 }
 
 export function fetchAudiobooks(limit = 200, offset = 0): Promise<AudiobookListResponse> {
-  return nativeFetchAudiobooks(limit, offset).catch(() =>
-    request<AudiobookListResponse>(`/audiobooks?limit=${limit}&offset=${offset}`),
-  );
+  return nativeFetchAudiobooks(limit, offset);
 }
 
 export function updateAudiobookProgress(trackId: number, requestBody: AudiobookProgressRequest): Promise<AudiobookProgressResponse> {
-  return nativeUpdateAudiobookProgress(trackId, requestBody).catch(() =>
-    request<AudiobookProgressResponse>(`/audiobooks/${trackId}/progress`, {
-      method: "PATCH",
-      body: JSON.stringify(requestBody),
-    }),
-  );
+  return nativeUpdateAudiobookProgress(trackId, requestBody);
 }
 
 export function fetchAudiobookBookmarks(trackId: number): Promise<AudiobookBookmark[]> {
-  return nativeFetchAudiobookBookmarks(trackId).catch(() =>
-    request<AudiobookBookmark[]>(`/audiobooks/${trackId}/bookmarks`),
-  );
+  return nativeFetchAudiobookBookmarks(trackId);
 }
 
 export function createAudiobookBookmark(trackId: number, requestBody: AudiobookBookmarkRequest): Promise<AudiobookBookmark> {
-  return nativeCreateAudiobookBookmark(trackId, requestBody).catch(() =>
-    request<AudiobookBookmark>(`/audiobooks/${trackId}/bookmarks`, {
-      method: "POST",
-      body: JSON.stringify(requestBody),
-    }),
-  );
+  return nativeCreateAudiobookBookmark(trackId, requestBody);
 }
 
 export function deleteAudiobookBookmark(bookmarkId: number): Promise<{ deleted: boolean }> {
-  return nativeDeleteAudiobookBookmark(bookmarkId).catch(() =>
-    request<{ deleted: boolean }>(`/audiobooks/bookmarks/${bookmarkId}`, { method: "DELETE" }),
-  );
+  return nativeDeleteAudiobookBookmark(bookmarkId);
 }
 
 export function fetchAudiobookChapters(trackId: number): Promise<AudiobookChapter[]> {
-  return nativeFetchAudiobookChapters(trackId).catch(() =>
-    request<AudiobookChapter[]>(`/audiobooks/${trackId}/chapters`),
-  );
+  return nativeFetchAudiobookChapters(trackId);
 }
 
 export function saveAudiobookChapters(trackId: number, chapters: AudiobookChapter[]): Promise<AudiobookChapter[]> {
-  return nativeSaveAudiobookChapters(trackId, chapters).catch(() =>
-    request<AudiobookChapter[]>(`/audiobooks/${trackId}/chapters`, {
-      method: "PUT",
-      body: JSON.stringify({ chapters }),
-    }),
-  );
+  return nativeSaveAudiobookChapters(trackId, chapters);
 }
 
 export function exportAudiobookSyncMetadata(trackIds?: number[] | null): Promise<AudiobookSyncExportResponse> {
-  return request<AudiobookSyncExportResponse>("/audiobooks/sync-export", {
+  const init = {
     method: "POST",
     body: JSON.stringify({ track_ids: trackIds?.length ? trackIds : null }),
-  });
+  };
+  return requestViaPythonWorker<AudiobookSyncExportResponse>("/audiobooks/sync-export", init).catch(() =>
+    request<AudiobookSyncExportResponse>("/audiobooks/sync-export", init),
+  );
 }
 
 export function fetchPodcastSubscriptions(): Promise<PodcastSubscription[]> {
-  return request<PodcastSubscription[]>("/podcasts/subscriptions");
+  return nativeFetchPodcastSubscriptions().catch(() => request<PodcastSubscription[]>("/podcasts/subscriptions"));
 }
 
 export function savePodcastSubscription(
   requestBody: PodcastSubscriptionPayload,
   subscriptionId?: number | null,
 ): Promise<PodcastSubscription> {
-  return request<PodcastSubscription>(
-    subscriptionId ? `/podcasts/subscriptions/${subscriptionId}` : "/podcasts/subscriptions",
-    {
-      method: subscriptionId ? "PATCH" : "POST",
-      body: JSON.stringify(requestBody),
-    },
+  return nativeSavePodcastSubscription(requestBody, subscriptionId).catch(() =>
+    request<PodcastSubscription>(
+      subscriptionId ? `/podcasts/subscriptions/${subscriptionId}` : "/podcasts/subscriptions",
+      {
+        method: subscriptionId ? "PATCH" : "POST",
+        body: JSON.stringify(requestBody),
+      },
+    ),
   );
 }
 
 export function deletePodcastSubscription(subscriptionId: number, deleteFiles = false): Promise<PodcastSubscriptionDeleteResponse> {
   const query = deleteFiles ? "?delete_files=true" : "";
-  return request<PodcastSubscriptionDeleteResponse>(`/podcasts/subscriptions/${subscriptionId}${query}`, { method: "DELETE" });
+  return nativeDeletePodcastSubscription(subscriptionId, deleteFiles).catch(() =>
+    request<PodcastSubscriptionDeleteResponse>(`/podcasts/subscriptions/${subscriptionId}${query}`, { method: "DELETE" }),
+  );
 }
 
 export function refreshPodcastSubscription(subscriptionId: number): Promise<PodcastRefreshResponse> {
-  return request<PodcastRefreshResponse>(`/podcasts/subscriptions/${subscriptionId}/refresh`, { method: "POST" });
+  const init = { method: "POST" };
+  return requestViaPythonWorker<PodcastRefreshResponse>(`/podcasts/subscriptions/${subscriptionId}/refresh`, init).catch(() =>
+    request<PodcastRefreshResponse>(`/podcasts/subscriptions/${subscriptionId}/refresh`, init),
+  );
 }
 
 export function ensurePodcastSubscriptionFolder(subscriptionId: number): Promise<PodcastFolderResponse> {
-  return request<PodcastFolderResponse>(`/podcasts/subscriptions/${subscriptionId}/folder`, { method: "POST" });
+  return nativeEnsurePodcastSubscriptionFolder(subscriptionId).catch(() =>
+    request<PodcastFolderResponse>(`/podcasts/subscriptions/${subscriptionId}/folder`, { method: "POST" }),
+  );
 }
 
 export function fetchPodcastEpisodes(subscriptionId?: number | null, limit = 200): Promise<PodcastEpisode[]> {
   const query = subscriptionId ? `?subscription_id=${subscriptionId}&limit=${limit}` : `?limit=${limit}`;
-  return request<PodcastEpisode[]>(`/podcasts/episodes${query}`);
+  return nativeFetchPodcastEpisodes(subscriptionId, limit).catch(() => request<PodcastEpisode[]>(`/podcasts/episodes${query}`));
 }
 
 export function downloadPodcastEpisode(episodeId: number, downloadFolder?: string | null): Promise<PodcastEpisode> {
@@ -951,39 +1034,32 @@ export function ensurePodcastEpisodeTrack(episodeId: number): Promise<Track> {
 }
 
 export function fetchRadioStations(): Promise<RadioStation[]> {
-  return nativeFetchRadioStations().catch(() => request<RadioStation[]>("/radio/stations"));
+  return nativeFetchRadioStations();
 }
 
 export function saveRadioStation(requestBody: RadioStationPayload, stationId?: number | null): Promise<RadioStation> {
-  return nativeSaveRadioStation(requestBody, stationId).catch(() =>
-    request<RadioStation>(stationId ? `/radio/stations/${stationId}` : "/radio/stations", {
-      method: stationId ? "PATCH" : "POST",
-      body: JSON.stringify(requestBody),
-    }),
-  );
+  return nativeSaveRadioStation(requestBody, stationId);
 }
 
 export function deleteRadioStation(stationId: number): Promise<{ deleted: boolean }> {
-  return nativeDeleteRadioStation(stationId).catch(() =>
-    request<{ deleted: boolean }>(`/radio/stations/${stationId}`, { method: "DELETE" }),
-  );
+  return nativeDeleteRadioStation(stationId);
 }
 
 export function markRadioStationPlayed(stationId: number): Promise<RadioStation> {
-  return nativeMarkRadioStationPlayed(stationId).catch(() =>
-    request<RadioStation>(`/radio/stations/${stationId}/played`, { method: "POST" }),
-  );
+  return nativeMarkRadioStationPlayed(stationId);
 }
 
 export function fetchScrobbleAccounts(): Promise<ScrobbleAccount[]> {
-  return request<ScrobbleAccount[]>("/scrobbling/accounts");
+  return nativeFetchScrobbleAccounts().catch(() => request<ScrobbleAccount[]>("/scrobbling/accounts"));
 }
 
 export function saveScrobbleAccount(service: ScrobbleService, requestBody: ScrobbleAccountRequest): Promise<ScrobbleAccount> {
-  return request<ScrobbleAccount>(`/scrobbling/accounts/${service}`, {
-    method: "PATCH",
-    body: JSON.stringify(requestBody),
-  });
+  return nativeSaveScrobbleAccount(service, requestBody).catch(() =>
+    request<ScrobbleAccount>(`/scrobbling/accounts/${service}`, {
+      method: "PATCH",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function startLastFmLogin(apiKey?: string | null, apiSecret?: string | null): Promise<LastFmLoginStartResponse> {
@@ -1006,14 +1082,16 @@ export function completeLastFmLogin(
 }
 
 export function fetchScrobbleOutbox(limit = 100): Promise<ScrobbleOutboxEntry[]> {
-  return request<ScrobbleOutboxEntry[]>(`/scrobbling/outbox?limit=${limit}`);
+  return nativeFetchScrobbleOutbox(limit).catch(() => request<ScrobbleOutboxEntry[]>(`/scrobbling/outbox?limit=${limit}`));
 }
 
 export function queueScrobbleHistory(service: ScrobbleService, limit = 100): Promise<ScrobbleQueueHistoryResponse> {
-  return request<ScrobbleQueueHistoryResponse>("/scrobbling/outbox/queue-history", {
-    method: "POST",
-    body: JSON.stringify({ service, limit }),
-  });
+  return nativeQueueScrobbleHistory(service, limit).catch(() =>
+    request<ScrobbleQueueHistoryResponse>("/scrobbling/outbox/queue-history", {
+      method: "POST",
+      body: JSON.stringify({ service, limit }),
+    }),
+  );
 }
 
 export function submitScrobbleOutbox(service: ScrobbleService, limit = 50): Promise<ScrobbleSubmitResponse> {
@@ -1024,16 +1102,11 @@ export function submitScrobbleOutbox(service: ScrobbleService, limit = 50): Prom
 }
 
 export function fetchLovedTracks(limit = 100): Promise<LovedTrack[]> {
-  return nativeFetchLovedTracks(limit).catch(() => request<LovedTrack[]>(`/scrobbling/loved?limit=${limit}`));
+  return nativeFetchLovedTracks(limit);
 }
 
 export function updateTrackLove(trackId: number, loved: boolean, source = "local"): Promise<TrackLoveResponse> {
-  return nativeUpdateTrackLove(trackId, loved, source).catch(() =>
-    request<TrackLoveResponse>(`/scrobbling/tracks/${trackId}/love`, {
-      method: "PATCH",
-      body: JSON.stringify({ loved, source }),
-    }),
-  );
+  return nativeUpdateTrackLove(trackId, loved, source);
 }
 
 export function importScrobbleHistory(csvPath: string, apply = false, limit = 10000): Promise<ScrobbleHistoryImportResponse> {
@@ -1060,11 +1133,16 @@ export function validateGaplessPlaybackViaBackend(requestBody: GaplessValidation
 }
 
 export function fetchExtensions(): Promise<ExtensionListResponse> {
-  return request<ExtensionListResponse>("/extensions");
+  return requestViaPythonWorker<ExtensionListResponse>("/extensions").catch(() =>
+    request<ExtensionListResponse>("/extensions"),
+  );
 }
 
 export function reloadExtensions(): Promise<ExtensionListResponse> {
-  return request<ExtensionListResponse>("/extensions/reload", { method: "POST" });
+  const init = { method: "POST" };
+  return requestViaPythonWorker<ExtensionListResponse>("/extensions/reload", init).catch(() =>
+    request<ExtensionListResponse>("/extensions/reload", init),
+  );
 }
 
 export function importLibraryStats(requestBody: LibraryStatsImportRequest): Promise<LibraryStatsImportResponse> {
@@ -1079,7 +1157,7 @@ export function fetchClapStatus(deep = false): Promise<ClapStatusResponse> {
 }
 
 export function fetchClapCoverage(): Promise<AudioAnalysisCoverage> {
-  return request<AudioAnalysisCoverage>("/analysis/clap/coverage");
+  return nativeFetchClapCoverage().catch(() => request<AudioAnalysisCoverage>("/analysis/clap/coverage"));
 }
 
 export function startClapInstall(requestBody: ClapInstallRequest): Promise<ClapInstallStartResponse> {
@@ -1153,7 +1231,16 @@ export function fetchTracks(
   }
   appendAdvancedTrackSearchFilters(params, options.advancedFilters);
   const query = params.toString();
-  return request<Track[]>(query ? `/tracks?${query}` : "/tracks");
+  return nativeFetchTrackPage({
+    search,
+    limit: options.limit ?? 100000,
+    offset: options.offset ?? 0,
+    sortBy: options.sortBy ?? "artist",
+    sortDirection: options.sortDirection ?? "asc",
+    advancedFilters: options.advancedFilters,
+  })
+    .then((page) => page.tracks)
+    .catch(() => request<Track[]>(query ? `/tracks?${query}` : "/tracks"));
 }
 
 function appendAdvancedTrackSearchFilters(params: URLSearchParams, filters?: AdvancedTrackSearchFilters) {
@@ -1198,9 +1285,7 @@ export function fetchTracksBatch(trackIds: number[]): Promise<TrackBatchResponse
 }
 
 export function fetchSimilarTracks(trackId: number, limit = 12): Promise<SimilarTrack[]> {
-  return nativeFetchSimilarTracks(trackId, limit).catch(() =>
-    request<SimilarTrack[]>(`/tracks/${trackId}/similar?limit=${limit}`),
-  );
+  return nativeFetchSimilarTracks(trackId, limit);
 }
 
 export function deleteTrack(trackId: number, deleteFile = false): Promise<TrackDeleteResponse> {
@@ -1267,7 +1352,9 @@ export function fetchTrackPage({
   params.set("sort_by", sortBy);
   params.set("sort_direction", sortDirection);
   appendAdvancedTrackSearchFilters(params, advancedFilters);
-  return request<TrackPage>(`/tracks/page?${params.toString()}`);
+  return nativeFetchTrackPage({ search, limit, offset, sortBy, sortDirection, advancedFilters }).catch(() =>
+    request<TrackPage>(`/tracks/page?${params.toString()}`),
+  );
 }
 
 export function fetchAlbums(search = ""): Promise<AlbumSummary[]> {
@@ -1363,7 +1450,8 @@ function artworkVersionQuery(version?: string | number | null): string {
 }
 
 export function albumCoverUrl(albumId: number, version?: string | number | null): string {
-  return `${API_BASE}/albums/${albumId}/artwork${artworkVersionQuery(version)}`;
+  const path = `/albums/${albumId}/artwork${artworkVersionQuery(version)}`;
+  return pythonWorkerMediaUrl(path) ?? "";
 }
 
 export function previewArtworkCollisions(limit = 200): Promise<AlbumArtworkCollisionResponse> {
@@ -1436,17 +1524,23 @@ export function moveTrackInPlaylist(
 }
 
 export function exportPlaylist(playlistId: number): Promise<ExportResponse> {
-  return request<ExportResponse>(`/playlists/${playlistId}/export`, {
+  const init = {
     method: "POST",
     body: JSON.stringify({ track_ids: [] }),
-  });
+  };
+  return requestViaPythonWorker<ExportResponse>(`/playlists/${playlistId}/export`, init).catch(() =>
+    request<ExportResponse>(`/playlists/${playlistId}/export`, init),
+  );
 }
 
 export function importPlaylist(playlistPath: string, name?: string): Promise<PlaylistSummary> {
-  return request<PlaylistSummary>("/playlists/import", {
+  const init = {
     method: "POST",
     body: JSON.stringify({ playlist_path: playlistPath, name: name || null }),
-  });
+  };
+  return requestViaPythonWorker<PlaylistSummary>("/playlists/import", init).catch(() =>
+    request<PlaylistSummary>("/playlists/import", init),
+  );
 }
 
 function scanRequestBody(folderPaths: string | string[], saveLibraryPaths?: string[], nativeSnapshot?: NativeScanSnapshot | null) {
@@ -1488,15 +1582,18 @@ export function updateTrackRating(trackId: number, rating: number | null): Promi
 }
 
 export function audioUrl(trackId: number): string {
-  return `${API_BASE}/tracks/${trackId}/audio`;
+  return desktopMediaUrl(`/track-audio/${trackId}`) ?? "";
 }
 
 export function albumArtworkUrl(trackId: number, version?: string | number | null): string {
-  return `${API_BASE}/tracks/${trackId}/artwork${artworkVersionQuery(version)}`;
+  const query = artworkVersionQuery(version);
+  return desktopMediaUrl(`/track-artwork/${trackId}${query}`) ?? "";
 }
 
 export function fetchLyrics(trackId: number): Promise<LyricsResponse> {
-  return request<LyricsResponse>(`/tracks/${trackId}/lyrics`);
+  return requestViaPythonWorker<LyricsResponse>(`/tracks/${trackId}/lyrics`).catch(() =>
+    request<LyricsResponse>(`/tracks/${trackId}/lyrics`),
+  );
 }
 
 export function fetchLyricsOnline(trackId: number): Promise<LyricsResponse> {
@@ -1511,10 +1608,13 @@ export function fetchLyricsByMetadata(requestBody: LyricsLookupRequest): Promise
 }
 
 export function updateLyrics(trackId: number, requestBody: LyricsUpdateRequest): Promise<LyricsResponse> {
-  return request<LyricsResponse>(`/tracks/${trackId}/lyrics`, {
+  const init = {
     method: "PATCH",
     body: JSON.stringify(requestBody),
-  });
+  };
+  return requestViaPythonWorker<LyricsResponse>(`/tracks/${trackId}/lyrics`, init).catch(() =>
+    request<LyricsResponse>(`/tracks/${trackId}/lyrics`, init),
+  );
 }
 
 export function fetchArtistInfo(artistName: string, refresh = false): Promise<ArtistInfoResponse> {
@@ -1522,7 +1622,9 @@ export function fetchArtistInfo(artistName: string, refresh = false): Promise<Ar
   if (refresh) {
     params.set("refresh", "true");
   }
-  return request<ArtistInfoResponse>(`/artists/info?${params.toString()}`);
+  return nativeFetchArtistInfo(artistName, refresh).catch(() =>
+    request<ArtistInfoResponse>(`/artists/info?${params.toString()}`),
+  );
 }
 
 export function markTrackPlayed(trackId: number): Promise<Track> {
@@ -1543,13 +1645,17 @@ export function markTrackSkipped(trackId: number): Promise<Track> {
 
 export function fetchArtistLocalTracks(artistName: string, limit = 100): Promise<Track[]> {
   const params = new URLSearchParams({ name: artistName, limit: String(limit) });
-  return request<Track[]>(`/artists/local-tracks?${params.toString()}`);
+  return nativeFetchArtistLocalTracks(artistName, limit).catch(() =>
+    request<Track[]>(`/artists/local-tracks?${params.toString()}`),
+  );
 }
 
 export function clearArtistCache(): Promise<{ deleted: number }> {
-  return request<{ deleted: number }>("/artists/cache", {
-    method: "DELETE",
-  });
+  return nativeClearArtistCache().catch(() =>
+    request<{ deleted: number }>("/artists/cache", {
+      method: "DELETE",
+    }),
+  );
 }
 
 export function fetchAutoDjAvoidRules(): Promise<AutoDjAvoidRule[]> {
@@ -1580,18 +1686,24 @@ export function recordRecommendationFeedback(requestBody: {
   event_type: "play_next" | "add_to_queue" | "manual_play";
   weight?: number;
 }): Promise<{ status: string }> {
-  return request<{ status: string }>("/autodj/feedback", {
-    method: "POST",
-    body: JSON.stringify(requestBody),
-  });
+  return nativeRecordRecommendationFeedback(requestBody).catch(() =>
+    request<{ status: string }>("/autodj/feedback", {
+      method: "POST",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function fetchRecommendationProfiles(): Promise<RecommendationProfile[]> {
-  return request<RecommendationProfile[]>("/autodj/profiles");
+  return nativeFetchRecommendationProfiles().catch(() =>
+    request<RecommendationProfile[]>("/autodj/profiles"),
+  );
 }
 
 export function fetchRecommendationHistory(limit = 30): Promise<RecommendationRun[]> {
-  return request<RecommendationRun[]>(`/autodj/history?limit=${limit}`);
+  return nativeFetchRecommendationHistory(limit).catch(() =>
+    request<RecommendationRun[]>(`/autodj/history?limit=${limit}`),
+  );
 }
 
 export function compareRecommendationProfiles(requestBody: {
@@ -1599,10 +1711,12 @@ export function compareRecommendationProfiles(requestBody: {
   seed_track_id?: number | null;
   seed?: number | null;
 }): Promise<RecommendationProfileComparison[]> {
-  return request<RecommendationProfileComparison[]>("/autodj/profiles/compare", {
-    method: "POST",
-    body: JSON.stringify(requestBody),
-  });
+  return nativeCompareRecommendationProfiles(requestBody).catch(() =>
+    request<RecommendationProfileComparison[]>("/autodj/profiles/compare", {
+      method: "POST",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function exportRecommendationProfileComparison(requestBody: {
@@ -1610,17 +1724,21 @@ export function exportRecommendationProfileComparison(requestBody: {
   seed_track_id?: number | null;
   seed?: number | null;
 }): Promise<RecommendationProfileComparisonExportResponse> {
-  return request<RecommendationProfileComparisonExportResponse>("/autodj/profiles/compare/export", {
-    method: "POST",
-    body: JSON.stringify(requestBody),
-  });
+  return nativeExportRecommendationProfileComparison(requestBody).catch(() =>
+    request<RecommendationProfileComparisonExportResponse>("/autodj/profiles/compare/export", {
+      method: "POST",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function importRecommendationProfileComparison(reportPath: string): Promise<RecommendationProfileComparisonImportResponse> {
-  return request<RecommendationProfileComparisonImportResponse>("/autodj/profiles/compare/import", {
-    method: "POST",
-    body: JSON.stringify({ report_path: reportPath }),
-  });
+  return nativeImportRecommendationProfileComparison(reportPath).catch(() =>
+    request<RecommendationProfileComparisonImportResponse>("/autodj/profiles/compare/import", {
+      method: "POST",
+      body: JSON.stringify({ report_path: reportPath }),
+    }),
+  );
 }
 
 export function createRecommendationAbTest(requestBody: {
@@ -1629,10 +1747,12 @@ export function createRecommendationAbTest(requestBody: {
   seed_track_id?: number | null;
   seed?: number | null;
 }): Promise<RecommendationAbTestResponse> {
-  return request<RecommendationAbTestResponse>("/autodj/ab-test", {
-    method: "POST",
-    body: JSON.stringify(requestBody),
-  });
+  return nativeCreateRecommendationAbTest(requestBody).catch(() =>
+    request<RecommendationAbTestResponse>("/autodj/ab-test", {
+      method: "POST",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function chooseRecommendationAbTest(requestBody: {
@@ -1642,10 +1762,12 @@ export function chooseRecommendationAbTest(requestBody: {
   rejected_track_ids?: number[];
   feedback_weight?: number;
 }): Promise<RecommendationAbChoiceResponse> {
-  return request<RecommendationAbChoiceResponse>("/autodj/ab-test/choose", {
-    method: "POST",
-    body: JSON.stringify(requestBody),
-  });
+  return nativeChooseRecommendationAbTest(requestBody).catch(() =>
+    request<RecommendationAbChoiceResponse>("/autodj/ab-test/choose", {
+      method: "POST",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function saveRecommendationProfile(requestBody: {
@@ -1653,10 +1775,12 @@ export function saveRecommendationProfile(requestBody: {
   settings: AutoDjSettings;
   is_default?: boolean;
 }): Promise<RecommendationProfile> {
-  return request<RecommendationProfile>("/autodj/profiles", {
-    method: "POST",
-    body: JSON.stringify(requestBody),
-  });
+  return nativeSaveRecommendationProfile(requestBody).catch(() =>
+    request<RecommendationProfile>("/autodj/profiles", {
+      method: "POST",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function updateRecommendationProfile(
@@ -1667,18 +1791,24 @@ export function updateRecommendationProfile(
     is_default?: boolean;
   },
 ): Promise<RecommendationProfile> {
-  return request<RecommendationProfile>(`/autodj/profiles/${profileId}`, {
-    method: "PATCH",
-    body: JSON.stringify(requestBody),
-  });
+  return nativeSaveRecommendationProfile(requestBody, profileId).catch(() =>
+    request<RecommendationProfile>(`/autodj/profiles/${profileId}`, {
+      method: "PATCH",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function setDefaultRecommendationProfile(profileId: number): Promise<RecommendationProfile[]> {
-  return request<RecommendationProfile[]>(`/autodj/profiles/${profileId}/default`, { method: "POST" });
+  return nativeSetDefaultRecommendationProfile(profileId).catch(() =>
+    request<RecommendationProfile[]>(`/autodj/profiles/${profileId}/default`, { method: "POST" }),
+  );
 }
 
 export function deleteRecommendationProfile(profileId: number): Promise<RecommendationProfile[]> {
-  return request<RecommendationProfile[]>(`/autodj/profiles/${profileId}`, { method: "DELETE" });
+  return nativeDeleteRecommendationProfile(profileId).catch(() =>
+    request<RecommendationProfile[]>(`/autodj/profiles/${profileId}`, { method: "DELETE" }),
+  );
 }
 
 export function generateAutoDj(settings: AutoDjSettings): Promise<AutoDjResponse> {
@@ -1691,8 +1821,11 @@ export function generateAutoDj(settings: AutoDjSettings): Promise<AutoDjResponse
 }
 
 export function exportQueue(trackIds: number[]): Promise<ExportResponse> {
-  return request<ExportResponse>("/autodj/export", {
+  const init = {
     method: "POST",
     body: JSON.stringify({ track_ids: trackIds }),
-  });
+  };
+  return requestViaPythonWorker<ExportResponse>("/autodj/export", init).catch(() =>
+    request<ExportResponse>("/autodj/export", init),
+  );
 }

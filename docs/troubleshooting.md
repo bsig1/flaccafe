@@ -2,7 +2,7 @@
 
 This page covers the checks most likely to help during alpha builds.
 
-## Backend Startup
+## Python Runtime Startup
 
 1. Open Settings and run the startup self-check.
 2. Create a support bundle from Settings if the self-check reports a failure.
@@ -15,8 +15,8 @@ npm run backend:dev
 
 Common causes:
 
-- Port `8765` is already in use. Run `.\scripts\stop_dev.ps1` before restarting dev mode.
-- The packaged backend was built without a dependency. Rebuild with `npm run package:msi`.
+- A stale pre-worker dev backend is still holding port `8765`. Run `.\scripts\stop_dev.ps1` if you previously used an older build.
+- The packaged Python worker was built without a dependency. Rebuild with `npm run package:msi`.
 - Optional ML packages were installed into the main app environment instead of the managed ML runtime.
 
 ## Codec Support
@@ -56,7 +56,7 @@ Build the MSI with:
 npm run package:msi
 ```
 
-For CI or disposable profiles, the installer round-trip script silently installs, starts the packaged backend, uninstalls, and verifies app data cleanup:
+For CI or disposable profiles, the installer round-trip script silently installs, checks the packaged app/runtime health, uninstalls, and verifies app data cleanup:
 
 ```powershell
 .\scripts\ci_installer_roundtrip.ps1 -AllowAppDataCleanup

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import csv
-import hashlib
 import json
 import logging
 from logging.handlers import RotatingFileHandler
@@ -16,22 +15,20 @@ import time
 import uuid
 import zipfile
 import xml.etree.ElementTree as ET
-from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Thread
 from urllib import error as urlerror
 from urllib import parse, request as urlrequest
 
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from .worker_types import ActionError, FileResponse, Param, Response, StreamingResponse, WorkerContext
 from mutagen import File as MutagenFile
 from mutagen.flac import Picture
 from mutagen.mp4 import MP4Cover
 
 from .config import APP_STORAGE_ROOT, EXPORT_DIR, MODEL_DIR, database_path
 from .database import connect, get_setting, init_db, invalidate_library_query_cache, rows_to_dicts, set_setting
+from .duplicates import duplicate_group_from_tracks, duplicate_keep_recommendation
 from .extensions import discover_extensions
 from .file_tags import write_custom_tags, write_track_artwork, write_track_lyrics, write_track_metadata, write_track_rating
 from .gapless import gapless_validate
@@ -74,15 +71,8 @@ from .audio_conversion_jobs import (
 )
 from .ffmpeg_install_jobs import get_ffmpeg_install_job, start_ffmpeg_install_job
 from .audiobooks import (
-    add_bookmark as add_audiobook_bookmark,
     audiobook_where_clause,
     audiobook_sync_export,
-    delete_bookmark as delete_audiobook_bookmark,
-    list_audiobooks,
-    list_bookmarks as list_audiobook_bookmarks,
-    list_chapters as list_audiobook_chapters,
-    replace_chapters as replace_audiobook_chapters,
-    upsert_audiobook_progress,
 )
 from .cd_ripping import (
     active_cd_playback_for_drive,
@@ -115,21 +105,12 @@ from .podcasts import (
     subscription_download_folder as podcast_subscription_download_folder,
     upsert_subscription as upsert_podcast_subscription,
 )
-from .radio import (
-    delete_radio_station,
-    list_radio_stations,
-    mark_radio_station_played,
-    save_radio_station,
-)
 from .recommender import (
     album_token,
     artist_tokens,
-    cosine_similarity,
     event_metadata,
     generate_queue,
     normalize_token,
-    parse_embedding,
-    similarity_adjustment,
     text_tokens,
     track_is_exploratory,
     track_is_familiar,
@@ -141,11 +122,9 @@ from .scrobbling import (
     configured_lastfm_credentials,
     import_history_csv as import_scrobble_history_csv,
     list_accounts as list_scrobble_accounts,
-    loved_tracks as list_loved_tracks,
     outbox as list_scrobble_outbox,
     queue_history as queue_scrobble_history,
     save_account as save_scrobble_account,
-    set_loved as set_track_loved,
     start_lastfm_login,
     submit_outbox as submit_scrobble_outbox,
 )
@@ -167,13 +146,6 @@ from .schemas import (
     AudioConversionSetupRequest,
     AudioConversionSetupResponse,
     AudioConversionStartResponse,
-    AudiobookBookmark,
-    AudiobookBookmarkRequest,
-    AudiobookChapter,
-    AudiobookChapterUpdateRequest,
-    AudiobookListResponse,
-    AudiobookProgressRequest,
-    AudiobookProgressResponse,
     AudiobookSyncExportRequest,
     AudiobookSyncExportResponse,
     CdPlaybackRequest,
@@ -298,8 +270,6 @@ from .schemas import (
     PodcastSubscriptionDeleteResponse,
     PodcastSubscriptionPayload,
     RatingRequest,
-    RadioStation,
-    RadioStationPayload,
     ReportFileRequest,
     ReportFileResponse,
     RecommendationFeedbackRequest,
@@ -334,7 +304,6 @@ from .schemas import (
     LibrarySourceRemoveResponse,
     SettingsUpdateRequest,
     SettingsResponse,
-    SimilarTrack,
     StartupDiagnosticsResponse,
     SupportBundleResponse,
     RegexTagPreset,
@@ -351,9 +320,6 @@ from .schemas import (
     TagFieldCopySwapPreview,
     TagFieldCopySwapRequest,
     TagFieldCopySwapResponse,
-    LovedTrack,
-    TrackLoveRequest,
-    TrackLoveResponse,
     Track,
     TrackBatchRequest,
     TrackBatchResponse,
@@ -736,111 +702,6 @@ def read_log_tail(path: Path, limit: int) -> LogTailResponse:
     return LogTailResponse(path=str(path), exists=True, lines=lines[-limit:])
 
 
-def duplicate_keep_recommendation(tracks: list[dict]) -> tuple[int | None, str | None]:
-    if not tracks:
-        return None, None
-
-    def score(track: dict) -> float:
-        value = 0.0
-        if track.get("rating") is not None:
-            value += float(track["rating"]) * 100
-        if track.get("bitrate"):
-            value += min(80, int(track["bitrate"]) / 4000)
-        if track.get("audio_fingerprint"):
-            value += 20
-        if track.get("acoustic_fingerprint"):
-            value += 25
-        if track.get("analysis_embedding"):
-            value += 15
-        if track.get("duration_seconds"):
-            value += 8
-        if Path(track["path"]).exists():
-            value += 10
-        value -= len(str(track.get("path") or "")) / 1000
-        return value
-
-    selected = max(tracks, key=score)
-    reasons: list[str] = []
-    if selected.get("rating") is not None:
-        reasons.append(f"{selected['rating']} star rating")
-    if selected.get("bitrate"):
-        reasons.append(f"{round(int(selected['bitrate']) / 1000)} kbps")
-    if selected.get("analysis_embedding"):
-        reasons.append("has CLAP analysis")
-    if selected.get("audio_fingerprint"):
-        reasons.append("has file fingerprint")
-    if selected.get("acoustic_fingerprint"):
-        reasons.append("has acoustic fingerprint")
-    return int(selected["id"]), ", ".join(reasons) if reasons else "best available metadata"
-
-
-def average_embedding_similarity(tracks: list[dict]) -> float | None:
-    embeddings = [parse_embedding(track.get("analysis_embedding")) for track in tracks]
-    embeddings = [embedding for embedding in embeddings if embedding]
-    if len(embeddings) < 2:
-        return None
-    values: list[float] = []
-    for index, left in enumerate(embeddings):
-        for right in embeddings[index + 1 :]:
-            similarity = cosine_similarity(left, right)
-            if similarity is not None:
-                values.append(similarity)
-    return round(sum(values) / len(values), 4) if values else None
-
-
-def duplicate_group_ignore_key(tracks: list[dict]) -> str:
-    identity = sorted(
-        str(track.get("path_key") or path_key(Path(str(track.get("path") or ""))) or track.get("id")).lower()
-        for track in tracks
-    )
-    payload = json.dumps(identity, ensure_ascii=True, separators=(",", ":"))
-    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
-
-
-def duplicate_group_from_tracks(key: str, tracks: list[dict], base_reason: str) -> DuplicateGroup:
-    durations = [
-        float(track["duration_seconds"])
-        for track in tracks
-        if isinstance(track.get("duration_seconds"), (int, float))
-    ]
-    bitrates = [int(track["bitrate"]) for track in tracks if isinstance(track.get("bitrate"), int)]
-    fingerprints = [track.get("audio_fingerprint") for track in tracks if track.get("audio_fingerprint")]
-    acoustic_fingerprints = [track.get("acoustic_fingerprint") for track in tracks if track.get("acoustic_fingerprint")]
-    duration_spread = round(max(durations) - min(durations), 3) if len(durations) >= 2 else None
-    bitrate_spread = max(bitrates) - min(bitrates) if len(bitrates) >= 2 else None
-    shared_fingerprint = bool(fingerprints and len(set(fingerprints)) < len(fingerprints))
-    shared_acoustic_fingerprint = bool(acoustic_fingerprints and len(set(acoustic_fingerprints)) < len(acoustic_fingerprints))
-    path_roots = sorted({str(Path(track["path"]).parent) for track in tracks if track.get("path")})[:6]
-    analyzed_tracks = sum(1 for track in tracks if track.get("analysis_embedding"))
-    keep_id, keep_reason = duplicate_keep_recommendation(tracks)
-    reasons = [base_reason]
-    if shared_fingerprint:
-        reasons.append("matching fingerprint")
-    if shared_acoustic_fingerprint:
-        reasons.append("matching acoustic fingerprint")
-    if duration_spread is not None:
-        reasons.append("same duration" if duration_spread <= 2 else f"duration spread {duration_spread:.1f}s")
-    if bitrate_spread is not None:
-        reasons.append("same bitrate" if bitrate_spread == 0 else f"bitrate spread {round(bitrate_spread / 1000)} kbps")
-    if analyzed_tracks:
-        reasons.append(f"{analyzed_tracks}/{len(tracks)} analyzed")
-    return DuplicateGroup(
-        key=key,
-        ignore_key=duplicate_group_ignore_key(tracks),
-        tracks=tracks,
-        match_reason=", ".join(reasons),
-        recommended_keep_id=keep_id,
-        recommendation_reason=keep_reason,
-        duration_spread_seconds=duration_spread,
-        bitrate_spread=bitrate_spread,
-        shared_fingerprint=shared_fingerprint,
-        shared_acoustic_fingerprint=shared_acoustic_fingerprint,
-        average_audio_similarity=average_embedding_similarity(tracks),
-        path_roots=path_roots,
-        analyzed_tracks=analyzed_tracks,
-    )
-
-
 def create_support_bundle() -> SupportBundleResponse:
     configure_backend_file_logging()
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
@@ -954,11 +815,11 @@ def get_track_path(track_id: int) -> Path:
         ).fetchone()
 
     if row is None:
-        raise HTTPException(status_code=404, detail="Track not found")
+        raise ActionError(status_code=404, detail="Track not found")
 
     path = Path(row["path"])
     if not path.exists() or not path.is_file():
-        raise HTTPException(status_code=404, detail="Audio file not found on disk")
+        raise ActionError(status_code=404, detail="Audio file not found on disk")
 
     return path
 
@@ -1035,7 +896,7 @@ def library_path_compare_key(path_text: str) -> str:
 def remove_library_source_rows(conn, source_path: str) -> LibrarySourceRemoveResponse:
     normalized_sources = normalized_library_paths([source_path])
     if not normalized_sources:
-        raise HTTPException(status_code=400, detail="Choose a library source to remove")
+        raise ActionError(status_code=400, detail="Choose a library source to remove")
 
     normalized_source = normalized_sources[0]
     source_root = Path(normalized_source).expanduser().resolve(strict=False)
@@ -1422,7 +1283,7 @@ def playlist_tracks(playlist_id: int) -> list[dict]:
     with connect() as conn:
         row = conn.execute("SELECT id FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
         if row is None:
-            raise HTTPException(status_code=404, detail="Playlist not found")
+            raise ActionError(status_code=404, detail="Playlist not found")
         return rows_to_dicts(
             conn.execute(
                 f"""
@@ -1592,7 +1453,7 @@ def track_response(conn, track_id: int) -> dict:
         (track_id,),
     ).fetchone()
     if row is None:
-        raise HTTPException(status_code=404, detail="Track not found")
+        raise ActionError(status_code=404, detail="Track not found")
     return dict(row)
 
 
@@ -1604,7 +1465,7 @@ def apply_track_metadata_update(conn, track_id: int, updates: dict[str, object],
     clean_updates = {key: value for key, value in updates.items() if key in EDITABLE_METADATA_FIELDS}
     row = conn.execute(f"SELECT {TRACK_COLUMNS} FROM tracks WHERE id = ?", (track_id,)).fetchone()
     if row is None:
-        raise HTTPException(status_code=404, detail="Track not found")
+        raise ActionError(status_code=404, detail="Track not found")
     if not clean_updates:
         return dict(row)
 
@@ -1619,9 +1480,9 @@ def apply_track_metadata_update(conn, track_id: int, updates: dict[str, object],
             if path.exists():
                 file_modified_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).replace(microsecond=0).isoformat()
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise ActionError(status_code=400, detail=str(exc)) from exc
         except OSError as exc:
-            raise HTTPException(status_code=400, detail=f"Could not write metadata to file: {exc}") from exc
+            raise ActionError(status_code=400, detail=f"Could not write metadata to file: {exc}") from exc
 
     merged["album_id"] = ensure_album_for_track(conn, merged)
     conn.execute(
@@ -1655,7 +1516,7 @@ def apply_track_metadata_update(conn, track_id: int, updates: dict[str, object],
 def apply_track_rating_update(conn, track_id: int, rating: float | None, record_event: bool = True) -> dict:
     row = conn.execute("SELECT id, path FROM tracks WHERE id = ?", (track_id,)).fetchone()
     if row is None:
-        raise HTTPException(status_code=404, detail="Track not found")
+        raise ActionError(status_code=404, detail="Track not found")
 
     file_modified_at = None
     if get_write_ratings_to_files(conn):
@@ -1665,9 +1526,9 @@ def apply_track_rating_update(conn, track_id: int, rating: float | None, record_
             if path.exists():
                 file_modified_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).replace(microsecond=0).isoformat()
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise ActionError(status_code=400, detail=str(exc)) from exc
         except OSError as exc:
-            raise HTTPException(status_code=400, detail=f"Could not write rating to file: {exc}") from exc
+            raise ActionError(status_code=400, detail=f"Could not write rating to file: {exc}") from exc
 
     conn.execute(
         """
@@ -2010,7 +1871,7 @@ def album_record(conn, album_id: int):
         (album_id,),
     ).fetchone()
     if row is None:
-        raise HTTPException(status_code=404, detail="Album not found")
+        raise ActionError(status_code=404, detail="Album not found")
     return row
 
 
@@ -2252,7 +2113,7 @@ def album_artwork_candidates(conn, album_id: int) -> list[AlbumArtworkCandidate]
 def album_primary_folder_and_tracks(conn, album_id: int) -> tuple[Path, list[dict]]:
     tracks = album_track_rows(conn, album_id)
     if not tracks:
-        raise HTTPException(status_code=404, detail="Album has no tracks")
+        raise ActionError(status_code=404, detail="Album has no tracks")
     folders: list[Path] = []
     for track in tracks:
         folder = Path(track["path"]).expanduser().parent
@@ -2810,7 +2671,7 @@ def lrclib_fetch(track: dict) -> LyricsResponse:
                 return response
         except urlerror.HTTPError as exc:
             if exc.code != 404:
-                raise HTTPException(status_code=502, detail=f"Lyric lookup failed: HTTP {exc.code}") from exc
+                raise ActionError(status_code=502, detail=f"Lyric lookup failed: HTTP {exc.code}") from exc
             last_error = exc
         except Exception as exc:
             last_error = exc
@@ -2820,11 +2681,11 @@ def lrclib_fetch(track: dict) -> LyricsResponse:
         payload = lrclib_read_json(LRCLIB_SEARCH_URL, search_params)
     except urlerror.HTTPError as exc:
         if exc.code == 404:
-            raise HTTPException(status_code=404, detail="No matching lyrics found")
-        raise HTTPException(status_code=502, detail=f"Lyric lookup failed: HTTP {exc.code}") from exc
+            raise ActionError(status_code=404, detail="No matching lyrics found")
+        raise ActionError(status_code=502, detail=f"Lyric lookup failed: HTTP {exc.code}") from exc
     except Exception as exc:
         detail = exc if last_error is None else last_error
-        raise HTTPException(status_code=502, detail=f"Lyric lookup failed: {detail}") from exc
+        raise ActionError(status_code=502, detail=f"Lyric lookup failed: {detail}") from exc
 
     candidates = payload if isinstance(payload, list) else [payload]
     for candidate in candidates:
@@ -2832,7 +2693,7 @@ def lrclib_fetch(track: dict) -> LyricsResponse:
             response = lrclib_payload_response(int(track["id"]), candidate)
             if response:
                 return response
-    raise HTTPException(status_code=404, detail="No lyrics text found")
+    raise ActionError(status_code=404, detail="No lyrics text found")
 
 
 def display_track_title(track: dict) -> str:
@@ -3138,62 +2999,15 @@ def save_artist_info(query_name: str, info: dict[str, str | None]) -> ArtistInfo
     )
 
 
-@asynccontextmanager
-async def lifespan(_app: FastAPI):
-    mark("FastAPI lifespan starting")
-    configure_backend_file_logging()
-    mark("backend logging configured")
-    init_db()
-    mark("database initialized")
-    start_folder_watcher_from_settings_in_background()
-    mark("folder watcher resume scheduled")
-    try:
-        yield
-    finally:
-        mark("FastAPI lifespan stopping")
-        stop_folder_watcher(update_setting=False)
 
-
-app = FastAPI(title="FLAC Cafe", lifespan=lifespan)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:1420",
-        "http://127.0.0.1:1420",
-        "http://localhost:5173",
-        "http://tauri.localhost",
-        "https://tauri.localhost",
-        "tauri://localhost",
-    ],
-    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1):\d+$",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-@app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
-
-
-@app.get("/diagnostics/startup", response_model=StartupDiagnosticsResponse)
 def get_startup_diagnostics() -> StartupDiagnosticsResponse:
     return startup_diagnostics()
-
-
-@app.get("/diagnostics/logs/backend", response_model=LogTailResponse)
-def get_backend_log(limit: int = Query(default=200, ge=1, le=2000)) -> LogTailResponse:
+def get_backend_log(limit: int = Param(default=200, ge=1, le=2000)) -> LogTailResponse:
     return read_log_tail(backend_log_path(), limit)
-
-
-@app.post("/diagnostics/support-bundle", response_model=SupportBundleResponse)
 def build_support_bundle() -> SupportBundleResponse:
     return create_support_bundle()
-
-
-@app.get("/settings", response_model=SettingsResponse)
 def get_settings() -> SettingsResponse:
     with connect() as conn:
         library_path = get_setting(conn, "library_path")
@@ -3224,9 +3038,6 @@ def get_settings() -> SettingsResponse:
         lastfm_api_credentials_source=lastfm_source,
         extra={"clap": {"deferred": True}},
     )
-
-
-@app.patch("/settings", response_model=SettingsResponse)
 def update_settings(request: SettingsUpdateRequest) -> SettingsResponse:
     with connect() as conn:
         if request.write_ratings_to_files is not None:
@@ -3252,33 +3063,18 @@ def update_settings(request: SettingsUpdateRequest) -> SettingsResponse:
         api_secret = request.lastfm_api_secret.strip() if request.lastfm_api_secret is not None else str(existing.get("api_secret") or "").strip()
         save_scrobble_account("lastfm", {"api_key": api_key or None, "api_secret": api_secret or None})
     return get_settings()
-
-
-@app.post("/settings/library-sources/remove", response_model=LibrarySourceRemoveResponse)
 def remove_library_source(request: LibrarySourceRemoveRequest) -> LibrarySourceRemoveResponse:
     with connect() as conn:
         return remove_library_source_rows(conn, request.path)
-
-
-@app.get("/analysis/clap/status", response_model=ClapStatusResponse)
-def get_clap_status(deep: bool = Query(default=False)) -> dict:
+def get_clap_status(deep: bool = Param(default=False)) -> dict:
     return clap_status(deep=deep)
-
-
-@app.post("/analysis/clap/install", response_model=ClapInstallStartResponse)
 def install_clap_dependencies(request: ClapInstallRequest) -> dict:
     return start_clap_install_job(device=request.device, force=request.force)
-
-
-@app.get("/analysis/clap/install/{job_id}", response_model=ClapInstallProgress)
 def get_clap_install(job_id: str) -> dict:
     job = get_clap_install_job(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="CLAP install job not found")
+        raise ActionError(status_code=404, detail="CLAP install job not found")
     return job
-
-
-@app.get("/analysis/clap/coverage", response_model=AudioAnalysisCoverage)
 def get_clap_coverage() -> AudioAnalysisCoverage:
     with connect() as conn:
         row = conn.execute(
@@ -3309,9 +3105,6 @@ def get_clap_coverage() -> AudioAnalysisCoverage:
         failed_tracks=failed,
         coverage_percent=round((analyzed / total) * 100, 2) if total else 0.0,
     )
-
-
-@app.patch("/analysis/clap/config", response_model=ClapStatusResponse)
 def update_clap_config(request: ClapConfigRequest) -> dict:
     save_clap_config(
         model_id=request.model_id,
@@ -3319,58 +3112,40 @@ def update_clap_config(request: ClapConfigRequest) -> dict:
         max_duration_seconds=request.max_duration_seconds,
     )
     return clap_status()
-
-
-@app.post("/analysis/clap/start", response_model=AudioAnalysisStartResponse)
 def start_clap_audio_analysis(request: AudioAnalysisStartRequest) -> dict:
     status = clap_status(deep=True)
     if not status["installed"]:
-        raise HTTPException(status_code=400, detail=status["message"] or "CLAP is not ready")
+        raise ActionError(status_code=400, detail=status["message"] or "CLAP is not ready")
     return start_audio_analysis_job(
         limit=request.limit,
         overwrite=request.overwrite,
         only_missing=request.only_missing,
         track_ids=request.track_ids,
     )
-
-
-@app.get("/analysis/clap/jobs/{job_id}", response_model=AudioAnalysisProgress)
 def get_clap_audio_analysis(job_id: str) -> dict:
     job = get_audio_analysis_job(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="Analysis job not found")
+        raise ActionError(status_code=404, detail="Analysis job not found")
     return job
-
-
-@app.post("/analysis/clap/jobs/{job_id}/pause", response_model=AudioAnalysisProgress)
 def pause_clap_audio_analysis(job_id: str) -> dict:
     job = pause_audio_analysis_job(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="Analysis job not found")
+        raise ActionError(status_code=404, detail="Analysis job not found")
     return job
-
-
-@app.post("/analysis/clap/jobs/{job_id}/resume", response_model=AudioAnalysisProgress)
 def resume_clap_audio_analysis(job_id: str) -> dict:
     job = resume_audio_analysis_job(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="Analysis job not found")
+        raise ActionError(status_code=404, detail="Analysis job not found")
     return job
-
-
-@app.post("/analysis/clap/jobs/{job_id}/cancel", response_model=AudioAnalysisProgress)
 def cancel_clap_audio_analysis(job_id: str) -> dict:
     job = cancel_audio_analysis_job(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="Analysis job not found")
+        raise ActionError(status_code=404, detail="Analysis job not found")
     return job
-
-
-@app.post("/settings/backup", response_model=BackupResponse)
 def backup_database() -> BackupResponse:
     source = database_path()
     if not source.exists():
-        raise HTTPException(status_code=404, detail="Database does not exist yet")
+        raise ActionError(status_code=404, detail="Database does not exist yet")
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     target = EXPORT_DIR / f"flac-cafe-backup-{stamp}.sqlite"
@@ -3390,12 +3165,9 @@ def reset_database_in_place(db_path: Path) -> None:
         conn.commit()
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("VACUUM")
-
-
-@app.post("/settings/reset-local-data", response_model=LocalDataResetResponse)
 def reset_local_data(request: LocalDataResetRequest) -> LocalDataResetResponse:
     if request.confirmation.strip().upper() != "RESET":
-        raise HTTPException(status_code=400, detail="Type RESET to confirm local data reset.")
+        raise ActionError(status_code=400, detail="Type RESET to confirm local data reset.")
 
     source = database_path()
     backup_path: str | None = None
@@ -3408,7 +3180,7 @@ def reset_local_data(request: LocalDataResetRequest) -> LocalDataResetResponse:
             shutil.copy2(source, target)
             backup_path = str(target)
         except OSError as exc:
-            raise HTTPException(status_code=400, detail=f"Could not back up database before reset: {exc}") from exc
+            raise ActionError(status_code=400, detail=f"Could not back up database before reset: {exc}") from exc
 
     for path in [source, Path(f"{source}-wal"), Path(f"{source}-shm")]:
         try:
@@ -3443,13 +3215,10 @@ def reset_local_data(request: LocalDataResetRequest) -> LocalDataResetResponse:
         removed_paths=removed_paths,
         message="Local FLAC Cafe data was reset. Music files, exports, tools, models, and logs were left in place.",
     )
-
-
-@app.get("/tracks", response_model=list[Track])
 def list_tracks(
     search: str = "",
-    limit: int | None = Query(default=None, ge=1, le=100000),
-    offset: int = Query(default=0, ge=0),
+    limit: int | None = Param(default=None, ge=1, le=100000),
+    offset: int = Param(default=0, ge=0),
     sort_by: str = "artist",
     sort_direction: str = "asc",
     artist: str = "",
@@ -3458,12 +3227,12 @@ def list_tracks(
     path: str = "",
     extension: str = "",
     rating_state: str = "any",
-    min_rating: float | None = Query(default=None, ge=0.5, le=5),
-    max_rating: float | None = Query(default=None, ge=0.5, le=5),
-    year_from: int | None = Query(default=None, ge=0, le=9999),
-    year_to: int | None = Query(default=None, ge=0, le=9999),
-    min_duration: float | None = Query(default=None, ge=0),
-    max_duration: float | None = Query(default=None, ge=0),
+    min_rating: float | None = Param(default=None, ge=0.5, le=5),
+    max_rating: float | None = Param(default=None, ge=0.5, le=5),
+    year_from: int | None = Param(default=None, ge=0, le=9999),
+    year_to: int | None = Param(default=None, ge=0, le=9999),
+    min_duration: float | None = Param(default=None, ge=0),
+    max_duration: float | None = Param(default=None, ge=0),
     missing_metadata: bool = False,
 ) -> list[dict]:
     tracks, _total = query_tracks(
@@ -3489,13 +3258,10 @@ def list_tracks(
         },
     )
     return tracks
-
-
-@app.get("/tracks/page", response_model=TrackPage)
 def list_track_page(
     search: str = "",
-    limit: int = Query(default=150, ge=1, le=1000),
-    offset: int = Query(default=0, ge=0),
+    limit: int = Param(default=150, ge=1, le=1000),
+    offset: int = Param(default=0, ge=0),
     sort_by: str = "artist",
     sort_direction: str = "asc",
     artist: str = "",
@@ -3504,12 +3270,12 @@ def list_track_page(
     path: str = "",
     extension: str = "",
     rating_state: str = "any",
-    min_rating: float | None = Query(default=None, ge=0.5, le=5),
-    max_rating: float | None = Query(default=None, ge=0.5, le=5),
-    year_from: int | None = Query(default=None, ge=0, le=9999),
-    year_to: int | None = Query(default=None, ge=0, le=9999),
-    min_duration: float | None = Query(default=None, ge=0),
-    max_duration: float | None = Query(default=None, ge=0),
+    min_rating: float | None = Param(default=None, ge=0.5, le=5),
+    max_rating: float | None = Param(default=None, ge=0.5, le=5),
+    year_from: int | None = Param(default=None, ge=0, le=9999),
+    year_to: int | None = Param(default=None, ge=0, le=9999),
+    min_duration: float | None = Param(default=None, ge=0),
+    max_duration: float | None = Param(default=None, ge=0),
     missing_metadata: bool = False,
 ) -> TrackPage:
     tracks, total = query_tracks(
@@ -3535,9 +3301,6 @@ def list_track_page(
         },
     )
     return TrackPage(tracks=tracks, total=total, limit=limit, offset=offset)
-
-
-@app.post("/tracks/batch", response_model=TrackBatchResponse)
 def get_tracks_batch(request: TrackBatchRequest) -> TrackBatchResponse:
     unique_ids = list(dict.fromkeys(int(track_id) for track_id in request.track_ids if int(track_id) > 0))
     if not unique_ids:
@@ -3545,13 +3308,9 @@ def get_tracks_batch(request: TrackBatchRequest) -> TrackBatchResponse:
     with connect() as conn:
         rows, missing_ids = tracks_by_ids(conn, unique_ids)
     return TrackBatchResponse(tracks=rows, missing_ids=missing_ids)
-
-
-@app.post("/library/tools/write-metadata-to-files", response_model=TrackFileMetadataWriteResponse)
-@app.post("/tracks/write-metadata-to-files", response_model=TrackFileMetadataWriteResponse)
 def write_track_metadata_to_files(request: TrackFileMetadataWriteRequest) -> TrackFileMetadataWriteResponse:
     if not request.include_metadata and not request.include_rating:
-        raise HTTPException(status_code=400, detail="Choose metadata, ratings, or both to write")
+        raise ActionError(status_code=400, detail="Choose metadata, ratings, or both to write")
 
     unique_ids = list(dict.fromkeys(int(track_id) for track_id in (request.track_ids or []) if int(track_id) > 0))
     previews: list[TrackFileMetadataWritePreview] = []
@@ -3652,62 +3411,9 @@ def write_track_metadata_to_files(request: TrackFileMetadataWriteRequest) -> Tra
         errors=errors[:100],
         previews=previews,
     )
-
-
-@app.get("/tracks/{track_id}", response_model=Track)
 def get_track(track_id: int) -> dict:
     with connect() as conn:
         return track_response(conn, track_id)
-
-
-@app.get("/tracks/{track_id}/similar", response_model=list[SimilarTrack])
-def similar_tracks(track_id: int, limit: int = Query(default=12, ge=1, le=50)) -> list[dict]:
-    with connect() as conn:
-        seed = conn.execute(f"SELECT {TRACK_COLUMNS} FROM tracks WHERE id = ?", (track_id,)).fetchone()
-        if seed is None:
-            raise HTTPException(status_code=404, detail="Track not found")
-        seed_track = dict(seed)
-        rows = rows_to_dicts(
-            conn.execute(
-                f"""
-                SELECT {TRACK_COLUMNS}
-                FROM tracks
-                WHERE id <> ?
-                """,
-                (track_id,),
-            )
-        )
-
-    candidates: list[dict] = []
-    seed_embedding = parse_embedding(seed_track.get("analysis_embedding"))
-    for track in rows:
-        score, reason = similarity_adjustment(track, seed_track)
-        audio_similarity = cosine_similarity(parse_embedding(track.get("analysis_embedding")), seed_embedding)
-        if audio_similarity is not None and audio_similarity > 0:
-            score += audio_similarity
-        if score <= 0:
-            continue
-        candidates.append(
-            {
-                **track,
-                "similarity_score": round(score, 4),
-                "similarity_reason": reason or "metadata similarity",
-                "audio_similarity": round(audio_similarity, 4) if audio_similarity is not None else None,
-            }
-        )
-
-    candidates.sort(
-        key=lambda track: (
-            track["similarity_score"],
-            track.get("rating") or 0,
-            track.get("bitrate") or 0,
-        ),
-        reverse=True,
-    )
-    return candidates[:limit]
-
-
-@app.patch("/tracks/{track_id}/metadata", response_model=Track)
 def update_track_metadata(track_id: int, request: TrackMetadataUpdateRequest) -> dict:
     requested = request.model_dump(exclude_unset=True)
     updates = {key: value for key, value in requested.items() if key in EDITABLE_METADATA_FIELDS}
@@ -3719,26 +3425,23 @@ def update_track_metadata(track_id: int, request: TrackMetadataUpdateRequest) ->
         updated = apply_track_metadata_update(conn, track_id, updates, request.write_to_file)
         conn.commit()
         return updated
-
-
-@app.delete("/tracks/{track_id}", response_model=TrackDeleteResponse)
 def delete_track(track_id: int, delete_file: bool = False) -> TrackDeleteResponse:
     with connect() as conn:
         row = conn.execute("SELECT id, path FROM tracks WHERE id = ?", (track_id,)).fetchone()
         if row is None:
-            raise HTTPException(status_code=404, detail="Track not found")
+            raise ActionError(status_code=404, detail="Track not found")
 
         path = Path(row["path"])
         file_missing = not path.exists()
         deleted_file = False
         if delete_file and not file_missing:
             if not path.is_file():
-                raise HTTPException(status_code=400, detail="Track path is not a file")
+                raise ActionError(status_code=400, detail="Track path is not a file")
             try:
                 move_file_to_recycle_bin(path)
                 deleted_file = True
             except OSError as exc:
-                raise HTTPException(status_code=400, detail=f"Could not move audio file to the Recycle Bin: {exc}") from exc
+                raise ActionError(status_code=400, detail=f"Could not move audio file to the Recycle Bin: {exc}") from exc
 
         conn.execute("DELETE FROM tracks WHERE id = ?", (track_id,))
         delete_orphan_albums(conn)
@@ -3751,13 +3454,10 @@ def delete_track(track_id: int, delete_file: bool = False) -> TrackDeleteRespons
         deleted_file=deleted_file,
         file_missing=file_missing,
     )
-
-
-@app.post("/tracks/delete", response_model=TracksDeleteResponse)
 def delete_tracks(request: TracksDeleteRequest) -> TracksDeleteResponse:
     unique_ids = list(dict.fromkeys(int(track_id) for track_id in request.track_ids if int(track_id) > 0))
     if not unique_ids:
-        raise HTTPException(status_code=400, detail="Choose at least one track to remove")
+        raise ActionError(status_code=400, detail="Choose at least one track to remove")
 
     batch_id = new_undo_batch_id("track-remove")
     with connect() as conn:
@@ -3778,13 +3478,10 @@ def delete_tracks(request: TracksDeleteRequest) -> TracksDeleteResponse:
         missing_track_ids=missing_track_ids,
         errors=errors,
     )
-
-
-@app.post("/tracks/sync-metadata", response_model=TrackMetadataSyncResponse)
 def sync_track_metadata_from_files(request: TrackMetadataSyncRequest) -> TrackMetadataSyncResponse:
     unique_ids = list(dict.fromkeys(int(track_id) for track_id in request.track_ids if int(track_id) > 0))
     if not unique_ids:
-        raise HTTPException(status_code=400, detail="Choose at least one track to sync")
+        raise ActionError(status_code=400, detail="Choose at least one track to sync")
 
     synced: list[int] = []
     errors: list[str] = []
@@ -3814,23 +3511,20 @@ def sync_track_metadata_from_files(request: TrackMetadataSyncRequest) -> TrackMe
         missing_track_ids=missing_ids,
         errors=errors[:100],
     )
-
-
-@app.post("/tracks/restore", response_model=Track)
 def restore_track(request: TrackRestoreRequest) -> dict:
     path = Path(request.path).expanduser()
     if not path.exists() or not path.is_file():
-        raise HTTPException(status_code=404, detail="Audio file is missing on disk")
+        raise ActionError(status_code=404, detail="Audio file is missing on disk")
     try:
         metadata = read_metadata(path)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Could not read track metadata: {exc}") from exc
+        raise ActionError(status_code=400, detail=f"Could not read track metadata: {exc}") from exc
 
     with connect() as conn:
         upsert_track(conn, metadata)
         row = conn.execute("SELECT id FROM tracks WHERE path_key = ?", (metadata["path_key"],)).fetchone()
         if row is None:
-            raise HTTPException(status_code=400, detail="Track could not be restored")
+            raise ActionError(status_code=400, detail="Track could not be restored")
         track_id = int(row["id"])
         if request.rating is not None:
             conn.execute(
@@ -3840,10 +3534,7 @@ def restore_track(request: TrackRestoreRequest) -> dict:
         invalidate_library_query_cache(conn)
         conn.commit()
         return track_response(conn, track_id)
-
-
-@app.get("/history", response_model=list[PlayEventEntry])
-def play_history(limit: int = Query(default=200, ge=1, le=1000)) -> list[PlayEventEntry]:
+def play_history(limit: int = Param(default=200, ge=1, le=1000)) -> list[PlayEventEntry]:
     with connect() as conn:
         rows = conn.execute(
             f"""
@@ -3892,10 +3583,7 @@ def history_track_stat(row: sqlite3.Row) -> dict:
         "skip_count": int(row["skip_count"] or 0),
         "listened_seconds": float(row["listened_seconds"] or 0),
     }
-
-
-@app.get("/history/stats", response_model=HistoryStatsResponse)
-def play_history_stats(limit: int = Query(default=10, ge=1, le=50)) -> HistoryStatsResponse:
+def play_history_stats(limit: int = Param(default=10, ge=1, le=50)) -> HistoryStatsResponse:
     with connect() as conn:
         totals = conn.execute(
             """
@@ -3964,9 +3652,6 @@ def play_history_stats(limit: int = Query(default=10, ge=1, le=50)) -> HistorySt
         top_played=top_played,
         top_skipped=top_skipped,
     )
-
-
-@app.get("/library/stats", response_model=LibraryStatsResponse)
 def library_stats() -> LibraryStatsResponse:
     with connect() as conn:
         row = conn.execute(
@@ -4003,12 +3688,9 @@ def library_stats() -> LibraryStatsResponse:
 
 def inbox_counts(conn) -> tuple[int, int]:
     return inbox_service.inbox_counts(conn)
-
-
-@app.get("/library/inbox", response_model=InboxResponse)
 def library_inbox(
-    limit: int = Query(default=200, ge=1, le=1000),
-    offset: int = Query(default=0, ge=0),
+    limit: int = Param(default=200, ge=1, le=1000),
+    offset: int = Param(default=0, ge=0),
 ) -> InboxResponse:
     with connect() as conn:
         total_new, total_reviewed = inbox_counts(conn)
@@ -4038,9 +3720,6 @@ def library_inbox(
         limit=limit,
         offset=offset,
     )
-
-
-@app.post("/library/inbox/review", response_model=InboxReviewResponse)
 def review_inbox_tracks(request: InboxReviewRequest) -> InboxReviewResponse:
     with connect() as conn:
         if request.all_new:
@@ -4095,75 +3774,54 @@ def review_inbox_tracks(request: InboxReviewRequest) -> InboxReviewResponse:
         conn.commit()
         total_new, total_reviewed = inbox_counts(conn)
     return InboxReviewResponse(updated=updated, total_new=total_new, total_reviewed=total_reviewed)
-
-
-@app.patch("/library/inbox/notes/{track_id}", response_model=InboxTrackNote | None)
 def update_inbox_note(track_id: int, request: InboxNoteUpdateRequest) -> dict | None:
     with connect() as conn:
         try:
             note = inbox_service.save_inbox_note(conn, track_id, request.note)
         except KeyError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise ActionError(status_code=404, detail=str(exc)) from exc
         conn.commit()
         return note
-
-
-@app.get("/library/inbox/auto-review-rules", response_model=list[InboxAutoReviewRule])
 def list_inbox_auto_review_rules() -> list[dict]:
     with connect() as conn:
         return inbox_service.list_auto_review_rules(conn)
-
-
-@app.post("/library/inbox/auto-review-rules", response_model=InboxAutoReviewRuleApplyResponse)
 def create_inbox_auto_review_rule(request: InboxAutoReviewRuleRequest) -> InboxAutoReviewRuleApplyResponse:
     with connect() as conn:
         try:
             rule = inbox_service.create_auto_review_rule(conn, request)
             applied = inbox_service.apply_auto_review_rules_to_new_tracks(conn, rule["id"]) if request.apply_existing else 0
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise ActionError(status_code=400, detail=str(exc)) from exc
         conn.commit()
         total_new, total_reviewed = inbox_counts(conn)
     return InboxAutoReviewRuleApplyResponse(rule=rule, applied=applied, total_new=total_new, total_reviewed=total_reviewed)
-
-
-@app.patch("/library/inbox/auto-review-rules/{rule_id}", response_model=InboxAutoReviewRuleApplyResponse)
 def update_inbox_auto_review_rule(rule_id: int, request: InboxAutoReviewRuleRequest) -> InboxAutoReviewRuleApplyResponse:
     with connect() as conn:
         try:
             rule = inbox_service.update_auto_review_rule(conn, rule_id, request)
             applied = inbox_service.apply_auto_review_rules_to_new_tracks(conn, rule["id"]) if request.apply_existing else 0
         except KeyError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise ActionError(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise ActionError(status_code=400, detail=str(exc)) from exc
         conn.commit()
         total_new, total_reviewed = inbox_counts(conn)
     return InboxAutoReviewRuleApplyResponse(rule=rule, applied=applied, total_new=total_new, total_reviewed=total_reviewed)
-
-
-@app.delete("/library/inbox/auto-review-rules/{rule_id}", response_model=InboxAutoReviewRuleDeleteResponse)
 def delete_inbox_auto_review_rule(rule_id: int) -> InboxAutoReviewRuleDeleteResponse:
     with connect() as conn:
         deleted = inbox_service.delete_auto_review_rule(conn, rule_id)
         conn.commit()
         total_new, total_reviewed = inbox_counts(conn)
     return InboxAutoReviewRuleDeleteResponse(deleted=deleted, total_new=total_new, total_reviewed=total_reviewed)
-
-
-@app.get("/library/watch", response_model=FolderWatchStatus)
-def get_folder_watch(limit: int = Query(default=300, ge=1, le=5000)) -> dict:
+def get_folder_watch(limit: int = Param(default=300, ge=1, le=5000)) -> dict:
     return get_folder_watch_status(limit)
-
-
-@app.post("/library/watch/start", response_model=FolderWatchStatus)
 def start_folder_watch(request: FolderWatchStartRequest) -> dict:
     folder_path = request.folder_path
     with connect() as conn:
         if not folder_path:
             folder_path = get_setting(conn, "library_path")
         if not folder_path:
-            raise HTTPException(status_code=400, detail="Choose a music folder before starting folder watch")
+            raise ActionError(status_code=400, detail="Choose a music folder before starting folder watch")
         set_setting(conn, "folder_watch_enabled", "1")
         set_setting(conn, "folder_watch_interval_seconds", str(request.interval_seconds))
         conn.commit()
@@ -4172,15 +3830,9 @@ def start_folder_watch(request: FolderWatchStartRequest) -> dict:
         native_files, _native_scan_errors = native_snapshot_files_and_errors(request)
         return start_folder_watcher(folder_path, request.interval_seconds, request.limit, native_files=native_files)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.post("/library/watch/stop", response_model=FolderWatchStatus)
-def stop_folder_watch(limit: int = Query(default=300, ge=1, le=5000)) -> dict:
+        raise ActionError(status_code=400, detail=str(exc)) from exc
+def stop_folder_watch(limit: int = Param(default=300, ge=1, le=5000)) -> dict:
     return stop_folder_watcher(update_setting=True, limit=limit)
-
-
-@app.post("/library/watch/refresh", response_model=FolderWatchStatus)
 def refresh_folder_watch(request: FolderWatchRefreshRequest) -> dict:
     folder_path = request.folder_path
     if not folder_path:
@@ -4190,10 +3842,7 @@ def refresh_folder_watch(request: FolderWatchRefreshRequest) -> dict:
         native_files, _native_scan_errors = native_snapshot_files_and_errors(request)
         return refresh_folder_watch_now(folder_path, request.limit, native_files=native_files)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.post("/library/watch/apply", response_model=FolderWatchApplyResponse)
+        raise ActionError(status_code=400, detail=str(exc)) from exc
 def apply_folder_watch(request: FolderWatchApplyRequest) -> dict:
     try:
         return apply_folder_watch_changes(
@@ -4202,24 +3851,15 @@ def apply_folder_watch(request: FolderWatchApplyRequest) -> dict:
             limit=request.limit,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.post("/library/watch/notifications/ack", response_model=FolderWatchStatus)
+        raise ActionError(status_code=400, detail=str(exc)) from exc
 def acknowledge_folder_watch_notifications_route(request: FolderWatchNotificationAckRequest) -> dict:
     return acknowledge_folder_watch_notifications(
         notification_ids=request.notification_ids,
         all_notifications=request.all_notifications,
     )
-
-
-@app.get("/library/tools/audio-conversion/setup", response_model=AudioConversionSetupResponse)
 def get_audio_conversion_setup() -> AudioConversionSetupResponse:
     with connect() as conn:
         return AudioConversionSetupResponse(**ffmpeg_status(conn))
-
-
-@app.patch("/library/tools/audio-conversion/setup", response_model=AudioConversionSetupResponse)
 def update_audio_conversion_setup(request: AudioConversionSetupRequest) -> AudioConversionSetupResponse:
     with connect() as conn:
         text = request.ffmpeg_path.strip() if request.ffmpeg_path else ""
@@ -4240,9 +3880,6 @@ def update_audio_conversion_setup(request: AudioConversionSetupRequest) -> Audio
         set_setting(conn, "ffmpeg_path", str(candidate.resolve()))
         conn.commit()
         return AudioConversionSetupResponse(**ffmpeg_status(conn))
-
-
-@app.post("/library/tools/audio-conversion/install", response_model=AudioConversionSetupResponse)
 def install_audio_conversion_ffmpeg(request: AudioConversionInstallRequest) -> AudioConversionSetupResponse:
     job = start_ffmpeg_install_job(request.source_url)
     while job["status"] not in {"completed", "failed"}:
@@ -4254,65 +3891,38 @@ def install_audio_conversion_ffmpeg(request: AudioConversionInstallRequest) -> A
     if job.get("error"):
         status["errors"].append(str(job["error"]))
     return AudioConversionSetupResponse(**status)
-
-
-@app.post("/library/tools/audio-conversion/install/jobs", response_model=AudioConversionInstallStartResponse)
 def start_audio_conversion_ffmpeg_install(request: AudioConversionInstallRequest) -> AudioConversionInstallStartResponse:
     job = start_ffmpeg_install_job(request.source_url)
     return AudioConversionInstallStartResponse(job_id=job["job_id"], status=job["status"])
-
-
-@app.get("/library/tools/audio-conversion/install/jobs/{job_id}", response_model=AudioConversionInstallProgress)
 def get_audio_conversion_ffmpeg_install(job_id: str) -> dict:
     job = get_ffmpeg_install_job(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="FFmpeg install job not found")
+        raise ActionError(status_code=404, detail="FFmpeg install job not found")
     return job
-
-
-@app.post("/library/tools/audio-conversion/preview", response_model=AudioConversionPreviewResponse)
 def preview_audio_conversion(request: AudioConversionRequest) -> AudioConversionPreviewResponse:
     preview_request = request if request.limit is not None else request.model_copy(update={"limit": 200})
     return AudioConversionPreviewResponse(**conversion_preview(preview_request))
-
-
-@app.post("/library/tools/audio-conversion/jobs", response_model=AudioConversionStartResponse)
 def start_audio_conversion(request: AudioConversionRequest) -> AudioConversionStartResponse:
     with connect() as conn:
         ffmpeg_path, _configured, _candidates = resolve_ffmpeg_path(conn)
     if ffmpeg_path is None:
-        raise HTTPException(status_code=400, detail="FFmpeg was not found. Save an ffmpeg.exe path before starting conversion.")
+        raise ActionError(status_code=400, detail="FFmpeg was not found. Save an ffmpeg.exe path before starting conversion.")
     job = start_audio_conversion_job(request)
     return AudioConversionStartResponse(job_id=job["job_id"], status=job["status"])
-
-
-@app.get("/library/tools/audio-conversion/jobs/{job_id}", response_model=AudioConversionProgress)
 def get_audio_conversion_progress(job_id: str) -> dict:
     job = get_audio_conversion_job(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="Audio conversion job not found")
+        raise ActionError(status_code=404, detail="Audio conversion job not found")
     return job
-
-
-@app.post("/library/tools/audio-conversion/jobs/{job_id}/cancel", response_model=AudioConversionProgress)
 def cancel_audio_conversion(job_id: str) -> dict:
     job = cancel_audio_conversion_job(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="Audio conversion job not found")
+        raise ActionError(status_code=404, detail="Audio conversion job not found")
     return job
-
-
-@app.get("/library/tools/cd-rip/setup", response_model=CdRipSetupResponse)
 def get_cd_rip_setup() -> CdRipSetupResponse:
     return CdRipSetupResponse(**cd_rip_setup())
-
-
-@app.post("/library/tools/cd-rip/metadata", response_model=CdRipMetadataResponse)
 def get_cd_rip_metadata(request: CdRipMetadataRequest) -> CdRipMetadataResponse:
     return CdRipMetadataResponse(**lookup_cd_metadata(request))
-
-
-@app.post("/library/tools/cd-rip/jobs", response_model=CdRipStartResponse)
 def start_cd_rip(request: CdRipStartRequest) -> CdRipStartResponse:
     setup = cd_rip_setup()
     native_ripping_available = any(
@@ -4320,48 +3930,39 @@ def start_cd_rip(request: CdRipStartRequest) -> CdRipStartResponse:
         for tool in setup.get("tools", [])
     )
     if request.output_format != "wav" and not setup["ffmpeg_available"]:
-        raise HTTPException(status_code=400, detail="FFmpeg is required to encode ripped CD audio to FLAC or MP3.")
+        raise ActionError(status_code=400, detail="FFmpeg is required to encode ripped CD audio to FLAC or MP3.")
     if request.secure_mode and not (setup["secure_ripping_available"] or native_ripping_available):
-        raise HTTPException(status_code=400, detail="Secure CD ripping requires cdparanoia, cdda2wav, or icedax.")
+        raise ActionError(status_code=400, detail="Secure CD ripping requires cdparanoia, cdda2wav, or icedax.")
     if not request.secure_mode and not (setup["secure_ripping_available"] or setup["ffmpeg_available"] or native_ripping_available):
-        raise HTTPException(status_code=400, detail="No compatible CD ripping tool was found.")
+        raise ActionError(status_code=400, detail="No compatible CD ripping tool was found.")
     active_rip = active_cd_rip_job_for_drive(request.drive_id)
     if active_rip is not None:
-        raise HTTPException(
+        raise ActionError(
             status_code=409,
             detail=f"CD ripping is already active on {request.drive_id}. Cancel or wait for that rip before starting another.",
         )
     if active_cd_playback_for_drive(request.drive_id):
-        raise HTTPException(
+        raise ActionError(
             status_code=409,
             detail=f"CD playback is active on {request.drive_id}. Stop playback before ripping from this drive.",
         )
     job = start_cd_rip_job(request)
     return CdRipStartResponse(job_id=job["job_id"], status=job["status"])
-
-
-@app.get("/library/tools/cd-rip/jobs/{job_id}", response_model=CdRipProgress)
 def get_cd_rip_progress(job_id: str) -> dict:
     job = get_cd_rip_job(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="CD rip job not found")
+        raise ActionError(status_code=404, detail="CD rip job not found")
     return job
-
-
-@app.post("/library/tools/cd-rip/jobs/{job_id}/cancel", response_model=CdRipProgress)
 def cancel_cd_rip(job_id: str) -> dict:
     job = cancel_cd_rip_job(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="CD rip job not found")
+        raise ActionError(status_code=404, detail="CD rip job not found")
     return job
-
-
-@app.post("/library/tools/cd-rip/playback/play", response_model=CdPlaybackResponse)
 def play_cd_track_route(request: CdPlaybackRequest) -> CdPlaybackResponse:
     active_rip = active_cd_rip_job_for_drive(request.drive_id)
     if active_rip is not None:
         drive = request.drive_id or active_rip.get("drive_id") or "the selected drive"
-        raise HTTPException(
+        raise ActionError(
             status_code=409,
             detail=f"CD ripping is active on {drive}. Cancel or wait for the rip before playing from this drive.",
         )
@@ -4372,24 +3973,20 @@ def play_cd_track_route(request: CdPlaybackRequest) -> CdPlaybackResponse:
             remember_cd_preview_track(track)
         return CdPlaybackResponse(**response)
     except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise ActionError(status_code=400, detail=str(exc)) from exc
     except OSError as exc:
         drive = request.drive_id or "the selected drive"
-        raise HTTPException(
+        raise ActionError(
             status_code=400,
             detail=f"Could not open CD drive {drive}. Refresh CD drives, reinsert the disc, or choose another detected CD drive. {exc}",
         ) from exc
-
-
-@app.head("/library/tools/cd-rip/playback/live/audio")
-@app.get("/library/tools/cd-rip/playback/live/audio")
 def stream_cd_live_audio(
-    request: Request,
-    drive_id: str = Query(..., min_length=1),
-    track_number: int = Query(..., ge=1, le=999),
-    token: str | None = Query(default=None),
+    context: WorkerContext,
+    drive_id: str = Param(..., min_length=1),
+    track_number: int = Param(..., ge=1, le=999),
+    token: str | None = Param(default=None),
 ) -> Response:
-    if request.method == "HEAD":
+    if context.metadata_only:
         return Response(
             media_type="audio/wav",
             headers={
@@ -4406,293 +4003,126 @@ def stream_cd_live_audio(
             "Accept-Ranges": "none",
         },
     )
-
-
-@app.post("/library/tools/cd-rip/playback/stop", response_model=CdPlaybackResponse)
 def stop_cd_playback_route() -> CdPlaybackResponse:
     try:
         return CdPlaybackResponse(**stop_cd_playback())
     except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.get("/audiobooks", response_model=AudiobookListResponse)
-def get_audiobooks(limit: int = Query(default=200, ge=1, le=1000), offset: int = Query(default=0, ge=0)) -> AudiobookListResponse:
-    return AudiobookListResponse(**list_audiobooks(limit, offset))
-
-
-@app.patch("/audiobooks/{track_id}/progress", response_model=AudiobookProgressResponse)
-def update_audiobook_progress(track_id: int, request: AudiobookProgressRequest) -> AudiobookProgressResponse:
-    progress = upsert_audiobook_progress(track_id, request.position_seconds, request.duration_seconds)
-    if progress is None:
-        raise HTTPException(status_code=404, detail="Audiobook track not found")
-    return AudiobookProgressResponse(**progress)
-
-
-@app.get("/audiobooks/{track_id}/bookmarks", response_model=list[AudiobookBookmark])
-def get_audiobook_bookmarks(track_id: int) -> list[AudiobookBookmark]:
-    return [AudiobookBookmark(**bookmark) for bookmark in list_audiobook_bookmarks(track_id)]
-
-
-@app.post("/audiobooks/{track_id}/bookmarks", response_model=AudiobookBookmark)
-def create_audiobook_bookmark(track_id: int, request: AudiobookBookmarkRequest) -> AudiobookBookmark:
-    bookmark = add_audiobook_bookmark(track_id, request.position_seconds, request.label, request.note)
-    if bookmark is None:
-        raise HTTPException(status_code=404, detail="Audiobook track not found")
-    return AudiobookBookmark(**bookmark)
-
-
-@app.delete("/audiobooks/bookmarks/{bookmark_id}")
-def remove_audiobook_bookmark(bookmark_id: int) -> dict:
-    if not delete_audiobook_bookmark(bookmark_id):
-        raise HTTPException(status_code=404, detail="Audiobook bookmark not found")
-    return {"deleted": True}
-
-
-@app.get("/audiobooks/{track_id}/chapters", response_model=list[AudiobookChapter])
-def get_audiobook_chapters(track_id: int) -> list[AudiobookChapter]:
-    return [AudiobookChapter(**chapter) for chapter in list_audiobook_chapters(track_id)]
-
-
-@app.put("/audiobooks/{track_id}/chapters", response_model=list[AudiobookChapter])
-def update_audiobook_chapters(track_id: int, request: AudiobookChapterUpdateRequest) -> list[AudiobookChapter]:
-    chapters = replace_audiobook_chapters(track_id, [chapter.model_dump(mode="json") for chapter in request.chapters])
-    if chapters is None:
-        raise HTTPException(status_code=404, detail="Audiobook track not found")
-    return [AudiobookChapter(**chapter) for chapter in chapters]
-
-
-@app.post("/audiobooks/sync-export", response_model=AudiobookSyncExportResponse)
+        raise ActionError(status_code=400, detail=str(exc)) from exc
 def export_audiobook_sync_metadata(request: AudiobookSyncExportRequest) -> AudiobookSyncExportResponse:
     try:
         return AudiobookSyncExportResponse(**audiobook_sync_export(request.track_ids, request.limit))
     except OSError as exc:
-        raise HTTPException(status_code=400, detail=f"Could not export audiobook sync metadata: {exc}") from exc
-
-
-@app.get("/podcasts/subscriptions", response_model=list[PodcastSubscription])
+        raise ActionError(status_code=400, detail=f"Could not export audiobook sync metadata: {exc}") from exc
 def get_podcast_subscriptions() -> list[PodcastSubscription]:
     return [PodcastSubscription(**subscription) for subscription in list_podcast_subscriptions()]
-
-
-@app.post("/podcasts/subscriptions", response_model=PodcastSubscription)
 def create_podcast_subscription(request: PodcastSubscriptionPayload) -> PodcastSubscription:
     subscription = upsert_podcast_subscription(request)
     if subscription is None:
-        raise HTTPException(status_code=400, detail="Could not save podcast subscription")
+        raise ActionError(status_code=400, detail="Could not save podcast subscription")
     return PodcastSubscription(**subscription)
-
-
-@app.patch("/podcasts/subscriptions/{subscription_id}", response_model=PodcastSubscription)
 def update_podcast_subscription(subscription_id: int, request: PodcastSubscriptionPayload) -> PodcastSubscription:
     subscription = upsert_podcast_subscription(request, subscription_id)
     if subscription is None:
-        raise HTTPException(status_code=404, detail="Podcast subscription not found")
+        raise ActionError(status_code=404, detail="Podcast subscription not found")
     return PodcastSubscription(**subscription)
-
-
-@app.delete("/podcasts/subscriptions/{subscription_id}", response_model=PodcastSubscriptionDeleteResponse)
 def remove_podcast_subscription(subscription_id: int, delete_files: bool = False) -> PodcastSubscriptionDeleteResponse:
     try:
         response = delete_podcast_subscription(subscription_id, delete_files)
     except OSError as exc:
-        raise HTTPException(status_code=400, detail=f"Could not delete podcast files: {exc}") from exc
+        raise ActionError(status_code=400, detail=f"Could not delete podcast files: {exc}") from exc
     if not response.get("deleted"):
-        raise HTTPException(status_code=404, detail="Podcast subscription not found")
+        raise ActionError(status_code=404, detail="Podcast subscription not found")
     return PodcastSubscriptionDeleteResponse(**response)
-
-
-@app.post("/podcasts/subscriptions/{subscription_id}/folder", response_model=PodcastFolderResponse)
 def ensure_podcast_subscription_folder_route(subscription_id: int) -> PodcastFolderResponse:
     try:
         response = podcast_subscription_download_folder(subscription_id, create=True)
     except OSError as exc:
-        raise HTTPException(status_code=400, detail=f"Could not create podcast folder: {exc}") from exc
+        raise ActionError(status_code=400, detail=f"Could not create podcast folder: {exc}") from exc
     if response is None:
-        raise HTTPException(status_code=404, detail="Podcast subscription not found")
+        raise ActionError(status_code=404, detail="Podcast subscription not found")
     return PodcastFolderResponse(**response)
-
-
-@app.post("/podcasts/subscriptions/{subscription_id}/refresh", response_model=PodcastRefreshResponse)
 def refresh_podcast_subscription_route(subscription_id: int) -> PodcastRefreshResponse:
     try:
         response = refresh_podcast_subscription(subscription_id)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Could not refresh podcast feed: {exc}") from exc
+        raise ActionError(status_code=400, detail=f"Could not refresh podcast feed: {exc}") from exc
     if response is None:
-        raise HTTPException(status_code=404, detail="Podcast subscription not found")
+        raise ActionError(status_code=404, detail="Podcast subscription not found")
     return PodcastRefreshResponse(**response)
-
-
-@app.get("/podcasts/episodes", response_model=list[PodcastEpisode])
-def get_podcast_episodes(subscription_id: int | None = None, limit: int = Query(default=200, ge=1, le=1000)) -> list[PodcastEpisode]:
+def get_podcast_episodes(subscription_id: int | None = None, limit: int = Param(default=200, ge=1, le=1000)) -> list[PodcastEpisode]:
     return [PodcastEpisode(**episode) for episode in list_podcast_episodes(subscription_id, limit)]
-
-
-@app.post("/podcasts/episodes/{episode_id}/download", response_model=PodcastEpisode)
 def download_podcast_episode_route(episode_id: int, request: PodcastDownloadRequest) -> PodcastEpisode:
     try:
         episode = download_episode(episode_id, request.download_folder)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise ActionError(status_code=400, detail=str(exc)) from exc
     except OSError as exc:
-        raise HTTPException(status_code=400, detail=f"Could not download episode: {exc}") from exc
+        raise ActionError(status_code=400, detail=f"Could not download episode: {exc}") from exc
     if episode is None:
-        raise HTTPException(status_code=404, detail="Podcast episode not found")
+        raise ActionError(status_code=404, detail="Podcast episode not found")
     return PodcastEpisode(**episode)
-
-
-@app.delete("/podcasts/episodes/{episode_id}/download", response_model=PodcastDeleteDownloadResponse)
 def delete_podcast_episode_download_route(episode_id: int) -> PodcastDeleteDownloadResponse:
     try:
         response = delete_podcast_episode_download(episode_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise ActionError(status_code=400, detail=str(exc)) from exc
     except OSError as exc:
-        raise HTTPException(status_code=400, detail=f"Could not delete podcast file: {exc}") from exc
+        raise ActionError(status_code=400, detail=f"Could not delete podcast file: {exc}") from exc
     if response is None or response.get("episode") is None:
-        raise HTTPException(status_code=404, detail="Podcast episode not found")
+        raise ActionError(status_code=404, detail="Podcast episode not found")
     return PodcastDeleteDownloadResponse(**response)
-
-
-@app.post("/podcasts/episodes/{episode_id}/track", response_model=Track)
 def ensure_podcast_episode_track_route(episode_id: int) -> dict:
     try:
         track_id = ensure_podcast_episode_track(episode_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise ActionError(status_code=400, detail=str(exc)) from exc
     if track_id is None:
-        raise HTTPException(status_code=404, detail="Podcast episode not found")
+        raise ActionError(status_code=404, detail="Podcast episode not found")
     with connect() as conn:
         return track_response(conn, track_id)
-
-
-@app.get("/radio/stations", response_model=list[RadioStation])
-def get_radio_stations() -> list[RadioStation]:
-    return [RadioStation(**station) for station in list_radio_stations()]
-
-
-@app.post("/radio/stations", response_model=RadioStation)
-def create_radio_station(request: RadioStationPayload) -> RadioStation:
-    station = save_radio_station(request)
-    if station is None:
-        raise HTTPException(status_code=400, detail="Could not save radio station")
-    return RadioStation(**station)
-
-
-@app.patch("/radio/stations/{station_id}", response_model=RadioStation)
-def update_radio_station(station_id: int, request: RadioStationPayload) -> RadioStation:
-    station = save_radio_station(request, station_id)
-    if station is None:
-        raise HTTPException(status_code=404, detail="Radio station not found")
-    return RadioStation(**station)
-
-
-@app.delete("/radio/stations/{station_id}")
-def remove_radio_station(station_id: int) -> dict:
-    if not delete_radio_station(station_id):
-        raise HTTPException(status_code=404, detail="Radio station not found")
-    return {"deleted": True}
-
-
-@app.post("/radio/stations/{station_id}/played", response_model=RadioStation)
-def mark_radio_played(station_id: int) -> RadioStation:
-    station = mark_radio_station_played(station_id)
-    if station is None:
-        raise HTTPException(status_code=404, detail="Radio station not found")
-    return RadioStation(**station)
-
-
-@app.get("/scrobbling/accounts", response_model=list[ScrobbleAccount])
 def get_scrobble_accounts() -> list[ScrobbleAccount]:
     return [ScrobbleAccount(**account) for account in list_scrobble_accounts()]
-
-
-@app.patch("/scrobbling/accounts/{service}", response_model=ScrobbleAccount)
 def update_scrobble_account(service: str, request: ScrobbleAccountRequest) -> ScrobbleAccount:
     if service not in {"listenbrainz", "lastfm"}:
-        raise HTTPException(status_code=404, detail="Scrobble service not found")
+        raise ActionError(status_code=404, detail="Scrobble service not found")
     return ScrobbleAccount(**save_scrobble_account(service, request))
-
-
-@app.post("/scrobbling/lastfm/login/start", response_model=LastFmLoginStartResponse)
 def start_lastfm_login_route(request: LastFmLoginStartRequest) -> LastFmLoginStartResponse:
     try:
         return LastFmLoginStartResponse(**start_lastfm_login(request.api_key, request.api_secret))
     except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise ActionError(status_code=400, detail=str(exc)) from exc
     except OSError as exc:
-        raise HTTPException(status_code=400, detail=f"Could not reach Last.fm: {exc}") from exc
-
-
-@app.post("/scrobbling/lastfm/login/complete", response_model=LastFmLoginCompleteResponse)
+        raise ActionError(status_code=400, detail=f"Could not reach Last.fm: {exc}") from exc
 def complete_lastfm_login_route(request: LastFmLoginCompleteRequest) -> LastFmLoginCompleteResponse:
     try:
         account = complete_lastfm_login(request.api_key, request.api_secret, request.token, request.enabled)
     except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise ActionError(status_code=400, detail=str(exc)) from exc
     except OSError as exc:
-        raise HTTPException(status_code=400, detail=f"Could not reach Last.fm: {exc}") from exc
+        raise ActionError(status_code=400, detail=f"Could not reach Last.fm: {exc}") from exc
     return LastFmLoginCompleteResponse(account=ScrobbleAccount(**account))
-
-
-@app.get("/scrobbling/outbox", response_model=list[ScrobbleOutboxEntry])
-def get_scrobble_outbox(limit: int = Query(default=100, ge=1, le=1000)) -> list[ScrobbleOutboxEntry]:
+def get_scrobble_outbox(limit: int = Param(default=100, ge=1, le=1000)) -> list[ScrobbleOutboxEntry]:
     return [ScrobbleOutboxEntry(**entry) for entry in list_scrobble_outbox(limit)]
-
-
-@app.post("/scrobbling/outbox/queue-history", response_model=ScrobbleQueueHistoryResponse)
 def queue_scrobbling_history(request: ScrobbleQueueHistoryRequest) -> ScrobbleQueueHistoryResponse:
     return ScrobbleQueueHistoryResponse(**queue_scrobble_history(request.service, request.limit))
-
-
-@app.post("/scrobbling/outbox/submit", response_model=ScrobbleSubmitResponse)
 def submit_scrobbling_outbox(request: ScrobbleSubmitRequest) -> ScrobbleSubmitResponse:
     try:
         return ScrobbleSubmitResponse(**submit_scrobble_outbox(request.service, request.limit))
     except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.get("/scrobbling/loved", response_model=list[LovedTrack])
-def get_loved_tracks(limit: int = Query(default=100, ge=1, le=1000)) -> list[LovedTrack]:
-    return [LovedTrack(**track) for track in list_loved_tracks(limit)]
-
-
-@app.patch("/scrobbling/tracks/{track_id}/love", response_model=TrackLoveResponse)
-def update_track_love(track_id: int, request: TrackLoveRequest) -> TrackLoveResponse:
-    love = set_track_loved(track_id, request.loved, request.source)
-    if love is None:
-        raise HTTPException(status_code=404, detail="Track not found")
-    return TrackLoveResponse(**love)
-
-
-@app.post("/scrobbling/import-history", response_model=ScrobbleHistoryImportResponse)
+        raise ActionError(status_code=400, detail=str(exc)) from exc
 def import_scrobbling_history(request: ScrobbleHistoryImportRequest) -> ScrobbleHistoryImportResponse:
     try:
         return ScrobbleHistoryImportResponse(**import_scrobble_history_csv(request.csv_path, request.apply, request.limit))
     except (OSError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.post("/playback/gapless/validate", response_model=GaplessValidationResponse)
+        raise ActionError(status_code=400, detail=str(exc)) from exc
 def validate_gapless_playback(request: GaplessValidationRequest) -> GaplessValidationResponse:
     if not request.track_ids and request.album_id is None:
-        raise HTTPException(status_code=400, detail="Provide track_ids or album_id")
+        raise ActionError(status_code=400, detail="Provide track_ids or album_id")
     return GaplessValidationResponse(**gapless_validate(request.track_ids, request.album_id, request.limit))
-
-
-@app.get("/extensions", response_model=ExtensionListResponse)
 def list_extensions() -> ExtensionListResponse:
     return ExtensionListResponse(**discover_extensions())
-
-
-@app.post("/extensions/reload", response_model=ExtensionListResponse)
 def reload_extensions() -> ExtensionListResponse:
     return ExtensionListResponse(**discover_extensions())
-
-
-@app.post("/library/importers/stats", response_model=LibraryStatsImportResponse)
 def import_external_library_stats(request: LibraryStatsImportRequest) -> LibraryStatsImportResponse:
     try:
         result = import_library_stats(
@@ -4703,12 +4133,9 @@ def import_external_library_stats(request: LibraryStatsImportRequest) -> Library
             limit=request.limit,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise ActionError(status_code=400, detail=str(exc)) from exc
     return LibraryStatsImportResponse(**result)
-
-
-@app.get("/library/health", response_model=LibraryHealthResponse)
-def library_health(limit: int = Query(default=80, ge=1, le=500)) -> LibraryHealthResponse:
+def library_health(limit: int = Param(default=80, ge=1, le=500)) -> LibraryHealthResponse:
     with connect() as conn:
         music_filter = f"NOT {audiobook_where_clause()} AND NOT {podcast_where_clause()}"
         missing_predicate = """
@@ -4979,7 +4406,7 @@ def resolve_csv_tool_path(csv_path: str | None, default_name: str | None = None)
     elif default_name:
         target = EXPORT_DIR / default_name
     else:
-        raise HTTPException(status_code=400, detail="CSV path is required")
+        raise ActionError(status_code=400, detail="CSV path is required")
     if target.suffix.lower() != ".csv":
         target = target.with_suffix(".csv")
     return target
@@ -5001,7 +4428,7 @@ def resolve_json_tool_path(json_path: str | None, default_name: str) -> Path:
 def resolve_existing_json_report_path(json_path: str) -> Path:
     text = json_path.strip()
     if not text:
-        raise HTTPException(status_code=400, detail="Report path is required")
+        raise ActionError(status_code=400, detail="Report path is required")
     target = Path(text).expanduser()
     if not target.is_absolute():
         target = (EXPORT_DIR / target).resolve()
@@ -5262,7 +4689,7 @@ def remove_empty_source_folders(source_parent: Path, cleanup_root: Path | None) 
 def build_metadata_csv_import_response(request: CsvMetadataImportRequest) -> CsvMetadataImportResponse:
     source = resolve_csv_tool_path(request.csv_path)
     if not source.exists():
-        raise HTTPException(status_code=400, detail="CSV file does not exist")
+        raise ActionError(status_code=400, detail="CSV file does not exist")
 
     try:
         with source.open("r", encoding="utf-8-sig", newline="") as handle:
@@ -5271,7 +4698,7 @@ def build_metadata_csv_import_response(request: CsvMetadataImportRequest) -> Csv
         with source.open("r", encoding="latin-1", errors="ignore", newline="") as handle:
             rows = list(csv.DictReader(handle))
     except OSError as exc:
-        raise HTTPException(status_code=400, detail=f"Could not read CSV: {exc}") from exc
+        raise ActionError(status_code=400, detail=f"Could not read CSV: {exc}") from exc
 
     rows = rows[: request.limit]
     allowed_ids = set(request.track_ids) if request.track_ids else None
@@ -5321,8 +4748,8 @@ def build_metadata_csv_import_response(request: CsvMetadataImportRequest) -> Csv
                         apply_track_rating_update(conn, int(track["id"]), changes["rating"])
                     preview.applied = True
                     applied += 1
-            except (HTTPException, ValueError) as exc:
-                message = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
+            except (ActionError, ValueError) as exc:
+                message = str(exc.detail) if isinstance(exc, ActionError) else str(exc)
                 preview.error = message
                 errors.append(f"Row {index}: {message}")
             previews.append(preview)
@@ -5728,9 +5155,6 @@ def restore_bulk_undo_entry(conn, action_type: str, payload: dict[str, object]) 
     if action_type == "sqlite_file_tag_write":
         return restore_file_tag_write(conn, payload)
     return [], [f"Undo is not supported for {action_type}"]
-
-
-@app.post("/library/maintenance/clear", response_model=CacheClearResponse)
 def clear_library_caches(request: CacheClearRequest) -> CacheClearResponse:
     table_by_target = {
         "artist": "artist_info_cache",
@@ -5756,7 +5180,7 @@ VIRTUAL_TOKEN_RE = re.compile(r"<([^<>]+)>|\{([^{}]+)\}")
 def clean_custom_tag_key(tag_key: str) -> str:
     cleaned = tag_key.strip()
     if not CUSTOM_TAG_KEY_RE.fullmatch(cleaned):
-        raise HTTPException(
+        raise ActionError(
             status_code=400,
             detail="Custom tag names can use letters, numbers, spaces, underscore, dash, dot, and #.",
         )
@@ -5789,7 +5213,7 @@ def parse_tag_field_ref(field: str) -> tuple[str, str]:
     core = tag_field_alias(text)
     if core in TAG_TOOL_CORE_FIELDS:
         return "core", core
-    raise HTTPException(
+    raise ActionError(
         status_code=400,
         detail=f"Unsupported tag field '{field}'. Use a core field or custom:Name.",
     )
@@ -5849,7 +5273,7 @@ def apply_custom_tags_update(conn, track_id: int, updates: dict[str, object | No
         return
     row = conn.execute("SELECT id, path FROM tracks WHERE id = ?", (track_id,)).fetchone()
     if row is None:
-        raise HTTPException(status_code=404, detail="Track not found")
+        raise ActionError(status_code=404, detail="Track not found")
 
     file_modified_at = None
     if get_write_ratings_to_files(conn):
@@ -5859,9 +5283,9 @@ def apply_custom_tags_update(conn, track_id: int, updates: dict[str, object | No
             if path.exists():
                 file_modified_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).replace(microsecond=0).isoformat()
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise ActionError(status_code=400, detail=str(exc)) from exc
         except OSError as exc:
-            raise HTTPException(status_code=400, detail=f"Could not write custom tags to file: {exc}") from exc
+            raise ActionError(status_code=400, detail=f"Could not write custom tags to file: {exc}") from exc
 
     for tag_key, value in cleaned_updates.items():
         conn.execute(
@@ -5956,7 +5380,7 @@ def restore_advanced_tag_edit(conn, payload: dict[str, object]) -> tuple[list[in
             continue
         try:
             kind, name = parse_tag_field_ref(raw_field)
-        except HTTPException as exc:
+        except ActionError as exc:
             errors.append(str(exc.detail))
             continue
         if kind == "custom":
@@ -6004,9 +5428,6 @@ def tool_track_rows_with_path_key(conn, track_ids: list[int] | None, limit: int)
             (limit,),
         )
     )
-
-
-@app.get("/library/tools/regex-presets", response_model=list[RegexTagPreset])
 def list_regex_tag_presets() -> list[RegexTagPreset]:
     with connect() as conn:
         rows = conn.execute(
@@ -6029,9 +5450,6 @@ def list_regex_tag_presets() -> list[RegexTagPreset]:
         )
         for row in rows
     ]
-
-
-@app.post("/library/tools/regex-presets", response_model=RegexTagPreset)
 def save_regex_tag_preset(request: RegexTagPresetRequest) -> RegexTagPreset:
     with connect() as conn:
         cursor = conn.execute(
@@ -6051,7 +5469,7 @@ def save_regex_tag_preset(request: RegexTagPresetRequest) -> RegexTagPreset:
         row = cursor.fetchone()
         conn.commit()
     if row is None:
-        raise HTTPException(status_code=400, detail="Could not save regex preset")
+        raise ActionError(status_code=400, detail="Could not save regex preset")
     return RegexTagPreset(
         id=int(row["id"]),
         name=row["name"],
@@ -6062,19 +5480,13 @@ def save_regex_tag_preset(request: RegexTagPresetRequest) -> RegexTagPreset:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
-
-
-@app.delete("/library/tools/regex-presets/{preset_id}")
 def delete_regex_tag_preset(preset_id: int) -> dict[str, bool]:
     with connect() as conn:
         cursor = conn.execute("DELETE FROM regex_tag_presets WHERE id = ?", (preset_id,))
         conn.commit()
     if cursor.rowcount == 0:
-        raise HTTPException(status_code=404, detail="Regex preset was not found")
+        raise ActionError(status_code=404, detail="Regex preset was not found")
     return {"deleted": True}
-
-
-@app.post("/library/tools/custom-tags", response_model=CustomTagBatchResponse)
 def batch_custom_tags(request: CustomTagBatchRequest) -> CustomTagBatchResponse:
     tag_key = clean_custom_tag_key(request.tag_key)
     requested_value = None if request.action == "delete" or request.value is None else request.value.strip()
@@ -6112,7 +5524,7 @@ def batch_custom_tags(request: CustomTagBatchRequest) -> CustomTagBatchResponse:
                     apply_custom_tags_update(conn, track_id, {tag_key: new_value})
                     preview.applied = True
                     applied += 1
-                except HTTPException as exc:
+                except ActionError as exc:
                     preview.error = str(exc.detail)
             previews.append(preview)
         if request.apply:
@@ -6168,9 +5580,6 @@ def render_virtual_tag_expression(expression: str, track: dict, custom_tags: dic
         return virtual_tag_value(token, track, custom_tags)
 
     return VIRTUAL_TOKEN_RE.sub(replace, expression)
-
-
-@app.get("/library/tools/virtual-tags", response_model=list[VirtualTagDefinition])
 def list_virtual_tag_definitions() -> list[VirtualTagDefinition]:
     with connect() as conn:
         rows = conn.execute(
@@ -6181,9 +5590,6 @@ def list_virtual_tag_definitions() -> list[VirtualTagDefinition]:
             """
         ).fetchall()
     return [VirtualTagDefinition(**dict(row)) for row in rows]
-
-
-@app.post("/library/tools/virtual-tags", response_model=VirtualTagDefinition)
 def save_virtual_tag_definition(request: VirtualTagDefinitionRequest) -> VirtualTagDefinition:
     with connect() as conn:
         row = conn.execute(
@@ -6199,21 +5605,15 @@ def save_virtual_tag_definition(request: VirtualTagDefinitionRequest) -> Virtual
         ).fetchone()
         conn.commit()
     if row is None:
-        raise HTTPException(status_code=400, detail="Could not save virtual tag")
+        raise ActionError(status_code=400, detail="Could not save virtual tag")
     return VirtualTagDefinition(**dict(row))
-
-
-@app.delete("/library/tools/virtual-tags/{definition_id}")
 def delete_virtual_tag_definition(definition_id: int) -> dict[str, bool]:
     with connect() as conn:
         cursor = conn.execute("DELETE FROM virtual_tag_definitions WHERE id = ?", (definition_id,))
         conn.commit()
     if cursor.rowcount == 0:
-        raise HTTPException(status_code=404, detail="Virtual tag was not found")
+        raise ActionError(status_code=404, detail="Virtual tag was not found")
     return {"deleted": True}
-
-
-@app.post("/library/tools/virtual-tags/preview", response_model=VirtualTagPreviewResponse)
 def preview_virtual_tag(request: VirtualTagPreviewRequest) -> VirtualTagPreviewResponse:
     previews: list[VirtualTagPreview] = []
     with connect() as conn:
@@ -6233,14 +5633,11 @@ def preview_virtual_tag(request: VirtualTagPreviewRequest) -> VirtualTagPreviewR
                     )
                 )
     return VirtualTagPreviewResponse(expression=request.expression, total=len(previews), previews=previews)
-
-
-@app.post("/library/tools/copy-swap-tags", response_model=TagFieldCopySwapResponse)
 def copy_or_swap_tag_fields(request: TagFieldCopySwapRequest) -> TagFieldCopySwapResponse:
     parse_tag_field_ref(request.source_field)
     parse_tag_field_ref(request.target_field)
     if request.source_field.strip().lower() == request.target_field.strip().lower():
-        raise HTTPException(status_code=400, detail="Choose two different fields")
+        raise ActionError(status_code=400, detail="Choose two different fields")
 
     previews: list[TagFieldCopySwapPreview] = []
     changed = 0
@@ -6289,7 +5686,7 @@ def copy_or_swap_tag_fields(request: TagFieldCopySwapRequest) -> TagFieldCopySwa
                     apply_tag_field_updates(conn, track_id, updates)
                     preview.applied = True
                     applied += 1
-                except HTTPException as exc:
+                except ActionError as exc:
                     preview.error = str(exc.detail)
             previews.append(preview)
         if request.apply:
@@ -6306,7 +5703,7 @@ def resolve_tag_backup_path(backup_path: str | None, default_name: str | None = 
     elif default_name:
         target = TAG_BACKUP_DIR / default_name
     else:
-        raise HTTPException(status_code=400, detail="Tag backup path is required")
+        raise ActionError(status_code=400, detail="Tag backup path is required")
     if target.suffix.lower() != ".json":
         target = target.with_suffix(".json")
     return target
@@ -6337,9 +5734,6 @@ def tag_backup_payload(conn, request: TagBackupRequest, created_at: str) -> tupl
         },
         custom_count,
     )
-
-
-@app.post("/library/tools/tag-backups", response_model=TagBackupResponse)
 def create_tag_backup(request: TagBackupRequest) -> TagBackupResponse:
     created_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -6350,17 +5744,14 @@ def create_tag_backup(request: TagBackupRequest) -> TagBackupResponse:
     try:
         target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     except OSError as exc:
-        raise HTTPException(status_code=400, detail=f"Could not write tag backup: {exc}") from exc
+        raise ActionError(status_code=400, detail=f"Could not write tag backup: {exc}") from exc
     return TagBackupResponse(
         backup_path=str(target),
         track_count=int(payload["track_count"]),
         custom_tag_count=custom_count,
         created_at=created_at,
     )
-
-
-@app.get("/library/tools/tag-backups", response_model=list[TagBackupSummary])
-def list_tag_backups(limit: int = Query(default=30, ge=1, le=200)) -> list[TagBackupSummary]:
+def list_tag_backups(limit: int = Param(default=30, ge=1, le=200)) -> list[TagBackupSummary]:
     if not TAG_BACKUP_DIR.exists():
         return []
     summaries: list[TagBackupSummary] = []
@@ -6392,13 +5783,13 @@ def list_tag_backups(limit: int = Query(default=30, ge=1, le=200)) -> list[TagBa
 
 def load_tag_backup(path: Path) -> dict[str, object]:
     if not path.exists() or not path.is_file():
-        raise HTTPException(status_code=400, detail="Tag backup file does not exist")
+        raise ActionError(status_code=400, detail="Tag backup file does not exist")
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=400, detail=f"Could not read tag backup: {exc}") from exc
+        raise ActionError(status_code=400, detail=f"Could not read tag backup: {exc}") from exc
     if not isinstance(payload, dict) or payload.get("format") != "flac-cafe-tag-backup-v1":
-        raise HTTPException(status_code=400, detail="Unsupported tag backup format")
+        raise ActionError(status_code=400, detail="Unsupported tag backup format")
     return payload
 
 
@@ -6428,15 +5819,12 @@ def backup_entry_track(conn, entry: dict[str, object], allowed_ids: set[int] | N
             if row is not None and (allowed_ids is None or int(row["id"]) in allowed_ids):
                 return dict(row)
     return None
-
-
-@app.post("/library/tools/tag-backups/restore", response_model=TagBackupRestoreResponse)
 def restore_tag_backup(request: TagBackupRestoreRequest) -> TagBackupRestoreResponse:
     source = resolve_tag_backup_path(request.backup_path)
     payload = load_tag_backup(source)
     entries = payload.get("tracks")
     if not isinstance(entries, list):
-        raise HTTPException(status_code=400, detail="Tag backup has no tracks")
+        raise ActionError(status_code=400, detail="Tag backup has no tracks")
     entries = entries[: request.limit]
     allowed_ids = set(request.track_ids) if request.track_ids else None
     previews: list[TagBackupRestorePreview] = []
@@ -6502,8 +5890,8 @@ def restore_tag_backup(request: TagBackupRestoreRequest) -> TagBackupRestoreResp
                     apply_tag_field_updates(conn, track_id, changes)
                     preview.applied = True
                     applied += 1
-            except (HTTPException, ValueError) as exc:
-                message = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
+            except (ActionError, ValueError) as exc:
+                message = str(exc.detail) if isinstance(exc, ActionError) else str(exc)
                 preview.error = message
                 errors.append(message)
             previews.append(preview)
@@ -6518,9 +5906,6 @@ def restore_tag_backup(request: TagBackupRestoreRequest) -> TagBackupRestoreResp
         errors=errors[:100],
         previews=previews,
     )
-
-
-@app.post("/library/tools/infer-tags", response_model=FilenameTagInferenceResponse)
 def infer_tags_from_filenames(request: FilenameTagInferenceRequest) -> FilenameTagInferenceResponse:
     previews: list[FilenameTagInferencePreview] = []
     matches = 0
@@ -6547,20 +5932,17 @@ def infer_tags_from_filenames(request: FilenameTagInferenceRequest) -> FilenameT
                     apply_track_metadata_update(conn, int(track["id"]), changes)
                     preview.applied = True
                     applied += 1
-                except HTTPException as exc:
+                except ActionError as exc:
                     preview.error = str(exc.detail)
             previews.append(preview)
         if request.apply:
             conn.commit()
     return FilenameTagInferenceResponse(total=len(previews), matches=matches, applied=applied, previews=previews)
-
-
-@app.post("/library/tools/regex-tags", response_model=TagRegexReplaceResponse)
 def regex_replace_tags(request: TagRegexReplaceRequest) -> TagRegexReplaceResponse:
     try:
         expression = re.compile(request.pattern, 0 if request.case_sensitive else re.IGNORECASE)
     except re.error as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid regular expression: {exc}") from exc
+        raise ActionError(status_code=400, detail=f"Invalid regular expression: {exc}") from exc
 
     previews: list[TagRegexReplacePreview] = []
     changed = 0
@@ -6602,7 +5984,7 @@ def regex_replace_tags(request: TagRegexReplaceRequest) -> TagRegexReplaceRespon
                     apply_track_metadata_update(conn, int(track["id"]), changes)
                     preview.applied = True
                     applied += 1
-                except HTTPException as exc:
+                except ActionError as exc:
                     preview.error = str(exc.detail)
             previews.append(preview)
         if request.apply:
@@ -6637,15 +6019,12 @@ def auto_tag_candidate_tracks(conn, request: AutoTagRequest) -> tuple[list[dict]
             (request.limit,),
         )
     ), []
-
-
-@app.post("/library/tools/autotag", response_model=AutoTagResponse)
 def auto_tag_musicbrainz(request: AutoTagRequest) -> AutoTagResponse:
     with connect() as conn:
         tracks, missing_ids = auto_tag_candidate_tracks(conn, request)
         acoustid_api_key = get_setting(conn, "acoustid_api_key")
     if missing_ids:
-        raise HTTPException(status_code=404, detail=f"Track not found: {missing_ids[0]}")
+        raise ActionError(status_code=404, detail=f"Track not found: {missing_ids[0]}")
 
     previews = preview_auto_tags(
         tracks,
@@ -6677,7 +6056,7 @@ def auto_tag_musicbrainz(request: AutoTagRequest) -> AutoTagResponse:
                             (track_id,),
                         ).fetchone()
                         if row is None:
-                            raise HTTPException(status_code=404, detail="Track not found")
+                            raise ActionError(status_code=404, detail="Track not found")
                         write_bulk_undo_log(
                             conn,
                             "musicbrainz_auto_tag",
@@ -6703,7 +6082,7 @@ def auto_tag_musicbrainz(request: AutoTagRequest) -> AutoTagResponse:
                             saved_release_ids.add(release_id)
                             preview["artwork_saved"] = True
                             artwork_saved += 1
-                except HTTPException as exc:
+                except ActionError as exc:
                     message = str(exc.detail)
                     preview["error"] = message
                     errors.append(f"Track {track_id}: {message}")
@@ -6726,9 +6105,6 @@ def auto_tag_musicbrainz(request: AutoTagRequest) -> AutoTagResponse:
         errors=errors[:100],
         previews=[AutoTagPreview(**preview) for preview in previews],
     )
-
-
-@app.post("/library/tools/clap-genre-tags", response_model=ClapGenreTagResponse)
 def clap_genre_tags(request: ClapGenreTagRequest) -> ClapGenreTagResponse:
     params: list[object] = []
     missing_ids: list[int] = []
@@ -6793,7 +6169,7 @@ def clap_genre_tags(request: ClapGenreTagRequest) -> ClapGenreTagResponse:
                     apply_track_metadata_update(conn, int(row["id"]), {"genre": proposed_genre}, request.write_to_file)
                     preview["applied"] = True
                     applied += 1
-                except HTTPException as exc:
+                except ActionError as exc:
                     message = str(exc.detail)
                     preview["error"] = message
                     errors.append(f"{row.get('title') or row.get('path')}: {message}")
@@ -6812,9 +6188,6 @@ def clap_genre_tags(request: ClapGenreTagRequest) -> ClapGenreTagResponse:
         errors=errors[:100],
         previews=previews,
     )
-
-
-@app.post("/library/tools/volume-tags", response_model=VolumeTagResponse)
 def volume_tags(request: VolumeTagRequest) -> VolumeTagResponse:
     return VolumeTagResponse(
         **build_volume_tag_response(
@@ -6829,9 +6202,6 @@ def volume_tags(request: VolumeTagRequest) -> VolumeTagResponse:
             request.manual_album_peak,
         )
     )
-
-
-@app.post("/library/tools/organize-files", response_model=FileOrganizationResponse)
 def organize_files_from_tags(request: FileOrganizationRequest) -> FileOrganizationResponse:
     with connect() as conn:
         library_path = get_setting(conn, "library_path")
@@ -6917,9 +6287,6 @@ def organize_files_from_tags(request: FileOrganizationRequest) -> FileOrganizati
         applied=applied,
         removed_empty_folders=removed_empty_folders,
     )
-
-
-@app.post("/library/tools/organize-files/report", response_model=FileOrganizationReportResponse)
 def export_file_organization_report(request: FileOrganizationReportRequest) -> FileOrganizationReportResponse:
     preview_request = FileOrganizationRequest(
         template=request.template,
@@ -6945,23 +6312,20 @@ def export_file_organization_report(request: FileOrganizationReportRequest) -> F
     try:
         target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     except OSError as exc:
-        raise HTTPException(status_code=400, detail=f"Could not write file organization report: {exc}") from exc
+        raise ActionError(status_code=400, detail=f"Could not write file organization report: {exc}") from exc
     return FileOrganizationReportResponse(
         report_path=str(target),
         total=response.total,
         changed_count=response.changed_count,
         collisions=sum(1 for change in response.changes if change.collision),
     )
-
-
-@app.post("/library/tools/device-sync", response_model=DeviceSyncResponse)
 def sync_device_folder(request: DeviceSyncRequest) -> DeviceSyncResponse:
     target_root = Path(request.target_folder).expanduser().resolve()
     if request.apply:
         try:
             target_root.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
-            raise HTTPException(status_code=400, detail=f"Could not create target folder: {exc}") from exc
+            raise ActionError(status_code=400, detail=f"Could not create target folder: {exc}") from exc
 
     with connect() as conn:
         library_path = get_setting(conn, "library_path")
@@ -7045,42 +6409,24 @@ def sync_device_folder(request: DeviceSyncRequest) -> DeviceSyncResponse:
         changes=changes,
         playlist_exports=playlist_exports,
     )
-
-
-@app.get("/library/tools/device-sync/devices", response_model=DeviceSyncDevicesResponse)
 def get_device_sync_devices() -> DeviceSyncDevicesResponse:
     return DeviceSyncDevicesResponse(**detected_device_sync_devices())
-
-
-@app.get("/library/tools/device-sync/profiles", response_model=DeviceSyncProfilesResponse)
 def get_device_sync_profiles() -> DeviceSyncProfilesResponse:
     return DeviceSyncProfilesResponse(**list_device_sync_profiles())
-
-
-@app.post("/library/tools/device-sync/profiles", response_model=DeviceSyncProfile)
 def create_device_sync_profile(request: DeviceSyncProfilePayload) -> DeviceSyncProfile:
     profile = save_device_sync_profile(request)
     if profile is None:
-        raise HTTPException(status_code=400, detail="Could not save device sync profile")
+        raise ActionError(status_code=400, detail="Could not save device sync profile")
     return DeviceSyncProfile(**profile)
-
-
-@app.patch("/library/tools/device-sync/profiles/{profile_id}", response_model=DeviceSyncProfile)
 def update_device_sync_profile(profile_id: int, request: DeviceSyncProfilePayload) -> DeviceSyncProfile:
     profile = save_device_sync_profile(request, profile_id)
     if profile is None:
-        raise HTTPException(status_code=404, detail="Device sync profile not found")
+        raise ActionError(status_code=404, detail="Device sync profile not found")
     return DeviceSyncProfile(**profile)
-
-
-@app.delete("/library/tools/device-sync/profiles/{profile_id}")
 def remove_device_sync_profile(profile_id: int) -> dict:
     if not delete_device_sync_profile(profile_id):
-        raise HTTPException(status_code=404, detail="Device sync profile not found")
+        raise ActionError(status_code=404, detail="Device sync profile not found")
     return {"deleted": True}
-
-
-@app.post("/library/tools/export-metadata-csv", response_model=CsvMetadataExportResponse)
 def export_metadata_csv(request: CsvMetadataExportRequest) -> CsvMetadataExportResponse:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     target = resolve_csv_tool_path(request.csv_path, f"flac-cafe-metadata-{stamp}.csv")
@@ -7094,16 +6440,10 @@ def export_metadata_csv(request: CsvMetadataExportRequest) -> CsvMetadataExportR
             for row in rows:
                 writer.writerow({column: row.get(column) for column in METADATA_CSV_COLUMNS})
     except OSError as exc:
-        raise HTTPException(status_code=400, detail=f"Could not write CSV: {exc}") from exc
+        raise ActionError(status_code=400, detail=f"Could not write CSV: {exc}") from exc
     return CsvMetadataExportResponse(csv_path=str(target), track_count=len(rows), columns=METADATA_CSV_COLUMNS)
-
-
-@app.post("/library/tools/import-metadata-csv", response_model=CsvMetadataImportResponse)
 def import_metadata_csv(request: CsvMetadataImportRequest) -> CsvMetadataImportResponse:
     return build_metadata_csv_import_response(request)
-
-
-@app.post("/library/tools/import-metadata-csv/report", response_model=CsvMetadataImportReportResponse)
 def export_metadata_csv_import_report(request: CsvMetadataImportReportRequest) -> CsvMetadataImportReportResponse:
     preview_request = CsvMetadataImportRequest(
         csv_path=request.csv_path,
@@ -7131,7 +6471,7 @@ def export_metadata_csv_import_report(request: CsvMetadataImportReportRequest) -
     try:
         target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     except OSError as exc:
-        raise HTTPException(status_code=400, detail=f"Could not write CSV import report: {exc}") from exc
+        raise ActionError(status_code=400, detail=f"Could not write CSV import report: {exc}") from exc
     return CsvMetadataImportReportResponse(
         report_path=str(target),
         csv_path=response.csv_path,
@@ -7140,9 +6480,6 @@ def export_metadata_csv_import_report(request: CsvMetadataImportReportRequest) -
         changed=response.changed,
         errors=len(response.errors),
     )
-
-
-@app.post("/library/duplicates/action", response_model=DuplicateActionResponse)
 def apply_duplicate_action(request: DuplicateActionRequest) -> DuplicateActionResponse:
     errors: list[str] = []
     removed_track_ids: list[int] = []
@@ -7164,7 +6501,7 @@ def apply_duplicate_action(request: DuplicateActionRequest) -> DuplicateActionRe
                 if len(tracks) >= 2:
                     ignore_key = duplicate_group_from_tracks(label, tracks, "selected duplicate group").ignore_key
             if not ignore_key:
-                raise HTTPException(status_code=400, detail="Choose a duplicate group to ignore")
+                raise ActionError(status_code=400, detail="Choose a duplicate group to ignore")
             conn.execute(
                 """
                 INSERT INTO library_health_ignores(kind, ignore_key, label)
@@ -7197,7 +6534,7 @@ def apply_duplicate_action(request: DuplicateActionRequest) -> DuplicateActionRe
         try:
             target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         except OSError as exc:
-            raise HTTPException(status_code=400, detail=f"Could not write duplicate report: {exc}") from exc
+            raise ActionError(status_code=400, detail=f"Could not write duplicate report: {exc}") from exc
         return DuplicateActionResponse(action=request.action, affected=len(groups), report_path=str(target))
 
     if request.action == "keep_best":
@@ -7234,9 +6571,6 @@ def apply_duplicate_action(request: DuplicateActionRequest) -> DuplicateActionRe
         deleted_files=deleted_files,
         errors=errors,
     )
-
-
-@app.post("/library/duplicates/review", response_model=DuplicateReviewResponse)
 def review_duplicates(request: DuplicateReviewRequest) -> DuplicateReviewResponse:
     groups: list[DuplicateGroup] = []
     missing: list[int] = []
@@ -7264,15 +6598,9 @@ def review_duplicates(request: DuplicateReviewRequest) -> DuplicateReviewRespons
         groups=groups,
         missing_track_ids=list(dict.fromkeys(missing)),
     )
-
-
-@app.get("/library/tools/acoustic-fingerprints/setup", response_model=ChromaprintStatusResponse)
 def get_chromaprint_setup() -> ChromaprintStatusResponse:
     with connect() as conn:
         return chromaprint_status(conn)
-
-
-@app.patch("/library/tools/acoustic-fingerprints/setup", response_model=ChromaprintStatusResponse)
 def update_chromaprint_setup(request: ChromaprintConfigRequest) -> ChromaprintStatusResponse:
     with connect() as conn:
         text = request.fpcalc_path.strip() if request.fpcalc_path else ""
@@ -7293,9 +6621,6 @@ def update_chromaprint_setup(request: ChromaprintConfigRequest) -> ChromaprintSt
         set_setting(conn, "chromaprint_fpcalc_path", str(candidate.resolve()))
         conn.commit()
         return chromaprint_status(conn)
-
-
-@app.post("/library/tools/acoustic-fingerprints", response_model=AcousticFingerprintResponse)
 def run_acoustic_fingerprint_pass(request: AcousticFingerprintRequest) -> AcousticFingerprintResponse:
     processed = 0
     updated = 0
@@ -7357,10 +6682,7 @@ def run_acoustic_fingerprint_pass(request: AcousticFingerprintRequest) -> Acoust
         skipped_reasons=skipped_reasons[:100],
         errors=errors[:100],
     )
-
-
-@app.get("/library/tools/undo-log", response_model=list[BulkUndoLogEntry])
-def list_bulk_undo_log(limit: int = Query(default=30, ge=1, le=200)) -> list[BulkUndoLogEntry]:
+def list_bulk_undo_log(limit: int = Param(default=30, ge=1, le=200)) -> list[BulkUndoLogEntry]:
     with connect() as conn:
         rows = conn.execute(
             """
@@ -7388,10 +6710,7 @@ def list_bulk_undo_log(limit: int = Query(default=30, ge=1, le=200)) -> list[Bul
             )
         )
     return entries
-
-
-@app.get("/library/tools/undo-batches", response_model=list[BulkUndoBatchEntry])
-def list_bulk_undo_batches(limit: int = Query(default=30, ge=1, le=200)) -> list[BulkUndoBatchEntry]:
+def list_bulk_undo_batches(limit: int = Param(default=30, ge=1, le=200)) -> list[BulkUndoBatchEntry]:
     with connect() as conn:
         rows = conn.execute(
             """
@@ -7425,9 +6744,6 @@ def list_bulk_undo_batches(limit: int = Query(default=30, ge=1, le=200)) -> list
         )
         for row in rows
     ]
-
-
-@app.post("/library/tools/undo-batches/{batch_id}/restore", response_model=BulkUndoRestoreResponse)
 def restore_bulk_undo_batch(batch_id: str) -> BulkUndoRestoreResponse:
     with connect() as conn:
         rows = conn.execute(
@@ -7441,7 +6757,7 @@ def restore_bulk_undo_batch(batch_id: str) -> BulkUndoRestoreResponse:
             (batch_id,),
         ).fetchall()
         if not rows:
-            raise HTTPException(status_code=404, detail="Undo batch was not found")
+            raise ActionError(status_code=404, detail="Undo batch was not found")
         affected: list[int] = []
         errors: list[str] = []
         action_type = rows[0]["action_type"]
@@ -7476,9 +6792,6 @@ def restore_bulk_undo_batch(batch_id: str) -> BulkUndoRestoreResponse:
         affected_track_ids=list(dict.fromkeys(affected)),
         errors=errors[:100],
     )
-
-
-@app.post("/library/tools/undo-log/{entry_id}/restore", response_model=BulkUndoRestoreResponse)
 def restore_bulk_undo_log_entry(entry_id: int) -> BulkUndoRestoreResponse:
     with connect() as conn:
         row = conn.execute(
@@ -7490,11 +6803,11 @@ def restore_bulk_undo_log_entry(entry_id: int) -> BulkUndoRestoreResponse:
             (entry_id,),
         ).fetchone()
         if row is None:
-            raise HTTPException(status_code=404, detail="Undo log entry was not found")
+            raise ActionError(status_code=404, detail="Undo log entry was not found")
         try:
             payload = json.loads(row["payload_json"] or "{}")
         except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=400, detail="Undo log entry payload is invalid") from exc
+            raise ActionError(status_code=400, detail="Undo log entry payload is invalid") from exc
         affected, errors = restore_bulk_undo_entry(conn, row["action_type"], payload)
         restored = not errors
         if restored:
@@ -7518,9 +6831,6 @@ def restore_bulk_undo_log_entry(entry_id: int) -> BulkUndoRestoreResponse:
         affected_track_ids=affected,
         errors=errors,
     )
-
-
-@app.post("/library/tools/reports/read", response_model=ReportFileResponse)
 def read_report_file(request: ReportFileRequest) -> ReportFileResponse:
     target = resolve_existing_json_report_path(request.report_path)
     if not target.exists() or not target.is_file():
@@ -7548,14 +6858,11 @@ def read_report_file(request: ReportFileRequest) -> ReportFileResponse:
             error=error_message,
         )
     except OSError as exc:
-        raise HTTPException(status_code=400, detail=f"Could not read report: {exc}") from exc
-
-
-@app.get("/albums", response_model=list[AlbumSummary])
+        raise ActionError(status_code=400, detail=f"Could not read report: {exc}") from exc
 def list_albums(
     search: str = "",
-    limit: int = Query(default=5000, ge=1, le=20000),
-    offset: int = Query(default=0, ge=0),
+    limit: int = Param(default=5000, ge=1, le=20000),
+    offset: int = Param(default=0, ge=0),
 ) -> list[dict]:
     album_key = "lower(trim(coalesce(albums.album, '')))"
     artist_key = "lower(trim(coalesce(albums.album_artist, '')))"
@@ -7684,9 +6991,6 @@ def list_albums(
         row["edition_count"] = len(album_ids) or int(row.get("edition_count") or 1)
         row["year"] = years[0] if years else row.get("year")
     return rows
-
-
-@app.post("/albums/{album_id}/completion-lookup", response_model=AlbumCompletionLookupResponse)
 def lookup_album_completion(album_id: int) -> AlbumCompletionLookupResponse:
     with connect() as conn:
         album = album_record(conn, album_id)
@@ -7746,15 +7050,9 @@ def lookup_album_completion(album_id: int) -> AlbumCompletionLookupResponse:
             confidence=float(match["confidence"]),
             checked_at=checked_at,
         )
-
-
-@app.get("/albums/{album_id}/tracks", response_model=list[Track])
 def album_tracks(album_id: int) -> list[dict]:
     with connect() as conn:
         return album_track_rows(conn, album_id)
-
-
-@app.get("/albums/{album_id}/artwork")
 def album_artwork(album_id: int) -> Response:
     with connect() as conn:
         album = album_record(conn, album_id)
@@ -7770,7 +7068,7 @@ def album_artwork(album_id: int) -> Response:
                     headers={"Cache-Control": "no-store, max-age=0"},
                 )
             except OSError as exc:
-                raise HTTPException(status_code=404, detail=f"Could not read selected album artwork: {exc}") from exc
+                raise ActionError(status_code=404, detail=f"Could not read selected album artwork: {exc}") from exc
 
     for track in tracks:
         artwork = cached_artwork(Path(track["path"]))
@@ -7781,24 +7079,15 @@ def album_artwork(album_id: int) -> Response:
                 media_type=media_type,
                 headers={"Cache-Control": "no-store, max-age=0"},
             )
-    raise HTTPException(status_code=404, detail="No album artwork found")
-
-
-@app.get("/albums/{album_id}/artwork-candidates", response_model=AlbumArtworkCandidatesResponse)
+    raise ActionError(status_code=404, detail="No album artwork found")
 def list_album_artwork_candidates(album_id: int) -> AlbumArtworkCandidatesResponse:
     with connect() as conn:
         candidates = album_artwork_candidates(conn, album_id)
     return AlbumArtworkCandidatesResponse(album_id=album_id, candidates=candidates)
-
-
-@app.get("/albums/{album_id}/artwork-search", response_model=AlbumArtworkSearchResponse)
-def search_album_artwork(album_id: int, limit: int = Query(default=8, ge=1, le=20)) -> AlbumArtworkSearchResponse:
+def search_album_artwork(album_id: int, limit: int = Param(default=8, ge=1, le=20)) -> AlbumArtworkSearchResponse:
     with connect() as conn:
         candidates, errors = album_artwork_web_candidates(conn, album_id, limit)
     return AlbumArtworkSearchResponse(album_id=album_id, candidates=candidates, errors=errors)
-
-
-@app.patch("/albums/{album_id}/artwork", response_model=AlbumArtworkUpdateResponse)
 def update_album_artwork(album_id: int, request: AlbumArtworkUpdateRequest) -> AlbumArtworkUpdateResponse:
     with connect() as conn:
         album_record(conn, album_id)
@@ -7812,21 +7101,21 @@ def update_album_artwork(album_id: int, request: AlbumArtworkUpdateRequest) -> A
         elif request.artwork_path:
             candidate = Path(request.artwork_path).expanduser().resolve()
             if not candidate.exists() or not candidate.is_file():
-                raise HTTPException(status_code=400, detail="Artwork path must be a local jpg, png, or webp file")
+                raise ActionError(status_code=400, detail="Artwork path must be a local jpg, png, or webp file")
             try:
                 artwork_data, artwork_media_type = read_local_artwork(candidate)
             except Exception as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+                raise ActionError(status_code=400, detail=str(exc)) from exc
             artwork_path = str(candidate)
             conn.execute("UPDATE albums SET artwork_path = ? WHERE id = ?", (artwork_path, album_id))
         elif request.embedded_track_id:
             tracks = album_track_rows(conn, album_id)
             track = next((item for item in tracks if int(item["id"]) == request.embedded_track_id), None)
             if track is None:
-                raise HTTPException(status_code=404, detail="Embedded artwork track is not part of this album")
+                raise ActionError(status_code=404, detail="Embedded artwork track is not part of this album")
             artwork = cached_artwork(Path(track["path"]))
             if artwork is None:
-                raise HTTPException(status_code=404, detail="Selected track has no readable embedded artwork")
+                raise ActionError(status_code=404, detail="Selected track has no readable embedded artwork")
             artwork_data, artwork_media_type = artwork
             if request.save_embedded_as_sidecar:
                 folder = Path(track["path"]).expanduser().parent
@@ -7834,33 +7123,33 @@ def update_album_artwork(album_id: int, request: AlbumArtworkUpdateRequest) -> A
                 try:
                     target.write_bytes(artwork_data)
                 except OSError as exc:
-                    raise HTTPException(status_code=400, detail=f"Could not save sidecar artwork: {exc}") from exc
+                    raise ActionError(status_code=400, detail=f"Could not save sidecar artwork: {exc}") from exc
                 artwork_path = str(target.resolve())
                 conn.execute("UPDATE albums SET artwork_path = ? WHERE id = ?", (artwork_path, album_id))
             elif not request.embed_to_files:
-                raise HTTPException(status_code=400, detail="Embedded artwork must be saved as a sidecar or embedded into album files")
+                raise ActionError(status_code=400, detail="Embedded artwork must be saved as a sidecar or embedded into album files")
         elif request.artwork_url:
             try:
                 artwork_data, artwork_media_type = download_cover_art(request.artwork_url)
             except Exception as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+                raise ActionError(status_code=400, detail=str(exc)) from exc
             if request.save_web_as_sidecar:
                 folder, _tracks = album_primary_folder_and_tracks(conn, album_id)
                 target = unique_sidecar_artwork_path(folder, request.sidecar_filename, artwork_media_type)
                 try:
                     target.write_bytes(artwork_data)
                 except OSError as exc:
-                    raise HTTPException(status_code=400, detail=f"Could not save web artwork: {exc}") from exc
+                    raise ActionError(status_code=400, detail=f"Could not save web artwork: {exc}") from exc
                 artwork_path = str(target.resolve())
                 conn.execute("UPDATE albums SET artwork_path = ? WHERE id = ?", (artwork_path, album_id))
             elif not request.embed_to_files:
-                raise HTTPException(status_code=400, detail="Web artwork must be saved as a sidecar or embedded into album files")
+                raise ActionError(status_code=400, detail="Web artwork must be saved as a sidecar or embedded into album files")
         else:
-            raise HTTPException(status_code=400, detail="Choose artwork, save artwork as a sidecar, embed artwork, or clear the selection")
+            raise ActionError(status_code=400, detail="Choose artwork, save artwork as a sidecar, embed artwork, or clear the selection")
 
         if request.embed_to_files:
             if artwork_data is None or artwork_media_type is None:
-                raise HTTPException(status_code=400, detail="No readable artwork was selected for embedding")
+                raise ActionError(status_code=400, detail="No readable artwork was selected for embedding")
             try:
                 embedded_updated, errors = embed_artwork_for_album(
                     conn,
@@ -7870,7 +7159,7 @@ def update_album_artwork(album_id: int, request: AlbumArtworkUpdateRequest) -> A
                     request.target_track_ids,
                 )
             except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+                raise ActionError(status_code=400, detail=str(exc)) from exc
 
         conn.execute("DELETE FROM artwork_cache")
         CD_ALBUM_ARTWORK_FALLBACK_CACHE.clear()
@@ -7884,9 +7173,6 @@ def update_album_artwork(album_id: int, request: AlbumArtworkUpdateRequest) -> A
         embedded_updated=embedded_updated,
         errors=errors,
     )
-
-
-@app.post("/library/tools/artwork-collisions", response_model=AlbumArtworkCollisionResponse)
 def artwork_collision_repair(request: AlbumArtworkCollisionRequest) -> AlbumArtworkCollisionResponse:
     errors: list[str] = []
     with connect() as conn:
@@ -7908,9 +7194,6 @@ def artwork_collision_repair(request: AlbumArtworkCollisionRequest) -> AlbumArtw
 
     repaired_count = sum(1 for issue in repaired if issue.repaired)
     return AlbumArtworkCollisionResponse(total=len(repaired), repaired=repaired_count, issues=repaired, errors=errors)
-
-
-@app.get("/playlists", response_model=list[PlaylistSummary])
 def list_playlists() -> list[dict]:
     with connect() as conn:
         return rows_to_dicts(
@@ -7931,19 +7214,16 @@ def list_playlists() -> list[dict]:
                 """
             )
         )
-
-
-@app.post("/playlists", response_model=PlaylistSummary)
 def create_playlist(request: PlaylistCreateRequest) -> dict:
     name = request.name.strip()
     if not name:
-        raise HTTPException(status_code=400, detail="Playlist name is required")
+        raise ActionError(status_code=400, detail="Playlist name is required")
     with connect() as conn:
         try:
             conn.execute("INSERT INTO playlists(name) VALUES(?)", (name,))
             conn.commit()
         except sqlite3.IntegrityError as exc:
-            raise HTTPException(status_code=409, detail="A playlist with that name already exists") from exc
+            raise ActionError(status_code=409, detail="A playlist with that name already exists") from exc
         row = conn.execute(
             """
             SELECT id, name, 0 AS track_count, NULL AS duration_seconds, created_at, updated_at
@@ -7953,32 +7233,23 @@ def create_playlist(request: PlaylistCreateRequest) -> dict:
             (name,),
         ).fetchone()
     return dict(row)
-
-
-@app.delete("/playlists/{playlist_id}", response_model=list[PlaylistSummary])
 def delete_playlist(playlist_id: int) -> list[dict]:
     with connect() as conn:
         row = conn.execute("SELECT id FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
         if row is None:
-            raise HTTPException(status_code=404, detail="Playlist not found")
+            raise ActionError(status_code=404, detail="Playlist not found")
         conn.execute("DELETE FROM playlists WHERE id = ?", (playlist_id,))
         conn.commit()
     return list_playlists()
-
-
-@app.get("/playlists/{playlist_id}/tracks", response_model=list[Track])
 def get_playlist_tracks(playlist_id: int) -> list[dict]:
     return playlist_tracks(playlist_id)
-
-
-@app.post("/playlists/{playlist_id}/tracks", response_model=list[Track])
 def add_playlist_tracks(playlist_id: int, request: PlaylistTrackRequest) -> list[dict]:
     seen: set[int] = set()
     track_ids = [track_id for track_id in request.track_ids if not (track_id in seen or seen.add(track_id))]
     with connect() as conn:
         playlist = conn.execute("SELECT id FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
         if playlist is None:
-            raise HTTPException(status_code=404, detail="Playlist not found")
+            raise ActionError(status_code=404, detail="Playlist not found")
         existing_tracks = {
             row["id"]
             for row in conn.execute(
@@ -7988,7 +7259,7 @@ def add_playlist_tracks(playlist_id: int, request: PlaylistTrackRequest) -> list
         }
         missing = [track_id for track_id in track_ids if track_id not in existing_tracks]
         if missing:
-            raise HTTPException(status_code=404, detail=f"Track not found: {missing[0]}")
+            raise ActionError(status_code=404, detail=f"Track not found: {missing[0]}")
 
         max_position = conn.execute(
             "SELECT coalesce(max(position), 0) AS position FROM playlist_tracks WHERE playlist_id = ?",
@@ -8011,14 +7282,11 @@ def add_playlist_tracks(playlist_id: int, request: PlaylistTrackRequest) -> list
         )
         conn.commit()
     return playlist_tracks(playlist_id)
-
-
-@app.delete("/playlists/{playlist_id}/tracks/{track_id}", response_model=list[Track])
 def remove_playlist_track(playlist_id: int, track_id: int) -> list[dict]:
     with connect() as conn:
         playlist = conn.execute("SELECT id FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
         if playlist is None:
-            raise HTTPException(status_code=404, detail="Playlist not found")
+            raise ActionError(status_code=404, detail="Playlist not found")
         conn.execute(
             "DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?",
             (playlist_id, track_id),
@@ -8030,9 +7298,6 @@ def remove_playlist_track(playlist_id: int, track_id: int) -> list[dict]:
         )
         conn.commit()
     return playlist_tracks(playlist_id)
-
-
-@app.patch("/playlists/{playlist_id}/tracks/{track_id}/move", response_model=list[Track])
 def move_playlist_track(playlist_id: int, track_id: int, request: PlaylistMoveRequest) -> list[dict]:
     with connect() as conn:
         row = conn.execute(
@@ -8044,7 +7309,7 @@ def move_playlist_track(playlist_id: int, track_id: int, request: PlaylistMoveRe
             (playlist_id, track_id),
         ).fetchone()
         if row is None:
-            raise HTTPException(status_code=404, detail="Playlist track not found")
+            raise ActionError(status_code=404, detail="Playlist track not found")
         operator = "<" if request.direction == "up" else ">"
         ordering = "DESC" if request.direction == "up" else "ASC"
         swap = conn.execute(
@@ -8063,9 +7328,6 @@ def move_playlist_track(playlist_id: int, track_id: int, request: PlaylistMoveRe
             conn.execute("UPDATE playlists SET updated_at = datetime('now') WHERE id = ?", (playlist_id,))
             conn.commit()
     return playlist_tracks(playlist_id)
-
-
-@app.post("/playlists/{playlist_id}/export", response_model=ExportResponse)
 def export_playlist(playlist_id: int, request: ExportRequest | None = None) -> ExportResponse:
     tracks = playlist_tracks(playlist_id)
     try:
@@ -8075,15 +7337,12 @@ def export_playlist(playlist_id: int, request: ExportRequest | None = None) -> E
         )
         return ExportResponse(playlist_path=str(path), track_count=count)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.post("/playlists/import", response_model=PlaylistSummary)
+        raise ActionError(status_code=400, detail=str(exc)) from exc
 def import_playlist(request: PlaylistImportRequest) -> dict:
     try:
         imported_paths = parse_playlist_paths(request.playlist_path)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise ActionError(status_code=400, detail=str(exc)) from exc
 
     source = Path(request.playlist_path).expanduser()
     base_name = (request.name or source.stem or "Imported Playlist").strip()
@@ -8183,9 +7442,6 @@ def scan_library_paths(
         save_library_paths(conn, save_paths or paths)
         conn.commit()
     return combined
-
-
-@app.post("/scan", response_model=ScanResult)
 def scan_library(request: ScanRequest) -> ScanResult:
     try:
         paths = request_library_paths(request)
@@ -8198,10 +7454,7 @@ def scan_library(request: ScanRequest) -> ScanResult:
         )
         return ScanResult(**result.__dict__, folder_paths=paths)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.post("/scan/start", response_model=ScanStartResponse)
+        raise ActionError(status_code=400, detail=str(exc)) from exc
 def start_scan_library(request: ScanRequest) -> dict:
     try:
         paths = request_library_paths(request)
@@ -8221,41 +7474,28 @@ def start_scan_library(request: ScanRequest) -> dict:
             "status": job["status"],
         }
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.get("/scan/jobs/{job_id}", response_model=ScanProgress)
+        raise ActionError(status_code=400, detail=str(exc)) from exc
 def get_scan_progress(job_id: str) -> dict:
     job = get_scan_job(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="Scan job not found")
+        raise ActionError(status_code=404, detail="Scan job not found")
     return job
-
-
-@app.patch("/tracks/{track_id}/rating", response_model=Track)
 def update_rating(track_id: int, request: RatingRequest) -> dict:
     with connect() as conn:
         updated = apply_track_rating_update(conn, track_id, request.rating)
         conn.commit()
     return updated
-
-
-@app.head("/tracks/{track_id}/audio")
-@app.get("/tracks/{track_id}/audio")
 def stream_track_audio(track_id: int) -> FileResponse:
     path = get_track_path(track_id)
     return FileResponse(
         path,
         media_type=MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream"),
     )
-
-
-@app.get("/tracks/{track_id}/artwork")
 def track_artwork(track_id: int) -> Response:
     if track_id < 0:
         artwork = cd_preview_track_artwork(track_id)
         if artwork is None:
-            raise HTTPException(status_code=404, detail="No CD album artwork fallback found")
+            raise ActionError(status_code=404, detail="No CD album artwork fallback found")
         data, media_type = artwork
         return Response(
             content=data,
@@ -8266,7 +7506,7 @@ def track_artwork(track_id: int) -> Response:
     path = get_track_path(track_id)
     artwork = cached_artwork(path)
     if artwork is None:
-        raise HTTPException(status_code=404, detail="No embedded artwork found")
+        raise ActionError(status_code=404, detail="No embedded artwork found")
 
     data, media_type = artwork
     return Response(
@@ -8274,9 +7514,6 @@ def track_artwork(track_id: int) -> Response:
         media_type=media_type,
         headers={"Cache-Control": "no-store, max-age=0"},
     )
-
-
-@app.get("/tracks/{track_id}/lyrics", response_model=LyricsResponse)
 def track_lyrics(track_id: int) -> LyricsResponse:
     path = get_track_path(track_id)
     found = database_lyrics(track_id) or embedded_lyrics(path) or sidecar_lyrics(path)
@@ -8285,22 +7522,19 @@ def track_lyrics(track_id: int) -> LyricsResponse:
 
     lyrics, source, is_synced, sidecar_path = found
     return LyricsResponse(track_id=track_id, lyrics=lyrics, source=source, is_synced=is_synced, sidecar_path=sidecar_path)
-
-
-@app.post("/tracks/{track_id}/lyrics/fetch", response_model=LyricsResponse)
 def fetch_track_lyrics(track_id: int) -> LyricsResponse:
     with connect() as conn:
         row = conn.execute(f"SELECT {TRACK_COLUMNS} FROM tracks WHERE id = ?", (track_id,)).fetchone()
         auto_write_sidecar = get_auto_write_fetched_lyrics_sidecars(conn)
     if row is None:
-        raise HTTPException(status_code=404, detail="Track not found")
+        raise ActionError(status_code=404, detail="Track not found")
     track = dict(row)
     response = lrclib_fetch(track)
     if auto_write_sidecar and response.lyrics:
         try:
             sidecar_path = write_cached_lyrics_sidecar(track, response.lyrics, response.is_synced)
         except OSError as exc:
-            raise HTTPException(status_code=400, detail=f"Could not write lyric sidecar: {exc}") from exc
+            raise ActionError(status_code=400, detail=f"Could not write lyric sidecar: {exc}") from exc
         return save_database_lyrics(
             track_id,
             response.lyrics,
@@ -8309,14 +7543,11 @@ def fetch_track_lyrics(track_id: int) -> LyricsResponse:
             sidecar_path,
         )
     return response
-
-
-@app.post("/lyrics/lookup", response_model=LyricsResponse)
 def lookup_lyrics_by_metadata(request_body: LyricsLookupRequest) -> LyricsResponse:
     title = request_body.title.strip()
     artist = (request_body.artist or request_body.album_artist or "").strip()
     if not title or not artist:
-        raise HTTPException(status_code=400, detail="Track title and artist are required for lyric lookup")
+        raise ActionError(status_code=400, detail="Track title and artist are required for lyric lookup")
 
     track = {
         "id": request_body.track_id if request_body.track_id is not None else 0,
@@ -8330,9 +7561,6 @@ def lookup_lyrics_by_metadata(request_body: LyricsLookupRequest) -> LyricsRespon
     # CD and MusicBrainz durations often describe a different pressing or include
     # lead-in/lead-out differences, so avoid making the online lyric lookup too exact.
     return lrclib_fetch({**track, "duration_seconds": None})
-
-
-@app.patch("/tracks/{track_id}/lyrics", response_model=LyricsResponse)
 def update_track_lyrics(track_id: int, request_body: LyricsUpdateRequest) -> LyricsResponse:
     path = get_track_path(track_id)
     text = normalize_lyrics(request_body.lyrics)
@@ -8347,17 +7575,14 @@ def update_track_lyrics(track_id: int, request_body: LyricsUpdateRequest) -> Lyr
         try:
             write_track_lyrics(path, text, request_body.is_synced)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise ActionError(status_code=400, detail=str(exc)) from exc
         source = f"embedded:{path.suffix.lower() or 'audio'}"
 
     return save_database_lyrics(track_id, text, source, request_body.is_synced)
-
-
-@app.get("/artists", response_model=list[ArtistSummary])
 def list_artists(
     search: str = "",
-    limit: int = Query(default=5000, ge=1, le=20000),
-    offset: int = Query(default=0, ge=0),
+    limit: int = Param(default=5000, ge=1, le=20000),
+    offset: int = Param(default=0, ge=0),
 ) -> list[dict]:
     artist_expr = primary_artist_sql()
     condition, params = fuzzy_condition(
@@ -8416,13 +7641,10 @@ def list_artists(
                 [*params, limit, offset],
             )
         )
-
-
-@app.get("/artists/info", response_model=ArtistInfoResponse)
 def artist_info(name: str, refresh: bool = False) -> ArtistInfoResponse:
     query_name = primary_artist_name(name)
     if not query_name:
-        raise HTTPException(status_code=400, detail="Artist name is required")
+        raise ActionError(status_code=400, detail="Artist name is required")
 
     cached = cached_artist_info(query_name, refresh)
     if cached is not None:
@@ -8443,24 +7665,18 @@ def artist_info(name: str, refresh: bool = False) -> ArtistInfoResponse:
         )
 
     return save_artist_info(query_name, info)
-
-
-@app.delete("/artists/cache")
 def clear_artist_cache() -> dict[str, int]:
     with connect() as conn:
         cursor = conn.execute("DELETE FROM artist_info_cache")
         conn.commit()
     return {"deleted": cursor.rowcount if cursor.rowcount is not None else 0}
-
-
-@app.get("/artists/local-tracks", response_model=list[Track])
 def artist_local_tracks(
     name: str,
-    limit: int = Query(default=100, ge=1, le=20000),
+    limit: int = Param(default=100, ge=1, le=20000),
 ) -> list[dict]:
     artist = primary_artist_name(name)
     if not artist:
-        raise HTTPException(status_code=400, detail="Artist name is required")
+        raise ActionError(status_code=400, detail="Artist name is required")
     artist_expr = primary_artist_sql()
     with connect() as conn:
         return rows_to_dicts(
@@ -8481,15 +7697,12 @@ def artist_local_tracks(
                 (artist, limit),
             )
         )
-
-
-@app.post("/tracks/{track_id}/played", response_model=Track)
 def mark_track_played(track_id: int) -> dict:
     played_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     with connect() as conn:
         row = conn.execute("SELECT id FROM tracks WHERE id = ?", (track_id,)).fetchone()
         if row is None:
-            raise HTTPException(status_code=404, detail="Track not found")
+            raise ActionError(status_code=404, detail="Track not found")
 
         conn.execute(
             """
@@ -8519,15 +7732,12 @@ def mark_track_played(track_id: int) -> dict:
             (track_id,),
         ).fetchone()
     return dict(updated)
-
-
-@app.post("/tracks/{track_id}/skipped", response_model=Track)
 def mark_track_skipped(track_id: int) -> dict:
     skipped_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     with connect() as conn:
         row = conn.execute("SELECT id FROM tracks WHERE id = ?", (track_id,)).fetchone()
         if row is None:
-            raise HTTPException(status_code=404, detail="Track not found")
+            raise ActionError(status_code=404, detail="Track not found")
 
         conn.execute(
             """
@@ -8557,9 +7767,6 @@ def mark_track_skipped(track_id: int) -> dict:
             (track_id,),
         ).fetchone()
     return dict(updated)
-
-
-@app.post("/autodj/generate", response_model=AutoDjResponse)
 def generate_autodj(request: AutoDjRequest) -> AutoDjResponse:
     tracks = generate_queue(request)
     drift = recommendation_drift(tracks)
@@ -8668,9 +7875,6 @@ def build_ab_queue(label: str, settings: AutoDjRequest) -> RecommendationAbQueue
     drift = recommendation_drift(tracks)
     record_recommendation_run(settings, drift, tracks)
     return RecommendationAbQueue(label=label, settings=settings, drift=drift, tracks=tracks)
-
-
-@app.post("/autodj/ab-test", response_model=RecommendationAbTestResponse)
 def create_recommendation_ab_test(request: RecommendationAbTestRequest) -> RecommendationAbTestResponse:
     seed = request.seed if request.seed is not None else int(datetime.now().timestamp()) % 1_000_000
     base = request.base_settings.model_copy(
@@ -8698,9 +7902,6 @@ def create_recommendation_ab_test(request: RecommendationAbTestRequest) -> Recom
             build_ab_queue("B", challenger),
         ],
     )
-
-
-@app.post("/autodj/ab-test/choose", response_model=RecommendationAbChoiceResponse)
 def choose_recommendation_ab_test(request: RecommendationAbChoiceRequest) -> RecommendationAbChoiceResponse:
     track_ids = list(dict.fromkeys(int(track_id) for track_id in request.chosen_track_ids))
     if not track_ids:
@@ -8769,9 +7970,6 @@ def recommendation_run_from_row(row) -> RecommendationRun:
         track_ids=track_ids,
         created_at=row["created_at"],
     )
-
-
-@app.get("/autodj/profiles", response_model=list[RecommendationProfile])
 def list_recommendation_profiles() -> list[RecommendationProfile]:
     with connect() as conn:
         rows = conn.execute(
@@ -8782,10 +7980,7 @@ def list_recommendation_profiles() -> list[RecommendationProfile]:
             """
         ).fetchall()
     return [profile_from_row(row) for row in rows]
-
-
-@app.get("/autodj/history", response_model=list[RecommendationRun])
-def recommendation_history(limit: int = Query(default=30, ge=1, le=100)) -> list[RecommendationRun]:
+def recommendation_history(limit: int = Param(default=30, ge=1, le=100)) -> list[RecommendationRun]:
     with connect() as conn:
         rows = conn.execute(
             """
@@ -8840,16 +8035,10 @@ def build_recommendation_profile_comparisons(
             )
         )
     return comparisons
-
-
-@app.post("/autodj/profiles/compare", response_model=list[RecommendationProfileComparison])
 def compare_recommendation_profiles(
     request: RecommendationProfileComparisonRequest,
 ) -> list[RecommendationProfileComparison]:
     return build_recommendation_profile_comparisons(request)
-
-
-@app.post("/autodj/profiles/compare/export", response_model=RecommendationProfileComparisonExportResponse)
 def export_recommendation_profile_comparison(
     request: RecommendationProfileComparisonRequest,
 ) -> RecommendationProfileComparisonExportResponse:
@@ -8866,30 +8055,27 @@ def export_recommendation_profile_comparison(
     try:
         target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     except OSError as exc:
-        raise HTTPException(status_code=400, detail=f"Could not write profile comparison: {exc}") from exc
+        raise ActionError(status_code=400, detail=f"Could not write profile comparison: {exc}") from exc
     return RecommendationProfileComparisonExportResponse(export_path=str(target), profile_count=len(comparisons))
-
-
-@app.post("/autodj/profiles/compare/import", response_model=RecommendationProfileComparisonImportResponse)
 def import_recommendation_profile_comparison(
     request: RecommendationProfileComparisonImportRequest,
 ) -> RecommendationProfileComparisonImportResponse:
     path = Path(request.report_path)
     if not path.exists() or not path.is_file():
-        raise HTTPException(status_code=404, detail="Recommendation comparison report not found")
+        raise ActionError(status_code=404, detail="Recommendation comparison report not found")
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=400, detail=f"Could not read comparison report: {exc}") from exc
+        raise ActionError(status_code=400, detail=f"Could not read comparison report: {exc}") from exc
     raw_comparisons = payload.get("comparisons") if isinstance(payload, dict) else None
     if not isinstance(raw_comparisons, list):
-        raise HTTPException(status_code=400, detail="Comparison report is missing a comparisons list")
+        raise ActionError(status_code=400, detail="Comparison report is missing a comparisons list")
     comparisons: list[RecommendationProfileComparison] = []
     for raw in raw_comparisons:
         try:
             comparisons.append(RecommendationProfileComparison.model_validate(raw))
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid comparison entry: {exc}") from exc
+            raise ActionError(status_code=400, detail=f"Invalid comparison entry: {exc}") from exc
     return RecommendationProfileComparisonImportResponse(
         report_path=str(path),
         generated_at=payload.get("generated_at"),
@@ -8897,13 +8083,10 @@ def import_recommendation_profile_comparison(
         seed_track_id=payload.get("seed_track_id"),
         comparisons=comparisons,
     )
-
-
-@app.post("/autodj/profiles", response_model=RecommendationProfile)
 def create_recommendation_profile(request: RecommendationProfileRequest) -> RecommendationProfile:
     name = request.name.strip()
     if not name:
-        raise HTTPException(status_code=400, detail="Profile name is required")
+        raise ActionError(status_code=400, detail="Profile name is required")
     settings_json = json.dumps(request.settings.model_dump(), ensure_ascii=True, sort_keys=True)
     with connect() as conn:
         if request.is_default:
@@ -8931,18 +8114,15 @@ def create_recommendation_profile(request: RecommendationProfileRequest) -> Reco
             (name,),
         ).fetchone()
     return profile_from_row(row)
-
-
-@app.patch("/autodj/profiles/{profile_id}", response_model=RecommendationProfile)
 def update_recommendation_profile(profile_id: int, request: RecommendationProfileRequest) -> RecommendationProfile:
     name = request.name.strip()
     if not name:
-        raise HTTPException(status_code=400, detail="Profile name is required")
+        raise ActionError(status_code=400, detail="Profile name is required")
     settings_json = json.dumps(request.settings.model_dump(), ensure_ascii=True, sort_keys=True)
     with connect() as conn:
         row = conn.execute("SELECT id FROM recommendation_profiles WHERE id = ?", (profile_id,)).fetchone()
         if row is None:
-            raise HTTPException(status_code=404, detail="Recommendation profile not found")
+            raise ActionError(status_code=404, detail="Recommendation profile not found")
         if request.is_default:
             conn.execute("UPDATE recommendation_profiles SET is_default = 0")
         conn.execute(
@@ -8963,20 +8143,14 @@ def update_recommendation_profile(profile_id: int, request: RecommendationProfil
             (profile_id,),
         ).fetchone()
     return profile_from_row(row)
-
-
-@app.post("/autodj/profiles/{profile_id}/default", response_model=list[RecommendationProfile])
 def set_default_recommendation_profile(profile_id: int) -> list[RecommendationProfile]:
     with connect() as conn:
         row = conn.execute("SELECT id FROM recommendation_profiles WHERE id = ?", (profile_id,)).fetchone()
         if row is None:
-            raise HTTPException(status_code=404, detail="Recommendation profile not found")
+            raise ActionError(status_code=404, detail="Recommendation profile not found")
         conn.execute("UPDATE recommendation_profiles SET is_default = CASE WHEN id = ? THEN 1 ELSE 0 END", (profile_id,))
         conn.commit()
     return list_recommendation_profiles()
-
-
-@app.delete("/autodj/profiles/{profile_id}", response_model=list[RecommendationProfile])
 def delete_recommendation_profile(profile_id: int) -> list[RecommendationProfile]:
     with connect() as conn:
         conn.execute("DELETE FROM recommendation_profiles WHERE id = ?", (profile_id,))
@@ -8990,13 +8164,13 @@ def _avoid_key_and_label(request: AutoDjAvoidRequest) -> tuple[str, str]:
         with connect() as conn:
             track = conn.execute(f"SELECT {TRACK_COLUMNS} FROM tracks WHERE id = ?", (request.track_id,)).fetchone()
         if track is None:
-            raise HTTPException(status_code=404, detail="Track not found")
+            raise ActionError(status_code=404, detail="Track not found")
         track = dict(track)
 
     value = (request.value or "").strip()
     if request.scope == "track":
         if track is None:
-            raise HTTPException(status_code=400, detail="Track avoid rules require track_id")
+            raise ActionError(status_code=400, detail="Track avoid rules require track_id")
         return str(track["id"]), display_track_label(track)
 
     if request.scope == "artist":
@@ -9012,7 +8186,7 @@ def _avoid_key_and_label(request: AutoDjAvoidRequest) -> tuple[str, str]:
         key = tokens[0] if tokens else normalize_token(label)
 
     if not key:
-        raise HTTPException(status_code=400, detail=f"No {request.scope} value available")
+        raise ActionError(status_code=400, detail=f"No {request.scope} value available")
     return key, label or key
 
 
@@ -9020,9 +8194,6 @@ def display_track_label(track: dict) -> str:
     title = track.get("title") or "Untitled"
     artist = track.get("artist") or "Unknown artist"
     return f"{title} - {artist}"
-
-
-@app.get("/autodj/avoid", response_model=list[AutoDjAvoidRule])
 def list_autodj_avoid_rules() -> list[dict]:
     with connect() as conn:
         return rows_to_dicts(
@@ -9034,9 +8205,6 @@ def list_autodj_avoid_rules() -> list[dict]:
                 """
             )
         )
-
-
-@app.post("/autodj/avoid", response_model=AutoDjAvoidRule)
 def create_autodj_avoid_rule(request: AutoDjAvoidRequest) -> dict:
     key, label = _avoid_key_and_label(request)
     with connect() as conn:
@@ -9060,22 +8228,16 @@ def create_autodj_avoid_rule(request: AutoDjAvoidRequest) -> dict:
             (request.scope, key),
         ).fetchone()
     return dict(row)
-
-
-@app.delete("/autodj/avoid/{rule_id}", response_model=list[AutoDjAvoidRule])
 def delete_autodj_avoid_rule(rule_id: int) -> list[dict]:
     with connect() as conn:
         conn.execute("DELETE FROM autodj_avoid_rules WHERE id = ?", (rule_id,))
         conn.commit()
     return list_autodj_avoid_rules()
-
-
-@app.post("/autodj/feedback")
 def record_recommendation_feedback(request: RecommendationFeedbackRequest) -> dict[str, str]:
     with connect() as conn:
         track = conn.execute("SELECT id FROM tracks WHERE id = ?", (request.track_id,)).fetchone()
         if track is None:
-            raise HTTPException(status_code=404, detail="Track not found")
+            raise ActionError(status_code=404, detail="Track not found")
         conn.execute(
             """
             INSERT INTO recommendation_feedback(track_id, event_type, weight)
@@ -9085,12 +8247,9 @@ def record_recommendation_feedback(request: RecommendationFeedbackRequest) -> di
         )
         conn.commit()
     return {"status": "ok"}
-
-
-@app.post("/autodj/export", response_model=ExportResponse)
 def export_autodj(request: ExportRequest) -> ExportResponse:
     try:
         path, count = export_m3u(request.track_ids, request.playlist_path)
         return ExportResponse(playlist_path=str(path), track_count=count)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise ActionError(status_code=400, detail=str(exc)) from exc

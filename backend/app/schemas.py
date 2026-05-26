@@ -671,7 +671,10 @@ class RegexTagPresetRequest(BaseModel):
     @field_validator("name")
     @classmethod
     def clean_name(cls, value: str) -> str:
-        return value.strip()
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("name is required")
+        return cleaned
 
 
 class RegexTagPreset(BaseModel):
@@ -724,7 +727,10 @@ class VirtualTagDefinitionRequest(BaseModel):
     @field_validator("name", "expression")
     @classmethod
     def clean_text(cls, value: str) -> str:
-        return value.strip()
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("value is required")
+        return cleaned
 
 
 class VirtualTagDefinition(BaseModel):

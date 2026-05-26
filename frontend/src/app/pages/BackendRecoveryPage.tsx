@@ -19,8 +19,8 @@ export function BackendRecoveryPage({
   onOpenBackendLog: () => void;
 }) {
   const recoveryHint = import.meta.env.DEV
-    ? "In development, start the backend with npm run backend:dev."
-    : "In the installed app, Restart Backend should relaunch the bundled service. Open the backend log if it still cannot start.";
+    ? "In development, restart the Tauri dev session so the Rust bridge can relaunch its Python worker."
+    : "In the installed app, Restart Backend should relaunch the bundled worker. Open the backend log if it still cannot start.";
 
   return (
     <main className="flex min-w-0 flex-1 flex-col">
@@ -43,8 +43,7 @@ export function BackendRecoveryPage({
           </div>
           <div className="grid gap-3 text-sm text-neutral-200">
             <div className="rounded border border-line/70 bg-ink p-3">
-              The UI is still running, but library scans, ratings, playback URLs, and AutoDJ need the Python service on
-              `127.0.0.1:8765`.
+              The UI is still running, but library scans, ratings, playback URLs, and AutoDJ need the local Rust-to-Python worker bridge.
             </div>
             <div className="flex flex-wrap gap-2">
               <button className="primary-button" type="button" onClick={onCheckBackend}>

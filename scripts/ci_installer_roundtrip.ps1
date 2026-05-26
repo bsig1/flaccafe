@@ -28,8 +28,6 @@ $AppExe = Join-Path $InstallDir "flac-cafe.exe"
 $BackendExe = Join-Path $InstallDir "flaccafe-backend\flaccafe-backend.exe"
 $AppDataDir = Join-Path $env:LOCALAPPDATA "FLAC Cafe"
 $Marker = Join-Path $AppDataDir "ci-uninstall-marker.txt"
-$Port = 18765
-$BackendProcess = $null
 
 function Invoke-Msi {
     param([string[]]$Arguments)
@@ -39,20 +37,13 @@ function Invoke-Msi {
     }
 }
 
-function Wait-BackendHealth {
-    $deadline = (Get-Date).AddSeconds(30)
-    do {
-        try {
-            $response = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 2
-            if ($response.status -eq "ok") {
-                return
-            }
-        }
-        catch {
-            Start-Sleep -Milliseconds 500
-        }
-    } while ((Get-Date) -lt $deadline)
-    throw "Packaged backend did not answer /health on port $Port."
+function Test-PythonWorkerHealth {
+    $payload = '{"action":"health","params":{},"body":null}'
+    $output = $payload | & $BackendExe --worker-once
+    $response = $output | ConvertFrom-Json
+    if (-not $response.ok -or $response.code -ne 200 -or $response.body.status -ne "ok") {
+        throw "Packaged Python worker did not answer health correctly: $output"
+    }
 }
 
 try {
@@ -68,14 +59,9 @@ try {
         }
     }
 
-    $env:FLAC_CAFE_PORT = [string]$Port
-    $BackendProcess = Start-Process -FilePath $BackendExe -PassThru -WindowStyle Hidden
-    Wait-BackendHealth
+    Test-PythonWorkerHealth
 }
 finally {
-    if ($BackendProcess -and -not $BackendProcess.HasExited) {
-        Stop-Process -Id $BackendProcess.Id -Force -ErrorAction SilentlyContinue
-    }
     Remove-Item Env:\FLAC_CAFE_PORT -ErrorAction SilentlyContinue
 }
 

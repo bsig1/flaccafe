@@ -50,6 +50,12 @@ foreach ($Needle in @('"--noconsole"', '"--exclude-module", "torch"', '"--exclud
     }
 }
 
+foreach ($Needle in @('"--exclude-module", "fastapi"', '"--exclude-module", "starlette"', '"--exclude-module", "uvicorn"', '"--exclude-module", "httpx"')) {
+    if (-not $SidecarBuildText.Contains($Needle)) {
+        throw "Backend sidecar build script is missing expected no-HTTP-framework guard: $Needle"
+    }
+}
+
 foreach ($Needle in @('"--onedir"', '"--name", "flaccafe-backend"', '"--distpath", "dist-backend"')) {
     if (-not $SidecarBuildText.Contains($Needle)) {
         throw "Backend sidecar build script is missing expected output setting: $Needle"

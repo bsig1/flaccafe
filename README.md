@@ -47,17 +47,17 @@ Windows beta installers are published on the [GitHub Releases page](https://gith
 
 - Desktop shell: Tauri v2
 - Frontend: React, TypeScript, Vite, Tailwind CSS
-- Backend: Python, FastAPI, mutagen, SQLite, with Rust native SQLite fast paths for common desktop flows
+- Backend: Rust app-facing controller plus a one-shot Python worker for mutagen, scanning, network jobs, and optional ML
 - Optional analysis: CLAP through Transformers and Torch
 
-The MVP started with FastAPI because it keeps music logic in Python, keeps React focused on UI state, and allows the backend to be tested independently. The desktop build now also uses Rust native commands for common SQLite reads and lightweight mutations, with FastAPI kept as the fallback and Python owner for scanning, file tag writes, online services, and optional ML.
+The MVP started with FastAPI because it kept music logic in Python and made early testing simple. The desktop build now uses Rust as the app-facing controller for SQLite reads, lightweight mutations, local media URLs, and all frontend-facing dispatch. Python remains the expert worker for scanning, mutagen file writes, feed/network jobs, online services, and optional ML. Rust resolves app paths to named Python actions, so the packaged app no longer bundles, starts, or routes through a Python HTTP server.
 
 ## Repo Layout
 
 ```text
-backend/       Python API, SQLite, scanner, recommender, library tools
+backend/       Python worker modules, SQLite, scanner, recommender, library tools
 frontend/      React/TypeScript UI, typed API clients, themes, player surfaces
-src-tauri/     Tauri v2 shell, backend launcher, native commands, Windows media controls, native playback
+src-tauri/     Tauri v2 shell, native commands, Python worker bridge, Windows media controls, native playback
 scripts/       Windows dev, test, validation, packaging, and runtime helpers
 docs/          maintainer guides, feature docs, release docs, and project structure
 extensions/    sample extension/skin manifests
@@ -80,19 +80,13 @@ Install frontend dependencies:
 npm install
 ```
 
-Run the browser preview:
-
-```powershell
-npm run dev
-```
-
 Run the desktop shell:
 
 ```powershell
 npm run desktop
 ```
 
-The backend listens on `http://127.0.0.1:8765`. The Vite preview uses `http://127.0.0.1:1420`. If an old dev server is still running:
+`npm run dev` is now a Windows-friendly alias for the desktop shell. The Python side runs as one-shot worker calls instead of a long-running HTTP backend. If an old dev server is still running:
 
 ```powershell
 .\scripts\stop_dev.ps1
