@@ -549,6 +549,25 @@ pub struct NativeAudioConversionPreviewResponse {
     pub(crate) changes: Vec<NativeAudioConversionChange>,
 }
 
+#[derive(Clone, Serialize)]
+pub struct NativeAudioConversionInstallProgress {
+    pub(crate) job_id: String,
+    pub(crate) status: String,
+    pub(crate) message: String,
+    pub(crate) current_step: i64,
+    pub(crate) total_steps: i64,
+    pub(crate) bytes_downloaded: i64,
+    pub(crate) total_bytes: Option<i64>,
+    pub(crate) download_url: Option<String>,
+    pub(crate) tool_directory: String,
+    pub(crate) log: Vec<String>,
+    pub(crate) started_at: Option<String>,
+    pub(crate) finished_at: Option<String>,
+    pub(crate) elapsed_seconds: f64,
+    pub(crate) percent: f64,
+    pub(crate) error: Option<String>,
+}
+
 #[derive(Serialize)]
 pub struct NativeBulkUndoLogEntry {
     pub(crate) id: i64,

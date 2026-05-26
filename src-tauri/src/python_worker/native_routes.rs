@@ -310,6 +310,14 @@ pub(super) fn try_handle_native_json(
         "preview_audio_conversion" => Some(to_json(
             native_library::audio_conversion::native_audio_conversion_preview(body.clone())?,
         )?),
+        "start_audio_conversion_ffmpeg_install" => Some(to_json(
+            native_library::audio_conversion::native_start_ffmpeg_install(body.clone())?,
+        )?),
+        "get_audio_conversion_ffmpeg_install" => Some(to_json(
+            native_library::audio_conversion::native_ffmpeg_install_progress(
+                required_param_string(params, "job_id")?,
+            )?,
+        )?),
         "get_chromaprint_setup" => {
             Some(to_json(native_library::tools::native_chromaprint_setup(state)?)?)
         }
