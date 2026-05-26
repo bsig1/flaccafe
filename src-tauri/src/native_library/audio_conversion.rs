@@ -79,6 +79,11 @@ struct AudioConversionJob {
     cancel_requested: bool,
 }
 
+enum ConvertStatus {
+    Converted,
+    Canceled,
+}
+
 #[derive(Clone)]
 struct FfmpegInstallJob {
     job_id: String,
@@ -333,8 +338,16 @@ fn run_audio_conversion(job_id: &str, ffmpeg_path: &Path) -> Result<(), String> 
             job.message = Some(format!("Converting {} of {}", index + 1, tracks.len()));
         })?;
 
-        let outcome = convert_one_track(ffmpeg_path, &request, &source, &target)
-            .and_then(|_| copy_converted_artwork_if_needed(&request, &source, &target));
+        let outcome = match convert_one_track(job_id, ffmpeg_path, &request, &source, &target) {
+            Ok(ConvertStatus::Converted) => {
+                copy_converted_artwork_if_needed(&request, &source, &target)
+            }
+            Ok(ConvertStatus::Canceled) => {
+                mark_audio_conversion_canceled(job_id, "Conversion canceled.")?;
+                return Ok(());
+            }
+            Err(error) => Err(error),
+        };
         update_audio_job(job_id, |job| {
             match outcome {
                 Ok(artwork_warning) => {
@@ -364,11 +377,15 @@ fn run_audio_conversion(job_id: &str, ffmpeg_path: &Path) -> Result<(), String> 
 }
 
 fn convert_one_track(
+    job_id: &str,
     ffmpeg_path: &Path,
     request: &ConversionRequest,
     source: &Path,
     target: &Path,
-) -> Result<(), String> {
+) -> Result<ConvertStatus, String> {
+    if update_audio_job(job_id, |job| job.cancel_requested)? {
+        return Ok(ConvertStatus::Canceled);
+    }
     if !source.is_file() {
         return Err("Source file is missing".to_string());
     }
@@ -381,14 +398,35 @@ fn convert_one_track(
     }
     let args = ffmpeg_args(source, target, request);
     let mut command = std::process::Command::new(ffmpeg_path);
-    command.args(&args);
+    command
+        .args(&args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
-    let output = command
-        .output()
+    let mut child = command
+        .spawn()
         .map_err(|error| format!("Could not start FFmpeg: {error}"))?;
+    let output = loop {
+        if update_audio_job(job_id, |job| job.cancel_requested)? {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = fs::remove_file(target);
+            return Ok(ConvertStatus::Canceled);
+        }
+        if child
+            .try_wait()
+            .map_err(|error| format!("Could not poll FFmpeg: {error}"))?
+            .is_some()
+        {
+            break child
+                .wait_with_output()
+                .map_err(|error| format!("Could not collect FFmpeg output: {error}"))?;
+        }
+        thread::sleep(std::time::Duration::from_millis(100));
+    };
     if output.status.success() {
-        Ok(())
+        Ok(ConvertStatus::Converted)
     } else {
         let text = String::from_utf8_lossy(if output.stderr.is_empty() {
             &output.stdout
@@ -509,6 +547,16 @@ fn update_audio_job<T>(
         .get_mut(job_id)
         .ok_or_else(|| "Audio conversion job not found".to_string())?;
     Ok(update(job))
+}
+
+fn mark_audio_conversion_canceled(job_id: &str, message: &str) -> Result<(), String> {
+    update_audio_job(job_id, |job| {
+        job.status = "canceled".to_string();
+        job.phase = "canceled".to_string();
+        job.message = Some(message.to_string());
+        job.current_track = None;
+        job.finished_at = Some(utc_now());
+    })
 }
 
 fn new_audio_conversion_job_id() -> String {

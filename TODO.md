@@ -35,7 +35,6 @@
 - Finish album-artwork cache storage in Rust; embedded artwork extraction/writes stay Python until Rust tag-writing safety is proven.
 - Keep MusicBrainz/AcoustID matching heuristics in Python until the matching code is decomposed and covered by golden tests.
 - Move CD drive detection, CD sidebar availability, active play/rip mutual exclusion, Windows CD TOC reading, disc ID generation, live stream token management, live audio streaming, rip job state, ETA, cancellation, verification hashes, and target path generation into Rust.
-- Harden native audio conversion cancellation so a cancel request can terminate an in-flight FFmpeg child process instead of waiting for the current file to finish.
 - Keep actual audio metadata writes for ReplayGain tags in Python until Rust tag-writing support is validated.
 - Add Rust route hammer coverage for native-only routes as a sibling to `scripts/hammer_backend_routes.py`.
 - Add benchmarks for worker-spawn overhead versus native Rust for large-library query, AutoDJ, folder watch, scan diff, and file organizer workloads.
@@ -83,6 +82,7 @@
 - Moved audio conversion job state, progress/ETA, cancellation requests, FFmpeg command construction/process orchestration, and stderr-tail error reporting into Rust while keeping embedded artwork copy as a Python mutagen worker action.
 - Moved CLAP analysis job state, candidate selection, progress/ETA, pause/resume/cancel requests, failure marking, and analysis DB writes into Rust while keeping the CLAP/Torch model warm in a persistent Python expert worker.
 - Moved CLAP genre-tag preview/application into Rust; explicit file writes still delegate to the Python mutagen metadata worker.
+- Hardened native audio conversion cancellation so canceling terminates the active FFmpeg child process and removes the partial output file.
 - Added `flaccafe-media://localhost/python-bytes/...` for Python-owned byte responses such as album art and CD live audio.
 - Switched `npm run dev` to desktop dev so local development exercises the same Rust-to-Python worker path as packaged builds.
 
