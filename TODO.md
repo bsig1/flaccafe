@@ -32,7 +32,6 @@
 - Consider persistent worker pooling only if one-shot worker startup becomes visible on long-running operations. Prefer correctness and simple process isolation until profiling proves it is too slow.
 
 ## Rust Native Migration Backlog
-- Move folder watching state, polling, pending-change generation, notifications, and apply/ignore actions into Rust. Keep Python metadata parsing for watcher tag updates.
 - Move missing-file cleanup and orphan-album cleanup into Rust.
 - Finish album completion lookup/display in Rust where it is local-only; keep online MusicBrainz heuristics in Python until golden tests exist.
 - Move audiobook sync export into Rust.
@@ -70,6 +69,7 @@
 - Moved SQLite schema creation and compatibility migrations into Rust startup/open handling, backed by shared `backend/app/schema.sql`, so the desktop controller prepares the database before Python worker actions spawn.
 - Moved database backup/reset, startup self-check aggregation, support-bundle collection, backend log tailing, and redaction into Rust maintenance routes.
 - Moved scan job orchestration into Rust for recursive discovery, unchanged-file diffing, async job progress/ETA/cancel state, missing-file cleanup, error sampling, and settings persistence while keeping mutagen metadata reads in a Python batch worker.
+- Moved folder-watch state, polling loop, pending change detection, notifications, acknowledgement, and apply actions into Rust while keeping tag reads for added/modified/moved files in the Python mutagen batch worker.
 - Added `flaccafe-media://localhost/python-bytes/...` for Python-owned byte responses such as album art and CD live audio.
 - Switched `npm run dev` to desktop dev so local development exercises the same Rust-to-Python worker path as packaged builds.
 

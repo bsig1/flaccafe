@@ -219,6 +219,28 @@ pub(super) fn try_handle_native_json(
                 required_param_i64(params, "rule_id")?,
             )?,
         )?),
+        "get_folder_watch" => Some(to_json(
+            native_library::folder_watch::native_folder_watch_status(
+                param_usize(params, "limit").unwrap_or(300),
+            )?,
+        )?),
+        "start_folder_watch" => Some(to_json(
+            native_library::folder_watch::native_start_folder_watch(body)?,
+        )?),
+        "stop_folder_watch" => Some(to_json(
+            native_library::folder_watch::native_stop_folder_watch(
+                param_usize(params, "limit").unwrap_or(300),
+            )?,
+        )?),
+        "refresh_folder_watch" => Some(to_json(
+            native_library::folder_watch::native_refresh_folder_watch(body)?,
+        )?),
+        "apply_folder_watch" => Some(to_json(
+            native_library::folder_watch::native_apply_folder_watch(body)?,
+        )?),
+        "acknowledge_folder_watch_notifications_route" => Some(to_json(
+            native_library::folder_watch::native_ack_folder_watch_notifications(body)?,
+        )?),
         "get_audio_conversion_setup" => Some(to_json(
             native_library::tools::native_audio_conversion_setup(state)?,
         )?),

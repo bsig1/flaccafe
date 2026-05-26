@@ -29,13 +29,13 @@ struct ScanRequest {
 }
 
 #[derive(Clone)]
-struct AudioSnapshot {
-    path: PathBuf,
-    path_text: String,
-    path_key: String,
-    modified_at: Option<String>,
-    modified_ms: Option<i64>,
-    size_bytes: Option<i64>,
+pub(crate) struct AudioSnapshot {
+    pub(crate) path: PathBuf,
+    pub(crate) path_text: String,
+    pub(crate) path_key: String,
+    pub(crate) modified_at: Option<String>,
+    pub(crate) modified_ms: Option<i64>,
+    pub(crate) size_bytes: Option<i64>,
 }
 
 struct FolderPlan {
@@ -335,7 +335,7 @@ fn build_scan_plans(request: &ScanRequest) -> Result<Vec<FolderPlan>, String> {
     Ok(plans)
 }
 
-fn discover_audio_files(folder: &Path) -> Result<Vec<AudioSnapshot>, String> {
+pub(crate) fn discover_audio_files(folder: &Path) -> Result<Vec<AudioSnapshot>, String> {
     let mut files = Vec::new();
     let mut stack = vec![folder.to_path_buf()];
     while let Some(current) = stack.pop() {
@@ -363,7 +363,7 @@ fn discover_audio_files(folder: &Path) -> Result<Vec<AudioSnapshot>, String> {
     Ok(files)
 }
 
-fn read_metadata_batch(files: &[AudioSnapshot]) -> Result<Vec<JsonValue>, String> {
+pub(crate) fn read_metadata_batch(files: &[AudioSnapshot]) -> Result<Vec<JsonValue>, String> {
     let payload_files = files
         .iter()
         .map(|snapshot| {
@@ -461,7 +461,7 @@ fn apply_metadata_results(
     Ok(())
 }
 
-fn upsert_track(
+pub(crate) fn upsert_track(
     connection: &Connection,
     metadata: &serde_json::Map<String, JsonValue>,
 ) -> Result<&'static str, String> {
@@ -574,6 +574,78 @@ fn upsert_track(
     }
 }
 
+pub(crate) fn update_track_from_metadata(
+    connection: &Connection,
+    track_id: i64,
+    metadata: &serde_json::Map<String, JsonValue>,
+) -> Result<(), String> {
+    let path = required_text(metadata, "path")?;
+    let path_key = required_text(metadata, "path_key")?;
+    let album_id = ensure_album(connection, metadata)?;
+    let existing_rating = connection
+        .query_row(
+            "SELECT rating FROM tracks WHERE id = ?",
+            params![track_id],
+            |row| row.get::<_, Option<f64>>(0),
+        )
+        .map_err(|_| "Moved track is no longer in the library".to_string())?;
+    let rating = existing_rating.or_else(|| json_f64(metadata, "rating"));
+    connection
+        .execute(
+            "
+            UPDATE tracks
+            SET path = ?,
+                path_key = ?,
+                title = ?,
+                artist = ?,
+                album = ?,
+                album_artist = ?,
+                album_id = ?,
+                track_number = ?,
+                disc_number = ?,
+                genre = ?,
+                year = ?,
+                duration_seconds = ?,
+                bitrate = ?,
+                replaygain_track_gain_db = ?,
+                replaygain_album_gain_db = ?,
+                replaygain_track_peak = ?,
+                replaygain_album_peak = ?,
+                audio_fingerprint = ?,
+                rating = ?,
+                file_modified_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            ",
+            params![
+                path,
+                path_key,
+                json_string(metadata, "title"),
+                json_string(metadata, "artist"),
+                json_string(metadata, "album"),
+                json_string(metadata, "album_artist"),
+                album_id,
+                json_i64(metadata, "track_number"),
+                json_i64(metadata, "disc_number"),
+                json_string(metadata, "genre"),
+                json_i64(metadata, "year"),
+                json_f64(metadata, "duration_seconds"),
+                json_i64(metadata, "bitrate"),
+                json_f64(metadata, "replaygain_track_gain_db"),
+                json_f64(metadata, "replaygain_album_gain_db"),
+                json_f64(metadata, "replaygain_track_peak"),
+                json_f64(metadata, "replaygain_album_peak"),
+                json_string(metadata, "audio_fingerprint"),
+                rating,
+                json_string(metadata, "file_modified_at"),
+                utc_now(),
+                track_id,
+            ],
+        )
+        .map_err(|error| format!("Could not update moved track metadata: {error}"))?;
+    Ok(())
+}
+
 fn ensure_album(
     connection: &Connection,
     metadata: &serde_json::Map<String, JsonValue>,
@@ -651,7 +723,7 @@ fn remove_missing_tracks(
     Ok(missing_ids.len())
 }
 
-fn cleanup_orphan_albums(connection: &Connection) -> Result<(), String> {
+pub(crate) fn cleanup_orphan_albums(connection: &Connection) -> Result<(), String> {
     connection
         .execute(
             "
@@ -748,7 +820,7 @@ fn record_scan_error(connection: &Connection, folder: &Path, path: Option<&Path>
     );
 }
 
-fn clear_library_query_cache(connection: &Connection) {
+pub(crate) fn clear_library_query_cache(connection: &Connection) {
     let _ = connection.execute("DELETE FROM library_query_cache", []);
 }
 
@@ -793,7 +865,7 @@ impl ScanRequest {
 }
 
 impl AudioSnapshot {
-    fn from_path(path: PathBuf) -> Result<Self, String> {
+    pub(crate) fn from_path(path: PathBuf) -> Result<Self, String> {
         let metadata = fs::metadata(&path)
             .map_err(|error| format!("Could not read {}: {error}", path.display()))?;
         let modified = metadata.modified().ok();
@@ -810,7 +882,7 @@ impl AudioSnapshot {
         })
     }
 
-    fn from_native(value: &JsonValue) -> Option<Self> {
+    pub(crate) fn from_native(value: &JsonValue) -> Option<Self> {
         let raw_path = value.get("path").and_then(JsonValue::as_str)?.trim();
         if raw_path.is_empty() {
             return None;
@@ -995,7 +1067,7 @@ fn normalize_folder_path(value: &str) -> Result<PathBuf, String> {
     Ok(PathBuf::from(normalize_path_text(Path::new(cleaned))))
 }
 
-fn normalize_path_text(path: &Path) -> String {
+pub(crate) fn normalize_path_text(path: &Path) -> String {
     let path = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -1017,11 +1089,11 @@ fn clean_windows_verbatim(value: &str) -> String {
     }
 }
 
-fn path_key(path: &Path) -> String {
+pub(crate) fn path_key(path: &Path) -> String {
     path_key_text(&normalize_path_text(path))
 }
 
-fn path_key_text(value: &str) -> String {
+pub(crate) fn path_key_text(value: &str) -> String {
     if cfg!(windows) {
         value.to_ascii_lowercase()
     } else {
@@ -1029,7 +1101,7 @@ fn path_key_text(value: &str) -> String {
     }
 }
 
-fn path_is_under_folder(path: &Path, folder: &Path) -> bool {
+pub(crate) fn path_is_under_folder(path: &Path, folder: &Path) -> bool {
     let path_key_value = path_key(path);
     let mut folder_key = path_key(folder);
     if path_key_value == folder_key {
@@ -1041,7 +1113,7 @@ fn path_is_under_folder(path: &Path, folder: &Path) -> bool {
     path_key_value.starts_with(&folder_key)
 }
 
-fn is_supported_audio_path(path: &Path) -> bool {
+pub(crate) fn is_supported_audio_path(path: &Path) -> bool {
     path.extension()
         .and_then(|value| value.to_str())
         .map(|extension| format!(".{}", extension.to_ascii_lowercase()))
@@ -1067,7 +1139,7 @@ fn epoch_millis_to_iso(value: i64) -> Option<String> {
         .map(|datetime| format_py_utc(datetime.replace_microsecond(0).unwrap_or(datetime)))
 }
 
-fn utc_now() -> String {
+pub(crate) fn utc_now() -> String {
     format_py_utc(
         OffsetDateTime::now_utc()
             .replace_microsecond(0)
