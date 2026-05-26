@@ -3741,6 +3741,348 @@ pub fn native_duplicate_review(
     })
 }
 
+fn duplicate_action_batch_id(prefix: &str) -> String {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    format!("{prefix}-{stamp}")
+}
+
+fn resolve_json_tool_output_path(path: Option<String>, default_name: String) -> PathBuf {
+    let trimmed = path.as_deref().map(str::trim).unwrap_or_default();
+    let mut target = if trimmed.is_empty() {
+        app_storage_root().join("exports").join(default_name)
+    } else {
+        let candidate = PathBuf::from(trimmed);
+        if candidate.is_absolute() {
+            candidate
+        } else {
+            app_storage_root().join("exports").join(candidate)
+        }
+    };
+    if target
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| !extension.eq_ignore_ascii_case("json"))
+        .unwrap_or(true)
+    {
+        target.set_extension("json");
+    }
+    target
+}
+
+fn remove_duplicate_tracks_from_library(
+    connection: &Connection,
+    track_ids: Vec<i64>,
+    batch_id: &str,
+) -> Result<(Vec<i64>, Vec<String>), String> {
+    let mut unique_ids = Vec::new();
+    for track_id in track_ids.into_iter().filter(|track_id| *track_id > 0) {
+        if !unique_ids.contains(&track_id) {
+            unique_ids.push(track_id);
+        }
+    }
+    if unique_ids.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    const REMOVE_COLUMNS: &[&str] = &[
+        "path_key",
+        "id",
+        "path",
+        "title",
+        "artist",
+        "album",
+        "album_artist",
+        "track_number",
+        "disc_number",
+        "genre",
+        "analysis_provider",
+        "analysis_model",
+        "analysis_genre",
+        "analysis_genre_confidence",
+        "analysis_genre_tags",
+        "analysis_embedding",
+        "analysis_updated_at",
+        "year",
+        "duration_seconds",
+        "bitrate",
+        "replaygain_track_gain_db",
+        "replaygain_album_gain_db",
+        "replaygain_track_peak",
+        "replaygain_album_peak",
+        "audio_fingerprint",
+        "acoustic_fingerprint",
+        "acoustic_fingerprint_updated_at",
+        "rating",
+        "play_count",
+        "skip_count",
+        "last_played_at",
+        "last_skipped_at",
+        "date_added",
+        "file_modified_at",
+    ];
+    let placeholders = vec!["?"; unique_ids.len()].join(",");
+    let mut statement = connection
+        .prepare(&format!(
+            "SELECT path_key, {TRACK_COLUMNS} FROM tracks WHERE id IN ({placeholders})"
+        ))
+        .map_err(|error| format!("Could not prepare duplicate removal query: {error}"))?;
+    let rows = statement
+        .query_map(params_from_iter(unique_ids.iter()), |row| {
+            row_to_json_object(row, REMOVE_COLUMNS)
+        })
+        .map_err(|error| format!("Could not read duplicate removal tracks: {error}"))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| format!("Could not decode duplicate removal tracks: {error}"))?;
+    let by_id = rows
+        .into_iter()
+        .filter_map(|track| {
+            track
+                .get("id")
+                .and_then(serde_json::Value::as_i64)
+                .map(|id| (id, track))
+        })
+        .collect::<HashMap<_, _>>();
+    let mut removed = Vec::new();
+    let mut errors = Vec::new();
+    for track_id in unique_ids {
+        let Some(track) = by_id.get(&track_id) else {
+            errors.push(format!("Track {track_id} was not found"));
+            continue;
+        };
+        let summary = track
+            .get("title")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| track.get("path").and_then(serde_json::Value::as_str))
+            .unwrap_or("track");
+        let payload = json!({"track": track, "delete_file": false});
+        connection
+            .execute(
+                "INSERT INTO bulk_action_undo_log(batch_id, action_type, summary, payload_json)
+                 VALUES(?, 'track_remove', ?, ?)",
+                params![batch_id, format!("Removed {summary}"), payload.to_string()],
+            )
+            .map_err(|error| format!("Could not write duplicate removal undo log: {error}"))?;
+        if let Some(path_key) = track.get("path_key").and_then(serde_json::Value::as_str) {
+            let _ = connection.execute(
+                "DELETE FROM track_metadata_cache WHERE path_key = ?",
+                params![path_key],
+            );
+            let _ = connection.execute(
+                "DELETE FROM artwork_cache WHERE path_key = ?",
+                params![path_key],
+            );
+        }
+        connection
+            .execute("DELETE FROM tracks WHERE id = ?", params![track_id])
+            .map_err(|error| format!("Could not remove duplicate track {track_id}: {error}"))?;
+        removed.push(track_id);
+    }
+    if !removed.is_empty() {
+        scan::cleanup_orphan_albums(connection)?;
+        clear_library_query_cache(connection);
+    }
+    Ok((removed, errors))
+}
+
+pub fn native_duplicate_action(
+    state: State<'_, NativeLibraryState>,
+    action: String,
+    track_ids: Option<Vec<i64>>,
+    groups: Option<Vec<Vec<i64>>>,
+    report_path: Option<String>,
+    ignore_key: Option<String>,
+    ignore_label: Option<String>,
+) -> Result<NativeDuplicateActionResponse, String> {
+    let action = action.trim().to_string();
+    let track_ids = track_ids.unwrap_or_default();
+    let groups = groups.unwrap_or_default();
+    match action.as_str() {
+        "clear_ignored" => {
+            let connection = open_database()?;
+            let affected = connection
+                .execute(
+                    "DELETE FROM library_health_ignores WHERE kind = 'duplicate'",
+                    [],
+                )
+                .map_err(|error| format!("Could not clear duplicate ignores: {error}"))?
+                as i64;
+            Ok(NativeDuplicateActionResponse {
+                action,
+                affected,
+                removed_track_ids: Vec::new(),
+                deleted_files: 0,
+                report_path: None,
+                errors: Vec::new(),
+            })
+        }
+        "ignore" => {
+            let connection = open_database()?;
+            let mut errors = Vec::new();
+            let mut ignore_key = ignore_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            if ignore_key.is_none() && !track_ids.is_empty() {
+                let (track_map, missing) = tracks_by_id_map(&connection, &track_ids)?;
+                errors.extend(
+                    missing
+                        .into_iter()
+                        .map(|track_id| format!("Track {track_id} was not found")),
+                );
+                let tracks = track_map.into_values().collect::<Vec<_>>();
+                if tracks.len() >= 2 {
+                    let label = ignore_label
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or("Ignored duplicate group");
+                    ignore_key = Some(
+                        duplicate_group_from_native_tracks(label.to_string(), tracks).ignore_key,
+                    );
+                }
+            }
+            let Some(ignore_key) = ignore_key else {
+                return Err("Choose a duplicate group to ignore".to_string());
+            };
+            let label = ignore_label
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("Ignored duplicate group");
+            connection
+                .execute(
+                    "INSERT INTO library_health_ignores(kind, ignore_key, label)
+                     VALUES('duplicate', ?, ?)
+                     ON CONFLICT(kind, ignore_key) DO UPDATE SET
+                       label = excluded.label,
+                       created_at = datetime('now')",
+                    params![ignore_key, label],
+                )
+                .map_err(|error| format!("Could not ignore duplicate group: {error}"))?;
+            Ok(NativeDuplicateActionResponse {
+                action,
+                affected: 1,
+                removed_track_ids: Vec::new(),
+                deleted_files: 0,
+                report_path: None,
+                errors,
+            })
+        }
+        "export_report" => {
+            let stamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_secs())
+                .unwrap_or(0);
+            let target = resolve_json_tool_output_path(
+                report_path,
+                format!("flac-cafe-duplicates-{stamp}.json"),
+            );
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).map_err(|error| {
+                    format!(
+                        "Could not create duplicate report folder {}: {error}",
+                        parent.display()
+                    )
+                })?;
+            }
+            let selected = track_ids.into_iter().collect::<HashSet<_>>();
+            let mut review = native_duplicate_review(state, None, None, Some(500))?;
+            if !selected.is_empty() {
+                review.groups.retain(|group| {
+                    group
+                        .tracks
+                        .iter()
+                        .any(|track| selected.contains(&track.id))
+                });
+            }
+            let payload = json!({
+                "generated_at": scan::utc_now(),
+                "groups": review.groups,
+            });
+            let text = serde_json::to_string_pretty(&payload)
+                .map_err(|error| format!("Could not encode duplicate report: {error}"))?;
+            std::fs::write(&target, text)
+                .map_err(|error| format!("Could not write duplicate report: {error}"))?;
+            Ok(NativeDuplicateActionResponse {
+                action,
+                affected: payload
+                    .get("groups")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|groups| groups.len() as i64)
+                    .unwrap_or(0),
+                removed_track_ids: Vec::new(),
+                deleted_files: 0,
+                report_path: Some(target.to_string_lossy().to_string()),
+                errors: Vec::new(),
+            })
+        }
+        "keep_best" | "remove_selected" => {
+            let mut connection = open_database()?;
+            let transaction = connection
+                .transaction()
+                .map_err(|error| format!("Could not start duplicate action: {error}"))?;
+            let ids_to_remove = if action == "keep_best" {
+                let candidate_groups = if groups.is_empty() && !track_ids.is_empty() {
+                    vec![track_ids.clone()]
+                } else {
+                    groups.clone()
+                };
+                let mut remove_ids = Vec::new();
+                for group in candidate_groups {
+                    let unique = group
+                        .into_iter()
+                        .filter(|track_id| *track_id > 0)
+                        .collect::<HashSet<_>>()
+                        .into_iter()
+                        .collect::<Vec<_>>();
+                    if unique.len() < 2 {
+                        continue;
+                    }
+                    let (track_map, _) = tracks_by_id_map(&transaction, &unique)?;
+                    let group_tracks = track_map.into_values().collect::<Vec<_>>();
+                    let keep_id = duplicate_group_from_native_tracks(
+                        "Selected duplicate group".to_string(),
+                        group_tracks.clone(),
+                    )
+                    .recommended_keep_id;
+                    remove_ids.extend(
+                        group_tracks
+                            .into_iter()
+                            .filter(|track| Some(track.id) != keep_id)
+                            .map(|track| track.id),
+                    );
+                }
+                remove_ids
+            } else {
+                track_ids.clone()
+            };
+            let batch_id = duplicate_action_batch_id(if action == "keep_best" {
+                "duplicate-keep"
+            } else {
+                "duplicate-remove"
+            });
+            let (removed_track_ids, errors) =
+                remove_duplicate_tracks_from_library(&transaction, ids_to_remove, &batch_id)?;
+            transaction
+                .commit()
+                .map_err(|error| format!("Could not commit duplicate action: {error}"))?;
+            Ok(NativeDuplicateActionResponse {
+                action,
+                affected: removed_track_ids.len() as i64,
+                removed_track_ids,
+                deleted_files: 0,
+                report_path: None,
+                errors,
+            })
+        }
+        _ => Err("Unsupported duplicate action".to_string()),
+    }
+}
+
 fn primary_artist_name(value: &str) -> String {
     let separators = [';', '|'];
     let mut artist = value

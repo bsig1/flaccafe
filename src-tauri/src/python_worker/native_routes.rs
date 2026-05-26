@@ -429,6 +429,24 @@ pub(super) fn try_handle_native_json(
             body_i64_groups(&body, "groups"),
             body_usize(&body, "limit"),
         )?)?),
+        "apply_duplicate_action" => {
+            let action = required_body_string(&body, "action")?;
+            if matches!(action.as_str(), "keep_best" | "remove_selected")
+                && body_bool(&body, "delete_files").unwrap_or(false)
+            {
+                None
+            } else {
+                Some(to_json(native_library::native_duplicate_action(
+                    state,
+                    action,
+                    body_i64_vec(&body, "track_ids"),
+                    body_i64_groups(&body, "groups"),
+                    body_string(&body, "report_path"),
+                    body_string(&body, "ignore_key"),
+                    body_string(&body, "ignore_label"),
+                )?)?)
+            }
+        }
         "validate_gapless_playback" => Some(to_json(native_library::native_gapless_validate(
             state,
             body_i64_vec(&body, "track_ids"),

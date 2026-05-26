@@ -1005,3 +1005,13 @@ pub struct NativeDuplicateReviewResponse {
     pub(crate) groups: Vec<NativeDuplicateGroup>,
     pub(crate) missing_track_ids: Vec<i64>,
 }
+
+#[derive(Serialize)]
+pub struct NativeDuplicateActionResponse {
+    pub(crate) action: String,
+    pub(crate) affected: i64,
+    pub(crate) removed_track_ids: Vec<i64>,
+    pub(crate) deleted_files: i64,
+    pub(crate) report_path: Option<String>,
+    pub(crate) errors: Vec<String>,
+}

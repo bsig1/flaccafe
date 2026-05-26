@@ -35,7 +35,7 @@
 - Keep RSS/feed parsing and episode downloading in Python for now only if current Python libraries remain more convenient; otherwise evaluate Rust `rss` plus `reqwest`.
 - Consider moving ListenBrainz and Last.fm HTTP submission to Rust because signing and JSON/form posts are not Python-specialist work.
 - Keep CLAP inference in Python, but move analysis job state, candidate selection, pause/resume/cancel, progress, DB writes, and genre-tag application into Rust.
-- Move duplicate ignore/delete actions and duplicate embedding similarity math into Rust.
+- Move duplicate embedding similarity math into Rust.
 - Move tag backup/restore JSON handling and CSV metadata export/import/report generation into Rust.
 - Move device sync detected-drive probing, preview, copy jobs, and playlist export into Rust where Windows APIs or filesystem operations are involved.
 - Move metadata write preview diffing into Rust, but keep actual audio tag writes in Python until Rust tag-writing crates are proven safe for MP3, FLAC, M4A, OGG/Opus, WAV, and AIFF.
@@ -71,6 +71,7 @@
 - Moved JSON report file reading into Rust so File Management report viewing no longer spawns Python.
 - Added a low-noise Rust counter for remaining Python worker action calls, exposed at `/diagnostics/python-worker-usage`.
 - Added `docs/rust-route-migration-checklist.md` with the per-route Rust migration exit checklist.
+- Moved duplicate ignore, clear-ignored, report export, keep-best, and remove-selected SQLite actions into Rust; delete-from-disk still falls back to Python for Recycle Bin handling.
 - Added `flaccafe-media://localhost/python-bytes/...` for Python-owned byte responses such as album art and CD live audio.
 - Switched `npm run dev` to desktop dev so local development exercises the same Rust-to-Python worker path as packaged builds.
 
