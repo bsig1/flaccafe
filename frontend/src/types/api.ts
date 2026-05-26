@@ -252,6 +252,7 @@ export interface HistoryStatsResponse {
 
 export interface DuplicateGroup {
   key: string;
+  ignore_key: string;
   tracks: Track[];
   match_reason: string;
   recommended_keep_id: number | null;
@@ -276,6 +277,9 @@ export interface LibraryHealthResponse {
   missing_metadata: Track[];
   duplicate_groups: DuplicateGroup[];
   unrated_tracks: Track[];
+  missing_metadata_total: number;
+  duplicate_group_total: number;
+  ignored_duplicate_group_total: number;
 }
 
 export interface LibraryStatsResponse {
@@ -897,11 +901,13 @@ export interface VolumeTagResponse {
 }
 
 export interface DuplicateActionRequest {
-  action: "keep_best" | "remove_selected" | "export_report";
+  action: "keep_best" | "remove_selected" | "export_report" | "ignore" | "clear_ignored";
   track_ids?: number[];
   groups?: number[][];
   delete_files?: boolean;
   report_path?: string | null;
+  ignore_key?: string | null;
+  ignore_label?: string | null;
 }
 
 export interface DuplicateActionResponse {
@@ -1192,7 +1198,7 @@ export interface AudioConversionRequest {
   sample_rate_hz?: number | null;
   bitrate_kbps?: number | null;
   overwrite?: boolean;
-  limit?: number;
+  limit?: number | null;
 }
 
 export interface AudioConversionChange {
@@ -1201,6 +1207,11 @@ export interface AudioConversionChange {
   artist: string | null;
   source_path: string;
   target_path: string;
+  source_size_bytes: number | null;
+  estimated_output_size_bytes: number | null;
+  estimated_size_change_bytes: number | null;
+  estimated_size_ratio: number | null;
+  estimate_note: string | null;
   changed: boolean;
   collision: boolean;
   error: string | null;
@@ -1211,6 +1222,11 @@ export interface AudioConversionPreviewResponse {
   total: number;
   changed_count: number;
   collisions: number;
+  source_size_bytes: number | null;
+  estimated_output_size_bytes: number | null;
+  estimated_size_change_bytes: number | null;
+  estimated_size_ratio: number | null;
+  estimated_tracks: number;
   changes: AudioConversionChange[];
 }
 

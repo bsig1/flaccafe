@@ -68,6 +68,7 @@ import type {
   AlbumArtworkCandidate,
   AdvancedTrackSearchFilters,
   ArtistSummary,
+  DuplicateGroup,
   InboxAutoReviewField,
   InboxAutoReviewMatchType,
   InboxAutoReviewRule,
@@ -184,6 +185,49 @@ function artistMetaLabel(artist: ArtistSummary): string {
   ]
     .filter(Boolean)
     .join(" - ");
+}
+
+const missingMetadataFilters = [
+  { id: "all", label: "All" },
+  { id: "title", label: "Title" },
+  { id: "artist", label: "Artist" },
+  { id: "album", label: "Album" },
+  { id: "album_artist", label: "Album Artist" },
+  { id: "track", label: "Track #" },
+  { id: "genre", label: "Genre" },
+  { id: "year", label: "Year" },
+  { id: "duration", label: "Duration" },
+] as const;
+
+type MissingMetadataFilter = (typeof missingMetadataFilters)[number]["id"];
+
+function missingMetadataFields(track: Track): Array<{ id: MissingMetadataFilter; label: string }> {
+  const fields: Array<{ id: MissingMetadataFilter; label: string }> = [];
+  if (!track.title?.trim()) {
+    fields.push({ id: "title", label: "Title" });
+  }
+  if (!track.artist?.trim()) {
+    fields.push({ id: "artist", label: "Artist" });
+  }
+  if (!track.album?.trim()) {
+    fields.push({ id: "album", label: "Album" });
+  }
+  if (!track.album_artist?.trim()) {
+    fields.push({ id: "album_artist", label: "Album Artist" });
+  }
+  if (track.track_number === null || track.track_number === undefined) {
+    fields.push({ id: "track", label: "Track #" });
+  }
+  if (!trackGenre(track)?.trim()) {
+    fields.push({ id: "genre", label: "Genre" });
+  }
+  if (track.year === null || track.year === undefined) {
+    fields.push({ id: "year", label: "Year" });
+  }
+  if (track.duration_seconds === null || track.duration_seconds === undefined) {
+    fields.push({ id: "duration", label: "Duration" });
+  }
+  return fields;
 }
 
 function virtualCollectionWindow(
@@ -328,6 +372,8 @@ export function LibraryPage({
   detailTrack,
   setDetailTrack,
   onAnalyzeTracks,
+  onIgnoreDuplicateGroup,
+  onClearIgnoredDuplicateGroups,
   isAudioAnalyzing,
   currentTrackId,
   currentTrack,
@@ -431,6 +477,8 @@ export function LibraryPage({
   detailTrack: Track | null;
   setDetailTrack: (track: Track | null) => void;
   onAnalyzeTracks: (trackIds: number[]) => void;
+  onIgnoreDuplicateGroup: (ignoreKey: string, label: string) => void | Promise<void>;
+  onClearIgnoredDuplicateGroups: () => void | Promise<void>;
   isAudioAnalyzing: boolean;
   currentTrackId: number | null;
   currentTrack: Track | null;
@@ -461,6 +509,8 @@ export function LibraryPage({
   const [selectedTrackCache, setSelectedTrackCache] = useState<Map<number, Track>>(() => new Map());
   const [isSelectingAllTracks, setIsSelectingAllTracks] = useState(false);
   const [showAllDuplicateGroups, setShowAllDuplicateGroups] = useState(false);
+  const [showAllMissingMetadata, setShowAllMissingMetadata] = useState(false);
+  const [missingMetadataFilter, setMissingMetadataFilter] = useState<MissingMetadataFilter>("all");
   const [bulkMetadataOpen, setBulkMetadataOpen] = useState(false);
   const [draggedColumn, setDraggedColumn] = useState<MetadataColumnKey | null>(null);
   const [dragOverColumn, setDragOverColumn] = useState<MetadataColumnKey | null>(null);
@@ -555,6 +605,19 @@ export function LibraryPage({
   const activeAlbum = albums.find((album) => album.id === selectedAlbumId) ?? null;
   const activeArtist = artists.find((artist) => artist.name === selectedArtistName) ?? null;
   const activePlaylist = playlists.find((playlist) => playlist.id === selectedPlaylistId) ?? null;
+  const missingMetadataRows = libraryHealth?.missing_metadata ?? [];
+  const filteredMissingMetadataRows = missingMetadataRows.filter((track) => {
+    if (missingMetadataFilter === "all") {
+      return true;
+    }
+    return missingMetadataFields(track).some((field) => field.id === missingMetadataFilter);
+  });
+  const visibleMissingMetadataRows = showAllMissingMetadata
+    ? filteredMissingMetadataRows
+    : filteredMissingMetadataRows.slice(0, 30);
+  const visibleDuplicateGroups = showAllDuplicateGroups
+    ? libraryHealth?.duplicate_groups ?? []
+    : (libraryHealth?.duplicate_groups ?? []).slice(0, 8);
   const completionQuery = search.trim().toLowerCase();
   const completionSearchTerms = completionQuery.split(/\s+/).filter(Boolean);
   const completionMatchesSearch = (...values: Array<string | number | null | undefined>) => {
@@ -3376,29 +3439,107 @@ export function LibraryPage({
                   </div>
                 </div>
                 <div>
-                  <h2 className="mb-2 text-sm font-semibold text-white">Missing Metadata</h2>
-                  <div className="rounded border border-line">
-                    {(libraryHealth?.missing_metadata ?? []).slice(0, 12).map((track) => (
-                      <button key={track.id} className="flex w-full items-center justify-between border-b border-line/60 px-3 py-2 text-left text-sm hover:bg-white/[0.035]" type="button" onClick={() => onPlayTrack(track, [track])}>
-                        <span className="truncate text-white">{display(track.title, "Untitled")}</span>
-                        <span className="ml-3 truncate text-xs text-muted">{display(track.artist)} - {display(track.album)}</span>
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h2 className="text-sm font-semibold text-white">Missing Metadata</h2>
+                      <div className="text-xs text-muted">
+                        Showing {visibleMissingMetadataRows.length.toLocaleString()} of{" "}
+                        {(libraryHealth?.missing_metadata_total ?? missingMetadataRows.length).toLocaleString()} incomplete music tracks
+                      </div>
+                    </div>
+                    {filteredMissingMetadataRows.length > 30 && (
+                      <button
+                        className="text-xs text-muted hover:text-white"
+                        type="button"
+                        onClick={() => setShowAllMissingMetadata((current) => !current)}
+                      >
+                        {showAllMissingMetadata ? "Show fewer" : `Show all ${filteredMissingMetadataRows.length.toLocaleString()}`}
                       </button>
-                    ))}
+                    )}
+                  </div>
+                  <div className="mb-2 flex flex-wrap gap-1.5">
+                    {missingMetadataFilters.map((filter) => {
+                      const active = missingMetadataFilter === filter.id;
+                      return (
+                        <button
+                          key={filter.id}
+                          className={`rounded border px-2 py-1 text-xs transition ${
+                            active ? "border-moss bg-moss/10 text-moss" : "border-line bg-panel text-muted hover:text-white"
+                          }`}
+                          type="button"
+                          onClick={() => setMissingMetadataFilter(filter.id)}
+                        >
+                          {filter.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="rounded border border-line">
+                    {visibleMissingMetadataRows.map((track) => {
+                      const fields = missingMetadataFields(track);
+                      return (
+                        <div key={track.id} className="flex items-center gap-3 border-b border-line/60 px-3 py-2 text-sm last:border-b-0 hover:bg-white/[0.035]">
+                          <button className="min-w-0 flex-1 text-left" type="button" onClick={() => setDetailTrack(track)} onDoubleClick={() => onPlayTrack(track, [track])}>
+                            <div className="truncate text-white">{display(track.title, fileName(track.path) || "Untitled")}</div>
+                            <div className="truncate text-xs text-muted">{display(track.artist)} - {display(track.album)}</div>
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {fields.map((field) => (
+                                <span key={field.id} className="rounded border border-ember/40 bg-ember/10 px-1.5 py-0.5 text-[11px] text-ember">
+                                  {field.label}
+                                </span>
+                              ))}
+                            </div>
+                          </button>
+                          <div className="flex shrink-0 items-center gap-1">
+                            <button className="icon-button h-8 w-8" type="button" title="Play track" onClick={() => onPlayTrack(track, [track])}>
+                              <Play size={14} />
+                            </button>
+                            <button className="secondary-button h-8" type="button" onClick={() => onEditTrack(track)}>
+                              <Pencil size={14} />
+                              Edit
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {visibleMissingMetadataRows.length === 0 && (
+                      <div className="px-3 py-3 text-sm text-muted">
+                        {missingMetadataFilter === "all" ? "No missing metadata found." : "No tracks match this missing-field filter."}
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div>
                   <div className="mb-2 flex items-center justify-between gap-3">
-                    <h2 className="text-sm font-semibold text-white">Potential Duplicates</h2>
-                    <button
-                      className="text-xs text-muted hover:text-white"
-                      type="button"
-                      onClick={() => setShowAllDuplicateGroups((current) => !current)}
-                    >
-                      {showAllDuplicateGroups ? "Show fewer" : `Review all ${(libraryHealth?.duplicate_groups ?? []).length}`}
-                    </button>
+                    <div>
+                      <h2 className="text-sm font-semibold text-white">Potential Duplicates</h2>
+                      {(libraryHealth?.ignored_duplicate_group_total ?? 0) > 0 && (
+                        <div className="text-xs text-muted">
+                          {libraryHealth?.ignored_duplicate_group_total.toLocaleString()} ignored
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {(libraryHealth?.ignored_duplicate_group_total ?? 0) > 0 && (
+                        <button
+                          className="text-xs text-muted hover:text-white"
+                          type="button"
+                          onClick={() => void onClearIgnoredDuplicateGroups()}
+                        >
+                          Show ignored
+                        </button>
+                      )}
+                      <button
+                        className="text-xs text-muted hover:text-white"
+                        type="button"
+                        onClick={() => setShowAllDuplicateGroups((current) => !current)}
+                      >
+                        {showAllDuplicateGroups ? "Show fewer" : `Review all ${(libraryHealth?.duplicate_group_total ?? libraryHealth?.duplicate_groups.length ?? 0).toLocaleString()}`}
+                      </button>
+                    </div>
                   </div>
                   <div className="grid gap-3">
-                    {(showAllDuplicateGroups ? libraryHealth?.duplicate_groups ?? [] : (libraryHealth?.duplicate_groups ?? []).slice(0, 8)).map((group) => {
+                    {visibleDuplicateGroups.map((group: DuplicateGroup) => {
                       const keepId = group.recommended_keep_id ?? group.tracks[0]?.id ?? null;
                       const removableIds = group.tracks.filter((track) => track.id !== keepId).map((track) => track.id);
                       return (
@@ -3438,6 +3579,15 @@ export function LibraryPage({
                               <button
                                 className="secondary-button h-8"
                                 type="button"
+                                title="Hide this duplicate group from Library Health"
+                                onClick={() => void onIgnoreDuplicateGroup(group.ignore_key, group.key)}
+                              >
+                                <CheckCircle2 size={14} />
+                                Ignore
+                              </button>
+                              <button
+                                className="secondary-button h-8"
+                                type="button"
                                 disabled={removableIds.length === 0}
                                 onClick={() => onRequestDeleteTracks(removableIds, `duplicates for ${group.key}`, true)}
                               >
@@ -3464,21 +3614,32 @@ export function LibraryPage({
                             {group.tracks.map((track) => {
                               const recommended = track.id === keepId;
                               return (
-                                <button
+                                <div
                                   key={track.id}
                                   className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-white/[0.04] ${
                                     recommended ? "bg-moss/10 text-moss" : "text-muted"
                                   }`}
-                                  type="button"
-                                  onClick={() => setDetailTrack(track)}
-                                  onDoubleClick={() => onPlayTrack(track, group.tracks)}
                                 >
-                                  <span className="w-12 shrink-0 tabular-nums">{formatDuration(track.duration_seconds)}</span>
-                                  <span className="w-20 shrink-0 tabular-nums">{formatBitrate(track.bitrate)}</span>
-                                  <span className="min-w-0 flex-1 truncate">{track.path}</span>
-                                  <span className="w-24 shrink-0 truncate text-right">{formatFingerprint(track.audio_fingerprint)}</span>
+                                  <button className="flex min-w-0 flex-1 items-center gap-2 text-left" type="button" onClick={() => setDetailTrack(track)} onDoubleClick={() => onPlayTrack(track, group.tracks)}>
+                                    <span className="w-12 shrink-0 tabular-nums">{formatDuration(track.duration_seconds)}</span>
+                                    <span className="w-20 shrink-0 tabular-nums">{formatBitrate(track.bitrate)}</span>
+                                    <span className="min-w-0 flex-1 truncate">{track.path}</span>
+                                    <span className="w-24 shrink-0 truncate text-right">{formatFingerprint(track.audio_fingerprint)}</span>
+                                  </button>
                                   {recommended && <span className="shrink-0 rounded border border-moss/40 px-2 py-0.5">keep</span>}
-                                </button>
+                                  <button className="icon-button h-7 w-7 shrink-0" type="button" title="Play this copy" onClick={() => onPlayTrack(track, group.tracks)}>
+                                    <Play size={13} />
+                                  </button>
+                                  <button
+                                    className="secondary-button h-7 shrink-0 px-2"
+                                    type="button"
+                                    title="Remove this track from the library or send the file to the Recycle Bin"
+                                    onClick={() => onRequestDeleteTracks([track.id], display(track.title, fileName(track.path) || "duplicate track"), true)}
+                                  >
+                                    <Trash2 size={13} />
+                                    Delete
+                                  </button>
+                                </div>
                               );
                             })}
                           </div>
@@ -3495,6 +3656,9 @@ export function LibraryPage({
                         </div>
                       );
                     })}
+                    {visibleDuplicateGroups.length === 0 && (
+                      <div className="rounded border border-line bg-panel px-3 py-3 text-sm text-muted">No duplicate groups found.</div>
+                    )}
                   </div>
                 </div>
                 <div>

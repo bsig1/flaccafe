@@ -3636,7 +3636,7 @@ export default function App() {
       overwrite: boolean;
       trackIds: number[] | null;
     },
-    limit: number,
+    limit?: number | null,
   ) {
     return {
       target_folder: targetFolder.trim(),
@@ -3674,7 +3674,7 @@ export default function App() {
     try {
       const response = await previewAudioConversion(audioConversionRequest(targetFolder, options, 200));
       setAudioConversionPreview(response);
-      setStatus(`${response.changed_count.toLocaleString()} of ${response.total.toLocaleString()} tracks would convert`);
+      setStatus(`${response.changed_count.toLocaleString()} of ${response.total.toLocaleString()} previewed tracks would convert`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not preview audio conversion");
     }
@@ -3698,12 +3698,15 @@ export default function App() {
       setStatus("Choose a conversion target folder first");
       return;
     }
-    if (!window.confirm("Start audio conversion? This writes new audio files into the target folder.")) {
+    const scopeLabel = options.trackIds?.length
+      ? `${options.trackIds.length.toLocaleString()} selected/scoped track${options.trackIds.length === 1 ? "" : "s"}`
+      : "every matching track in the library";
+    if (!window.confirm(`Start audio conversion for ${scopeLabel}? This writes new audio files into the target folder.`)) {
       return;
     }
     try {
       setAudioConversionProgress(null);
-      const started = await startAudioConversion(audioConversionRequest(targetFolder, options, 10000));
+      const started = await startAudioConversion(audioConversionRequest(targetFolder, options));
       setAudioConversionJobId(started.job_id);
       let latest: AudioConversionProgress | null = null;
       while (true) {
@@ -3839,7 +3842,7 @@ export default function App() {
   }
 
   async function handleDuplicateAction(request: DuplicateActionRequest) {
-    if (request.action !== "export_report") {
+    if (!["export_report", "ignore", "clear_ignored"].includes(request.action)) {
       const count = request.groups?.length
         ? request.groups.reduce((total, group) => total + group.length, 0)
         : request.track_ids?.length ?? 0;
@@ -3859,6 +3862,32 @@ export default function App() {
       }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not apply duplicate action");
+    }
+  }
+
+  async function handleIgnoreDuplicateGroup(ignoreKey: string, label: string) {
+    try {
+      const response = await applyDuplicateAction({
+        action: "ignore",
+        ignore_key: ignoreKey,
+        ignore_label: label,
+      });
+      setDuplicateActionResult(response);
+      await loadLibraryStats();
+      setStatus("Ignored duplicate group");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not ignore duplicate group");
+    }
+  }
+
+  async function handleClearIgnoredDuplicateGroups() {
+    try {
+      const response = await applyDuplicateAction({ action: "clear_ignored" });
+      setDuplicateActionResult(response);
+      await loadLibraryStats();
+      setStatus(`Restored ${response.affected.toLocaleString()} ignored duplicate group${response.affected === 1 ? "" : "s"}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not restore ignored duplicate groups");
     }
   }
 
@@ -4891,6 +4920,8 @@ export default function App() {
               detailTrack={detailTrack}
               setDetailTrack={setDetailTrack}
               onAnalyzeTracks={handleAnalyzeTracks}
+              onIgnoreDuplicateGroup={handleIgnoreDuplicateGroup}
+              onClearIgnoredDuplicateGroups={handleClearIgnoredDuplicateGroups}
               isAudioAnalyzing={isAudioAnalyzing}
               currentTrackId={currentTrack?.id ?? null}
               currentTrack={currentTrack}

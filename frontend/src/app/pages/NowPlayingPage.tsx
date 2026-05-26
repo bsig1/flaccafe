@@ -1,8 +1,10 @@
 import {
   ArrowDown,
   ArrowUp,
+  Clock,
   Download,
   GripVertical,
+  ListMusic,
   Maximize2,
   Minimize2,
   Pencil,
@@ -49,6 +51,8 @@ import {
   beginPointerReorderDrag,
   display,
   displayAlbumForTrack,
+  formatPlaybackTime,
+  isTimestampOnlyLyricLine,
   miniPlayerChannelName,
   parseLyricTimestamp,
   readMiniPlayerSnapshot,
@@ -61,6 +65,39 @@ import {
 
 const QUEUE_VIRTUALIZATION_THRESHOLD = 160;
 const QUEUE_VIRTUALIZATION_OVERSCAN = 10;
+
+type LyricsEditMode = "text" | "sync";
+
+interface LrcBuilderLine {
+  id: string;
+  text: string;
+  time: number | null;
+  gap: boolean;
+}
+
+function formatLrcTimestamp(seconds: number | null): string {
+  if (seconds === null || !Number.isFinite(seconds)) {
+    return "--:--.--";
+  }
+  const safeSeconds = Math.max(0, seconds);
+  const minutes = Math.floor(safeSeconds / 60);
+  const wholeSeconds = Math.floor(safeSeconds % 60);
+  const centiseconds = Math.floor((safeSeconds - Math.floor(safeSeconds)) * 100);
+  return `${minutes.toString().padStart(2, "0")}:${wholeSeconds.toString().padStart(2, "0")}.${centiseconds.toString().padStart(2, "0")}`;
+}
+
+function lrcDraftFromBuilderLines(lines: LrcBuilderLine[]): string {
+  return lines
+    .map((line) => {
+      const text = line.gap ? "" : line.text.trimEnd();
+      if (line.time === null) {
+        return text;
+      }
+      const timestamp = `[${formatLrcTimestamp(line.time)}]`;
+      return text ? `${timestamp} ${text}` : timestamp;
+    })
+    .join("\n");
+}
 
 export function NowPlayingPage({
   currentTrack,
@@ -119,11 +156,15 @@ export function NowPlayingPage({
   const [lyricsTarget, setLyricsTarget] = useState<"database" | "file">("database");
   const [lyricsSynced, setLyricsSynced] = useState(false);
   const [lyricsBusy, setLyricsBusy] = useState(false);
+  const [lyricsEditMode, setLyricsEditMode] = useState<LyricsEditMode>("text");
+  const [lrcBuilderLines, setLrcBuilderLines] = useState<LrcBuilderLine[]>([]);
+  const [activeBuilderLineIndex, setActiveBuilderLineIndex] = useState(0);
   const [visualizerFrame, setVisualizerFrame] = useState<VisualizerFrame | null>(null);
   const [playbackSnapshot, setPlaybackSnapshot] = useState<MiniPlayerSnapshot>(readMiniPlayerSnapshot);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const lyricsScrollRef = useRef<HTMLDivElement | null>(null);
-  const activeLyricRef = useRef<HTMLParagraphElement | null>(null);
+  const activeLyricRef = useRef<HTMLElement | null>(null);
+  const builderLineIdRef = useRef(0);
   const queueScrollRef = useRef<HTMLDivElement | null>(null);
   const queueScrollFrameRef = useRef<number | null>(null);
   const pendingQueueScrollTopRef = useRef(0);
@@ -138,6 +179,9 @@ export function NowPlayingPage({
     setLyricsDraft(lyrics?.lyrics ?? "");
     setLyricsSynced(Boolean(lyrics?.is_synced));
     setIsEditingLyrics(false);
+    setLyricsEditMode("text");
+    setLrcBuilderLines(builderLinesFromText(lyrics?.lyrics ?? ""));
+    setActiveBuilderLineIndex(0);
     setLyricsTarget("database");
   }, [currentTrack?.id, lyrics?.lyrics, lyrics?.is_synced]);
 
@@ -201,6 +245,7 @@ export function NowPlayingPage({
   const visualizerStyle = uiPreferences.nowPlayingVisualizerStyle;
   const pageTrackIsPlaying = Boolean(currentTrack && playbackSnapshot.track?.id === currentTrack.id && playbackSnapshot.isPlaying);
   const visualizerActive = Boolean(currentTrack && (visualizerFrame?.isPlaying || pageTrackIsPlaying));
+  const activeLyricIsGap = activeLyricIndex >= 0 && isTimestampOnlyLyricLine(lyricLines[activeLyricIndex] ?? "");
   const activeLyricLine =
     activeLyricIndex >= 0
       ? stripLyricTimestamp(lyricLines[activeLyricIndex] ?? "")
@@ -229,6 +274,117 @@ export function NowPlayingPage({
     if (currentTrack) {
       action(currentTrack);
     }
+  }
+
+  function createBuilderLine(text = "", time: number | null = null, gap = false): LrcBuilderLine {
+    const id = `lrc-line-${builderLineIdRef.current}`;
+    builderLineIdRef.current += 1;
+    return { id, text, time, gap };
+  }
+
+  function builderLinesFromText(text: string): LrcBuilderLine[] {
+    const rows = text.split(/\r?\n/).map((line) => {
+      const time = parseLyricTimestamp(line);
+      const lyricText = stripLyricTimestamp(line).trimEnd();
+      return createBuilderLine(lyricText, time, time !== null && lyricText.trim().length === 0);
+    });
+    return rows.length > 0 ? rows : [createBuilderLine()];
+  }
+
+  function commitBuilderLines(lines: LrcBuilderLine[], activeIndex = activeBuilderLineIndex) {
+    const nextLines = lines.length > 0 ? lines : [createBuilderLine()];
+    const nextActive = Math.max(0, Math.min(activeIndex, nextLines.length - 1));
+    setLrcBuilderLines(nextLines);
+    setActiveBuilderLineIndex(nextActive);
+    setLyricsSynced(true);
+    setLyricsDraft(lrcDraftFromBuilderLines(nextLines));
+  }
+
+  function openLrcBuilder() {
+    const nextLines = builderLinesFromText(lyricsDraft);
+    const firstUnsynced = nextLines.findIndex((line) => line.time === null && !line.gap);
+    commitBuilderLines(nextLines, firstUnsynced >= 0 ? firstUnsynced : 0);
+    setLyricsEditMode("sync");
+  }
+
+  function updateBuilderLine(index: number, update: Partial<LrcBuilderLine>) {
+    const nextLines = lrcBuilderLines.map((line, lineIndex) =>
+      lineIndex === index ? { ...line, ...update } : line,
+    );
+    commitBuilderLines(nextLines, index);
+  }
+
+  function syncBuilderLine(index = activeBuilderLineIndex) {
+    if (lrcBuilderLines.length === 0) {
+      commitBuilderLines([createBuilderLine("", playbackTime, true)], 0);
+      return;
+    }
+    const boundedIndex = Math.max(0, Math.min(index, lrcBuilderLines.length - 1));
+    const nextLines = lrcBuilderLines.map((line, lineIndex) =>
+      lineIndex === boundedIndex ? { ...line, time: playbackTime } : line,
+    );
+    const nextActive = Math.min(nextLines.length - 1, boundedIndex + 1);
+    commitBuilderLines(nextLines, nextActive);
+  }
+
+  function insertNoLyricSection() {
+    const boundedIndex = Math.max(0, Math.min(activeBuilderLineIndex, Math.max(0, lrcBuilderLines.length - 1)));
+    const selected = lrcBuilderLines[boundedIndex];
+    if (selected && selected.time === null && selected.text.trim().length === 0) {
+      const nextLines = lrcBuilderLines.map((line, index) =>
+        index === boundedIndex ? { ...line, time: playbackTime, text: "", gap: true } : line,
+      );
+      commitBuilderLines(nextLines, Math.min(nextLines.length - 1, boundedIndex + 1));
+      return;
+    }
+
+    const nextLines = [...lrcBuilderLines];
+    const insertAt = selected ? boundedIndex + 1 : nextLines.length;
+    nextLines.splice(insertAt, 0, createBuilderLine("", playbackTime, true));
+    commitBuilderLines(nextLines, Math.min(nextLines.length - 1, insertAt + 1));
+  }
+
+  function addBuilderLine() {
+    const insertAt = Math.max(0, Math.min(activeBuilderLineIndex + 1, lrcBuilderLines.length));
+    const nextLines = [...lrcBuilderLines];
+    nextLines.splice(insertAt, 0, createBuilderLine());
+    commitBuilderLines(nextLines, insertAt);
+  }
+
+  function removeBuilderLine(index: number) {
+    const nextLines = lrcBuilderLines.filter((_, lineIndex) => lineIndex !== index);
+    commitBuilderLines(nextLines, Math.max(0, index - 1));
+  }
+
+  function renderLyricLine(line: string, index: number, spacious = false) {
+    const active = activeLyricIndex === index;
+    const setActiveNode = active ? (node: HTMLElement | null) => { activeLyricRef.current = node; } : undefined;
+    if (line.trim().length === 0) {
+      return <div key={`space-${index}`} className={spacious ? "h-4" : "h-3"} />;
+    }
+    if (isTimestampOnlyLyricLine(line)) {
+      return (
+        <div
+          key={`${index}-${line}`}
+          ref={setActiveNode}
+          className={`mx-auto my-2 h-px rounded-full transition ${
+            active ? "w-28 bg-moss/70" : "w-16 bg-line"
+          }`}
+          title="No lyrics in this section"
+        />
+      );
+    }
+    return (
+      <p
+        key={`${index}-${line}`}
+        ref={setActiveNode}
+        className={`whitespace-pre-wrap transition ${
+          active ? `${spacious ? "scale-[1.02] " : ""}text-moss` : spacious ? "text-neutral-300" : "text-neutral-100"
+        }`}
+      >
+        {stripLyricTimestamp(line)}
+      </p>
+    );
   }
 
   useEffect(() => {
@@ -315,6 +471,8 @@ export function NowPlayingPage({
       const fetched = await onFetchLyrics(currentTrack);
       setLyricsDraft(fetched.lyrics ?? "");
       setLyricsSynced(fetched.is_synced);
+      setLrcBuilderLines(builderLinesFromText(fetched.lyrics ?? ""));
+      setActiveBuilderLineIndex(0);
       setIsEditingLyrics(true);
     } finally {
       setLyricsBusy(false);
@@ -355,7 +513,7 @@ export function NowPlayingPage({
         lyrics: lyricsDraft,
         is_synced: lyricsSynced,
         target: lyricsTarget,
-        source: lyricsTarget === "database" ? "database:manual" : null,
+        source: lyricsTarget === "database" ? (lyricsSynced ? "database:synced" : "database:manual") : null,
       });
       setIsEditingLyrics(false);
     } finally {
@@ -392,6 +550,183 @@ export function NowPlayingPage({
     } catch {
       // Fullscreen can be blocked in browser preview; the layout controls still work.
     }
+  }
+
+  function renderLyricsEditor(containerClass: string) {
+    return (
+      <div className={`${containerClass} grid h-full grid-rows-[auto_auto_minmax(0,1fr)_auto] gap-3`}>
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded border border-line/70 bg-ink px-3 py-2 text-xs">
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="flex items-center gap-2 text-muted">
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-moss"
+                checked={lyricsSynced}
+                onChange={(event) => setLyricsSynced(event.target.checked)}
+              />
+              Synced LRC
+            </label>
+            <label className="flex items-center gap-2 text-muted">
+              Save to
+              <select
+                className="h-8 rounded border border-line bg-panel px-2 text-white outline-none"
+                value={lyricsTarget}
+                onChange={(event) => setLyricsTarget(event.target.value as "database" | "file")}
+              >
+                <option value="database">Database</option>
+                <option value="file">Audio file + database</option>
+              </select>
+            </label>
+          </div>
+          <label className="flex items-center gap-2 text-muted">
+            File writes
+            <input
+              type="checkbox"
+              className="h-4 w-4 accent-ember"
+              checked={writeRatingsToFiles}
+              onChange={(event) => onWriteRatingsToFilesChange(event.target.checked)}
+            />
+          </label>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+          <div className="flex rounded border border-line/70 bg-ink p-1">
+            <button
+              className={`secondary-button h-8 border-0 px-3 ${lyricsEditMode === "text" ? "bg-panel text-white" : "bg-transparent text-muted"}`}
+              type="button"
+              onClick={() => setLyricsEditMode("text")}
+            >
+              <Pencil size={14} />
+              Text
+            </button>
+            <button
+              className={`secondary-button h-8 border-0 px-3 ${lyricsEditMode === "sync" ? "bg-panel text-white" : "bg-transparent text-muted"}`}
+              type="button"
+              onClick={openLrcBuilder}
+            >
+              <ListMusic size={14} />
+              LRC Builder
+            </button>
+          </div>
+          {lyricsEditMode === "sync" && (
+            <div className="rounded border border-line/70 bg-ink px-3 py-2 font-mono text-muted">
+              {formatPlaybackTime(playbackTime)} / [{formatLrcTimestamp(playbackTime)}]
+            </div>
+          )}
+        </div>
+
+        {lyricsEditMode === "text" ? (
+          <textarea
+            className="min-h-0 resize-none rounded border border-line bg-ink p-4 font-mono text-sm leading-6 text-neutral-100 outline-none ring-moss/40 focus:ring-2"
+            value={lyricsDraft}
+            placeholder="Paste lyrics here, or fetch them first."
+            onChange={(event) => setLyricsDraft(event.target.value)}
+          />
+        ) : (
+          <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 rounded border border-line bg-ink p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="min-w-0 text-muted">
+                Select a lyric row, press Sync as the line starts, or add a timed no-lyric section.
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button className="secondary-button h-8" type="button" onClick={() => syncBuilderLine()}>
+                  <Clock size={14} />
+                  Sync
+                </button>
+                <button className="secondary-button h-8" type="button" onClick={insertNoLyricSection}>
+                  <Volume2 size={14} />
+                  No Lyrics
+                </button>
+                <button className="secondary-button h-8" type="button" onClick={addBuilderLine}>
+                  <Plus size={14} />
+                  Line
+                </button>
+              </div>
+            </div>
+            <div className="min-h-0 overflow-auto rounded border border-line/70">
+              {lrcBuilderLines.map((line, index) => {
+                const selected = index === activeBuilderLineIndex;
+                return (
+                  <div
+                    key={line.id}
+                    className={`grid grid-cols-[5.75rem_minmax(0,1fr)_2.25rem] items-center gap-2 border-b border-line/60 px-2 py-2 text-sm last:border-b-0 ${
+                      selected ? "bg-moss/10" : "bg-panel/40"
+                    }`}
+                    onClick={() => setActiveBuilderLineIndex(index)}
+                  >
+                    <button
+                      className={`h-8 rounded border px-2 font-mono text-xs tabular-nums ${
+                        line.time === null ? "border-line text-muted" : "border-moss/50 text-moss"
+                      }`}
+                      type="button"
+                      title="Stamp this line with the current playback time"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        syncBuilderLine(index);
+                      }}
+                    >
+                      {formatLrcTimestamp(line.time)}
+                    </button>
+                    {line.gap ? (
+                      <button
+                        className="min-w-0 truncate rounded border border-dashed border-line bg-ink px-3 py-1.5 text-left text-xs text-muted hover:text-white"
+                        type="button"
+                        title="Click to turn this back into a lyric line"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          updateBuilderLine(index, { gap: false, text: "" });
+                        }}
+                      >
+                        No lyric section
+                      </button>
+                    ) : (
+                      <input
+                        className="min-w-0 rounded border border-line bg-ink px-3 py-1.5 text-neutral-100 outline-none ring-moss/40 focus:ring-2"
+                        value={line.text}
+                        placeholder="Lyric line"
+                        onFocus={() => setActiveBuilderLineIndex(index)}
+                        onChange={(event) => updateBuilderLine(index, { text: event.target.value, gap: false })}
+                      />
+                    )}
+                    <button
+                      className="icon-button h-8 w-8"
+                      type="button"
+                      title="Remove line"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        removeBuilderLine(index);
+                      }}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="text-xs text-muted">
+            {lyricsTarget === "file" && !writeRatingsToFiles
+              ? "File writing is off; enable it here before saving to the audio file."
+              : lyricsTarget === "file"
+                ? "Saving will update the file tags and keep a database copy."
+                : "Saving will keep lyrics in the FLAC Cafe database only."}
+          </div>
+          <button
+            className="primary-button"
+            type="button"
+            disabled={lyricsSaveDisabled}
+            title="Save lyrics (Ctrl+S)"
+            onClick={() => void handleSaveLyrics()}
+          >
+            <Pencil size={15} />
+            Save Lyrics
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -511,66 +846,7 @@ export function NowPlayingPage({
               <div className="grid h-full place-items-center text-sm text-muted">No track selected.</div>
             )}
             {!isLyricsLoading && currentTrack && isEditingLyrics && (
-              <div className="grid h-full grid-rows-[auto_minmax(0,1fr)_auto] gap-3">
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded border border-line/70 bg-ink px-3 py-2 text-xs">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <label className="flex items-center gap-2 text-muted">
-                      <input
-                        type="checkbox"
-                        className="h-4 w-4 accent-moss"
-                        checked={lyricsSynced}
-                        onChange={(event) => setLyricsSynced(event.target.checked)}
-                      />
-                      Synced LRC
-                    </label>
-                    <label className="flex items-center gap-2 text-muted">
-                      Save to
-                      <select
-                        className="h-8 rounded border border-line bg-panel px-2 text-white outline-none"
-                        value={lyricsTarget}
-                        onChange={(event) => setLyricsTarget(event.target.value as "database" | "file")}
-                      >
-                        <option value="database">Database</option>
-                        <option value="file">Audio file + database</option>
-                      </select>
-                    </label>
-                  </div>
-                  <label className="flex items-center gap-2 text-muted">
-                    File writes
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 accent-ember"
-                      checked={writeRatingsToFiles}
-                      onChange={(event) => onWriteRatingsToFilesChange(event.target.checked)}
-                    />
-                  </label>
-                </div>
-                <textarea
-                  className="min-h-0 resize-none rounded border border-line bg-ink p-4 font-mono text-sm leading-6 text-neutral-100 outline-none ring-moss/40 focus:ring-2"
-                  value={lyricsDraft}
-                  placeholder="Paste lyrics here, or fetch them first."
-                  onChange={(event) => setLyricsDraft(event.target.value)}
-                />
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="text-xs text-muted">
-                    {lyricsTarget === "file" && !writeRatingsToFiles
-                      ? "File writing is off; enable it here before saving to the audio file."
-                      : lyricsTarget === "file"
-                        ? "Saving will update the file tags and keep a database copy."
-                        : "Saving will keep lyrics in the FLAC Cafe database only."}
-                  </div>
-                  <button
-                    className="primary-button"
-                    type="button"
-                    disabled={lyricsSaveDisabled}
-                    title="Save lyrics (Ctrl+S)"
-                    onClick={() => void handleSaveLyrics()}
-                  >
-                    <Pencil size={15} />
-                    Save Lyrics
-                  </button>
-                </div>
-              </div>
+              renderLyricsEditor("")
             )}
             {!isLyricsLoading && currentTrack && !isEditingLyrics && !hasLyrics && (
               <div className="grid h-full place-items-center text-center text-sm text-muted">
@@ -585,21 +861,7 @@ export function NowPlayingPage({
             )}
             {!isLyricsLoading && !isEditingLyrics && hasLyrics && (
               <div className="mx-auto max-w-4xl space-y-5 pb-[45vh] pt-[16vh] text-center text-2xl leading-10 text-neutral-100 md:text-3xl md:leading-[3.25rem]">
-                {lyricLines.map((line, index) => (
-                  line.trim().length > 0 ? (
-                    <p
-                      key={`${index}-${line}`}
-                      ref={activeLyricIndex === index ? activeLyricRef : undefined}
-                      className={`whitespace-pre-wrap transition ${
-                        activeLyricIndex === index ? "scale-[1.02] text-moss" : "text-neutral-300"
-                      }`}
-                    >
-                      {stripLyricTimestamp(line)}
-                    </p>
-                  ) : (
-                    <div key={`space-${index}`} className="h-4" />
-                  )
-                ))}
+                {lyricLines.map((line, index) => renderLyricLine(line, index, true))}
               </div>
             )}
           </section>
@@ -664,7 +926,11 @@ export function NowPlayingPage({
             </div>
             {showLyrics && (
               <div className="mx-auto min-h-0 max-w-5xl overflow-hidden text-balance text-xl font-medium leading-tight text-moss md:col-span-2 md:text-2xl">
-                {hasLyrics ? activeLyricLine || stripLyricTimestamp(lyricLines.find((line) => line.trim()) ?? "") : "No lyrics loaded"}
+                {hasLyrics
+                  ? activeLyricIsGap
+                    ? ""
+                    : activeLyricLine || stripLyricTimestamp(lyricLines.find((line) => line.trim()) ?? "")
+                  : "No lyrics loaded"}
               </div>
             )}
           </div>
@@ -792,66 +1058,7 @@ export function NowPlayingPage({
               <div className="grid h-full place-items-center text-sm text-muted">No track selected.</div>
             )}
             {!isLyricsLoading && currentTrack && isEditingLyrics && (
-              <div className="mx-auto grid h-full max-w-3xl grid-rows-[auto_minmax(0,1fr)_auto] gap-3">
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded border border-line/70 bg-ink px-3 py-2 text-xs">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <label className="flex items-center gap-2 text-muted">
-                      <input
-                        type="checkbox"
-                        className="h-4 w-4 accent-moss"
-                        checked={lyricsSynced}
-                        onChange={(event) => setLyricsSynced(event.target.checked)}
-                      />
-                      Synced LRC
-                    </label>
-                    <label className="flex items-center gap-2 text-muted">
-                      Save to
-                      <select
-                        className="h-8 rounded border border-line bg-panel px-2 text-white outline-none"
-                        value={lyricsTarget}
-                        onChange={(event) => setLyricsTarget(event.target.value as "database" | "file")}
-                      >
-                        <option value="database">Database</option>
-                        <option value="file">Audio file + database</option>
-                      </select>
-                    </label>
-                  </div>
-                  <label className="flex items-center gap-2 text-muted">
-                    File writes
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 accent-ember"
-                      checked={writeRatingsToFiles}
-                      onChange={(event) => onWriteRatingsToFilesChange(event.target.checked)}
-                    />
-                  </label>
-                </div>
-                <textarea
-                  className="min-h-0 resize-none rounded border border-line bg-ink p-4 font-mono text-sm leading-6 text-neutral-100 outline-none ring-moss/40 focus:ring-2"
-                  value={lyricsDraft}
-                  placeholder="Paste lyrics here, or fetch them first."
-                  onChange={(event) => setLyricsDraft(event.target.value)}
-                />
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="text-xs text-muted">
-                    {lyricsTarget === "file" && !writeRatingsToFiles
-                      ? "File writing is off; enable it here before saving to the audio file."
-                      : lyricsTarget === "file"
-                        ? "Saving will update the file tags and keep a database copy."
-                        : "Saving will keep lyrics in the FLAC Cafe database only."}
-                  </div>
-                  <button
-                    className="primary-button"
-                    type="button"
-                    disabled={lyricsSaveDisabled}
-                    title="Save lyrics (Ctrl+S)"
-                    onClick={() => void handleSaveLyrics()}
-                  >
-                    <Pencil size={15} />
-                    Save Lyrics
-                  </button>
-                </div>
-              </div>
+              renderLyricsEditor("mx-auto max-w-3xl")
             )}
             {!isLyricsLoading && currentTrack && !isEditingLyrics && !hasLyrics && (
               <div className="grid h-full place-items-center text-center text-sm text-muted">
@@ -866,21 +1073,7 @@ export function NowPlayingPage({
             )}
             {!isLyricsLoading && !isEditingLyrics && hasLyrics && (
               <div className={`mx-auto max-w-3xl space-y-3 text-neutral-100 ${lyricSizeClass}`}>
-                {lyricLines.map((line, index) => (
-                  line.trim().length > 0 ? (
-                    <p
-                      key={`${index}-${line}`}
-                      ref={activeLyricIndex === index ? activeLyricRef : undefined}
-                      className={`whitespace-pre-wrap transition ${
-                        activeLyricIndex === index ? "text-moss" : "text-neutral-100"
-                      }`}
-                    >
-                      {stripLyricTimestamp(line)}
-                    </p>
-                  ) : (
-                    <div key={`space-${index}`} className="h-3" />
-                  )
-                ))}
+                {lyricLines.map((line, index) => renderLyricLine(line, index))}
               </div>
             )}
           </div>

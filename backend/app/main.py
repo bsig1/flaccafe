@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import csv
+import hashlib
 import json
 import logging
 from logging.handlers import RotatingFileHandler
@@ -790,6 +791,15 @@ def average_embedding_similarity(tracks: list[dict]) -> float | None:
     return round(sum(values) / len(values), 4) if values else None
 
 
+def duplicate_group_ignore_key(tracks: list[dict]) -> str:
+    identity = sorted(
+        str(track.get("path_key") or path_key(Path(str(track.get("path") or ""))) or track.get("id")).lower()
+        for track in tracks
+    )
+    payload = json.dumps(identity, ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+
 def duplicate_group_from_tracks(key: str, tracks: list[dict], base_reason: str) -> DuplicateGroup:
     durations = [
         float(track["duration_seconds"])
@@ -819,6 +829,7 @@ def duplicate_group_from_tracks(key: str, tracks: list[dict], base_reason: str) 
         reasons.append(f"{analyzed_tracks}/{len(tracks)} analyzed")
     return DuplicateGroup(
         key=key,
+        ignore_key=duplicate_group_ignore_key(tracks),
         tracks=tracks,
         match_reason=", ".join(reasons),
         recommended_keep_id=keep_id,
@@ -2755,8 +2766,10 @@ def embedded_lyrics(path: Path) -> tuple[str, str, bool, str | None] | None:
 def sidecar_lyrics(path: Path) -> tuple[str, str, bool, str | None] | None:
     candidates = [
         path.with_suffix(".lrc"),
+        path.with_suffix(".elrc"),
         path.with_suffix(".txt"),
         path.with_name(f"{path.stem}.lyrics.lrc"),
+        path.with_name(f"{path.stem}.lyrics.elrc"),
         path.with_name(f"{path.stem}.lyrics.txt"),
     ]
     for candidate in candidates:
@@ -2770,7 +2783,7 @@ def sidecar_lyrics(path: Path) -> tuple[str, str, bool, str | None] | None:
             continue
         normalized = normalize_lyrics(text)
         if normalized:
-            return normalized, f"sidecar:{candidate.name}", candidate.suffix.lower() == ".lrc" or looks_synced(normalized), str(candidate)
+            return normalized, f"sidecar:{candidate.name}", candidate.suffix.lower() in {".lrc", ".elrc"} or looks_synced(normalized), str(candidate)
     return None
 
 
@@ -2789,7 +2802,7 @@ def cached_sidecar_text(path_value: str | None) -> tuple[str, bool] | None:
     normalized = normalize_lyrics(text)
     if not normalized:
         return None
-    return normalized, path.suffix.lower() == ".lrc" or looks_synced(normalized)
+    return normalized, path.suffix.lower() in {".lrc", ".elrc"} or looks_synced(normalized)
 
 
 def database_lyrics(track_id: int) -> tuple[str, str, bool, str | None] | None:
@@ -4380,7 +4393,8 @@ def get_audio_conversion_ffmpeg_install(job_id: str) -> dict:
 
 @app.post("/library/tools/audio-conversion/preview", response_model=AudioConversionPreviewResponse)
 def preview_audio_conversion(request: AudioConversionRequest) -> AudioConversionPreviewResponse:
-    return AudioConversionPreviewResponse(**conversion_preview(request))
+    preview_request = request if request.limit is not None else request.model_copy(update={"limit": 200})
+    return AudioConversionPreviewResponse(**conversion_preview(preview_request))
 
 
 @app.post("/library/tools/audio-conversion/jobs", response_model=AudioConversionStartResponse)
@@ -4817,6 +4831,30 @@ def import_external_library_stats(request: LibraryStatsImportRequest) -> Library
 @app.get("/library/health", response_model=LibraryHealthResponse)
 def library_health(limit: int = Query(default=80, ge=1, le=500)) -> LibraryHealthResponse:
     with connect() as conn:
+        music_filter = f"NOT {audiobook_where_clause()} AND NOT {podcast_where_clause()}"
+        missing_predicate = """
+            title IS NULL OR trim(title) = ''
+            OR artist IS NULL OR trim(artist) = ''
+            OR album IS NULL OR trim(album) = ''
+            OR album_artist IS NULL OR trim(album_artist) = ''
+            OR track_number IS NULL
+            OR year IS NULL
+            OR duration_seconds IS NULL
+            OR ((genre IS NULL OR trim(genre) = '')
+                AND (analysis_genre IS NULL OR trim(analysis_genre) = ''))
+        """
+        missing_score = """
+            (CASE WHEN title IS NULL OR trim(title) = '' THEN 1 ELSE 0 END)
+            + (CASE WHEN artist IS NULL OR trim(artist) = '' THEN 1 ELSE 0 END)
+            + (CASE WHEN album IS NULL OR trim(album) = '' THEN 1 ELSE 0 END)
+            + (CASE WHEN album_artist IS NULL OR trim(album_artist) = '' THEN 1 ELSE 0 END)
+            + (CASE WHEN track_number IS NULL THEN 1 ELSE 0 END)
+            + (CASE WHEN year IS NULL THEN 1 ELSE 0 END)
+            + (CASE WHEN duration_seconds IS NULL THEN 1 ELSE 0 END)
+            + (CASE WHEN (genre IS NULL OR trim(genre) = '')
+                     AND (analysis_genre IS NULL OR trim(analysis_genre) = '')
+                THEN 1 ELSE 0 END)
+        """
         missing_files = [
             track
             for track in rows_to_dicts(
@@ -4824,22 +4862,36 @@ def library_health(limit: int = Query(default=80, ge=1, le=500)) -> LibraryHealt
                     f"""
                     SELECT {TRACK_COLUMNS}
                     FROM tracks
+                    WHERE {music_filter}
                     ORDER BY lower(coalesce(artist, '')), lower(coalesce(album, '')), lower(coalesce(title, ''))
                     """
                 )
             )
             if not Path(track["path"]).exists()
         ][:limit]
+        missing_metadata_total = int(
+            conn.execute(
+                f"""
+                SELECT count(*) AS total
+                FROM tracks
+                WHERE {music_filter}
+                  AND ({missing_predicate})
+                """
+            ).fetchone()["total"]
+        )
         missing = rows_to_dicts(
             conn.execute(
                 f"""
                 SELECT {TRACK_COLUMNS}
                 FROM tracks
-                WHERE title IS NULL OR trim(title) = '' OR artist IS NULL OR trim(artist) = ''
-                   OR album IS NULL OR trim(album) = ''
-                   OR ((genre IS NULL OR trim(genre) = '')
-                       AND (analysis_genre IS NULL OR trim(analysis_genre) = ''))
-                ORDER BY lower(coalesce(artist, '')), lower(coalesce(album, '')), lower(coalesce(title, ''))
+                WHERE {music_filter}
+                  AND ({missing_predicate})
+                ORDER BY ({missing_score}) DESC,
+                         datetime(date_added) DESC,
+                         lower(coalesce(artist, '')),
+                         lower(coalesce(album, '')),
+                         lower(coalesce(title, '')),
+                         path ASC
                 LIMIT ?
                 """,
                 (limit,),
@@ -4850,19 +4902,26 @@ def library_health(limit: int = Query(default=80, ge=1, le=500)) -> LibraryHealt
                 f"""
                 SELECT {TRACK_COLUMNS}
                 FROM tracks
-                WHERE rating IS NULL
+                WHERE {music_filter}
+                  AND rating IS NULL
                 ORDER BY datetime(date_added) DESC, lower(coalesce(artist, '')), lower(coalesce(title, ''))
                 LIMIT ?
                 """,
                 (limit,),
             )
         )
+        ignored_duplicate_keys = {
+            str(row["ignore_key"])
+            for row in conn.execute("SELECT ignore_key FROM library_health_ignores WHERE kind = 'duplicate'").fetchall()
+        }
+        ignored_duplicate_group_total = len(ignored_duplicate_keys)
         duplicate_keys = conn.execute(
-            """
+            f"""
             SELECT lower(coalesce(title, '')) AS title_key,
                    lower(coalesce(artist, '')) AS artist_key,
                    coalesce(title, 'Untitled') || ' - ' || coalesce(artist, 'Unknown Artist') AS display_key
             FROM tracks
+            WHERE {music_filter}
             GROUP BY title_key, artist_key
             HAVING count(*) > 1 AND title_key <> ''
             ORDER BY count(*) DESC, display_key ASC
@@ -4879,15 +4938,19 @@ def library_health(limit: int = Query(default=80, ge=1, le=500)) -> LibraryHealt
             if identity in seen_duplicate_sets:
                 return
             seen_duplicate_sets.add(identity)
-            duplicates.append(duplicate_group_from_tracks(key, tracks, reason))
+            group = duplicate_group_from_tracks(key, tracks, reason)
+            if group.ignore_key in ignored_duplicate_keys:
+                return
+            duplicates.append(group)
 
         for key in duplicate_keys:
             tracks = rows_to_dicts(
                 conn.execute(
                     f"""
-                    SELECT {TRACK_COLUMNS}
+                    SELECT path_key, {TRACK_COLUMNS}
                     FROM tracks
                     WHERE lower(coalesce(title, '')) = ? AND lower(coalesce(artist, '')) = ?
+                      AND {music_filter}
                     ORDER BY path ASC
                     LIMIT ?
                     """,
@@ -4897,10 +4960,11 @@ def library_health(limit: int = Query(default=80, ge=1, le=500)) -> LibraryHealt
             append_duplicate_group(key["display_key"], tracks, "matching title/artist")
 
         fingerprint_keys = conn.execute(
-            """
+            f"""
             SELECT audio_fingerprint, count(*) AS tracks
             FROM tracks
             WHERE audio_fingerprint IS NOT NULL AND trim(audio_fingerprint) <> ''
+              AND {music_filter}
             GROUP BY audio_fingerprint
             HAVING count(*) > 1
             ORDER BY tracks DESC
@@ -4911,9 +4975,10 @@ def library_health(limit: int = Query(default=80, ge=1, le=500)) -> LibraryHealt
             tracks = rows_to_dicts(
                 conn.execute(
                     f"""
-                    SELECT {TRACK_COLUMNS}
+                    SELECT path_key, {TRACK_COLUMNS}
                     FROM tracks
                     WHERE audio_fingerprint = ?
+                      AND {music_filter}
                     ORDER BY lower(coalesce(artist, '')), lower(coalesce(album, '')), path ASC
                     LIMIT ?
                     """,
@@ -4923,10 +4988,11 @@ def library_health(limit: int = Query(default=80, ge=1, le=500)) -> LibraryHealt
             label = f"File fingerprint {str(key['audio_fingerprint'])[:10]}"
             append_duplicate_group(label, tracks, "matching file fingerprint")
         acoustic_keys = conn.execute(
-            """
+            f"""
             SELECT acoustic_fingerprint, count(*) AS tracks
             FROM tracks
             WHERE acoustic_fingerprint IS NOT NULL AND trim(acoustic_fingerprint) <> ''
+              AND {music_filter}
             GROUP BY acoustic_fingerprint
             HAVING count(*) > 1
             LIMIT ?
@@ -4937,9 +5003,10 @@ def library_health(limit: int = Query(default=80, ge=1, le=500)) -> LibraryHealt
             tracks = rows_to_dicts(
                 conn.execute(
                     f"""
-                    SELECT {TRACK_COLUMNS}
+                    SELECT path_key, {TRACK_COLUMNS}
                     FROM tracks
                     WHERE acoustic_fingerprint = ?
+                      AND {music_filter}
                     ORDER BY lower(coalesce(artist, '')), lower(coalesce(album, '')), path ASC
                     LIMIT ?
                     """,
@@ -4953,6 +5020,9 @@ def library_health(limit: int = Query(default=80, ge=1, le=500)) -> LibraryHealt
         missing_metadata=missing,
         duplicate_groups=duplicates,
         unrated_tracks=unrated,
+        missing_metadata_total=missing_metadata_total,
+        duplicate_group_total=len(duplicates),
+        ignored_duplicate_group_total=ignored_duplicate_group_total,
     )
 
 
@@ -7198,6 +7268,37 @@ def apply_duplicate_action(request: DuplicateActionRequest) -> DuplicateActionRe
     errors: list[str] = []
     removed_track_ids: list[int] = []
     deleted_files = 0
+    if request.action == "clear_ignored":
+        with connect() as conn:
+            cursor = conn.execute("DELETE FROM library_health_ignores WHERE kind = 'duplicate'")
+            affected = max(0, cursor.rowcount)
+            conn.commit()
+        return DuplicateActionResponse(action=request.action, affected=affected)
+
+    if request.action == "ignore":
+        ignore_key = (request.ignore_key or "").strip()
+        label = (request.ignore_label or "").strip() or "Ignored duplicate group"
+        with connect() as conn:
+            if not ignore_key and request.track_ids:
+                tracks, missing = tracks_by_ids(conn, request.track_ids)
+                errors.extend(f"Track {track_id} was not found" for track_id in missing)
+                if len(tracks) >= 2:
+                    ignore_key = duplicate_group_from_tracks(label, tracks, "selected duplicate group").ignore_key
+            if not ignore_key:
+                raise HTTPException(status_code=400, detail="Choose a duplicate group to ignore")
+            conn.execute(
+                """
+                INSERT INTO library_health_ignores(kind, ignore_key, label)
+                VALUES ('duplicate', ?, ?)
+                ON CONFLICT(kind, ignore_key) DO UPDATE SET
+                  label = excluded.label,
+                  created_at = datetime('now')
+                """,
+                (ignore_key, label),
+            )
+            conn.commit()
+        return DuplicateActionResponse(action=request.action, affected=1, errors=errors)
+
     if request.action == "export_report":
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         target = resolve_json_tool_path(request.report_path, f"flac-cafe-duplicates-{stamp}.json")

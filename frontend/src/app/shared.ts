@@ -972,7 +972,7 @@ export function formatShortDate(value: string | null | undefined): string {
 }
 
 export function parseLyricTimestamp(line: string): number | null {
-  const match = line.match(/^\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?]/);
+  const match = line.match(/^\[(\d+):(\d{2})(?:[.:](\d{1,3}))?]/);
   if (!match) {
     return null;
   }
@@ -983,7 +983,13 @@ export function parseLyricTimestamp(line: string): number | null {
 }
 
 export function stripLyricTimestamp(line: string): string {
-  return line.replace(/^\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?]\s*/, "");
+  return line
+    .replace(/^\[\d+:\d{2}(?:[.:]\d{1,3})?]\s*/, "")
+    .replace(/<\d+:\d{2}(?:[.:]\d{1,3})?>\s*/g, "");
+}
+
+export function isTimestampOnlyLyricLine(line: string): boolean {
+  return parseLyricTimestamp(line) !== null && stripLyricTimestamp(line).trim().length === 0;
 }
 
 export function fileName(path: string | null): string {

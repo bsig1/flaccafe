@@ -1356,7 +1356,13 @@ class ApiTests(unittest.TestCase):
         preview = self.client.post("/library/tools/audio-conversion/preview", json=request)
         self.assertEqual(preview.status_code, 200)
         self.assertEqual(preview.json()["changed_count"], 1)
+        self.assertEqual(preview.json()["estimated_tracks"], 1)
+        self.assertEqual(preview.json()["source_size_bytes"], 4)
+        self.assertEqual(preview.json()["estimated_output_size_bytes"], 4320000)
+        self.assertGreater(preview.json()["estimated_size_ratio"], 1)
         self.assertTrue(preview.json()["changes"][0]["target_path"].endswith(r"Artist\Album\song.mp3"))
+        self.assertEqual(preview.json()["changes"][0]["estimated_output_size_bytes"], 4320000)
+        self.assertIn("192 kbps", preview.json()["changes"][0]["estimate_note"])
 
         commands: list[list[str]] = []
 
@@ -1390,6 +1396,54 @@ class ApiTests(unittest.TestCase):
         self.assertIn("-b:a 192k", command_text)
         self.assertIn("-vn", command_text)
         self.assertNotIn("0:v?", command_text)
+
+    def test_audio_conversion_job_without_limit_processes_all_tracks(self) -> None:
+        music_dir = self.root / "Music"
+        music_dir.mkdir(parents=True)
+        first = music_dir / "first.flac"
+        second = music_dir / "second.flac"
+        first.write_bytes(b"first")
+        second.write_bytes(b"second")
+        insert_track(first, title="First")
+        insert_track(second, title="Second")
+        target = self.root / "Converted"
+        ffmpeg = self.root / "ffmpeg.exe"
+        ffmpeg.write_bytes(b"fake")
+        with connect() as conn:
+            set_setting(conn, "library_path", str(music_dir))
+            set_setting(conn, "ffmpeg_path", str(ffmpeg))
+            conn.commit()
+
+        commands: list[list[str]] = []
+
+        def fake_ffmpeg(command: list[str]) -> None:
+            commands.append(command)
+            Path(command[-1]).parent.mkdir(parents=True, exist_ok=True)
+            Path(command[-1]).write_bytes(b"wav")
+
+        request = {
+            "target_folder": str(target),
+            "output_format": "wav",
+            "preserve_structure": False,
+            "overwrite": True,
+        }
+        with patch("backend.app.audio_conversion_jobs.run_ffmpeg_command", side_effect=fake_ffmpeg):
+            started = self.client.post("/library/tools/audio-conversion/jobs", json=request)
+            self.assertEqual(started.status_code, 200)
+            job_id = started.json()["job_id"]
+            latest = None
+            for _ in range(30):
+                latest = self.client.get(f"/library/tools/audio-conversion/jobs/{job_id}")
+                self.assertEqual(latest.status_code, 200)
+                if latest.json()["status"] in {"completed", "failed", "canceled"}:
+                    break
+                time.sleep(0.05)
+
+        self.assertIsNotNone(latest)
+        self.assertEqual(latest.json()["status"], "completed")
+        self.assertEqual(latest.json()["total_tracks"], 2)
+        self.assertEqual(latest.json()["converted"], 2)
+        self.assertEqual(len(commands), 2)
 
     def test_cd_rip_setup_reports_drives_and_tools(self) -> None:
         ffmpeg = self.root / "ffmpeg.exe"
@@ -3990,6 +4044,57 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(fetched.status_code, 200)
         self.assertEqual(fetched.json()["lyrics"], "line one\nline two")
         self.assertEqual(fetched.json()["source"], "database:manual")
+
+    def test_lyrics_endpoint_reads_elrc_sidecar_as_synced(self) -> None:
+        audio_file = self.root / "enhanced.mp3"
+        audio_file.write_bytes(b"audio")
+        sidecar = self.root / "enhanced.elrc"
+        sidecar.write_text("[00:01.00]<00:01.00>hello", encoding="utf-8")
+        track_id = insert_track(audio_file)
+
+        fetched = self.client.get(f"/tracks/{track_id}/lyrics")
+
+        self.assertEqual(fetched.status_code, 200)
+        self.assertEqual(fetched.json()["lyrics"], "[00:01.00]<00:01.00>hello")
+        self.assertEqual(fetched.json()["source"], "sidecar:enhanced.elrc")
+        self.assertTrue(fetched.json()["is_synced"])
+
+    def test_duplicate_ignore_hides_group_from_library_health(self) -> None:
+        first = self.root / "duplicate-a.mp3"
+        second = self.root / "duplicate-b.mp3"
+        first.write_bytes(b"audio-a")
+        second.write_bytes(b"audio-b")
+        insert_track(first, title="Same Song", artist="Same Artist", album="One")
+        insert_track(second, title="Same Song", artist="Same Artist", album="Two")
+
+        health = self.client.get("/library/health")
+        self.assertEqual(health.status_code, 200)
+        groups = health.json()["duplicate_groups"]
+        self.assertEqual(len(groups), 1)
+
+        ignored = self.client.post(
+            "/library/duplicates/action",
+            json={
+                "action": "ignore",
+                "ignore_key": groups[0]["ignore_key"],
+                "ignore_label": groups[0]["key"],
+            },
+        )
+        self.assertEqual(ignored.status_code, 200)
+        self.assertEqual(ignored.json()["affected"], 1)
+
+        refreshed = self.client.get("/library/health")
+        self.assertEqual(refreshed.status_code, 200)
+        self.assertEqual(refreshed.json()["duplicate_groups"], [])
+        self.assertEqual(refreshed.json()["ignored_duplicate_group_total"], 1)
+
+        restored = self.client.post("/library/duplicates/action", json={"action": "clear_ignored"})
+        self.assertEqual(restored.status_code, 200)
+        self.assertEqual(restored.json()["affected"], 1)
+
+        visible_again = self.client.get("/library/health")
+        self.assertEqual(visible_again.status_code, 200)
+        self.assertEqual(len(visible_again.json()["duplicate_groups"]), 1)
 
     def test_lyrics_fetch_endpoint_returns_lrclib_text(self) -> None:
         audio_file = self.root / "fetch-lyrics.mp3"

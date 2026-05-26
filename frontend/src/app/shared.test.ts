@@ -7,16 +7,19 @@ import {
   formatPlaybackTime,
   formatShortcut,
   formatDate,
+  isTimestampOnlyLyricLine,
   normalizeAudioAnalysisCoverage,
   normalizePlaybackResumePosition,
   normalizeEqualizerGains,
   normalizeKeyboardShortcuts,
+  parseLyricTimestamp,
   parseAppDate,
   readUiPreferences,
   replayGainMultiplier,
   shortcutConflictGroups,
   shortcutFromEvent,
   shortcutMatchesEvent,
+  stripLyricTimestamp,
 } from "./shared";
 import type { Track } from "../types/api";
 
@@ -131,6 +134,18 @@ describe("duration formatting", () => {
     expect(normalizePlaybackResumePosition(55, 240)).toBe(55);
     expect(normalizePlaybackResumePosition(238, 240)).toBeNull();
     expect(normalizePlaybackResumePosition("42", null)).toBe(42);
+  });
+});
+
+describe("lyric timestamp helpers", () => {
+  it("parses long LRC timestamps and recognizes blank timed sections", () => {
+    expect(parseLyricTimestamp("[123:04.50] long song")).toBeCloseTo(7384.5);
+    expect(isTimestampOnlyLyricLine("[01:23.45]")).toBe(true);
+    expect(isTimestampOnlyLyricLine("[01:23.45] a line")).toBe(false);
+  });
+
+  it("removes enhanced LRC word timestamps for line-level display", () => {
+    expect(stripLyricTimestamp("[00:18.019] <00:18.019>I <00:18.200>care")).toBe("I care");
   });
 });
 

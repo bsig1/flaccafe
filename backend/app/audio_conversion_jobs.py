@@ -138,7 +138,7 @@ def safe_component(value: object, fallback: str) -> str:
     return text[:120] or fallback
 
 
-def selected_tracks(track_ids: list[int] | None, limit: int) -> list[dict]:
+def selected_tracks(track_ids: list[int] | None, limit: int | None) -> list[dict]:
     params: list[object] = []
     where = ""
     if track_ids:
@@ -147,7 +147,10 @@ def selected_tracks(track_ids: list[int] | None, limit: int) -> list[dict]:
             return []
         where = f"WHERE id IN ({','.join('?' for _ in unique_ids)})"
         params.extend(unique_ids)
-    params.append(limit)
+    limit_clause = ""
+    if limit is not None:
+        limit_clause = "LIMIT ?"
+        params.append(limit)
     with connect() as conn:
         return rows_to_dicts(
             conn.execute(
@@ -158,7 +161,7 @@ def selected_tracks(track_ids: list[int] | None, limit: int) -> list[dict]:
                 ORDER BY lower(coalesce(artist, '')), lower(coalesce(album, '')),
                          coalesce(disc_number, 0), coalesce(track_number, 0),
                          lower(coalesce(title, ''))
-                LIMIT ?
+                {limit_clause}
                 """,
                 params,
             )
@@ -185,6 +188,56 @@ def conversion_target_path(
     return (target_folder / album_artist / album / filename).resolve()
 
 
+def source_size_bytes(source: Path) -> int | None:
+    try:
+        return source.stat().st_size if source.exists() and source.is_file() else None
+    except OSError:
+        return None
+
+
+def decoded_pcm_size_bytes(track: dict, request: object) -> int | None:
+    duration = track.get("duration_seconds")
+    if duration is None or float(duration) <= 0:
+        return None
+    sample_rate = int(getattr(request, "sample_rate_hz", None) or 44_100)
+    channels = 2
+    bytes_per_sample = 2
+    return int(sample_rate * channels * bytes_per_sample * float(duration))
+
+
+def estimate_output_size(track: dict, source: Path, request: object, input_size: int | None) -> tuple[int | None, str]:
+    output_format = str(getattr(request, "output_format"))
+    duration = track.get("duration_seconds")
+    source_extension = source.suffix.lower().lstrip(".")
+    if output_format in {"mp3", "m4a", "opus"}:
+        if duration is None or float(duration) <= 0:
+            return None, "Needs duration metadata for bitrate-based estimate."
+        bitrate = int(getattr(request, "bitrate_kbps", None) or DEFAULT_BITRATES.get(output_format) or 192)
+        return int((bitrate * 1000 / 8) * float(duration)), f"Estimated from {bitrate} kbps target bitrate."
+    if output_format == "wav":
+        pcm_size = decoded_pcm_size_bytes(track, request)
+        if pcm_size is None:
+            return None, "Needs duration metadata for PCM estimate."
+        return pcm_size + 44, "Estimated as 16-bit stereo PCM."
+    if output_format == "flac":
+        pcm_size = decoded_pcm_size_bytes(track, request)
+        if pcm_size is None:
+            return None, "Needs duration metadata for FLAC estimate."
+        estimate = int(pcm_size * 0.60)
+        if source_extension in {"mp3", "m4a", "aac", "opus", "ogg"}:
+            return estimate, "Lossy-to-FLAC usually expands and does not recover quality."
+        if source_extension == "flac" and input_size:
+            return input_size, "FLAC-to-FLAC is estimated near the current file size."
+        return estimate, "Estimated around 60% of decoded PCM size."
+    return None, "Unsupported estimate."
+
+
+def size_ratio(estimated_output: int | None, input_size: int | None) -> float | None:
+    if estimated_output is None or input_size is None or input_size <= 0:
+        return None
+    return estimated_output / input_size
+
+
 def conversion_preview(request: object) -> dict:
     target_folder = Path(getattr(request, "target_folder")).expanduser().resolve()
     with connect() as conn:
@@ -205,6 +258,8 @@ def conversion_preview(request: object) -> dict:
         if not source.exists():
             error = "Source file is missing"
         collision = target.exists() and not getattr(request, "overwrite")
+        input_size = source_size_bytes(source)
+        estimated_output, estimate_note = estimate_output_size(track, source, request, input_size)
         changes.append(
             {
                 "track_id": int(track["id"]),
@@ -212,16 +267,41 @@ def conversion_preview(request: object) -> dict:
                 "artist": track.get("artist"),
                 "source_path": str(source),
                 "target_path": str(target),
+                "source_size_bytes": input_size,
+                "estimated_output_size_bytes": estimated_output,
+                "estimated_size_change_bytes": (
+                    estimated_output - input_size
+                    if estimated_output is not None and input_size is not None
+                    else None
+                ),
+                "estimated_size_ratio": size_ratio(estimated_output, input_size),
+                "estimate_note": estimate_note,
                 "changed": source.resolve() != target,
                 "collision": collision,
                 "error": error,
             }
         )
+    source_total = sum(change["source_size_bytes"] or 0 for change in changes)
+    estimated_total = sum(change["estimated_output_size_bytes"] or 0 for change in changes)
+    estimable_outputs = sum(1 for change in changes if change["estimated_output_size_bytes"] is not None)
     return {
         "target_folder": str(target_folder),
         "total": len(changes),
         "changed_count": sum(1 for change in changes if change["changed"] and not change["error"]),
         "collisions": sum(1 for change in changes if change["collision"]),
+        "source_size_bytes": source_total or None,
+        "estimated_output_size_bytes": estimated_total or None,
+        "estimated_size_change_bytes": (
+            estimated_total - source_total
+            if source_total and estimated_total
+            else None
+        ),
+        "estimated_size_ratio": (
+            estimated_total / source_total
+            if source_total and estimated_total
+            else None
+        ),
+        "estimated_tracks": estimable_outputs,
         "changes": changes,
     }
 

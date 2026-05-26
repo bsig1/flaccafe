@@ -300,7 +300,7 @@ export function fetchLibraryStats(): Promise<LibraryStatsResponse> {
   return request<LibraryStatsResponse>("/library/stats");
 }
 
-export function fetchLibraryHealth(limit = 80): Promise<LibraryHealthResponse> {
+export function fetchLibraryHealth(limit = 300): Promise<LibraryHealthResponse> {
   return request<LibraryHealthResponse>(`/library/health?limit=${limit}`);
 }
 

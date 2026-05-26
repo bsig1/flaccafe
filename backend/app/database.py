@@ -372,6 +372,14 @@ CREATE TABLE IF NOT EXISTS bulk_action_undo_log (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS library_health_ignores (
+  kind TEXT NOT NULL,
+  ignore_key TEXT NOT NULL,
+  label TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY(kind, ignore_key)
+);
+
 CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
 CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album);
 CREATE INDEX IF NOT EXISTS idx_tracks_rating ON tracks(rating);
@@ -403,6 +411,7 @@ CREATE INDEX IF NOT EXISTS idx_radio_stations_name ON radio_stations(lower(name)
 CREATE INDEX IF NOT EXISTS idx_radio_stations_last_played ON radio_stations(last_played_at);
 CREATE INDEX IF NOT EXISTS idx_scrobble_outbox_status ON scrobble_outbox(status, service, created_at);
 CREATE INDEX IF NOT EXISTS idx_scrobble_outbox_track ON scrobble_outbox(track_id);
+CREATE INDEX IF NOT EXISTS idx_library_health_ignores_kind ON library_health_ignores(kind, created_at);
 """
 
 

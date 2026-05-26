@@ -304,6 +304,7 @@ class HistoryStatsResponse(BaseModel):
 
 class DuplicateGroup(BaseModel):
     key: str
+    ignore_key: str
     tracks: list[Track]
     match_reason: str = "matching title and artist"
     recommended_keep_id: int | None = None
@@ -322,6 +323,9 @@ class LibraryHealthResponse(BaseModel):
     missing_metadata: list[Track] = Field(default_factory=list)
     duplicate_groups: list[DuplicateGroup] = Field(default_factory=list)
     unrated_tracks: list[Track] = Field(default_factory=list)
+    missing_metadata_total: int = 0
+    duplicate_group_total: int = 0
+    ignored_duplicate_group_total: int = 0
 
 
 class LibraryStatsResponse(BaseModel):
@@ -993,11 +997,13 @@ class VolumeTagResponse(BaseModel):
 
 
 class DuplicateActionRequest(BaseModel):
-    action: Literal["keep_best", "remove_selected", "export_report"]
+    action: Literal["keep_best", "remove_selected", "export_report", "ignore", "clear_ignored"]
     track_ids: list[int] = Field(default_factory=list, max_length=10000)
     groups: list[list[int]] = Field(default_factory=list, max_length=1000)
     delete_files: bool = False
     report_path: str | None = None
+    ignore_key: str | None = Field(default=None, max_length=200)
+    ignore_label: str | None = Field(default=None, max_length=500)
 
 
 class DuplicateActionResponse(BaseModel):
@@ -1257,7 +1263,7 @@ class AudioConversionSetupResponse(BaseModel):
 class AudioConversionRequest(BaseModel):
     target_folder: str
     output_format: Literal["flac", "mp3", "m4a", "opus", "wav"] = "flac"
-    track_ids: list[int] | None = Field(default=None, max_length=10000)
+    track_ids: list[int] | None = None
     preserve_structure: bool = True
     copy_tags: bool = True
     copy_artwork: bool = True
@@ -1265,7 +1271,7 @@ class AudioConversionRequest(BaseModel):
     sample_rate_hz: int | None = Field(default=None, ge=8000, le=384000)
     bitrate_kbps: int | None = Field(default=None, ge=32, le=1411)
     overwrite: bool = False
-    limit: int = Field(default=200, ge=1, le=100000)
+    limit: int | None = Field(default=None, ge=1)
 
     @field_validator("target_folder")
     @classmethod
@@ -1282,6 +1288,11 @@ class AudioConversionChange(BaseModel):
     artist: str | None = None
     source_path: str
     target_path: str
+    source_size_bytes: int | None = None
+    estimated_output_size_bytes: int | None = None
+    estimated_size_change_bytes: int | None = None
+    estimated_size_ratio: float | None = None
+    estimate_note: str | None = None
     changed: bool = False
     collision: bool = False
     error: str | None = None
@@ -1292,6 +1303,11 @@ class AudioConversionPreviewResponse(BaseModel):
     total: int = 0
     changed_count: int = 0
     collisions: int = 0
+    source_size_bytes: int | None = None
+    estimated_output_size_bytes: int | None = None
+    estimated_size_change_bytes: int | None = None
+    estimated_size_ratio: float | None = None
+    estimated_tracks: int = 0
     changes: list[AudioConversionChange] = Field(default_factory=list)
 
 
