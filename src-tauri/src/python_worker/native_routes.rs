@@ -85,6 +85,9 @@ pub(super) fn try_handle_native_json(
                 params, "job_id",
             )?)?,
         )?),
+        "clap_genre_tags" => Some(to_json(
+            native_library::analysis::native_clap_genre_tags(body.clone())?,
+        )?),
         "list_track_page" => Some(to_json(native_library::native_tracks_page(
             state,
             param_string(params, "search"),

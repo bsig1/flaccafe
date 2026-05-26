@@ -91,6 +91,30 @@ pub struct NativeAudioAnalysisProgress {
 }
 
 #[derive(Serialize)]
+pub struct NativeClapGenreTagPreview {
+    pub(crate) track_id: i64,
+    pub(crate) title: Option<String>,
+    pub(crate) artist: Option<String>,
+    pub(crate) album: Option<String>,
+    pub(crate) current_genre: Option<String>,
+    pub(crate) proposed_genre: Option<String>,
+    pub(crate) confidence: Option<f64>,
+    pub(crate) changed: bool,
+    pub(crate) applied: bool,
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct NativeClapGenreTagResponse {
+    pub(crate) total: i64,
+    pub(crate) matched: i64,
+    pub(crate) changed: i64,
+    pub(crate) applied: i64,
+    pub(crate) errors: Vec<String>,
+    pub(crate) previews: Vec<NativeClapGenreTagPreview>,
+}
+
+#[derive(Serialize)]
 pub struct NativeStatusResponse {
     pub(crate) status: String,
 }

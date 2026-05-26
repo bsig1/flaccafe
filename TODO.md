@@ -32,7 +32,6 @@
 - Consider persistent worker pooling only if one-shot worker startup becomes visible on long-running operations. Prefer correctness and simple process isolation until profiling proves it is too slow.
 
 ## Rust Native Migration Backlog
-- Move CLAP genre-tag preview/application into Rust; CLAP inference itself stays in the persistent Python expert worker.
 - Finish album-artwork cache storage in Rust; embedded artwork extraction/writes stay Python until Rust tag-writing safety is proven.
 - Keep MusicBrainz/AcoustID matching heuristics in Python until the matching code is decomposed and covered by golden tests.
 - Move CD drive detection, CD sidebar availability, active play/rip mutual exclusion, Windows CD TOC reading, disc ID generation, live stream token management, live audio streaming, rip job state, ETA, cancellation, verification hashes, and target path generation into Rust.
@@ -83,6 +82,7 @@
 - Moved FFmpeg installer job state, download progress, ZIP extraction, and saved tool-path configuration into Rust.
 - Moved audio conversion job state, progress/ETA, cancellation requests, FFmpeg command construction/process orchestration, and stderr-tail error reporting into Rust while keeping embedded artwork copy as a Python mutagen worker action.
 - Moved CLAP analysis job state, candidate selection, progress/ETA, pause/resume/cancel requests, failure marking, and analysis DB writes into Rust while keeping the CLAP/Torch model warm in a persistent Python expert worker.
+- Moved CLAP genre-tag preview/application into Rust; explicit file writes still delegate to the Python mutagen metadata worker.
 - Added `flaccafe-media://localhost/python-bytes/...` for Python-owned byte responses such as album art and CD live audio.
 - Switched `npm run dev` to desktop dev so local development exercises the same Rust-to-Python worker path as packaged builds.
 
