@@ -4,11 +4,11 @@ FLAC Cafe stores user library data in SQLite. The app treats SQLite as the sourc
 
 ## Storage Location
 
-The database path is shown in Settings and comes from `backend/app/config.py`. During tests, `MUSIC_REC_DB` points the app at a temporary database. Desktop builds normally use the FLAC Cafe app data folder.
+The database path is shown in Settings. Rust and Python both honor `MUSIC_REC_DB` for tests and otherwise use the FLAC Cafe app data folder in packaged builds. In desktop dev, the default database stays under `backend/data/`.
 
 ## Schema Ownership
 
-`backend/app/database.py` owns schema creation and lightweight migrations. Keep new tables and columns there, and prefer idempotent migrations that can run safely on an existing user database.
+Rust owns schema creation and lightweight desktop migrations through `src-tauri/src/native_library/schema.rs`, backed by the shared SQL file at `backend/app/schema.sql`. Python test and worker helpers read the same SQL file so both runtimes agree on table shape. Keep new tables and columns in the shared schema, then add idempotent Rust compatibility migrations when upgrading existing user databases.
 
 Core tables:
 
@@ -36,7 +36,7 @@ The Settings backup button copies the current SQLite file to the export folder. 
 
 Recommended checklist for a risky database change:
 
-1. Add or update schema setup in `backend/app/database.py`.
+1. Add or update `backend/app/schema.sql` and any Rust compatibility migration in `src-tauri/src/native_library/schema.rs`.
 2. Add API tests that initialize a fresh database and exercise an upgraded database shape when practical.
 3. Make the UI preview changes before applying bulk edits.
 4. Run `python -m unittest backend.tests.test_api`.

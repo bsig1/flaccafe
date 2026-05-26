@@ -25,6 +25,21 @@ pub(super) fn try_handle_native_json(
     // for mutagen, CLAP/Torch, network lookups, and byte streaming.
     let response = match action.action {
         "health" => Some(to_json(native_library::native_health()?)?),
+        "get_startup_diagnostics" => Some(to_json(
+            native_library::maintenance::native_startup_diagnostics()?,
+        )?),
+        "get_backend_log" => Some(to_json(
+            native_library::maintenance::native_backend_log_tail(param_usize(params, "limit").unwrap_or(200)),
+        )?),
+        "build_support_bundle" => Some(to_json(
+            native_library::maintenance::native_create_support_bundle()?,
+        )?),
+        "backup_database" => Some(to_json(
+            native_library::maintenance::native_backup_database()?,
+        )?),
+        "reset_local_data" => Some(to_json(
+            native_library::maintenance::native_reset_local_data(body_string(&body, "confirmation"))?,
+        )?),
         "get_settings" => Some(to_json(native_library::native_settings(state)?)?),
         "update_settings" => Some(to_json(native_library::native_update_settings(
             state,

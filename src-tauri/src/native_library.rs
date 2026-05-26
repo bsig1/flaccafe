@@ -10,6 +10,7 @@ use tauri::State;
 pub(crate) mod history;
 pub(crate) mod inbox;
 pub(crate) mod library_tools;
+pub(crate) mod maintenance;
 pub(crate) mod media_protocol;
 pub(crate) mod podcasts;
 pub(crate) mod recommendation_profiles;

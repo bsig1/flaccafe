@@ -15,6 +15,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 regex = "1"
 base64 = "0.22"
+time = { version = "0.3", features = ["formatting"] }
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 windows = { version = "0.61.3", features = ["Foundation", "Media", "Win32_Foundation", "Win32_System_WinRT", "Win32_UI_Shell"] }
 rodio = { version = "0.22.2", features = ["symphonia-all"] }
 notify = "6.1.1"
