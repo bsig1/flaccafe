@@ -1,12 +1,15 @@
 use super::types::*;
-use super::{open_database, track_from_row, TRACK_COLUMNS};
+use super::{app_storage_root, open_database, track_from_row, TRACK_COLUMNS};
 use regex::{Regex, RegexBuilder};
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{params, params_from_iter, Connection};
 use serde_json::{json, Value as JsonValue};
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::State;
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 const REGEX_PRESET_FIELDS: &[&str] = &["title", "artist", "album", "album_artist", "genre"];
 const TAG_CORE_FIELDS: &[&str] = &[
@@ -31,6 +34,41 @@ const FILENAME_INFERENCE_FIELDS: &[&str] = &[
     "year",
 ];
 const DEVICE_KINDS: &[&str] = &["folder", "usb", "android_folder", "android_mtp"];
+const TRACK_BACKUP_FIELDS: &[&str] = &[
+    "id",
+    "path",
+    "title",
+    "artist",
+    "album",
+    "album_artist",
+    "track_number",
+    "disc_number",
+    "genre",
+    "analysis_provider",
+    "analysis_model",
+    "analysis_genre",
+    "analysis_genre_confidence",
+    "analysis_genre_tags",
+    "analysis_embedding",
+    "analysis_updated_at",
+    "year",
+    "duration_seconds",
+    "bitrate",
+    "replaygain_track_gain_db",
+    "replaygain_album_gain_db",
+    "replaygain_track_peak",
+    "replaygain_album_peak",
+    "audio_fingerprint",
+    "acoustic_fingerprint",
+    "acoustic_fingerprint_updated_at",
+    "rating",
+    "play_count",
+    "skip_count",
+    "last_played_at",
+    "last_skipped_at",
+    "date_added",
+    "file_modified_at",
+];
 
 fn non_empty_trimmed(value: String, label: &str, max_len: usize) -> Result<String, String> {
     let cleaned = value.trim().to_string();
@@ -1538,4 +1576,289 @@ pub fn native_regex_tags(
         applied,
         previews,
     })
+}
+
+fn tag_backup_dir() -> PathBuf {
+    app_storage_root().join("exports").join("tag-backups")
+}
+
+fn timestamp_for_file() -> String {
+    let now = OffsetDateTime::now_utc();
+    format!(
+        "{:04}{:02}{:02}-{:02}{:02}{:02}",
+        now.year(),
+        u8::from(now.month()),
+        now.day(),
+        now.hour(),
+        now.minute(),
+        now.second()
+    )
+}
+
+fn utc_now_rfc3339() -> String {
+    OffsetDateTime::now_utc()
+        .replace_microsecond(0)
+        .unwrap_or_else(|_| OffsetDateTime::now_utc())
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+}
+
+fn resolve_tag_backup_path(
+    backup_path: Option<String>,
+    default_name: Option<String>,
+) -> Result<PathBuf, String> {
+    let trimmed = backup_path.unwrap_or_default().trim().to_string();
+    let mut target = if trimmed.is_empty() {
+        tag_backup_dir()
+            .join(default_name.ok_or_else(|| "Tag backup path is required".to_string())?)
+    } else {
+        let path = PathBuf::from(trimmed);
+        if path.is_absolute() {
+            path
+        } else {
+            tag_backup_dir().join(path)
+        }
+    };
+    if target
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| !value.eq_ignore_ascii_case("json"))
+        .unwrap_or(true)
+    {
+        target.set_extension("json");
+    }
+    Ok(target)
+}
+
+fn json_string_map(values: &BTreeMap<String, Option<String>>) -> JsonValue {
+    let mut object = serde_json::Map::new();
+    for (key, value) in values {
+        object.insert(key.clone(), json_string(value.clone()));
+    }
+    JsonValue::Object(object)
+}
+
+fn track_backup_json(track: &NativeTrack, path_key: Option<String>) -> JsonValue {
+    let mut object = serde_json::Map::new();
+    for field in TRACK_BACKUP_FIELDS {
+        let value = match *field {
+            "id" => json!(track.id),
+            "path" => json!(track.path.as_str()),
+            "title" => json!(track.title.as_deref()),
+            "artist" => json!(track.artist.as_deref()),
+            "album" => json!(track.album.as_deref()),
+            "album_artist" => json!(track.album_artist.as_deref()),
+            "track_number" => json!(track.track_number),
+            "disc_number" => json!(track.disc_number),
+            "genre" => json!(track.genre.as_deref()),
+            "analysis_provider" => json!(track.analysis_provider.as_deref()),
+            "analysis_model" => json!(track.analysis_model.as_deref()),
+            "analysis_genre" => json!(track.analysis_genre.as_deref()),
+            "analysis_genre_confidence" => json!(track.analysis_genre_confidence),
+            "analysis_genre_tags" => json!(track.analysis_genre_tags.as_deref()),
+            "analysis_embedding" => json!(track.analysis_embedding.as_deref()),
+            "analysis_updated_at" => json!(track.analysis_updated_at.as_deref()),
+            "year" => json!(track.year),
+            "duration_seconds" => json!(track.duration_seconds),
+            "bitrate" => json!(track.bitrate),
+            "replaygain_track_gain_db" => json!(track.replaygain_track_gain_db),
+            "replaygain_album_gain_db" => json!(track.replaygain_album_gain_db),
+            "replaygain_track_peak" => json!(track.replaygain_track_peak),
+            "replaygain_album_peak" => json!(track.replaygain_album_peak),
+            "audio_fingerprint" => json!(track.audio_fingerprint.as_deref()),
+            "acoustic_fingerprint" => json!(track.acoustic_fingerprint.as_deref()),
+            "acoustic_fingerprint_updated_at" => {
+                json!(track.acoustic_fingerprint_updated_at.as_deref())
+            }
+            "rating" => json!(track.rating),
+            "play_count" => json!(track.play_count),
+            "skip_count" => json!(track.skip_count),
+            "last_played_at" => json!(track.last_played_at.as_deref()),
+            "last_skipped_at" => json!(track.last_skipped_at.as_deref()),
+            "date_added" => json!(track.date_added.as_str()),
+            "file_modified_at" => json!(track.file_modified_at.as_deref()),
+            _ => JsonValue::Null,
+        };
+        object.insert((*field).to_string(), value);
+    }
+    object.insert("path_key".to_string(), json_string(path_key));
+    JsonValue::Object(object)
+}
+
+fn core_metadata_json(track: &NativeTrack) -> JsonValue {
+    json!({
+        "title": track.title.as_deref(),
+        "artist": track.artist.as_deref(),
+        "album": track.album.as_deref(),
+        "album_artist": track.album_artist.as_deref(),
+        "track_number": track.track_number,
+        "disc_number": track.disc_number,
+        "genre": track.genre.as_deref(),
+        "year": track.year,
+        "rating": track.rating,
+    })
+}
+
+fn path_keys_for_tracks(
+    connection: &Connection,
+    track_ids: &[i64],
+) -> Result<BTreeMap<i64, Option<String>>, String> {
+    let mut result = track_ids
+        .iter()
+        .map(|id| (*id, None))
+        .collect::<BTreeMap<_, _>>();
+    if track_ids.is_empty() {
+        return Ok(result);
+    }
+    let placeholders = vec!["?"; track_ids.len()].join(",");
+    let mut statement = connection
+        .prepare(&format!(
+            "SELECT id, path_key FROM tracks WHERE id IN ({placeholders})"
+        ))
+        .map_err(|error| format!("Could not prepare native tag-backup path-key query: {error}"))?;
+    let rows = statement
+        .query_map(params_from_iter(track_ids.iter()), |row| {
+            Ok((
+                row.get::<_, i64>("id")?,
+                row.get::<_, Option<String>>("path_key")?,
+            ))
+        })
+        .map_err(|error| format!("Could not read native tag-backup path keys: {error}"))?;
+    for row in rows {
+        let (id, path_key) =
+            row.map_err(|error| format!("Could not decode native tag-backup path key: {error}"))?;
+        result.insert(id, path_key);
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn native_create_tag_backup(
+    _state: State<'_, NativeLibraryState>,
+    backup_path: Option<String>,
+    track_ids: Option<Vec<i64>>,
+    include_custom_tags: Option<bool>,
+    limit: Option<usize>,
+) -> Result<NativeTagBackupResponse, String> {
+    let limit = limit.unwrap_or(100_000).clamp(1, 500_000);
+    let include_custom_tags = include_custom_tags.unwrap_or(true);
+    let created_at = utc_now_rfc3339();
+    let target = resolve_tag_backup_path(
+        backup_path,
+        Some(format!("flac-cafe-tags-{}.json", timestamp_for_file())),
+    )?;
+    let connection = open_database()?;
+    let tracks = select_tool_tracks(&connection, track_ids, Some(limit))?;
+    let ids = tracks.iter().map(|track| track.id).collect::<Vec<_>>();
+    let path_keys = path_keys_for_tracks(&connection, &ids)?;
+    let custom_by_track = if include_custom_tags {
+        custom_tags_for_tracks(&connection, &ids)?
+    } else {
+        BTreeMap::new()
+    };
+    let mut custom_tag_count = 0i64;
+    let tracks_json = tracks
+        .iter()
+        .map(|track| {
+            let custom_tags = custom_by_track.get(&track.id).cloned().unwrap_or_default();
+            custom_tag_count += custom_tags.len() as i64;
+            json!({
+                "track": track_backup_json(track, path_keys.get(&track.id).cloned().flatten()),
+                "metadata": core_metadata_json(track),
+                "custom_tags": json_string_map(&custom_tags),
+            })
+        })
+        .collect::<Vec<_>>();
+    let payload = json!({
+        "format": "flac-cafe-tag-backup-v1",
+        "created_at": created_at,
+        "track_count": tracks_json.len(),
+        "include_custom_tags": include_custom_tags,
+        "tracks": tracks_json,
+    });
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "Could not create tag backup folder {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    let text = serde_json::to_string_pretty(&payload)
+        .map_err(|error| format!("Could not encode tag backup: {error}"))?;
+    fs::write(&target, text).map_err(|error| format!("Could not write tag backup: {error}"))?;
+    Ok(NativeTagBackupResponse {
+        backup_path: target.to_string_lossy().to_string(),
+        track_count: tracks_json.len() as i64,
+        custom_tag_count,
+        created_at,
+    })
+}
+
+#[tauri::command]
+pub fn native_list_tag_backups(
+    _state: State<'_, NativeLibraryState>,
+    limit: Option<usize>,
+) -> Result<Vec<NativeTagBackupSummary>, String> {
+    let limit = limit.unwrap_or(30).clamp(1, 200);
+    let folder = tag_backup_dir();
+    if !folder.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut entries = fs::read_dir(&folder)
+        .map_err(|error| {
+            format!(
+                "Could not read tag backup folder {}: {error}",
+                folder.display()
+            )
+        })?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| value.eq_ignore_ascii_case("json"))
+            {
+                let modified = entry
+                    .metadata()
+                    .and_then(|metadata| metadata.modified())
+                    .ok();
+                Some((path, modified))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| right.1.cmp(&left.1));
+
+    let mut summaries = Vec::new();
+    for (path, _) in entries.into_iter().take(limit) {
+        let metadata = fs::metadata(&path).ok();
+        let payload = fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<JsonValue>(&text).ok());
+        let created_at = payload
+            .as_ref()
+            .and_then(|value| value.get("created_at"))
+            .and_then(JsonValue::as_str)
+            .map(ToOwned::to_owned);
+        let track_count = payload
+            .as_ref()
+            .and_then(|value| value.get("track_count"))
+            .and_then(JsonValue::as_i64)
+            .unwrap_or(0);
+        summaries.push(NativeTagBackupSummary {
+            backup_path: path.to_string_lossy().to_string(),
+            file_name: path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default()
+                .to_string(),
+            track_count,
+            created_at,
+            size_bytes: metadata.map(|value| value.len() as i64).unwrap_or(0),
+        });
+    }
+    Ok(summaries)
 }

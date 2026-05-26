@@ -350,6 +350,22 @@ pub(super) fn try_handle_native_json(
                 body_usize(&body, "limit"),
             )?,
         )?),
+        "create_tag_backup" => Some(to_json(
+            native_library::library_tools::native_create_tag_backup(
+                state,
+                body_string(&body, "backup_path").or_else(|| body_string(&body, "backupPath")),
+                body_i64_vec(&body, "track_ids").or_else(|| body_i64_vec(&body, "trackIds")),
+                body_bool(&body, "include_custom_tags")
+                    .or_else(|| body_bool(&body, "includeCustomTags")),
+                body_usize(&body, "limit"),
+            )?,
+        )?),
+        "list_tag_backups" => Some(to_json(
+            native_library::library_tools::native_list_tag_backups(
+                state,
+                param_usize(params, "limit"),
+            )?,
+        )?),
         "infer_tags_from_filenames" => Some(to_json(
             native_library::library_tools::native_infer_filename_tags(
                 state,

@@ -1045,3 +1045,20 @@ pub struct NativeCsvMetadataExportResponse {
     pub(crate) track_count: i64,
     pub(crate) columns: Vec<String>,
 }
+
+#[derive(Serialize)]
+pub struct NativeTagBackupResponse {
+    pub(crate) backup_path: String,
+    pub(crate) track_count: i64,
+    pub(crate) custom_tag_count: i64,
+    pub(crate) created_at: String,
+}
+
+#[derive(Serialize)]
+pub struct NativeTagBackupSummary {
+    pub(crate) backup_path: String,
+    pub(crate) file_name: String,
+    pub(crate) track_count: i64,
+    pub(crate) created_at: Option<String>,
+    pub(crate) size_bytes: i64,
+}
