@@ -32,7 +32,6 @@
 - Consider persistent worker pooling only if one-shot worker startup becomes visible on long-running operations. Prefer correctness and simple process isolation until profiling proves it is too slow.
 
 ## Rust Native Migration Backlog
-- Keep RSS/feed parsing and episode downloading in Python for now only if current Python libraries remain more convenient; otherwise evaluate Rust `rss` plus `reqwest`.
 - Consider moving ListenBrainz and Last.fm HTTP submission to Rust because signing and JSON/form posts are not Python-specialist work.
 - Keep CLAP inference in Python, but move analysis job state, candidate selection, pause/resume/cancel, progress, DB writes, and genre-tag application into Rust.
 - Move duplicate embedding similarity math into Rust.
@@ -72,6 +71,7 @@
 - Added a low-noise Rust counter for remaining Python worker action calls, exposed at `/diagnostics/python-worker-usage`.
 - Added `docs/rust-route-migration-checklist.md` with the per-route Rust migration exit checklist.
 - Moved duplicate ignore, clear-ignored, report export, keep-best, and remove-selected SQLite actions into Rust; delete-from-disk still falls back to Python for Recycle Bin handling.
+- Evaluated podcast RSS/feed parsing and episode downloads; keeping them in Python for now because the current feed/download/MIME/library-ingest flow is more convenient than adding Rust `rss`/`reqwest` plumbing.
 - Added `flaccafe-media://localhost/python-bytes/...` for Python-owned byte responses such as album art and CD live audio.
 - Switched `npm run dev` to desktop dev so local development exercises the same Rust-to-Python worker path as packaged builds.
 
