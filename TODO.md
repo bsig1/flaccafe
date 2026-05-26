@@ -36,7 +36,7 @@
 - Keep CLAP inference in Python, but move analysis job state, candidate selection, pause/resume/cancel, progress, DB writes, and genre-tag application into Rust.
 - Move duplicate embedding similarity math into Rust.
 - Move device sync detected-drive probing, preview, copy jobs, and playlist export into Rust where Windows APIs or filesystem operations are involved.
-- Move lyric database reads/writes and cached sidecar file management into Rust. Consider moving LRCLIB HTTP lookup to Rust; keep embedded lyrics reads/writes in Python until Rust tag-writing safety is proven.
+- Move cached lyric sidecar file management into Rust. Consider moving LRCLIB HTTP lookup to Rust; keep embedded lyrics reads/writes in Python until Rust tag-writing safety is proven.
 - Move album artwork sidecar discovery, cache lookup, cache storage, local image serving, and simple cover-art downloads into Rust; keep embedded artwork extraction/writes in Python until Rust tag-writing safety is proven.
 - Move AcoustID/fpcalc process invocation and fingerprint job state into Rust. Keep MusicBrainz matching heuristics in Python until the matching code is decomposed and covered by golden tests.
 - Move CD drive detection, CD sidebar availability, active play/rip mutual exclusion, Windows CD TOC reading, disc ID generation, live stream token management, live audio streaming, rip job state, ETA, cancellation, verification hashes, and target path generation into Rust.
@@ -75,6 +75,7 @@
 - Moved tag backup creation/listing into Rust; restore remains separate because it writes editable/custom tags and undo entries.
 - Moved tag backup restore into Rust, including preview, missing-only behavior, custom tags, apply, and undo entries.
 - Moved CSV metadata import and import-report generation into Rust, including previews, column maps, blank clearing, apply, and undo entries.
+- Moved lyric database reads/writes into Rust; embedded lyric reads/writes and online lyric fetches remain Python-owned.
 - Added `flaccafe-media://localhost/python-bytes/...` for Python-owned byte responses such as album art and CD live audio.
 - Switched `npm run dev` to desktop dev so local development exercises the same Rust-to-Python worker path as packaged builds.
 

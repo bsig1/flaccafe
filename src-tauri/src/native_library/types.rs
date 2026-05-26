@@ -1082,6 +1082,15 @@ pub struct NativeCsvMetadataImportReportResponse {
 }
 
 #[derive(Serialize)]
+pub struct NativeLyricsResponse {
+    pub(crate) track_id: i64,
+    pub(crate) lyrics: Option<String>,
+    pub(crate) source: Option<String>,
+    pub(crate) is_synced: bool,
+    pub(crate) sidecar_path: Option<String>,
+}
+
+#[derive(Serialize)]
 pub struct NativeTagBackupResponse {
     pub(crate) backup_path: String,
     pub(crate) track_count: i64,

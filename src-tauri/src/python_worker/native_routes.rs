@@ -127,6 +127,27 @@ pub(super) fn try_handle_native_json(
             state,
             required_param_i64(params, "track_id")?,
         )?)?),
+        "track_lyrics" => match native_library::lyrics::native_track_database_lyrics(
+            state,
+            required_param_i64(params, "track_id")?,
+        )? {
+            Some(response) => Some(to_json(response)?),
+            None => None,
+        },
+        "update_track_lyrics" => {
+            let target = body_string(&body, "target").unwrap_or_else(|| "database".to_string());
+            if target.eq_ignore_ascii_case("file") {
+                None
+            } else {
+                Some(to_json(native_library::lyrics::native_update_database_lyrics(
+                    state,
+                    required_param_i64(params, "track_id")?,
+                    body_string(&body, "lyrics"),
+                    body_bool(&body, "is_synced").or_else(|| body_bool(&body, "isSynced")),
+                    body_string(&body, "source"),
+                )?)?)
+            }
+        }
         "update_rating" => {
             let track_id = required_param_i64(params, "track_id")?;
             let rating = body_f64(&body, "rating");
