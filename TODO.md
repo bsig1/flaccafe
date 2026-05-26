@@ -35,7 +35,7 @@
 - Consider moving ListenBrainz and Last.fm HTTP submission to Rust because signing and JSON/form posts are not Python-specialist work.
 - Keep CLAP inference in Python, but move analysis job state, candidate selection, pause/resume/cancel, progress, DB writes, and genre-tag application into Rust.
 - Move duplicate embedding similarity math into Rust.
-- Move tag backup restore JSON handling and CSV metadata import/report generation into Rust.
+- Move CSV metadata import/report generation into Rust.
 - Move device sync detected-drive probing, preview, copy jobs, and playlist export into Rust where Windows APIs or filesystem operations are involved.
 - Move lyric database reads/writes and cached sidecar file management into Rust. Consider moving LRCLIB HTTP lookup to Rust; keep embedded lyrics reads/writes in Python until Rust tag-writing safety is proven.
 - Move album artwork sidecar discovery, cache lookup, cache storage, local image serving, and simple cover-art downloads into Rust; keep embedded artwork extraction/writes in Python until Rust tag-writing safety is proven.
@@ -74,6 +74,7 @@
 - Moved metadata-write preview diffing into Rust while keeping actual mutagen audio tag writes in the Python expert worker.
 - Moved metadata CSV export into Rust so File Management exports no longer spawn Python for read-only CSV generation.
 - Moved tag backup creation/listing into Rust; restore remains separate because it writes editable/custom tags and undo entries.
+- Moved tag backup restore into Rust, including preview, missing-only behavior, custom tags, apply, and undo entries.
 - Added `flaccafe-media://localhost/python-bytes/...` for Python-owned byte responses such as album art and CD live audio.
 - Switched `npm run dev` to desktop dev so local development exercises the same Rust-to-Python worker path as packaged builds.
 

@@ -1062,3 +1062,26 @@ pub struct NativeTagBackupSummary {
     pub(crate) created_at: Option<String>,
     pub(crate) size_bytes: i64,
 }
+
+#[derive(Serialize)]
+pub struct NativeTagBackupRestorePreview {
+    pub(crate) track_id: Option<i64>,
+    pub(crate) path: Option<String>,
+    pub(crate) matched: bool,
+    pub(crate) changed_fields: Vec<String>,
+    pub(crate) current: serde_json::Value,
+    pub(crate) restored: serde_json::Value,
+    pub(crate) applied: bool,
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct NativeTagBackupRestoreResponse {
+    pub(crate) backup_path: String,
+    pub(crate) total: i64,
+    pub(crate) matched: i64,
+    pub(crate) changed: i64,
+    pub(crate) applied: i64,
+    pub(crate) errors: Vec<String>,
+    pub(crate) previews: Vec<NativeTagBackupRestorePreview>,
+}

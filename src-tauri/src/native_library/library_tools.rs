@@ -2,9 +2,9 @@ use super::types::*;
 use super::{app_storage_root, open_database, track_from_row, TRACK_COLUMNS};
 use regex::{Regex, RegexBuilder};
 use rusqlite::types::Value as SqlValue;
-use rusqlite::{params, params_from_iter, Connection};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde_json::{json, Value as JsonValue};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::State;
@@ -1732,6 +1732,174 @@ fn path_keys_for_tracks(
     Ok(result)
 }
 
+fn load_tag_backup(path: &Path) -> Result<JsonValue, String> {
+    if !path.is_file() {
+        return Err("Tag backup file does not exist".to_string());
+    }
+    let text =
+        fs::read_to_string(path).map_err(|error| format!("Could not read tag backup: {error}"))?;
+    let payload = serde_json::from_str::<JsonValue>(&text)
+        .map_err(|error| format!("Could not read tag backup: {error}"))?;
+    if !payload
+        .get("format")
+        .and_then(JsonValue::as_str)
+        .is_some_and(|format| format == "flac-cafe-tag-backup-v1")
+    {
+        return Err("Unsupported tag backup format".to_string());
+    }
+    Ok(payload)
+}
+
+fn backup_entry_track(
+    connection: &Connection,
+    entry: &serde_json::Map<String, JsonValue>,
+    allowed_ids: Option<&HashSet<i64>>,
+) -> Result<Option<NativeTrack>, String> {
+    let Some(track) = entry.get("track").and_then(JsonValue::as_object) else {
+        return Ok(None);
+    };
+    if let Some(track_id) = track.get("id").and_then(JsonValue::as_i64) {
+        if allowed_ids.is_none_or(|ids| ids.contains(&track_id)) {
+            let found = connection
+                .query_row(
+                    &format!("SELECT {TRACK_COLUMNS} FROM tracks WHERE id = ?"),
+                    params![track_id],
+                    track_from_row,
+                )
+                .optional()
+                .map_err(|error| format!("Could not read tag backup track by id: {error}"))?;
+            if found.is_some() {
+                return Ok(found);
+            }
+        }
+    }
+    if let Some(path_key) = track
+        .get("path_key")
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let found = connection
+            .query_row(
+                &format!("SELECT {TRACK_COLUMNS} FROM tracks WHERE path_key = ?"),
+                params![path_key],
+                track_from_row,
+            )
+            .optional()
+            .map_err(|error| format!("Could not read tag backup track by path key: {error}"))?;
+        if let Some(track) = found {
+            if allowed_ids.is_none_or(|ids| ids.contains(&track.id)) {
+                return Ok(Some(track));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn tag_json_values_equal(current: &JsonValue, restored: &JsonValue) -> bool {
+    if current.is_null() && restored.is_null() {
+        return true;
+    }
+    if restored.is_number() && !current.is_null() {
+        if let (Some(left), Some(right)) = (coerce_f64(current), coerce_f64(restored)) {
+            return (left - right).abs() < 1e-9;
+        }
+        return false;
+    }
+    current == restored
+}
+
+fn backup_current_values(
+    track: &NativeTrack,
+    custom_tags: &BTreeMap<String, Option<String>>,
+    include_custom_tags: bool,
+) -> JsonValue {
+    let mut object = serde_json::Map::new();
+    if let JsonValue::Object(core) = core_metadata_json(track) {
+        object.extend(core);
+    }
+    if include_custom_tags {
+        for (key, value) in custom_tags {
+            object.insert(format!("custom:{key}"), json_string(value.clone()));
+        }
+    }
+    JsonValue::Object(object)
+}
+
+fn restored_backup_values(
+    entry: &serde_json::Map<String, JsonValue>,
+    restore_custom_tags: bool,
+) -> Result<JsonValue, String> {
+    let mut object = serde_json::Map::new();
+    if let Some(metadata) = entry.get("metadata").and_then(JsonValue::as_object) {
+        for field in TAG_CORE_FIELDS {
+            if let Some(value) = metadata.get(*field) {
+                object.insert((*field).to_string(), value.clone());
+            }
+        }
+    }
+    if restore_custom_tags {
+        if let Some(custom_tags) = entry.get("custom_tags").and_then(JsonValue::as_object) {
+            for (key, value) in custom_tags {
+                let clean = clean_custom_tag_key(key)?;
+                object.insert(format!("custom:{clean}"), value.clone());
+            }
+        }
+    }
+    Ok(JsonValue::Object(object))
+}
+
+fn tag_backup_undo_payload(
+    track: &NativeTrack,
+    custom_tags: &BTreeMap<String, Option<String>>,
+    changed_fields: &[String],
+) -> JsonValue {
+    let mut track_object = serde_json::Map::new();
+    if let JsonValue::Object(core) = core_metadata_json(track) {
+        track_object.extend(core);
+    }
+    track_object.insert("id".to_string(), json!(track.id));
+    track_object.insert("path".to_string(), json!(track.path.as_str()));
+    json!({
+        "source": "tag_backup_restore",
+        "track": JsonValue::Object(track_object),
+        "custom_tags": json_string_map(custom_tags),
+        "changed_fields": changed_fields,
+    })
+}
+
+fn write_tag_backup_restore_undo(
+    connection: &Connection,
+    batch_id: &str,
+    track: &NativeTrack,
+    custom_tags: &BTreeMap<String, Option<String>>,
+    changed_fields: &[String],
+) -> Result<(), String> {
+    let title = track
+        .title
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| {
+            Path::new(&track.path)
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("track")
+        });
+    let payload = tag_backup_undo_payload(track, custom_tags, changed_fields);
+    connection
+        .execute(
+            "INSERT INTO bulk_action_undo_log(batch_id, action_type, summary, payload_json)
+             VALUES(?, 'tag_backup_restore', ?, ?)",
+            params![
+                batch_id,
+                format!("Restored tag backup for {title}"),
+                payload.to_string()
+            ],
+        )
+        .map_err(|error| format!("Could not write tag backup undo entry: {error}"))?;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn native_create_tag_backup(
     _state: State<'_, NativeLibraryState>,
@@ -1861,4 +2029,125 @@ pub fn native_list_tag_backups(
         });
     }
     Ok(summaries)
+}
+
+#[tauri::command]
+pub fn native_restore_tag_backup(
+    _state: State<'_, NativeLibraryState>,
+    backup_path: String,
+    track_ids: Option<Vec<i64>>,
+    missing_only: Option<bool>,
+    restore_custom_tags: Option<bool>,
+    apply: Option<bool>,
+    limit: Option<usize>,
+) -> Result<NativeTagBackupRestoreResponse, String> {
+    let limit = limit.unwrap_or(10_000).clamp(1, 100_000);
+    let source = resolve_tag_backup_path(Some(backup_path), None)?;
+    let payload = load_tag_backup(&source)?;
+    let entries = payload
+        .get("tracks")
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| "Tag backup has no tracks".to_string())?;
+    let entries = entries.iter().take(limit).collect::<Vec<_>>();
+    let allowed_ids =
+        track_ids.map(|ids| ids.into_iter().filter(|id| *id > 0).collect::<HashSet<_>>());
+    let missing_only = missing_only.unwrap_or(false);
+    let restore_custom_tags = restore_custom_tags.unwrap_or(true);
+    let apply = apply.unwrap_or(false);
+    let batch_id = format!("tag-backup-restore-{}", timestamp_for_file());
+    let connection = open_database()?;
+
+    let mut previews = Vec::new();
+    let mut errors = Vec::new();
+    let mut matched = 0i64;
+    let mut changed = 0i64;
+    let mut applied = 0i64;
+    for entry in &entries {
+        let mut preview = NativeTagBackupRestorePreview {
+            track_id: None,
+            path: None,
+            matched: false,
+            changed_fields: Vec::new(),
+            current: json!({}),
+            restored: json!({}),
+            applied: false,
+            error: None,
+        };
+        let Some(entry_object) = entry.as_object() else {
+            continue;
+        };
+        match (|| -> Result<(), String> {
+            let Some(track) = backup_entry_track(&connection, entry_object, allowed_ids.as_ref())?
+            else {
+                return Err("No library track matched this backup entry".to_string());
+            };
+            preview.track_id = Some(track.id);
+            preview.path = Some(track.path.clone());
+            preview.matched = true;
+            matched += 1;
+            let current_custom = custom_tags_for_tracks(&connection, &[track.id])?
+                .remove(&track.id)
+                .unwrap_or_default();
+            let current = backup_current_values(&track, &current_custom, restore_custom_tags);
+            let restored = restored_backup_values(entry_object, restore_custom_tags)?;
+            let mut changed_fields = Vec::new();
+            if let Some(restored_object) = restored.as_object() {
+                for (field, restored_value) in restored_object {
+                    let current_value = tag_field_value(&track, &current_custom, field)?;
+                    if missing_only && !value_missing(&current_value) {
+                        continue;
+                    }
+                    if !tag_json_values_equal(&current_value, restored_value) {
+                        changed_fields.push(field.clone());
+                    }
+                }
+            }
+            changed_fields.sort();
+            preview.current = current;
+            preview.restored = restored.clone();
+            preview.changed_fields = changed_fields.clone();
+            if !changed_fields.is_empty() {
+                changed += 1;
+            }
+            if apply && !changed_fields.is_empty() {
+                write_tag_backup_restore_undo(
+                    &connection,
+                    &batch_id,
+                    &track,
+                    &current_custom,
+                    &changed_fields,
+                )?;
+                let restored_object = restored
+                    .as_object()
+                    .ok_or_else(|| "Tag backup restored values are invalid".to_string())?;
+                for field in &changed_fields {
+                    if let Some(value) = restored_object.get(field) {
+                        apply_tag_update(&connection, track.id, field, value)?;
+                    }
+                }
+                preview.applied = true;
+                applied += 1;
+            }
+            Ok(())
+        })() {
+            Ok(()) => {}
+            Err(error) => {
+                preview.error = Some(error.clone());
+                errors.push(error);
+            }
+        }
+        previews.push(preview);
+    }
+    if applied > 0 {
+        clear_query_cache(&connection);
+    }
+    Ok(NativeTagBackupRestoreResponse {
+        backup_path: source.to_string_lossy().to_string(),
+        total: entries.len() as i64,
+        matched,
+        changed,
+        applied,
+        errors: errors.into_iter().take(100).collect(),
+        previews,
+    })
 }

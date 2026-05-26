@@ -366,6 +366,19 @@ pub(super) fn try_handle_native_json(
                 param_usize(params, "limit"),
             )?,
         )?),
+        "restore_tag_backup" => Some(to_json(
+            native_library::library_tools::native_restore_tag_backup(
+                state,
+                required_body_string(&body, "backup_path")
+                    .or_else(|_| required_body_string(&body, "backupPath"))?,
+                body_i64_vec(&body, "track_ids").or_else(|| body_i64_vec(&body, "trackIds")),
+                body_bool(&body, "missing_only").or_else(|| body_bool(&body, "missingOnly")),
+                body_bool(&body, "restore_custom_tags")
+                    .or_else(|| body_bool(&body, "restoreCustomTags")),
+                body_bool(&body, "apply"),
+                body_usize(&body, "limit"),
+            )?,
+        )?),
         "infer_tags_from_filenames" => Some(to_json(
             native_library::library_tools::native_infer_filename_tags(
                 state,
