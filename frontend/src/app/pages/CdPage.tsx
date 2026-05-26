@@ -4,6 +4,7 @@ import type {
 import { CdRipperSection } from "./file-management/CdRipperSection";
 
 export function CdPage({
+  cdAutoLookupMetadata,
   currentCdPlaybackDriveId,
   defaultTargetFolder,
   isCdPlaybackActive,
@@ -12,6 +13,7 @@ export function CdPage({
   onPlayPreviewTrack,
   setStatus,
 }: {
+  cdAutoLookupMetadata: boolean;
   currentCdPlaybackDriveId?: string | null;
   defaultTargetFolder: string;
   isCdPlaybackActive: boolean;
@@ -30,6 +32,7 @@ export function CdPage({
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-5">
         <CdRipperSection
+          cdAutoLookupMetadata={cdAutoLookupMetadata}
           currentCdPlaybackDriveId={currentCdPlaybackDriveId}
           defaultTargetFolder={defaultTargetFolder}
           isCdPlaybackActive={isCdPlaybackActive}

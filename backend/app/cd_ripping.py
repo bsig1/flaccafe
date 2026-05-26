@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import base64
 import json
 import os
 import re
@@ -20,7 +21,7 @@ from uuid import uuid4
 from .audio_conversion_jobs import audio_codec_args, creation_flags, resolve_ffmpeg_path, safe_component
 from .config import APP_STORAGE_ROOT
 from .database import connect
-from .musicbrainz_autotag import artist_credit_phrase, cover_art_for_release, lookup_release, parse_year, search_releases, text_similarity
+from .musicbrainz_autotag import artist_credit_phrase, cover_art_for_release, lookup_discid_releases, lookup_release, parse_year, search_releases, text_similarity
 
 
 CD_OUTPUT_EXTENSIONS = {
@@ -38,10 +39,14 @@ CD_MSF_OFFSET = 150
 CDDA_SECTOR_SIZE = 2352
 CD_RAW_READ_OFFSET_SECTOR_SIZE = 2048
 WINDOWS_CDDA_READ_SECTORS = 16
-WINDOWS_CDDA_STREAM_READ_SECTORS = CD_FRAMES_PER_SECOND
+WINDOWS_CDDA_STREAM_READ_SECTORS = 15
 ACTIVE_CD_STREAM_TOKENS: dict[str, set[str]] = {}
 ACTIVE_CD_STREAM_LOCK = Lock()
+CDDA_ACCESS_LOCK = Lock()
 MAX_ACTIVE_CD_STREAM_TOKENS_PER_DRIVE = 100
+CD_DRIVE_CACHE: list[dict] = []
+CD_DRIVE_CACHE_LOCK = Lock()
+POWERSHELL_CD_DRIVE_TIMEOUT_SECONDS = 2
 
 IOCTL_CDROM_READ_TOC = 0x00024000
 IOCTL_CDROM_RAW_READ = 0x0002403E
@@ -50,6 +55,17 @@ FILE_SHARE_READ = 0x00000001
 FILE_SHARE_WRITE = 0x00000002
 OPEN_EXISTING = 3
 TRACK_MODE_CDDA = 2
+
+
+@dataclass(frozen=True)
+class CdDiscIdInfo:
+    disc_id: str
+    toc: str
+    first_track: int
+    last_track: int
+    audio_track_count: int
+    leadout_offset: int
+    track_offsets: list[int]
 
 
 def utc_now() -> datetime:
@@ -179,7 +195,7 @@ def powershell_cd_drives() -> list[dict]:
             command,
             capture_output=True,
             text=True,
-            timeout=8,
+            timeout=POWERSHELL_CD_DRIVE_TIMEOUT_SECONDS,
             creationflags=creation_flags(),
         )
     except (OSError, subprocess.SubprocessError):
@@ -195,6 +211,89 @@ def powershell_cd_drives() -> list[dict]:
     if isinstance(payload, list):
         return [item for item in payload if isinstance(item, dict)]
     return []
+
+
+def copy_cd_drive_entries(drives: list[dict]) -> list[dict]:
+    copied: list[dict] = []
+    for drive in drives:
+        item = dict(drive)
+        item["tracks"] = [dict(track) for track in drive.get("tracks") or []]
+        copied.append(item)
+    return copied
+
+
+def remember_cd_drive_cache(drives: list[dict]) -> None:
+    if not drives:
+        return
+    with CD_DRIVE_CACHE_LOCK:
+        CD_DRIVE_CACHE[:] = copy_cd_drive_entries(drives)
+
+
+def cached_cd_drives() -> list[dict]:
+    with CD_DRIVE_CACHE_LOCK:
+        return copy_cd_drive_entries(CD_DRIVE_CACHE)
+
+
+def hydrate_cd_drive_details_from_cache(drives: list[dict]) -> list[dict]:
+    cached_by_id = {
+        normalize_cd_drive_id(str(drive.get("id") or "")): drive
+        for drive in cached_cd_drives()
+        if normalize_cd_drive_id(str(drive.get("id") or ""))
+    }
+    hydrated: list[dict] = []
+    for drive in drives:
+        item = dict(drive)
+        item["tracks"] = [dict(track) for track in drive.get("tracks") or []]
+        cached = cached_by_id.get(normalize_cd_drive_id(str(item.get("id") or "")))
+        if cached:
+            cached_tracks = [dict(track) for track in cached.get("tracks") or []]
+            if cached_tracks and not item["tracks"]:
+                item["tracks"] = cached_tracks
+                item["track_count"] = len(cached_tracks)
+                item["media_loaded"] = True
+            if not item.get("volume_name") and cached.get("volume_name"):
+                item["volume_name"] = cached["volume_name"]
+            if cached.get("media_loaded"):
+                item["media_loaded"] = True
+        hydrated.append(item)
+    return hydrated
+
+
+def native_windows_cd_drives() -> list[dict]:
+    if os.name != "nt":
+        return []
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        mask = int(kernel32.GetLogicalDrives())
+        active_drive_ids = {normalize_cd_drive_id(drive_id) for drive_id in active_cd_playback_drive_ids()}
+        drives: list[dict] = []
+        for index in range(26):
+            if not mask & (1 << index):
+                continue
+            letter = chr(ord("A") + index)
+            drive_id = f"{letter}:"
+            root = f"{drive_id}\\"
+            if int(kernel32.GetDriveTypeW(root)) != 5:
+                continue
+            normalized = normalize_cd_drive_id(drive_id) or drive_id
+            playback_active = normalized in active_drive_ids
+            tracks = [] if playback_active else cda_tracks_for_drive(drive_id)
+            drives.append(
+                {
+                    "id": normalized,
+                    "path": root,
+                    "label": f"CD Drive ({normalized})",
+                    "volume_name": None,
+                    "media_loaded": playback_active or bool(tracks),
+                    "track_count": len(tracks) or None,
+                    "tracks": tracks,
+                }
+            )
+        return drives
+    except (OSError, RuntimeError, ValueError):
+        return []
 
 
 def root_from_drive_id(drive_id: str) -> Path | None:
@@ -236,22 +335,41 @@ def cda_tracks_for_drive(drive_id: str) -> list[dict]:
 def detect_cd_drives() -> list[dict]:
     drives: list[dict] = []
     if os.name == "nt":
-        for item in powershell_cd_drives():
+        power_shell_drives = powershell_cd_drives()
+        for item in power_shell_drives:
             drive_id = normalize_cd_drive_id(str(item.get("Drive") or "")) or ""
             if not drive_id:
                 continue
-            tracks = cda_tracks_for_drive(drive_id)
+            playback_active = normalize_cd_drive_id(drive_id) in {
+                normalize_cd_drive_id(active_drive_id) for active_drive_id in active_cd_playback_drive_ids()
+            }
+            if playback_active:
+                tracks = []
+            else:
+                tracks = cda_tracks_for_drive(drive_id)
             drives.append(
                 {
                     "id": drive_id,
                     "path": f"{drive_id}\\",
                     "label": str(item.get("Caption") or drive_id),
                     "volume_name": item.get("VolumeName"),
-                    "media_loaded": bool(item.get("MediaLoaded")) or bool(tracks),
+                    "media_loaded": playback_active or bool(item.get("MediaLoaded")) or bool(tracks),
                     "track_count": len(tracks) or None,
                     "tracks": tracks,
                 }
             )
+        if not drives:
+            drives = native_windows_cd_drives()
+        if not drives:
+            active_drive_ids = {normalize_cd_drive_id(drive_id) for drive_id in active_cd_playback_drive_ids()}
+            if active_drive_ids:
+                drives = [
+                    drive
+                    for drive in cached_cd_drives()
+                    if normalize_cd_drive_id(str(drive.get("id") or "")) in active_drive_ids
+                ]
+        drives = hydrate_cd_drive_details_from_cache(drives)
+        remember_cd_drive_cache(drives)
     else:
         for candidate in ("/dev/cdrom", "/dev/sr0"):
             path = Path(candidate)
@@ -386,18 +504,29 @@ def release_candidate(release: dict, query_album: str | None, query_artist: str 
 
 def lookup_cd_metadata(request: object) -> dict:
     setup = cd_rip_setup()
+    warnings = list(setup["warnings"])
+    drive_id = (getattr(request, "drive_id", None) or "").strip()
     album_title = (getattr(request, "album_title", None) or "").strip()
     album_artist = (getattr(request, "album_artist", None) or "").strip()
     release_id = (getattr(request, "release_id", None) or "").strip()
     limit = int(getattr(request, "limit", 5))
     releases: list[dict] = []
     source = "none"
+    disc_info: CdDiscIdInfo | None = None
     if release_id:
         release = lookup_release(release_id)
         if release:
             releases = [release]
             source = "MusicBrainz release"
-    elif album_title:
+    elif drive_id:
+        try:
+            disc_info = cd_disc_id_for_drive(drive_id)
+            releases = lookup_discid_releases(disc_info.disc_id, disc_info.toc)
+            source = "MusicBrainz Disc ID"
+        except Exception as exc:
+            warnings.append(f"Could not calculate the MusicBrainz Disc ID for {drive_id}: {exc}")
+
+    if not releases and not release_id and album_title:
         found = search_releases(album_title, album_artist or None, limit)
         for item in found:
             item_id = item.get("id")
@@ -409,20 +538,30 @@ def lookup_cd_metadata(request: object) -> dict:
         source = "MusicBrainz search"
 
     candidates = [release_candidate(release, album_title or None, album_artist or None) for release in releases]
+    if disc_info and source == "MusicBrainz Disc ID":
+        for candidate in candidates:
+            candidate["confidence"] = 1.0
     candidates.sort(key=lambda item: (-item["confidence"], abs((item["track_count"] or 0) - requested_drive_track_count(request))))
+    if candidates:
+        message = f"Found {len(candidates)} {source} candidate{'s' if len(candidates) != 1 else ''}."
+    elif disc_info and source == "MusicBrainz Disc ID":
+        message = "No MusicBrainz Disc ID match found. Try album/artist search or submit this Disc ID with Picard."
+    else:
+        message = "No MusicBrainz match found. You can still rip with manual track names."
     return {
         "drive_id": getattr(request, "drive_id", None),
         "source": source,
-        "query": {"album_title": album_title or None, "album_artist": album_artist or None, "release_id": release_id or None},
+        "query": {
+            "album_title": album_title or None,
+            "album_artist": album_artist or None,
+            "release_id": release_id or None,
+            "disc_id": disc_info.disc_id if disc_info else None,
+        },
         "candidates": candidates,
         "cd_text_available": bool(setup["cd_text_available"]),
-        "disc_id": None,
-        "message": (
-            f"Found {len(candidates)} MusicBrainz candidate{'s' if len(candidates) != 1 else ''}."
-            if candidates
-            else "No MusicBrainz match found. You can still rip with manual track names."
-        ),
-        "warnings": setup["warnings"],
+        "disc_id": disc_info.disc_id if disc_info else None,
+        "message": message,
+        "warnings": warnings,
     }
 
 
@@ -552,6 +691,78 @@ def msf_to_lba(address: object) -> int:
     second = int(address[2])
     frame = int(address[3])
     return (minute * 60 * CD_FRAMES_PER_SECOND) + (second * CD_FRAMES_PER_SECOND) + frame - CD_MSF_OFFSET
+
+
+def musicbrainz_base64_digest(digest: bytes) -> str:
+    return base64.b64encode(digest).decode("ascii").replace("+", ".").replace("/", "_").replace("=", "-")
+
+
+def musicbrainz_disc_id(first_track: int, last_track: int, leadout_offset: int, track_offsets_by_number: dict[int, int]) -> str:
+    frame_offsets = [0] * 100
+    frame_offsets[0] = leadout_offset
+    for track_number, offset in track_offsets_by_number.items():
+        if 1 <= track_number <= 99:
+            frame_offsets[track_number] = offset
+
+    hasher = hashlib.sha1()
+    hasher.update(f"{first_track:02X}".encode("ascii"))
+    hasher.update(f"{last_track:02X}".encode("ascii"))
+    for offset in frame_offsets:
+        hasher.update(f"{offset:08X}".encode("ascii"))
+    return musicbrainz_base64_digest(hasher.digest())
+
+
+def disc_id_info_from_toc_entries(entries: list[dict[str, int]]) -> CdDiscIdInfo:
+    track_entries = [entry for entry in entries if 1 <= int(entry.get("track_number", 0)) <= 99]
+    audio_entries = [entry for entry in track_entries if not (int(entry.get("control", 0)) & 0x04)]
+    if not audio_entries:
+        raise RuntimeError("No audio tracks were found in the CD table of contents.")
+
+    audio_entries.sort(key=lambda item: int(item["track_number"]))
+    first_track = int(audio_entries[0]["track_number"])
+    last_track = int(audio_entries[-1]["track_number"])
+    track_offsets = {int(entry["track_number"]): int(entry["start_lba"]) + CD_MSF_OFFSET for entry in audio_entries}
+
+    leadout_entry = next((entry for entry in entries if int(entry.get("track_number", 0)) == 0xAA), None)
+    next_non_audio = next(
+        (
+            entry
+            for entry in sorted(track_entries, key=lambda item: int(item["track_number"]))
+            if int(entry["track_number"]) > last_track
+        ),
+        None,
+    )
+    if next_non_audio and int(next_non_audio.get("control", 0)) & 0x04:
+        # MusicBrainz excludes CD-Extra data tracks from Disc IDs. The published
+        # calculation subtracts the session gap when using the data track as the
+        # audio-session leadout.
+        leadout_offset = max(track_offsets[last_track], int(next_non_audio["start_lba"]) + CD_MSF_OFFSET - 11_400)
+    elif leadout_entry:
+        leadout_offset = int(leadout_entry["start_lba"]) + CD_MSF_OFFSET
+    elif next_non_audio:
+        leadout_offset = int(next_non_audio["start_lba"]) + CD_MSF_OFFSET
+    else:
+        raise RuntimeError("The CD table of contents did not include a lead-out offset.")
+
+    ordered_offsets = [track_offsets[int(entry["track_number"])] for entry in audio_entries]
+    return CdDiscIdInfo(
+        disc_id=musicbrainz_disc_id(first_track, last_track, leadout_offset, track_offsets),
+        toc=" ".join(str(part) for part in [first_track, len(audio_entries), leadout_offset, *ordered_offsets]),
+        first_track=first_track,
+        last_track=last_track,
+        audio_track_count=len(audio_entries),
+        leadout_offset=leadout_offset,
+        track_offsets=ordered_offsets,
+    )
+
+
+def cd_disc_id_for_drive(drive_id: str) -> CdDiscIdInfo:
+    with CDDA_ACCESS_LOCK:
+        kernel32, handle = open_windows_cd_handle(drive_id)
+        try:
+            return disc_id_info_from_toc_entries(windows_read_toc(handle))
+        finally:
+            kernel32.CloseHandle(handle)
 
 
 def windows_last_error(message: str) -> OSError:
@@ -711,27 +922,28 @@ def rip_wav_native_windows(drive_id: str, track_number: int, wav_path: Path) -> 
     if os.name != "nt":
         raise RuntimeError("Native Windows CDDA ripping is only available on Windows.")
 
-    kernel32, handle = open_windows_cd_handle(drive_id)
+    with CDDA_ACCESS_LOCK:
+        kernel32, handle = open_windows_cd_handle(drive_id)
 
-    try:
-        start_lba, total_sectors = windows_track_bounds(handle, track_number)
+        try:
+            start_lba, total_sectors = windows_track_bounds(handle, track_number)
 
-        wav_path.parent.mkdir(parents=True, exist_ok=True)
-        with wave.open(str(wav_path), "wb") as handle_wav:
-            handle_wav.setnchannels(2)
-            handle_wav.setsampwidth(2)
-            handle_wav.setframerate(44100)
-            current_lba = start_lba
-            remaining = total_sectors
-            while remaining > 0:
-                sectors = min(WINDOWS_CDDA_READ_SECTORS, remaining)
-                handle_wav.writeframesraw(windows_raw_read_cdda(handle, current_lba, sectors))
-                current_lba += sectors
-                remaining -= sectors
-            handle_wav.writeframes(b"")
-        return f"Read track {track_number:02d} with native Windows CDDA ({total_sectors} sectors)."
-    finally:
-        kernel32.CloseHandle(handle)
+            wav_path.parent.mkdir(parents=True, exist_ok=True)
+            with wave.open(str(wav_path), "wb") as handle_wav:
+                handle_wav.setnchannels(2)
+                handle_wav.setsampwidth(2)
+                handle_wav.setframerate(44100)
+                current_lba = start_lba
+                remaining = total_sectors
+                while remaining > 0:
+                    sectors = min(WINDOWS_CDDA_READ_SECTORS, remaining)
+                    handle_wav.writeframesraw(windows_raw_read_cdda(handle, current_lba, sectors))
+                    current_lba += sectors
+                    remaining -= sectors
+                handle_wav.writeframes(b"")
+            return f"Read track {track_number:02d} with native Windows CDDA ({total_sectors} sectors)."
+        finally:
+            kernel32.CloseHandle(handle)
 
 
 def wav_header(data_size: int) -> bytes:
@@ -754,11 +966,12 @@ def wav_header(data_size: int) -> bytes:
 
 
 def cd_live_track_bounds(drive_id: str, track_number: int) -> tuple[int, int]:
-    kernel32, handle = open_windows_cd_handle(drive_id)
-    try:
-        return windows_track_bounds(handle, track_number)
-    finally:
-        kernel32.CloseHandle(handle)
+    with CDDA_ACCESS_LOCK:
+        kernel32, handle = open_windows_cd_handle(drive_id)
+        try:
+            return windows_track_bounds(handle, track_number)
+        finally:
+            kernel32.CloseHandle(handle)
 
 
 def cd_live_wav_content_length(drive_id: str, track_number: int) -> int:
@@ -783,6 +996,15 @@ def register_cd_live_stream_token(drive_id: str, token: str) -> None:
         if len(tokens) > MAX_ACTIVE_CD_STREAM_TOKENS_PER_DRIVE:
             for stale_token in list(tokens)[: len(tokens) - MAX_ACTIVE_CD_STREAM_TOKENS_PER_DRIVE]:
                 tokens.discard(stale_token)
+
+
+def replace_cd_live_stream_token(drive_id: str, token: str) -> None:
+    normalized = normalize_cd_drive_id(drive_id) or drive_id
+    with ACTIVE_CD_STREAM_LOCK:
+        # A CD drive cannot reliably service two raw CDDA readers. Replacing the
+        # token makes older live streams notice they are stale and release the
+        # drive before the next track starts pulling sectors.
+        ACTIVE_CD_STREAM_TOKENS[normalized] = {token}
 
 
 def unregister_cd_live_stream_token(drive_id: str, token: str | None) -> None:
@@ -829,51 +1051,56 @@ def active_cd_playback_for_drive(drive_id: str | None) -> bool:
 
 
 def cd_live_wav_stream(drive_id: str, track_number: int, token: str | None = None) -> Iterator[bytes]:
+    kernel32 = None
+    handle = None
     try:
         if token and not cd_live_stream_is_current(drive_id, token):
             yield from silent_wav_stream()
             return
         try:
-            kernel32, handle = open_windows_cd_handle(drive_id)
-        except OSError:
+            with CDDA_ACCESS_LOCK:
+                kernel32, handle = open_windows_cd_handle(drive_id)
+                start_lba, total_sectors = windows_track_bounds(handle, track_number)
+        except (OSError, RuntimeError):
             yield from silent_wav_stream()
             return
-        try:
-            try:
-                start_lba, total_sectors = windows_track_bounds(handle, track_number)
-            except (OSError, RuntimeError):
-                yield from silent_wav_stream()
+
+        yield wav_header(total_sectors * CDDA_SECTOR_SIZE)
+        current_lba = start_lba
+        remaining = total_sectors
+        while remaining > 0:
+            if token and not cd_live_stream_is_current(drive_id, token):
                 return
-            yield wav_header(total_sectors * CDDA_SECTOR_SIZE)
-            current_lba = start_lba
-            remaining = total_sectors
-            while remaining > 0:
-                if not cd_live_stream_is_current(drive_id, token):
-                    return
-                sectors = min(WINDOWS_CDDA_STREAM_READ_SECTORS, remaining)
-                try:
+            sectors = min(WINDOWS_CDDA_STREAM_READ_SECTORS, remaining)
+            try:
+                with CDDA_ACCESS_LOCK:
+                    if token and not cd_live_stream_is_current(drive_id, token):
+                        return
                     data = windows_raw_read_cdda(handle, current_lba, sectors)
-                    expected_size = sectors * CDDA_SECTOR_SIZE
+                expected_size = sectors * CDDA_SECTOR_SIZE
+                if token and not cd_live_stream_is_current(drive_id, token):
+                    return
+                yield data if len(data) >= expected_size else data + (b"\x00" * (expected_size - len(data)))
+            except OSError:
+                # Live playback should keep time even when a marginal sector fails.
+                # Retry at single-sector granularity and replace unreadable sectors with silence
+                # instead of aborting the stream and jumping to the next queued CD track.
+                for offset in range(sectors):
                     if not cd_live_stream_is_current(drive_id, token):
                         return
-                    yield data if len(data) >= expected_size else data + (b"\x00" * (expected_size - len(data)))
-                except OSError:
-                    # Live playback should keep time even when a marginal sector fails.
-                    # Retry at single-sector granularity and replace unreadable sectors with silence
-                    # instead of aborting the stream and jumping to the next queued CD track.
-                    for offset in range(sectors):
-                        if not cd_live_stream_is_current(drive_id, token):
-                            return
-                        try:
+                    try:
+                        with CDDA_ACCESS_LOCK:
+                            if token and not cd_live_stream_is_current(drive_id, token):
+                                return
                             data = windows_raw_read_cdda(handle, current_lba + offset, 1)
-                            yield data if len(data) >= CDDA_SECTOR_SIZE else data + (b"\x00" * (CDDA_SECTOR_SIZE - len(data)))
-                        except OSError:
-                            yield b"\x00" * CDDA_SECTOR_SIZE
-                current_lba += sectors
-                remaining -= sectors
-        finally:
-            kernel32.CloseHandle(handle)
+                        yield data if len(data) >= CDDA_SECTOR_SIZE else data + (b"\x00" * (CDDA_SECTOR_SIZE - len(data)))
+                    except OSError:
+                        yield b"\x00" * CDDA_SECTOR_SIZE
+            current_lba += sectors
+            remaining -= sectors
     finally:
+        if kernel32 is not None and handle is not None:
+            kernel32.CloseHandle(handle)
         unregister_cd_live_stream_token(drive_id, token)
 
 
@@ -1247,15 +1474,20 @@ def prepare_cd_live_track(request: object) -> dict:
     if track_number < 1:
         raise RuntimeError("Track number must be 1 or higher.")
 
+    live_id = uuid4().hex
+    replace_cd_live_stream_token(drive_id, live_id)
+
     track = metadata_for_track(request, track_number)
-    duration_seconds = track.get("duration_seconds") or cd_live_track_duration_seconds(drive_id, track_number)
+    try:
+        duration_seconds = track.get("duration_seconds") or cd_live_track_duration_seconds(drive_id, track_number)
+    except Exception:
+        unregister_cd_live_stream_token(drive_id, live_id)
+        raise
     added_at = iso(utc_now())
     title = track.get("title") or f"Track {track_number:02d}"
     artist = track.get("artist") or track.get("album_artist")
     album = track.get("album") or getattr(request, "album_title", None)
     album_artist = track.get("album_artist") or getattr(request, "album_artist", None) or artist
-    live_id = uuid4().hex
-    register_cd_live_stream_token(drive_id, live_id)
     query = urlencode({"drive_id": drive_id, "track_number": track_number, "token": live_id})
 
     return {

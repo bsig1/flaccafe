@@ -16,6 +16,7 @@ import {
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -73,7 +74,59 @@ function normalizeCdDriveId(value: string | null | undefined) {
   return match ? `${match[1].toUpperCase()}:` : text;
 }
 
+function cdQueuePlaceholderTrack(
+  track: CdRipTrackMetadata,
+  driveId: string,
+  albumTitle: string,
+  albumArtist: string,
+  year: number,
+  genre: string,
+): Track {
+  const normalizedDriveId = normalizeCdDriveId(driveId);
+  const trackNumber = track.track_number;
+  const paddedTrack = trackNumber.toString().padStart(2, "0");
+  const artist = track.artist || albumArtist || null;
+  return {
+    id: -1_500_000_000 - trackNumber,
+    path: `cdda://${normalizedDriveId}/track/${paddedTrack}`,
+    title: track.title || `Track ${paddedTrack}`,
+    artist,
+    album: albumTitle || null,
+    album_artist: albumArtist || artist,
+    track_number: trackNumber,
+    disc_number: track.disc_number ?? 1,
+    genre: genre || "CD Preview",
+    analysis_provider: null,
+    analysis_model: null,
+    analysis_genre: null,
+    analysis_genre_confidence: null,
+    analysis_genre_tags: null,
+    analysis_embedding: null,
+    analysis_updated_at: null,
+    year: year > 0 ? year : null,
+    duration_seconds: track.duration_seconds ?? null,
+    bitrate: 1_411_200,
+    replaygain_track_gain_db: null,
+    replaygain_album_gain_db: null,
+    replaygain_track_peak: null,
+    replaygain_album_peak: null,
+    audio_fingerprint: null,
+    acoustic_fingerprint: null,
+    acoustic_fingerprint_updated_at: null,
+    rating: null,
+    play_count: 0,
+    skip_count: 0,
+    last_played_at: null,
+    last_skipped_at: null,
+    date_added: new Date().toISOString(),
+    file_modified_at: null,
+    audio_url: null,
+    is_preview: true,
+  };
+}
+
 export function CdRipperSection({
+  cdAutoLookupMetadata = true,
   defaultTargetFolder,
   currentCdPlaybackDriveId = null,
   isCdPlaybackActive = false,
@@ -83,6 +136,7 @@ export function CdRipperSection({
   setStatus,
   standalone = false,
 }: {
+  cdAutoLookupMetadata?: boolean;
   defaultTargetFolder: string;
   currentCdPlaybackDriveId?: string | null;
   isCdPlaybackActive?: boolean;
@@ -113,6 +167,7 @@ export function CdRipperSection({
   const [jobId, setJobId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [preparingPlayback, setPreparingPlayback] = useState(false);
+  const autoLookupKeyRef = useRef("");
 
   const selectedDrive = setup?.drives.find((drive) => drive.id === selectedDriveId) ?? setup?.drives[0] ?? null;
   const activeJob = Boolean(progress && !["completed", "failed", "canceled"].includes(progress.status));
@@ -290,6 +345,33 @@ export function CdRipperSection({
     }
   }
 
+  useEffect(() => {
+    if (!cdAutoLookupMetadata || loading || !selectedDriveId || !selectedDrive?.media_loaded) {
+      return;
+    }
+    const detectedTracks = selectedDrive.tracks.length || selectedDrive.track_count || tracks.length;
+    const autoLookupKey = [
+      selectedDriveId,
+      selectedDrive.volume_name ?? "",
+      selectedDrive.track_count ?? detectedTracks,
+      detectedTracks,
+    ].join("|");
+    if (autoLookupKeyRef.current === autoLookupKey) {
+      return;
+    }
+    autoLookupKeyRef.current = autoLookupKey;
+    void handleLookupMetadata();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    cdAutoLookupMetadata,
+    loading,
+    selectedDriveId,
+    selectedDrive?.media_loaded,
+    selectedDrive?.track_count,
+    selectedDrive?.tracks.length,
+    selectedDrive?.volume_name,
+  ]);
+
   async function handleStartRip() {
     if (!selectedDriveId) {
       setStatus("Choose a CD drive first");
@@ -371,26 +453,22 @@ export function CdRipperSection({
     }
     setPreparingPlayback(true);
     try {
-      setStatus(`Preparing ${chosenTracks.length.toLocaleString()} selected CD track${chosenTracks.length === 1 ? "" : "s"}...`);
-      const playbackQueue: Track[] = [];
-      for (const [index, track] of chosenTracks.entries()) {
-        setStatus(
-          `Preparing CD track ${track.track_number.toString().padStart(2, "0")} (${index + 1}/${chosenTracks.length})...`,
-        );
-        const response = await playCdTrack(track.track_number, selectedDriveId, {
-          albumTitle: albumTitle || null,
-          albumArtist: albumArtist || null,
-          year: year > 0 ? year : null,
-          genre: genre || null,
-          tracks: [track],
-        });
-        if (response.track) {
-          playbackQueue.push(response.track);
-        }
+      const firstTrack = chosenTracks[0];
+      setStatus(`Preparing CD track ${firstTrack.track_number.toString().padStart(2, "0")}...`);
+      const response = await playCdTrack(firstTrack.track_number, selectedDriveId, {
+        albumTitle: albumTitle || null,
+        albumArtist: albumArtist || null,
+        year: year > 0 ? year : null,
+        genre: genre || null,
+        tracks: [firstTrack],
+      });
+      if (!response.track) {
+        throw new Error("No playable CD track was prepared.");
       }
-      if (playbackQueue[0]) {
-        onPlayPreviewTrack(playbackQueue[0], playbackQueue);
-      }
+      const playbackQueue: Track[] = chosenTracks.map((track, index) =>
+        index === 0 ? response.track as Track : cdQueuePlaceholderTrack(track, selectedDriveId, albumTitle, albumArtist, year, genre),
+      );
+      onPlayPreviewTrack(response.track, playbackQueue);
       setStatus(
         playbackQueue.length > 1
           ? `Playing ${playbackQueue.length.toLocaleString()} selected CD tracks`

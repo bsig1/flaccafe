@@ -940,18 +940,30 @@ export function LibraryPage({
     ref.current?.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  function saveTrackPaneScrollTop(value: number) {
+    pendingRenderScrollTopRef.current = value;
+    setVirtualScrollTop(value);
+    scheduleScrollPositionSave(value);
+  }
+
   function renderPaneTopButton(
     visible: boolean,
     label: string,
     ref: MutableRefObject<HTMLElement | null>,
     saveScrollTop: (value: number) => void,
+    placement: "fixed" | "pane" = "pane",
   ) {
     if (!visible) {
       return null;
     }
+    const placementClass =
+      placement === "fixed"
+        ? "fixed bottom-32 right-5 z-[80]"
+        : "absolute bottom-4 right-4 z-30";
     return (
       <button
-        className="absolute bottom-4 right-4 z-30 grid h-9 w-9 place-items-center rounded-full border border-line bg-panel/95 text-muted shadow-lg shadow-black/30 backdrop-blur transition hover:border-moss/60 hover:text-white"
+        aria-label={label}
+        className={`${placementClass} grid h-9 w-9 place-items-center rounded-full border border-line bg-panel/95 text-muted shadow-lg shadow-black/30 backdrop-blur transition hover:border-moss/60 hover:text-white`}
         type="button"
         title={label}
         onClick={() => scrollCollectionPaneToTop(ref, saveScrollTop)}
@@ -962,17 +974,11 @@ export function LibraryPage({
   }
 
   function renderActiveTopButton() {
-    if (libraryView === "artists") {
-      return renderPaneTopButton(artistScrollTop > 120, "Back to top", artistListRef, setArtistScrollTop);
+    if (libraryView === "tracks") {
+      return renderPaneTopButton(Math.max(virtualScrollTop, scrollTop) > 160, "Back to top", scrollRef, saveTrackPaneScrollTop, "fixed");
     }
     if (libraryView === "albums" && albumMode === "completion") {
-      return renderPaneTopButton(completionScrollTop > 160, "Back to top", scrollRef, setCompletionScrollTop);
-    }
-    if (libraryView === "albums") {
-      return renderPaneTopButton(albumScrollTop > 120, "Back to top", albumListRef, setAlbumScrollTop);
-    }
-    if (libraryView === "playlists") {
-      return renderPaneTopButton(playlistScrollTop > PLAYLIST_TOOLBAR_HEIGHT + 80, "Back to top", playlistListRef, setPlaylistScrollTop);
+      return renderPaneTopButton(completionScrollTop > 160, "Back to top", scrollRef, setCompletionScrollTop, "fixed");
     }
     return null;
   }
@@ -2714,51 +2720,54 @@ export function LibraryPage({
 
         {libraryView === "artists" && (
           <div className="grid h-full min-h-0 min-w-0 grid-cols-[minmax(220px,290px)_minmax(0,1fr)] min-[1280px]:grid-cols-[minmax(240px,320px)_minmax(0,1fr)]">
-            <section
-              ref={artistListRef}
-              className="min-h-0 overflow-auto border-r border-line"
-              onScroll={(event) => setArtistScrollTop(event.currentTarget.scrollTop)}
-            >
-              <div className="grid">
-                {artistWindow.topSpacerHeight > 0 && <div aria-hidden="true" style={{ height: artistWindow.topSpacerHeight }} />}
-                {renderedArtists.map((artist) => {
-                  const active = artist.name === selectedArtistName;
-                  const artwork = artist.artwork_track_id ? albumArtworkUrl(artist.artwork_track_id) : null;
-                  return (
-                    <button
-                      key={artist.name}
-                      className={`grid grid-cols-[44px_minmax(0,1fr)] items-center gap-3 border-b border-line/60 px-4 py-3 text-left transition ${
-                        active ? "bg-white/10" : "hover:bg-white/[0.035]"
-                      }`}
-                      style={{ height: ARTIST_ROW_HEIGHT }}
-                      type="button"
-                      onClick={() => onSelectArtist(artist.name)}
-                      onDoubleClick={() => void onPlayArtist(artist.name)}
-                    >
-                      <div className="h-11 w-11 overflow-hidden rounded border border-line bg-panel">
-                        {artwork ? (
-                          <img alt="" className="h-full w-full object-cover" src={artwork} />
-                        ) : (
-                          <div className="grid h-full w-full place-items-center text-moss">
-                            <UserRound size={20} />
-                          </div>
-                        )}
-                      </div>
-                      <span className="min-w-0">
-                        <span className="block truncate text-sm font-medium text-white">{display(artist.name, "Unknown artist")}</span>
-                        <span className="block truncate text-xs text-muted">{artistMetaLabel(artist)}</span>
-                      </span>
-                    </button>
-                  );
-                })}
-                {artistWindow.bottomSpacerHeight > 0 && <div aria-hidden="true" style={{ height: artistWindow.bottomSpacerHeight }} />}
-                {artists.length === 0 && (
-                  <div className="px-4 py-10 text-center text-sm text-muted">
-                    {search.trim() ? "No artists match the current search." : "No artists found in the current library."}
-                  </div>
-                )}
-              </div>
-            </section>
+            <div className="relative min-h-0 border-r border-line">
+              <section
+                ref={artistListRef}
+                className="h-full min-h-0 overflow-auto"
+                onScroll={(event) => setArtistScrollTop(event.currentTarget.scrollTop)}
+              >
+                <div className="grid">
+                  {artistWindow.topSpacerHeight > 0 && <div aria-hidden="true" style={{ height: artistWindow.topSpacerHeight }} />}
+                  {renderedArtists.map((artist) => {
+                    const active = artist.name === selectedArtistName;
+                    const artwork = artist.artwork_track_id ? albumArtworkUrl(artist.artwork_track_id) : null;
+                    return (
+                      <button
+                        key={artist.name}
+                        className={`grid grid-cols-[44px_minmax(0,1fr)] items-center gap-3 border-b border-line/60 px-4 py-3 text-left transition ${
+                          active ? "bg-white/10" : "hover:bg-white/[0.035]"
+                        }`}
+                        style={{ height: ARTIST_ROW_HEIGHT }}
+                        type="button"
+                        onClick={() => onSelectArtist(artist.name)}
+                        onDoubleClick={() => void onPlayArtist(artist.name)}
+                      >
+                        <div className="h-11 w-11 overflow-hidden rounded border border-line bg-panel">
+                          {artwork ? (
+                            <img alt="" className="h-full w-full object-cover" src={artwork} />
+                          ) : (
+                            <div className="grid h-full w-full place-items-center text-moss">
+                              <UserRound size={20} />
+                            </div>
+                          )}
+                        </div>
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-medium text-white">{display(artist.name, "Unknown artist")}</span>
+                          <span className="block truncate text-xs text-muted">{artistMetaLabel(artist)}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {artistWindow.bottomSpacerHeight > 0 && <div aria-hidden="true" style={{ height: artistWindow.bottomSpacerHeight }} />}
+                  {artists.length === 0 && (
+                    <div className="px-4 py-10 text-center text-sm text-muted">
+                      {search.trim() ? "No artists match the current search." : "No artists found in the current library."}
+                    </div>
+                  )}
+                </div>
+              </section>
+              {renderPaneTopButton(artistScrollTop > 120, "Back to top", artistListRef, setArtistScrollTop)}
+            </div>
             <section className="min-h-0 min-w-0 overflow-auto">
               <table className="w-full table-fixed text-left text-sm" style={{ minWidth: tableWidth }}>
                 <colgroup>
@@ -2787,82 +2796,85 @@ export function LibraryPage({
             renderCompletionView()
           ) : (
           <div className="grid h-full min-h-0 min-w-0 grid-cols-[minmax(240px,320px)_minmax(0,1fr)]">
-            <section
-              ref={albumListRef}
-              className="min-h-0 overflow-auto border-r border-line"
-              onScroll={(event) => setAlbumScrollTop(event.currentTarget.scrollTop)}
-            >
-              <div className={albumGrid ? "grid grid-cols-2 gap-3 p-3" : "grid"}>
-                {albumWindow.topSpacerHeight > 0 && (
-                  <div
-                    aria-hidden="true"
-                    className={albumGrid ? "col-span-full" : undefined}
-                    style={{ height: albumWindow.topSpacerHeight }}
-                  />
-                )}
-                {renderedBrowseAlbums.map((album) => {
-                  const active = album.id === selectedAlbumId;
-                  const artwork = album.artwork_path || album.artwork_track_id ? albumCoverUrl(album.id) : null;
-                  return (
-                    <button
-                      key={album.id}
-                      className={
-                        albumGrid
-                          ? `min-w-0 rounded border border-line bg-panel p-2 text-left transition ${
-                              active ? "border-moss bg-white/10" : "hover:border-moss/50"
-                            }`
-                          : `grid grid-cols-[44px_minmax(0,1fr)] items-center gap-3 border-b border-line/60 px-4 py-3 text-left transition ${
-                              active ? "bg-white/10" : "hover:bg-white/[0.035]"
-                            }`
-                      }
-                      style={albumGrid ? { minHeight: ALBUM_GRID_ROW_HEIGHT - 24 } : { height: ALBUM_LIST_ROW_HEIGHT }}
-                      type="button"
-                      onClick={() => onSelectAlbum(album.id)}
-                      onDoubleClick={() => void onPlayAlbum(album.id)}
-                    >
-                      {albumGrid && (
-                        <div className="mb-2 aspect-square overflow-hidden rounded border border-line bg-ink">
-                          {artwork ? (
-                            <img alt="" className="h-full w-full object-cover" src={artwork} />
-                          ) : (
-                            <div className="grid h-full w-full place-items-center text-moss">
-                              <Album size={28} />
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      {!albumGrid && (
-                        <div className="h-11 w-11 overflow-hidden rounded border border-line bg-panel">
-                          {artwork ? (
-                            <img alt="" className="h-full w-full object-cover" src={artwork} />
-                          ) : (
-                            <div className="grid h-full w-full place-items-center text-moss">
-                              <Album size={20} />
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      <span className="min-w-0">
-                        <span className="block truncate text-sm font-medium text-white">{display(album.album, "Unknown album")}</span>
-                        <span className="block truncate text-xs text-muted">{albumMetaLabel(album)}</span>
-                      </span>
-                    </button>
-                  );
-                })}
-                {albumWindow.bottomSpacerHeight > 0 && (
-                  <div
-                    aria-hidden="true"
-                    className={albumGrid ? "col-span-full" : undefined}
-                    style={{ height: albumWindow.bottomSpacerHeight }}
-                  />
-                )}
-                {albums.length === 0 && (
-                  <div className="col-span-full px-3 py-10 text-center text-sm text-muted">
-                    Albums will appear here after the first library scan.
-                  </div>
-                )}
-              </div>
-            </section>
+            <div className="relative min-h-0 border-r border-line">
+              <section
+                ref={albumListRef}
+                className="h-full min-h-0 overflow-auto"
+                onScroll={(event) => setAlbumScrollTop(event.currentTarget.scrollTop)}
+              >
+                <div className={albumGrid ? "grid grid-cols-2 gap-3 p-3" : "grid"}>
+                  {albumWindow.topSpacerHeight > 0 && (
+                    <div
+                      aria-hidden="true"
+                      className={albumGrid ? "col-span-full" : undefined}
+                      style={{ height: albumWindow.topSpacerHeight }}
+                    />
+                  )}
+                  {renderedBrowseAlbums.map((album) => {
+                    const active = album.id === selectedAlbumId;
+                    const artwork = album.artwork_path || album.artwork_track_id ? albumCoverUrl(album.id) : null;
+                    return (
+                      <button
+                        key={album.id}
+                        className={
+                          albumGrid
+                            ? `min-w-0 rounded border border-line bg-panel p-2 text-left transition ${
+                                active ? "border-moss bg-white/10" : "hover:border-moss/50"
+                              }`
+                            : `grid grid-cols-[44px_minmax(0,1fr)] items-center gap-3 border-b border-line/60 px-4 py-3 text-left transition ${
+                                active ? "bg-white/10" : "hover:bg-white/[0.035]"
+                              }`
+                        }
+                        style={albumGrid ? { minHeight: ALBUM_GRID_ROW_HEIGHT - 24 } : { height: ALBUM_LIST_ROW_HEIGHT }}
+                        type="button"
+                        onClick={() => onSelectAlbum(album.id)}
+                        onDoubleClick={() => void onPlayAlbum(album.id)}
+                      >
+                        {albumGrid && (
+                          <div className="mb-2 aspect-square overflow-hidden rounded border border-line bg-ink">
+                            {artwork ? (
+                              <img alt="" className="h-full w-full object-cover" src={artwork} />
+                            ) : (
+                              <div className="grid h-full w-full place-items-center text-moss">
+                                <Album size={28} />
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {!albumGrid && (
+                          <div className="h-11 w-11 overflow-hidden rounded border border-line bg-panel">
+                            {artwork ? (
+                              <img alt="" className="h-full w-full object-cover" src={artwork} />
+                            ) : (
+                              <div className="grid h-full w-full place-items-center text-moss">
+                                <Album size={20} />
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-medium text-white">{display(album.album, "Unknown album")}</span>
+                          <span className="block truncate text-xs text-muted">{albumMetaLabel(album)}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {albumWindow.bottomSpacerHeight > 0 && (
+                    <div
+                      aria-hidden="true"
+                      className={albumGrid ? "col-span-full" : undefined}
+                      style={{ height: albumWindow.bottomSpacerHeight }}
+                    />
+                  )}
+                  {albums.length === 0 && (
+                    <div className="col-span-full px-3 py-10 text-center text-sm text-muted">
+                      Albums will appear here after the first library scan.
+                    </div>
+                  )}
+                </div>
+              </section>
+              {renderPaneTopButton(albumScrollTop > 120, "Back to top", albumListRef, setAlbumScrollTop)}
+            </div>
             <section className="min-h-0 min-w-0 overflow-auto">
               {activeAlbum && isAlbumArtworkOpen && (
                 <div className="border-b border-line bg-panel px-4 py-3">
@@ -2983,64 +2995,67 @@ export function LibraryPage({
 
         {libraryView === "playlists" && (
           <div className="grid h-full min-h-0 min-w-0 grid-cols-[minmax(240px,320px)_minmax(0,1fr)]">
-            <section
-              ref={playlistListRef}
-              className="min-h-0 overflow-auto border-r border-line"
-              onScroll={(event) => setPlaylistScrollTop(event.currentTarget.scrollTop)}
-            >
-              <div className="sticky top-0 z-10 border-b border-line bg-ink p-3">
-                <div className="flex gap-2">
-                  <input
-                    className="h-9 min-w-0 flex-1 rounded border border-line bg-panel px-3 text-sm text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
-                    value={newPlaylistName}
-                    placeholder="New playlist"
-                    onChange={(event) => setNewPlaylistName(event.target.value)}
-                  />
-                  <button className="icon-button" type="button" title="Create playlist" onClick={onCreatePlaylist}>
-                    <Plus size={16} />
-                  </button>
-                </div>
-                <div className="mt-2 flex gap-2">
-                  <input
-                    className="h-9 min-w-0 flex-1 rounded border border-line bg-panel px-3 text-sm text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
-                    value={importPlaylistPath}
-                    placeholder="Import playlist path"
-                    onChange={(event) => setImportPlaylistPath(event.target.value)}
-                  />
-                  <button className="icon-button" type="button" title="Import playlist" onClick={onImportPlaylist}>
-                    <Upload size={16} />
-                  </button>
-                </div>
-              </div>
-              <div className="grid">
-                {playlistWindow.topSpacerHeight > 0 && <div aria-hidden="true" style={{ height: playlistWindow.topSpacerHeight }} />}
-                {renderedPlaylists.map((playlist) => {
-                  const active = playlist.id === selectedPlaylistId;
-                  return (
-                    <button
-                      key={playlist.id}
-                      className={`grid gap-1 border-b border-line/60 px-4 py-3 text-left transition ${
-                        active ? "bg-white/10" : "hover:bg-white/[0.035]"
-                      }`}
-                      style={{ height: PLAYLIST_ROW_HEIGHT }}
-                      type="button"
-                      onClick={() => onSelectPlaylist(playlist.id)}
-                    >
-                      <span className="truncate text-sm font-medium text-white">{playlist.name}</span>
-                      <span className="truncate text-xs text-muted">
-                        {playlist.track_count} tracks - {formatDuration(playlist.duration_seconds)}
-                      </span>
+            <div className="relative min-h-0 border-r border-line">
+              <section
+                ref={playlistListRef}
+                className="h-full min-h-0 overflow-auto"
+                onScroll={(event) => setPlaylistScrollTop(event.currentTarget.scrollTop)}
+              >
+                <div className="sticky top-0 z-10 border-b border-line bg-ink p-3">
+                  <div className="flex gap-2">
+                    <input
+                      className="h-9 min-w-0 flex-1 rounded border border-line bg-panel px-3 text-sm text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
+                      value={newPlaylistName}
+                      placeholder="New playlist"
+                      onChange={(event) => setNewPlaylistName(event.target.value)}
+                    />
+                    <button className="icon-button" type="button" title="Create playlist" onClick={onCreatePlaylist}>
+                      <Plus size={16} />
                     </button>
-                  );
-                })}
-                {playlistWindow.bottomSpacerHeight > 0 && <div aria-hidden="true" style={{ height: playlistWindow.bottomSpacerHeight }} />}
-                {playlists.length === 0 && (
-                  <div className="px-4 py-10 text-center text-sm text-muted">
-                    Create a playlist or import M3U, PLS, XSPF, WPL, or iTunes XML.
                   </div>
-                )}
-              </div>
-            </section>
+                  <div className="mt-2 flex gap-2">
+                    <input
+                      className="h-9 min-w-0 flex-1 rounded border border-line bg-panel px-3 text-sm text-white outline-none ring-moss/40 placeholder:text-muted focus:ring-2"
+                      value={importPlaylistPath}
+                      placeholder="Import playlist path"
+                      onChange={(event) => setImportPlaylistPath(event.target.value)}
+                    />
+                    <button className="icon-button" type="button" title="Import playlist" onClick={onImportPlaylist}>
+                      <Upload size={16} />
+                    </button>
+                  </div>
+                </div>
+                <div className="grid">
+                  {playlistWindow.topSpacerHeight > 0 && <div aria-hidden="true" style={{ height: playlistWindow.topSpacerHeight }} />}
+                  {renderedPlaylists.map((playlist) => {
+                    const active = playlist.id === selectedPlaylistId;
+                    return (
+                      <button
+                        key={playlist.id}
+                        className={`grid gap-1 border-b border-line/60 px-4 py-3 text-left transition ${
+                          active ? "bg-white/10" : "hover:bg-white/[0.035]"
+                        }`}
+                        style={{ height: PLAYLIST_ROW_HEIGHT }}
+                        type="button"
+                        onClick={() => onSelectPlaylist(playlist.id)}
+                      >
+                        <span className="truncate text-sm font-medium text-white">{playlist.name}</span>
+                        <span className="truncate text-xs text-muted">
+                          {playlist.track_count} tracks - {formatDuration(playlist.duration_seconds)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {playlistWindow.bottomSpacerHeight > 0 && <div aria-hidden="true" style={{ height: playlistWindow.bottomSpacerHeight }} />}
+                  {playlists.length === 0 && (
+                    <div className="px-4 py-10 text-center text-sm text-muted">
+                      Create a playlist or import M3U, PLS, XSPF, WPL, or iTunes XML.
+                    </div>
+                  )}
+                </div>
+              </section>
+              {renderPaneTopButton(playlistScrollTop > PLAYLIST_TOOLBAR_HEIGHT + 80, "Back to top", playlistListRef, setPlaylistScrollTop)}
+            </div>
             <section className="min-h-0 min-w-0 overflow-auto">
               <div className="sticky top-0 z-10 grid min-h-12 min-w-0 gap-2 border-b border-line bg-ink px-4 py-2 min-[1180px]:grid-cols-[minmax(0,1fr)_auto] min-[1180px]:items-center">
                 <div className="min-w-0">

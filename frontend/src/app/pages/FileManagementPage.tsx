@@ -165,6 +165,7 @@ export function FileManagementPage({
   onInstallAudioConversionFfmpeg,
   onBrowseAudioConversionTarget,
   onBrowseCdRipTarget,
+  cdAutoLookupMetadata,
   currentCdPlaybackDriveId,
   isCdPlaybackActive,
   onPlayCdPreviewTrack,
@@ -276,6 +277,7 @@ export function FileManagementPage({
   onInstallAudioConversionFfmpeg: () => void | Promise<void>;
   onBrowseAudioConversionTarget: () => Promise<string | null>;
   onBrowseCdRipTarget: () => Promise<string | null>;
+  cdAutoLookupMetadata: boolean;
   currentCdPlaybackDriveId?: string | null;
   isCdPlaybackActive?: boolean;
   onPlayCdPreviewTrack: (track: Track, queue?: Track[]) => void;
@@ -2156,6 +2158,7 @@ export function FileManagementPage({
 
           {showTool("cdRipper") && (
           <CdRipperSection
+            cdAutoLookupMetadata={cdAutoLookupMetadata}
             currentCdPlaybackDriveId={currentCdPlaybackDriveId}
             defaultTargetFolder={defaultCdRipTarget(folderPath)}
             isCdPlaybackActive={isCdPlaybackActive}

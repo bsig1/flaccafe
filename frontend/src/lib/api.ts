@@ -104,6 +104,7 @@ import type {
   LastFmLoginStartResponse,
   LibraryStatsResponse,
   LogTailResponse,
+  LyricsLookupRequest,
   LyricsResponse,
   LyricsUpdateRequest,
   PlayEventEntry,
@@ -1388,6 +1389,13 @@ export function fetchLyrics(trackId: number): Promise<LyricsResponse> {
 
 export function fetchLyricsOnline(trackId: number): Promise<LyricsResponse> {
   return request<LyricsResponse>(`/tracks/${trackId}/lyrics/fetch`, { method: "POST" });
+}
+
+export function fetchLyricsByMetadata(requestBody: LyricsLookupRequest): Promise<LyricsResponse> {
+  return request<LyricsResponse>("/lyrics/lookup", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+  });
 }
 
 export function updateLyrics(trackId: number, requestBody: LyricsUpdateRequest): Promise<LyricsResponse> {

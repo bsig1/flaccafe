@@ -1015,6 +1015,16 @@ export interface LyricsResponse {
   sidecar_path?: string | null;
 }
 
+export interface LyricsLookupRequest {
+  track_id?: number | null;
+  title: string;
+  artist?: string | null;
+  album?: string | null;
+  album_artist?: string | null;
+  duration_seconds?: number | null;
+  path?: string | null;
+}
+
 export interface LyricsUpdateRequest {
   lyrics: string | null;
   is_synced?: boolean;
@@ -1817,6 +1827,7 @@ export interface SettingsResponse {
   suggested_music_path?: string | null;
   write_ratings_to_files: boolean;
   auto_write_fetched_lyrics_sidecars: boolean;
+  cd_auto_lookup_metadata: boolean;
   acoustid_api_key_configured: boolean;
   lastfm_api_credentials_configured: boolean;
   lastfm_api_credentials_source?: string | null;
@@ -1826,6 +1837,7 @@ export interface SettingsResponse {
 export interface SettingsUpdateRequest {
   write_ratings_to_files?: boolean;
   auto_write_fetched_lyrics_sidecars?: boolean;
+  cd_auto_lookup_metadata?: boolean;
   acoustid_api_key?: string | null;
   clear_acoustid_api_key?: boolean;
   lastfm_api_key?: string | null;

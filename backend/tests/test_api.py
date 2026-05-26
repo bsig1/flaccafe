@@ -15,10 +15,13 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from backend.app import main as main_module
 from backend.app.database import connect, init_db, set_setting
 from backend.app.extensions import discover_extensions
+from backend.app.cd_ripping import disc_id_info_from_toc_entries
 from backend.app.main import app, fetch_artist_info_from_wikipedia, recent_backend_error_summary, recommendation_drift
 from backend.app.scanner import ScanStats, file_fingerprint, file_modified_at, path_key
+from backend.app.schemas import LyricsResponse
 
 
 def insert_track(path: Path, **overrides: object) -> int:
@@ -126,6 +129,19 @@ class ApiTests(unittest.TestCase):
         cleared = self.client.patch("/settings", json={"clear_acoustid_api_key": True})
         self.assertEqual(cleared.status_code, 200)
         self.assertFalse(cleared.json()["acoustid_api_key_configured"])
+
+    def test_cd_auto_lookup_metadata_setting_defaults_on_and_can_be_disabled(self) -> None:
+        defaults = self.client.get("/settings")
+        self.assertEqual(defaults.status_code, 200)
+        self.assertTrue(defaults.json()["cd_auto_lookup_metadata"])
+
+        disabled = self.client.patch("/settings", json={"cd_auto_lookup_metadata": False})
+        self.assertEqual(disabled.status_code, 200)
+        self.assertFalse(disabled.json()["cd_auto_lookup_metadata"])
+
+        enabled = self.client.patch("/settings", json={"cd_auto_lookup_metadata": True})
+        self.assertEqual(enabled.status_code, 200)
+        self.assertTrue(enabled.json()["cd_auto_lookup_metadata"])
 
     def test_settings_can_store_lastfm_credentials_without_returning_secrets(self) -> None:
         saved = self.client.patch(
@@ -1417,6 +1433,100 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(body["drives"][0]["id"], "D:")
         self.assertEqual(body["drives"][0]["track_count"], 2)
 
+    def test_cd_drive_detection_uses_native_fallback_when_powershell_times_out(self) -> None:
+        from backend.app import cd_ripping
+
+        native_drive = {
+            "id": "D:",
+            "path": "D:\\",
+            "label": "CD Drive (D:)",
+            "volume_name": None,
+            "media_loaded": True,
+            "track_count": 1,
+            "tracks": [{"track_number": 1, "title": "Track 01"}],
+        }
+        try:
+            with cd_ripping.CD_DRIVE_CACHE_LOCK:
+                cd_ripping.CD_DRIVE_CACHE.clear()
+            with (
+                patch("backend.app.cd_ripping.os.name", "nt"),
+                patch("backend.app.cd_ripping.powershell_cd_drives", return_value=[]),
+                patch("backend.app.cd_ripping.native_windows_cd_drives", return_value=[native_drive]),
+            ):
+                drives = cd_ripping.detect_cd_drives()
+            self.assertEqual(drives[0]["id"], "D:")
+            self.assertEqual(drives[0]["track_count"], 1)
+        finally:
+            with cd_ripping.CD_DRIVE_CACHE_LOCK:
+                cd_ripping.CD_DRIVE_CACHE.clear()
+
+    def test_cd_drive_detection_preserves_cached_active_playback_drive(self) -> None:
+        from backend.app import cd_ripping
+
+        cached_drive = {
+            "id": "D:",
+            "path": "D:\\",
+            "label": "Cached CD Drive",
+            "volume_name": "Disc",
+            "media_loaded": True,
+            "track_count": 2,
+            "tracks": [{"track_number": 1, "title": "Track 01"}, {"track_number": 2, "title": "Track 02"}],
+        }
+        try:
+            with cd_ripping.CD_DRIVE_CACHE_LOCK:
+                cd_ripping.CD_DRIVE_CACHE[:] = [cached_drive]
+            cd_ripping.register_cd_live_stream_token("D:", "playing")
+            with (
+                patch("backend.app.cd_ripping.os.name", "nt"),
+                patch("backend.app.cd_ripping.powershell_cd_drives", return_value=[]),
+                patch("backend.app.cd_ripping.native_windows_cd_drives", return_value=[]),
+            ):
+                drives = cd_ripping.detect_cd_drives()
+            self.assertEqual([drive["id"] for drive in drives], ["D:"])
+        finally:
+            cd_ripping.clear_cd_live_stream_tokens()
+            with cd_ripping.CD_DRIVE_CACHE_LOCK:
+                cd_ripping.CD_DRIVE_CACHE.clear()
+
+    def test_cd_drive_detection_reuses_cached_tracks_for_transient_empty_drive(self) -> None:
+        from backend.app import cd_ripping
+
+        cached_drive = {
+            "id": "D:",
+            "path": "D:\\",
+            "label": "Cached CD Drive",
+            "volume_name": "Disc",
+            "media_loaded": True,
+            "track_count": 2,
+            "tracks": [{"track_number": 1, "title": "Track 01"}, {"track_number": 2, "title": "Track 02"}],
+        }
+        detected_drive = {
+            "id": "D:",
+            "path": "D:\\",
+            "label": "CD Drive (D:)",
+            "volume_name": None,
+            "media_loaded": False,
+            "track_count": None,
+            "tracks": [],
+        }
+        try:
+            with cd_ripping.CD_DRIVE_CACHE_LOCK:
+                cd_ripping.CD_DRIVE_CACHE[:] = [cached_drive]
+            with (
+                patch("backend.app.cd_ripping.os.name", "nt"),
+                patch("backend.app.cd_ripping.powershell_cd_drives", return_value=[]),
+                patch("backend.app.cd_ripping.native_windows_cd_drives", return_value=[detected_drive]),
+            ):
+                drives = cd_ripping.detect_cd_drives()
+            self.assertEqual(drives[0]["id"], "D:")
+            self.assertTrue(drives[0]["media_loaded"])
+            self.assertEqual(drives[0]["track_count"], 2)
+            self.assertEqual([track["track_number"] for track in drives[0]["tracks"]], [1, 2])
+            self.assertEqual(drives[0]["volume_name"], "Disc")
+        finally:
+            with cd_ripping.CD_DRIVE_CACHE_LOCK:
+                cd_ripping.CD_DRIVE_CACHE.clear()
+
     def test_cd_rip_prefers_native_windows_reader_when_available(self) -> None:
         from backend.app import cd_ripping
 
@@ -1628,10 +1738,7 @@ class ApiTests(unittest.TestCase):
             cd_ripping._jobs.pop(response["job_id"], None)
 
     def test_cd_live_audio_streams_wav_response(self) -> None:
-        with (
-            patch("backend.app.main.cd_live_wav_content_length", return_value=47),
-            patch("backend.app.main.cd_live_wav_stream", return_value=iter([b"RIFF", b"audio"])),
-        ):
+        with patch("backend.app.main.cd_live_wav_stream", return_value=iter([b"RIFF", b"audio"])):
             response = self.client.get("/library/tools/cd-rip/playback/live/audio?drive_id=D%3A&track_number=1")
 
         self.assertEqual(response.status_code, 200)
@@ -1639,16 +1746,43 @@ class ApiTests(unittest.TestCase):
         self.assertNotIn("content-length", response.headers)
         self.assertEqual(response.content, b"RIFFaudio")
 
-    def test_cd_live_tokens_allow_prepared_queue_tracks(self) -> None:
+    def test_cd_live_token_replacement_invalidates_previous_stream(self) -> None:
         from backend.app import cd_ripping
 
         cd_ripping.clear_cd_live_stream_tokens()
         try:
             cd_ripping.register_cd_live_stream_token("D:", "first")
-            cd_ripping.register_cd_live_stream_token("D:", "second")
+            cd_ripping.replace_cd_live_stream_token("D:", "second")
 
-            self.assertTrue(cd_ripping.cd_live_stream_is_current("D:", "first"))
+            self.assertFalse(cd_ripping.cd_live_stream_is_current("D:", "first"))
             self.assertTrue(cd_ripping.cd_live_stream_is_current("D:", "second"))
+        finally:
+            cd_ripping.clear_cd_live_stream_tokens()
+
+    def test_cd_live_prepare_replaces_previous_stream_before_duration_probe(self) -> None:
+        from backend.app import cd_ripping
+        from types import SimpleNamespace
+        from urllib.parse import parse_qs, urlsplit
+
+        cd_ripping.clear_cd_live_stream_tokens()
+        cd_ripping.register_cd_live_stream_token("D:", "first")
+        request = SimpleNamespace(
+            drive_id="D:",
+            track_number=2,
+            tracks=[],
+            album_title=None,
+            album_artist=None,
+            year=None,
+            genre=None,
+        )
+        try:
+            with patch("backend.app.cd_ripping.cd_live_track_duration_seconds", return_value=123.0) as duration_mock:
+                response = cd_ripping.prepare_cd_live_track(request)
+            query = parse_qs(urlsplit(response["track"]["audio_url"]).query)
+            token = query["token"][0]
+            self.assertFalse(cd_ripping.cd_live_stream_is_current("D:", "first"))
+            self.assertTrue(cd_ripping.cd_live_stream_is_current("D:", token))
+            duration_mock.assert_called_once_with("D:", 2)
         finally:
             cd_ripping.clear_cd_live_stream_tokens()
 
@@ -1656,10 +1790,9 @@ class ApiTests(unittest.TestCase):
         from backend.app import cd_ripping
 
         cd_ripping.clear_cd_live_stream_tokens()
-        with patch("backend.app.main.cd_live_wav_content_length", return_value=44):
-            response = self.client.get(
-                "/library/tools/cd-rip/playback/live/audio?drive_id=D%3A&track_number=1&token=stale",
-            )
+        response = self.client.get(
+            "/library/tools/cd-rip/playback/live/audio?drive_id=D%3A&track_number=1&token=stale",
+        )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["content-type"], "audio/wav")
@@ -1706,7 +1839,7 @@ class ApiTests(unittest.TestCase):
         ):
             response = self.client.post(
                 "/library/tools/cd-rip/metadata",
-                json={"drive_id": "D:", "album_title": "Lookup Album", "album_artist": "Lookup Artist"},
+                json={"album_title": "Lookup Album", "album_artist": "Lookup Artist"},
             )
 
         self.assertEqual(response.status_code, 200)
@@ -1715,6 +1848,82 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(body["candidates"][0]["year"], 2001)
         self.assertEqual(body["candidates"][0]["tracks"][0]["title"], "First Song")
         self.assertEqual(body["candidates"][0]["tracks"][1]["duration_seconds"], 200.0)
+
+    def test_musicbrainz_disc_id_matches_documented_example(self) -> None:
+        info = disc_id_info_from_toc_entries(
+            [
+                {"track_number": 1, "start_lba": 0, "control": 0},
+                {"track_number": 2, "start_lba": 15213, "control": 0},
+                {"track_number": 3, "start_lba": 32164, "control": 0},
+                {"track_number": 4, "start_lba": 46442, "control": 0},
+                {"track_number": 5, "start_lba": 63264, "control": 0},
+                {"track_number": 6, "start_lba": 80339, "control": 0},
+                {"track_number": 0xAA, "start_lba": 95312, "control": 0},
+            ]
+        )
+
+        self.assertEqual(info.disc_id, "49HHV7Eb8UKF3aQiNmu1GR8vKTY-")
+        self.assertEqual(info.toc, "1 6 95462 150 15363 32314 46592 63414 80489")
+
+    def test_cd_rip_metadata_uses_musicbrainz_disc_id_before_text_search(self) -> None:
+        release = {
+            "id": "release-disc",
+            "title": "Disc Lookup Album",
+            "artist-credit": [{"name": "Disc Artist"}],
+            "date": "1999",
+            "country": "US",
+            "media": [
+                {
+                    "tracks": [
+                        {"position": 1, "title": "Disc First", "length": 181000, "artist-credit": [{"name": "Disc Artist"}]},
+                        {"position": 2, "title": "Disc Second", "length": 202000, "artist-credit": [{"name": "Disc Artist"}]},
+                    ],
+                }
+            ],
+        }
+        fake_setup = {
+            "available": True,
+            "tool_directory": str(self.root),
+            "drives": [],
+            "tools": [],
+            "ffmpeg_available": True,
+            "ffmpeg_path": str(self.root / "ffmpeg.exe"),
+            "secure_ripping_available": True,
+            "cd_text_available": True,
+            "accuraterip_available": False,
+            "message": "ready",
+            "warnings": [],
+        }
+        disc_info = disc_id_info_from_toc_entries(
+            [
+                {"track_number": 1, "start_lba": 0, "control": 0},
+                {"track_number": 2, "start_lba": 13575, "control": 0},
+                {"track_number": 0xAA, "start_lba": 28725, "control": 0},
+            ]
+        )
+
+        with (
+            patch("backend.app.cd_ripping.cd_rip_setup", return_value=fake_setup),
+            patch("backend.app.cd_ripping.cd_disc_id_for_drive", return_value=disc_info),
+            patch("backend.app.cd_ripping.lookup_discid_releases", return_value=[release]) as disc_lookup,
+            patch("backend.app.cd_ripping.search_releases") as text_search,
+            patch("backend.app.cd_ripping.cover_art_for_release", return_value=None),
+        ):
+            response = self.client.post(
+                "/library/tools/cd-rip/metadata",
+                json={"drive_id": "D:", "album_title": "Fallback Album", "album_artist": "Fallback Artist"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["source"], "MusicBrainz Disc ID")
+        self.assertEqual(body["disc_id"], disc_info.disc_id)
+        self.assertEqual(body["query"]["disc_id"], disc_info.disc_id)
+        self.assertEqual(body["candidates"][0]["release_id"], "release-disc")
+        self.assertEqual(body["candidates"][0]["confidence"], 1.0)
+        self.assertEqual(body["candidates"][0]["tracks"][0]["title"], "Disc First")
+        disc_lookup.assert_called_once_with(disc_info.disc_id, disc_info.toc)
+        text_search.assert_not_called()
 
     def test_cd_rip_job_writes_target_and_verification(self) -> None:
         target = self.root / "Rips"
@@ -3583,6 +3792,70 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(first.content, b"image-bytes")
         artwork.assert_called_once()
 
+    def test_cd_preview_artwork_uses_cached_local_album_fallback(self) -> None:
+        main_module.CD_PREVIEW_TRACK_METADATA.clear()
+        main_module.CD_ALBUM_ARTWORK_FALLBACK_CACHE.clear()
+        audio_file = self.root / "cd-artwork-match.mp3"
+        audio_file.write_bytes(b"audio")
+        insert_track(audio_file, title="CD Song", artist="CD Artist", album="CD Album", album_artist="CD Artist")
+        prepared = {
+            "status": "prepared",
+            "track_number": 1,
+            "message": "Playing CD track 01.",
+            "track": {
+                "id": -42,
+                "path": "cdda://D:/track/01",
+                "title": "CD Song",
+                "artist": "CD Artist",
+                "album": "CD Album",
+                "album_artist": "CD Artist",
+                "track_number": 1,
+                "disc_number": 1,
+                "genre": "CD Preview",
+                "analysis_provider": None,
+                "analysis_model": None,
+                "analysis_genre": None,
+                "analysis_genre_confidence": None,
+                "analysis_genre_tags": None,
+                "analysis_embedding": None,
+                "analysis_updated_at": None,
+                "year": None,
+                "duration_seconds": 180.0,
+                "bitrate": None,
+                "replaygain_track_gain_db": None,
+                "replaygain_album_gain_db": None,
+                "replaygain_track_peak": None,
+                "replaygain_album_peak": None,
+                "audio_fingerprint": None,
+                "acoustic_fingerprint": None,
+                "acoustic_fingerprint_updated_at": None,
+                "rating": None,
+                "play_count": 0,
+                "skip_count": 0,
+                "last_played_at": None,
+                "last_skipped_at": None,
+                "date_added": "2026-01-01T00:00:00+00:00",
+                "file_modified_at": None,
+                "audio_url": "http://127.0.0.1:8765/cd.wav",
+                "is_preview": True,
+            },
+        }
+
+        with patch("backend.app.main.active_cd_rip_job_for_drive", return_value=None), patch(
+            "backend.app.main.prepare_cd_live_track",
+            return_value=prepared,
+        ), patch("backend.app.main.cached_artwork", return_value=(b"cd-cover", "image/jpeg")) as cached:
+            playback = self.client.post("/library/tools/cd-rip/playback/play", json={"drive_id": "D:", "track_number": 1})
+            first = self.client.get("/tracks/-42/artwork")
+            second = self.client.get("/tracks/-42/artwork")
+
+        self.assertEqual(playback.status_code, 200)
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.content, b"cd-cover")
+        self.assertEqual(first.headers["content-type"], "image/jpeg")
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(cached.call_count, 1)
+
     def test_album_artwork_candidates_choose_sidecar_and_serve_image(self) -> None:
         album_dir = self.root / "Music" / "Album"
         album_dir.mkdir(parents=True)
@@ -3739,6 +4012,45 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["lyrics"], "[00:01.00] hello")
         self.assertTrue(response.json()["is_synced"])
+
+    def test_lyrics_lookup_by_metadata_fetches_virtual_cd_track(self) -> None:
+        with patch(
+            "backend.app.main.lrclib_fetch",
+            return_value=LyricsResponse(
+                track_id=-1002,
+                lyrics="[00:01.00] cd line",
+                source="lrclib:synced",
+                is_synced=True,
+            ),
+        ) as fetch:
+            response = self.client.post(
+                "/lyrics/lookup",
+                json={
+                    "track_id": -1002,
+                    "title": "CD Song",
+                    "artist": "CD Artist",
+                    "album": "CD Album",
+                    "album_artist": "CD Album Artist",
+                    "duration_seconds": 181.4,
+                    "path": "cdda://D:/track/02",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["track_id"], -1002)
+        self.assertEqual(response.json()["lyrics"], "[00:01.00] cd line")
+        lookup_track = fetch.call_args.args[0]
+        self.assertEqual(lookup_track["id"], -1002)
+        self.assertEqual(lookup_track["title"], "CD Song")
+        self.assertEqual(lookup_track["artist"], "CD Artist")
+        self.assertEqual(lookup_track["album"], "CD Album")
+        self.assertIsNone(lookup_track["duration_seconds"])
+
+    def test_lyrics_lookup_by_metadata_requires_artist(self) -> None:
+        response = self.client.post("/lyrics/lookup", json={"track_id": -1, "title": "CD Song"})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("title and artist", response.json()["detail"])
 
     def test_lyrics_fetch_can_cache_synced_lrc_sidecar(self) -> None:
         audio_file = self.root / "cached-lyrics.mp3"

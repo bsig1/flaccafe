@@ -95,7 +95,7 @@ export function NowPlayingPage({
   setUiPreferences: (updater: (current: UiPreferences) => UiPreferences) => void;
   writeRatingsToFiles: boolean;
   onWriteRatingsToFilesChange: (value: boolean) => void;
-  onFetchLyrics: (trackId: number) => Promise<LyricsResponse>;
+  onFetchLyrics: (track: Track) => Promise<LyricsResponse>;
   onSaveLyrics: (trackId: number, requestBody: LyricsUpdateRequest) => Promise<LyricsResponse>;
   onPlayTrack: (track: Track, queue: Track[]) => void;
   onMoveQueueTrack: (index: number, direction: "up" | "down") => void;
@@ -312,7 +312,7 @@ export function NowPlayingPage({
     }
     setLyricsBusy(true);
     try {
-      const fetched = await onFetchLyrics(currentTrack.id);
+      const fetched = await onFetchLyrics(currentTrack);
       setLyricsDraft(fetched.lyrics ?? "");
       setLyricsSynced(fetched.is_synced);
       setIsEditingLyrics(true);

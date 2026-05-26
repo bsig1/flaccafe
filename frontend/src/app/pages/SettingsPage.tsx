@@ -91,6 +91,8 @@ export function SettingsPage({
   onWriteRatingsToFilesChange,
   autoWriteFetchedLyricsSidecars,
   onAutoWriteFetchedLyricsSidecarsChange,
+  cdAutoLookupMetadata,
+  onCdAutoLookupMetadataChange,
   onAcoustIdApiKeyChange,
   onLastFmApiCredentialsChange,
   setStatus,
@@ -123,6 +125,8 @@ export function SettingsPage({
   onWriteRatingsToFilesChange: (value: boolean) => void;
   autoWriteFetchedLyricsSidecars: boolean;
   onAutoWriteFetchedLyricsSidecarsChange: (value: boolean) => void;
+  cdAutoLookupMetadata: boolean;
+  onCdAutoLookupMetadataChange: (value: boolean) => void;
   onAcoustIdApiKeyChange: (apiKey: string | null) => void | Promise<void>;
   onLastFmApiCredentialsChange: (apiKey: string | null, apiSecret: string | null) => void | Promise<void>;
   setStatus: (message: string) => void;
@@ -415,6 +419,22 @@ export function SettingsPage({
                   <option value="always">Always</option>
                 </select>
               </div>
+
+              <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-ink p-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <Search className="shrink-0 text-muted" size={18} />
+                  <div className="min-w-0">
+                    <div className="font-medium text-white">Auto-look up CD metadata</div>
+                    <div className="text-xs text-muted">Automatically queries MusicBrainz when a CD drive with media is detected.</div>
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 shrink-0 accent-moss"
+                  checked={cdAutoLookupMetadata}
+                  onChange={(event) => onCdAutoLookupMetadataChange(event.target.checked)}
+                />
+              </label>
 
               <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-ink p-3">
                 <div className="flex min-w-0 items-center gap-3">

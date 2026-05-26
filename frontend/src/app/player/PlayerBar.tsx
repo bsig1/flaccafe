@@ -92,6 +92,7 @@ type ExternalTrackRequest = {
 };
 
 const WEB_HANDOFF_FADE_MS = 90;
+const CD_SKIP_SETTLE_SECONDS = 1.15;
 
 export function PlayerBar({
   currentTrack,
@@ -231,6 +232,7 @@ export function PlayerBar({
   const currentIndex = currentTrack && !isRadioSource ? queue.findIndex((track) => track.id === currentTrack.id) : -1;
   const hasPrevious = currentIndex > 0;
   const hasNext = currentIndex >= 0 && currentIndex < queue.length - 1;
+  const cdSkipIsSettling = isCdPreviewTrack && isPlaying && currentTime < CD_SKIP_SETTLE_SECONDS;
   const useNativePlayback = playbackEngine === "native" && !isRadioSource && !currentTrack?.audio_url;
   const preloadedNextTrack =
     !isRadioSource && hasNext
@@ -883,15 +885,16 @@ export function PlayerBar({
     return bounded * bounded * (3 - 2 * bounded);
   }
 
-  function hardStopWebAudioElement(element: HTMLAudioElement | null) {
+  function pauseWebAudioForPreviewSwitch(element: HTMLAudioElement | null) {
+    cancelFade();
+    suppressWebPlaybackErrorsUntilRef.current = window.performance.now() + 1500;
+    suppressWebPauseUntilRef.current = window.performance.now() + 1200;
     if (!element) {
       return;
     }
-    suppressWebPlaybackErrorsUntilRef.current = window.performance.now() + 1500;
     try {
       element.pause();
-      element.removeAttribute("src");
-      element.load();
+      setWebSourceGain(element, currentSourceGainRef, 0);
     } catch {
       // Media teardown is best-effort; the next source render will recover.
     }
@@ -918,6 +921,15 @@ export function PlayerBar({
   function hideArtworkPreview() {
     clearArtworkPreviewTimer();
     setShowArtworkPreview(false);
+  }
+
+  function cdStreamIsSettling() {
+    if (!isCdPreviewTrack || !isPlaying) {
+      return false;
+    }
+    const audioTime = audioRef.current?.currentTime;
+    const playbackSeconds = typeof audioTime === "number" && Number.isFinite(audioTime) ? audioTime : currentTime;
+    return playbackSeconds < CD_SKIP_SETTLE_SECONDS;
   }
 
   function fadeVolume(targetVolume: number, durationMs: number, afterFade?: () => void) {
@@ -1288,9 +1300,8 @@ export function PlayerBar({
     nextAudioRef.current?.pause();
 
     if (isCdPreviewTrack) {
-      cancelFade();
       const audio = audioRef.current;
-      hardStopWebAudioElement(audio);
+      pauseWebAudioForPreviewSwitch(audio);
       commitTrackRequest();
       return;
     }
@@ -1624,6 +1635,9 @@ export function PlayerBar({
   function playRelative(offset: number, recordExit = true) {
     const nextTrack = queue[currentIndex + offset];
     if (nextTrack) {
+      if (cdStreamIsSettling()) {
+        return;
+      }
       const audio = audioRef.current;
       if (recordExit) {
         void recordCurrentTrackExit();
@@ -1632,9 +1646,9 @@ export function PlayerBar({
       crossfadeTrackRef.current = null;
       nextAudioRef.current?.pause();
       if (isCdPreviewTrack) {
-        cancelFade();
-        hardStopWebAudioElement(audio);
-        setIsPlaying(false);
+        // CD queue items may need a fresh live stream URL. Let the app prepare
+        // that URL before we touch the current stream, otherwise a failed skip
+        // leaves the player paused on the old track.
         onSelectTrack(nextTrack, queue, { suppressExitRecord: true });
         return;
       }
@@ -1698,6 +1712,9 @@ export function PlayerBar({
 
   async function recordCurrentTrackExit() {
     if (!currentTrack) {
+      return;
+    }
+    if (currentTrack.id <= 0 || currentTrack.is_preview) {
       return;
     }
     if (shouldRecordTrackAsPlayed(currentTime, effectiveDuration, skipThresholdPercent)) {
@@ -1872,7 +1889,7 @@ export function PlayerBar({
   }, [useNativePlayback, preloadedNextTrack?.id, preloadedNextTrack?.path, canPreloadNextTrack, playbackMode]);
 
   const artworkSrc =
-    currentTrack && !isRadioSource && !isPreviewTrack && !artworkFailed
+    currentTrack && !isRadioSource && (!isPreviewTrack || isCdPreviewTrack) && !artworkFailed
       ? albumArtworkUrl(currentTrack.id, currentTrack.file_modified_at)
       : null;
   const hasCurrentArtist = Boolean(currentTrack?.artist?.trim());
@@ -2171,8 +2188,8 @@ export function PlayerBar({
           <button
             className="icon-button"
             type="button"
-            title="Previous track"
-            disabled={!hasPrevious}
+            title={cdSkipIsSettling ? "CD track is starting" : "Previous track"}
+            disabled={!hasPrevious || cdSkipIsSettling}
             onClick={() => playRelative(-1)}
           >
             <SkipBack size={17} />
@@ -2189,8 +2206,8 @@ export function PlayerBar({
           <button
             className="icon-button"
             type="button"
-            title="Next track"
-            disabled={!hasNext}
+            title={cdSkipIsSettling ? "CD track is starting" : "Next track"}
+            disabled={!hasNext || cdSkipIsSettling}
             onClick={() => playRelative(1)}
           >
             <SkipForward size={17} />

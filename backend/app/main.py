@@ -87,7 +87,6 @@ from .cd_ripping import (
     active_cd_playback_for_drive,
     active_cd_rip_job_for_drive,
     cancel_cd_rip_job,
-    cd_live_wav_content_length,
     cd_live_wav_stream,
     cd_rip_setup,
     get_cd_rip_job,
@@ -280,6 +279,7 @@ from .schemas import (
     LastFmLoginCompleteResponse,
     LastFmLoginStartRequest,
     LastFmLoginStartResponse,
+    LyricsLookupRequest,
     LyricsResponse,
     LyricsUpdateRequest,
     PlaylistCreateRequest,
@@ -508,6 +508,10 @@ LRCLIB_API_URL = "https://lrclib.net/api/get"
 LRCLIB_SEARCH_URL = "https://lrclib.net/api/search"
 WIKIPEDIA_USER_AGENT = "FLACCafe/0.1 (local desktop music app)"
 LOGGER = logging.getLogger("flac_cafe.backend")
+CD_PREVIEW_TRACK_METADATA: dict[int, dict[str, object]] = {}
+CD_ALBUM_ARTWORK_FALLBACK_CACHE: dict[tuple[str, str], tuple[bytes, str] | None] = {}
+CD_PREVIEW_TRACK_METADATA_LIMIT = 300
+CD_ALBUM_ARTWORK_CACHE_LIMIT = 100
 
 
 def clap_status(deep: bool = False) -> dict:
@@ -961,6 +965,11 @@ def get_write_ratings_to_files(conn) -> bool:
 
 def get_auto_write_fetched_lyrics_sidecars(conn) -> bool:
     return setting_enabled(get_setting(conn, "auto_write_fetched_lyrics_sidecars"))
+
+
+def get_cd_auto_lookup_metadata(conn) -> bool:
+    value = get_setting(conn, "cd_auto_lookup_metadata")
+    return True if value is None else setting_enabled(value)
 
 
 def normalized_library_paths(paths: list[str | None]) -> list[str]:
@@ -1960,6 +1969,114 @@ def cached_artwork(path: Path) -> tuple[bytes, str] | None:
         )
         conn.commit()
     return data, media_type
+
+
+def normalized_metadata_match(value: object) -> str:
+    return re.sub(r"\s+", " ", str(value or "").casefold()).strip()
+
+
+def cd_album_artwork_cache_key(track: dict[str, object]) -> tuple[str, str] | None:
+    album = normalized_metadata_match(track.get("album"))
+    artist = normalized_metadata_match(
+        primary_artist_name(str(track.get("album_artist") or track.get("artist") or ""))
+    )
+    if not album:
+        return None
+    return artist, album
+
+
+def remember_cd_preview_track(track: dict[str, object]) -> None:
+    try:
+        track_id = int(track.get("id") or 0)
+    except (TypeError, ValueError):
+        return
+    if track_id >= 0:
+        return
+    CD_PREVIEW_TRACK_METADATA[track_id] = dict(track)
+    while len(CD_PREVIEW_TRACK_METADATA) > CD_PREVIEW_TRACK_METADATA_LIMIT:
+        CD_PREVIEW_TRACK_METADATA.pop(next(iter(CD_PREVIEW_TRACK_METADATA)), None)
+
+
+def local_album_artwork_for_metadata(track: dict[str, object]) -> tuple[bytes, str] | None:
+    key = cd_album_artwork_cache_key(track)
+    if key is None:
+        return None
+    if key in CD_ALBUM_ARTWORK_FALLBACK_CACHE:
+        return CD_ALBUM_ARTWORK_FALLBACK_CACHE[key]
+
+    artist_key, album_key = key
+    with connect() as conn:
+        rows = rows_to_dicts(
+            conn.execute(
+                f"""
+                SELECT tracks.path,
+                       tracks.artist,
+                       tracks.album_artist,
+                       tracks.album,
+                       albums.artwork_path
+                FROM tracks
+                LEFT JOIN albums ON albums.id = tracks.album_id
+                WHERE lower(trim(coalesce(tracks.album, ''))) = ?
+                  AND NOT {audiobook_where_clause()}
+                  AND NOT {podcast_where_clause()}
+                ORDER BY coalesce(tracks.disc_number, 0) ASC,
+                         coalesce(tracks.track_number, 0) ASC,
+                         tracks.id ASC
+                LIMIT 150
+                """,
+                (album_key,),
+            )
+        )
+
+    matches: list[dict] = []
+    for row in rows:
+        row_album = normalized_metadata_match(row.get("album"))
+        row_artist = normalized_metadata_match(primary_artist_name(str(row.get("artist") or "")))
+        row_album_artist = normalized_metadata_match(primary_artist_name(str(row.get("album_artist") or "")))
+        if row_album != album_key:
+            continue
+        if artist_key and artist_key not in {row_artist, row_album_artist}:
+            continue
+        matches.append(row)
+
+    for row in matches:
+        artwork_path = row.get("artwork_path")
+        if not artwork_path:
+            continue
+        selected = Path(str(artwork_path)).expanduser()
+        media_type = image_media_type(selected)
+        if selected.exists() and selected.is_file() and media_type:
+            try:
+                result = (selected.read_bytes(), media_type)
+                CD_ALBUM_ARTWORK_FALLBACK_CACHE[key] = result
+                while len(CD_ALBUM_ARTWORK_FALLBACK_CACHE) > CD_ALBUM_ARTWORK_CACHE_LIMIT:
+                    CD_ALBUM_ARTWORK_FALLBACK_CACHE.pop(next(iter(CD_ALBUM_ARTWORK_FALLBACK_CACHE)), None)
+                return result
+            except OSError:
+                continue
+
+    for row in matches:
+        try:
+            artwork = cached_artwork(Path(str(row["path"])))
+        except (KeyError, TypeError, OSError):
+            artwork = None
+        if artwork is not None:
+            CD_ALBUM_ARTWORK_FALLBACK_CACHE[key] = artwork
+            while len(CD_ALBUM_ARTWORK_FALLBACK_CACHE) > CD_ALBUM_ARTWORK_CACHE_LIMIT:
+                CD_ALBUM_ARTWORK_FALLBACK_CACHE.pop(next(iter(CD_ALBUM_ARTWORK_FALLBACK_CACHE)), None)
+            return artwork
+
+    CD_ALBUM_ARTWORK_FALLBACK_CACHE[key] = None
+    while len(CD_ALBUM_ARTWORK_FALLBACK_CACHE) > CD_ALBUM_ARTWORK_CACHE_LIMIT:
+        CD_ALBUM_ARTWORK_FALLBACK_CACHE.pop(next(iter(CD_ALBUM_ARTWORK_FALLBACK_CACHE)), None)
+    return None
+
+
+def cd_preview_track_artwork(track_id: int) -> tuple[bytes, str] | None:
+    track = CD_PREVIEW_TRACK_METADATA.get(track_id)
+    if track is None:
+        return None
+    return local_album_artwork_for_metadata(track)
 
 
 def image_media_type(path: Path) -> str | None:
@@ -3193,6 +3310,7 @@ def get_settings() -> SettingsResponse:
         library_paths = stored_library_paths(conn)
         write_ratings_to_files = get_write_ratings_to_files(conn)
         auto_write_fetched_lyrics_sidecars = get_auto_write_fetched_lyrics_sidecars(conn)
+        cd_auto_lookup_metadata = get_cd_auto_lookup_metadata(conn)
         acoustid_api_key_configured = bool((get_setting(conn, "acoustid_api_key") or "").strip())
     lastfm_account = next((account for account in list_scrobble_accounts() if account.get("service") == "lastfm"), {})
     lastfm_saved_configured = bool((lastfm_account.get("api_key") or "").strip() and (lastfm_account.get("api_secret") or "").strip())
@@ -3210,6 +3328,7 @@ def get_settings() -> SettingsResponse:
         suggested_music_path=suggested_music_path(),
         write_ratings_to_files=write_ratings_to_files,
         auto_write_fetched_lyrics_sidecars=auto_write_fetched_lyrics_sidecars,
+        cd_auto_lookup_metadata=cd_auto_lookup_metadata,
         acoustid_api_key_configured=acoustid_api_key_configured,
         lastfm_api_credentials_configured=bool(lastfm_source),
         lastfm_api_credentials_source=lastfm_source,
@@ -3228,6 +3347,8 @@ def update_settings(request: SettingsUpdateRequest) -> SettingsResponse:
                 "auto_write_fetched_lyrics_sidecars",
                 "1" if request.auto_write_fetched_lyrics_sidecars else "0",
             )
+        if request.cd_auto_lookup_metadata is not None:
+            set_setting(conn, "cd_auto_lookup_metadata", "1" if request.cd_auto_lookup_metadata else "0")
         if request.clear_acoustid_api_key:
             set_setting(conn, "acoustid_api_key", None)
         elif request.acoustid_api_key is not None:
@@ -4352,7 +4473,11 @@ def play_cd_track_route(request: CdPlaybackRequest) -> CdPlaybackResponse:
             detail=f"CD ripping is active on {drive}. Cancel or wait for the rip before playing from this drive.",
         )
     try:
-        return CdPlaybackResponse(**prepare_cd_live_track(request))
+        response = prepare_cd_live_track(request)
+        track = response.get("track")
+        if isinstance(track, dict):
+            remember_cd_preview_track(track)
+        return CdPlaybackResponse(**response)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except OSError as exc:
@@ -4371,12 +4496,6 @@ def stream_cd_live_audio(
     track_number: int = Query(..., ge=1, le=999),
     token: str | None = Query(default=None),
 ) -> Response:
-    try:
-        cd_live_wav_content_length(drive_id, track_number)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except OSError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if request.method == "HEAD":
         return Response(
             media_type="audio/wav",
@@ -7854,6 +7973,7 @@ def update_album_artwork(album_id: int, request: AlbumArtworkUpdateRequest) -> A
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         conn.execute("DELETE FROM artwork_cache")
+        CD_ALBUM_ARTWORK_FALLBACK_CACHE.clear()
         conn.commit()
         row = album_record(conn, album_id)
         candidates = album_artwork_candidates(conn, album_id)
@@ -7883,6 +8003,7 @@ def artwork_collision_repair(request: AlbumArtworkCollisionRequest) -> AlbumArtw
                 repaired.append(issue)
                 errors.append(f"{issue.album or issue.album_id}: {exc}")
         conn.execute("DELETE FROM artwork_cache")
+        CD_ALBUM_ARTWORK_FALLBACK_CACHE.clear()
         conn.commit()
 
     repaired_count = sum(1 for issue in repaired if issue.repaired)
@@ -8199,6 +8320,17 @@ def stream_track_audio(track_id: int) -> FileResponse:
 
 @app.get("/tracks/{track_id}/artwork")
 def track_artwork(track_id: int) -> Response:
+    if track_id < 0:
+        artwork = cd_preview_track_artwork(track_id)
+        if artwork is None:
+            raise HTTPException(status_code=404, detail="No CD album artwork fallback found")
+        data, media_type = artwork
+        return Response(
+            content=data,
+            media_type=media_type,
+            headers={"Cache-Control": "no-store, max-age=0"},
+        )
+
     path = get_track_path(track_id)
     artwork = cached_artwork(path)
     if artwork is None:
@@ -8245,6 +8377,27 @@ def fetch_track_lyrics(track_id: int) -> LyricsResponse:
             sidecar_path,
         )
     return response
+
+
+@app.post("/lyrics/lookup", response_model=LyricsResponse)
+def lookup_lyrics_by_metadata(request_body: LyricsLookupRequest) -> LyricsResponse:
+    title = request_body.title.strip()
+    artist = (request_body.artist or request_body.album_artist or "").strip()
+    if not title or not artist:
+        raise HTTPException(status_code=400, detail="Track title and artist are required for lyric lookup")
+
+    track = {
+        "id": request_body.track_id if request_body.track_id is not None else 0,
+        "path": request_body.path or title,
+        "title": title,
+        "artist": artist,
+        "album": request_body.album.strip() if request_body.album else None,
+        "album_artist": request_body.album_artist.strip() if request_body.album_artist else None,
+        "duration_seconds": request_body.duration_seconds,
+    }
+    # CD and MusicBrainz durations often describe a different pressing or include
+    # lead-in/lead-out differences, so avoid making the online lyric lookup too exact.
+    return lrclib_fetch({**track, "duration_seconds": None})
 
 
 @app.patch("/tracks/{track_id}/lyrics", response_model=LyricsResponse)

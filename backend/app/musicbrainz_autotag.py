@@ -258,6 +258,18 @@ def lookup_release(release_id: str) -> dict[str, Any] | None:
     )
 
 
+def lookup_discid_releases(disc_id: str, toc: str | None = None) -> list[dict[str, Any]]:
+    params: dict[str, object] = {
+        "inc": "recordings+artist-credits+release-groups",
+        "cdstubs": "no",
+    }
+    if toc:
+        params["toc"] = toc
+    payload = musicbrainz_get(f"discid/{disc_id or '-'}", params)
+    releases = payload.get("releases") if payload else []
+    return [release for release in releases if isinstance(release, dict)]
+
+
 def search_recordings(title: str, artist: str | None, limit: int) -> list[dict[str, Any]]:
     terms = [f'recording:"{musicbrainz_phrase(title)}"']
     if artist:

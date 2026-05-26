@@ -243,6 +243,16 @@ class LyricsResponse(BaseModel):
     sidecar_path: str | None = None
 
 
+class LyricsLookupRequest(BaseModel):
+    track_id: int | None = None
+    title: str = Field(min_length=1, max_length=500)
+    artist: str | None = Field(default=None, max_length=500)
+    album: str | None = Field(default=None, max_length=500)
+    album_artist: str | None = Field(default=None, max_length=500)
+    duration_seconds: float | None = Field(default=None, ge=0, le=604800)
+    path: str | None = Field(default=None, max_length=4000)
+
+
 class LyricsUpdateRequest(BaseModel):
     lyrics: str | None = Field(default=None, max_length=500_000)
     is_synced: bool = False
@@ -1457,7 +1467,7 @@ class CdPlaybackRequest(BaseModel):
     album_artist: str | None = None
     year: int | None = None
     genre: str | None = None
-    tracks: list[CdRipTrackMetadata] = Field(default_factory=list, max_length=5)
+    tracks: list[CdRipTrackMetadata] = Field(default_factory=list, max_length=120)
 
 
 class CdPlaybackResponse(BaseModel):
@@ -2090,6 +2100,7 @@ class TrackRestoreRequest(BaseModel):
 class SettingsUpdateRequest(BaseModel):
     write_ratings_to_files: bool | None = None
     auto_write_fetched_lyrics_sidecars: bool | None = None
+    cd_auto_lookup_metadata: bool | None = None
     acoustid_api_key: str | None = None
     clear_acoustid_api_key: bool | None = None
     lastfm_api_key: str | None = None
@@ -2336,6 +2347,7 @@ class SettingsResponse(BaseModel):
     suggested_music_path: str | None = None
     write_ratings_to_files: bool = False
     auto_write_fetched_lyrics_sidecars: bool = False
+    cd_auto_lookup_metadata: bool = True
     acoustid_api_key_configured: bool = False
     lastfm_api_credentials_configured: bool = False
     lastfm_api_credentials_source: str | None = None

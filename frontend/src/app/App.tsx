@@ -73,6 +73,7 @@ import {
   fetchLibraryInbox,
   fetchLibraryStats,
   fetchLyrics,
+  fetchLyricsByMetadata,
   fetchLyricsOnline,
   fetchPlaylistTracks,
   fetchPlaylists,
@@ -95,6 +96,7 @@ import {
   moveTrackInPlaylist,
   organizeFiles,
   pauseClapAudioAnalysis,
+  playCdTrack,
   recordRecommendationFeedback,
   refreshFolderWatch,
   removeLibrarySource,
@@ -188,6 +190,7 @@ import type {
   LibraryHealthResponse,
   LibraryStatsResponse,
   LogTailResponse,
+  LyricsLookupRequest,
   LyricsResponse,
   LyricsUpdateRequest,
   PlayEventEntry,
@@ -307,6 +310,73 @@ function findAlbumForTrack(albumList: AlbumSummary[], track: Track) {
 
 function lyricsHaveText(response: LyricsResponse | null) {
   return Boolean(response?.lyrics?.trim());
+}
+
+function shouldLookupLyricsByMetadata(track: Track | null) {
+  return Boolean(track && (track.id <= 0 || track.is_preview || track.path.startsWith("cdda://")));
+}
+
+function lyricsLookupRequestForTrack(track: Track): LyricsLookupRequest {
+  const fileName = track.path.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "") ?? "Untitled";
+  return {
+    track_id: track.id,
+    title: track.title?.trim() || fileName,
+    artist: track.artist?.trim() || track.album_artist?.trim() || null,
+    album: track.album?.trim() || null,
+    album_artist: track.album_artist?.trim() || null,
+    duration_seconds: track.duration_seconds,
+    path: track.path,
+  };
+}
+
+function cdDriveIdFromTrack(track: Track | null | undefined) {
+  if (!track) {
+    return null;
+  }
+  const pathMatch = track.path?.match(/^cdda:\/\/([^/]+)/);
+  if (pathMatch?.[1]) {
+    return decodeURIComponent(pathMatch[1]);
+  }
+  if (!track.audio_url?.includes("/library/tools/cd-rip/playback/")) {
+    return null;
+  }
+  try {
+    const parsed = new URL(track.audio_url);
+    return parsed.searchParams.get("drive_id");
+  } catch {
+    return null;
+  }
+}
+
+function cdTrackLooksActive(track: Track | null | undefined) {
+  return Boolean(track?.path?.startsWith("cdda://") || track?.audio_url?.includes("/library/tools/cd-rip/playback/"));
+}
+
+function cdTrackNumberFromTrack(track: Track) {
+  if (track.track_number && track.track_number > 0) {
+    return track.track_number;
+  }
+  const pathMatch = track.path.match(/\/track\/(\d+)/i);
+  return pathMatch?.[1] ? Number(pathMatch[1]) : null;
+}
+
+const CD_PLAYBACK_PREPARE_DEBOUNCE_MS = 180;
+
+class StaleCdPlaybackRequestError extends Error {
+  constructor() {
+    super("Stale CD playback request");
+    this.name = "StaleCdPlaybackRequestError";
+  }
+}
+
+function isStaleCdPlaybackRequest(error: unknown) {
+  return error instanceof StaleCdPlaybackRequestError;
+}
+
+function waitFor(milliseconds: number) {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, milliseconds);
+  });
 }
 
 function uniqueFolderPaths(paths: string[]) {
@@ -517,6 +587,7 @@ export default function App() {
   const [settingsFocusSection, setSettingsFocusSection] = useState<string | null>(null);
   const [writeRatingsToFiles, setWriteRatingsToFiles] = useState(false);
   const [autoWriteFetchedLyricsSidecars, setAutoWriteFetchedLyricsSidecars] = useState(false);
+  const [cdAutoLookupMetadata, setCdAutoLookupMetadata] = useState(true);
   const [folderPath, setFolderPath] = useState("");
   const [libraryFolders, setLibraryFolders] = useState<string[]>([]);
   const [search, setSearch] = useState("");
@@ -571,6 +642,8 @@ export default function App() {
     queue: Track[];
   } | null>(null);
   const externalTrackRequestIdRef = useRef(0);
+  const cdPlaybackPrepareRequestIdRef = useRef(0);
+  const cdPlaybackPrepareChainRef = useRef<Promise<unknown>>(Promise.resolve());
   const [playbackQueue, setPlaybackQueue] = useState<Track[]>([]);
   const [queueHistory, setQueueHistory] = useState<Track[][]>([]);
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode>("normal");
@@ -1050,6 +1123,7 @@ export default function App() {
       setFolderPath(paths[0] ?? "");
       setWriteRatingsToFiles(response.write_ratings_to_files);
       setAutoWriteFetchedLyricsSidecars(response.auto_write_fetched_lyrics_sidecars);
+      setCdAutoLookupMetadata(response.cd_auto_lookup_metadata);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not load settings");
     }
@@ -1290,6 +1364,20 @@ export default function App() {
     } catch (error) {
       setAutoWriteFetchedLyricsSidecars(previous);
       setStatus(error instanceof Error ? error.message : "Could not update lyrics cache setting");
+    }
+  }
+
+  async function handleCdAutoLookupMetadata(value: boolean) {
+    const previous = cdAutoLookupMetadata;
+    setCdAutoLookupMetadata(value);
+    try {
+      const response = await updateSettings({ cd_auto_lookup_metadata: value });
+      setSettings(response);
+      setCdAutoLookupMetadata(response.cd_auto_lookup_metadata);
+      setStatus(value ? "CD metadata auto-lookup is on" : "CD metadata auto-lookup is off");
+    } catch (error) {
+      setCdAutoLookupMetadata(previous);
+      setStatus(error instanceof Error ? error.message : "Could not update CD metadata lookup setting");
     }
   }
 
@@ -2600,7 +2688,55 @@ export default function App() {
     }
   }
 
-  function commitPlayTrack(track: Track, queueItems: Track[], options?: { suppressExitRecord?: boolean }) {
+  type PlayTrackOptions = { suppressExitRecord?: boolean; cdPreviewPrepared?: boolean };
+
+  function ensureLatestCdPlaybackRequest(requestId: number) {
+    if (cdPlaybackPrepareRequestIdRef.current !== requestId) {
+      throw new StaleCdPlaybackRequestError();
+    }
+  }
+
+  async function refreshCdPreviewTrack(track: Track, queueItems: Track[], requestId: number) {
+    const driveId = cdDriveIdFromTrack(track);
+    const trackNumber = cdTrackNumberFromTrack(track);
+    if (!driveId || !trackNumber) {
+      throw new Error("Could not refresh this CD track. Refresh the CD page and try again.");
+    }
+    ensureLatestCdPlaybackRequest(requestId);
+
+    const requestBody = {
+      albumTitle: track.album ?? null,
+      albumArtist: track.album_artist ?? track.artist ?? null,
+      year: track.year ?? null,
+      genre: track.genre ?? null,
+      tracks: [
+        {
+          track_number: trackNumber,
+          disc_number: track.disc_number,
+          title: track.title,
+          artist: track.artist,
+          duration_seconds: track.duration_seconds,
+        },
+      ],
+    };
+    const response = await playCdTrack(trackNumber, driveId, requestBody);
+    ensureLatestCdPlaybackRequest(requestId);
+    if (!response.track) {
+      throw new Error("Could not prepare this CD track for playback.");
+    }
+
+    const refreshedTrack = response.track;
+    const refreshedQueue = queueItems.map((item) => {
+      const sameVirtualTrack =
+        cdTrackLooksActive(item) &&
+        cdTrackNumberFromTrack(item) === trackNumber &&
+        cdDriveIdFromTrack(item) === driveId;
+      return item.id === track.id || sameVirtualTrack ? refreshedTrack : item;
+    });
+    return { track: refreshedTrack, queue: refreshedQueue };
+  }
+
+  function commitPlayTrack(track: Track, queueItems: Track[], options?: PlayTrackOptions) {
     if (!options?.suppressExitRecord && currentTrack && currentTrack.id !== track.id) {
       void recordTrackExitQuiet(currentTrack, playbackTime);
     }
@@ -2611,7 +2747,44 @@ export default function App() {
     rememberRecommendationFeedback(track, "manual_play", 0.7);
   }
 
-  function handlePlayTrack(track: Track, queueItems: Track[], options?: { suppressExitRecord?: boolean }) {
+  function handlePlayTrack(track: Track, queueItems: Track[], options?: PlayTrackOptions) {
+    if (cdTrackLooksActive(track) && !options?.cdPreviewPrepared) {
+      const requestId = ++cdPlaybackPrepareRequestIdRef.current;
+      const prepareTask = cdPlaybackPrepareChainRef.current
+        .catch(() => {
+          // A previous CD request may have failed or gone stale. The chain keeps
+          // ordering intact so only the newest request can touch the CD drive.
+        })
+        .then(async () => {
+          await waitFor(CD_PLAYBACK_PREPARE_DEBOUNCE_MS);
+          ensureLatestCdPlaybackRequest(requestId);
+          return refreshCdPreviewTrack(track, queueItems, requestId);
+        });
+      cdPlaybackPrepareChainRef.current = prepareTask.catch(() => {
+        // Keep the chain alive for future CD selections.
+      });
+      void prepareTask
+        .then((prepared) => {
+          if (cdPlaybackPrepareRequestIdRef.current !== requestId) {
+            return;
+          }
+          handlePlayTrack(prepared.track, prepared.queue, { ...options, cdPreviewPrepared: true });
+        })
+        .catch((error) => {
+          if (isStaleCdPlaybackRequest(error)) {
+            return;
+          }
+          if (cdPlaybackPrepareRequestIdRef.current === requestId) {
+            setStatus(error instanceof Error ? error.message : "Could not prepare CD playback");
+          }
+        });
+      return;
+    }
+
+    if (!cdTrackLooksActive(track)) {
+      cdPlaybackPrepareRequestIdRef.current += 1;
+    }
+
     const shouldFadeExistingSource =
       !options?.suppressExitRecord &&
       uiPreferences.playerFadeMs > 0 &&
@@ -2640,7 +2813,7 @@ export default function App() {
 
   function handlePlayCdPreviewTrack(track: Track, queueItems: Track[] = [track]) {
     setRestoredPlaybackPosition(null);
-    handlePlayTrack(track, queueItems.length ? queueItems : [track]);
+    handlePlayTrack(track, queueItems.length ? queueItems : [track], { cdPreviewPrepared: true });
   }
 
   async function handlePlayRadioStation(station: RadioStation) {
@@ -2810,14 +2983,23 @@ export default function App() {
     }
   }
 
-  async function handleFetchLyrics(trackId: number): Promise<LyricsResponse> {
+  async function handleFetchLyrics(trackOrId: Track | number): Promise<LyricsResponse> {
+    const trackId = typeof trackOrId === "number" ? trackOrId : trackOrId.id;
+    const sourceTrack = typeof trackOrId === "number" ? (currentTrack?.id === trackOrId ? currentTrack : null) : trackOrId;
+    const useMetadataLookup = Boolean(sourceTrack && shouldLookupLyricsByMetadata(sourceTrack));
     try {
-      const response = await fetchLyricsOnline(trackId);
+      const response = useMetadataLookup && sourceTrack
+        ? await fetchLyricsByMetadata(lyricsLookupRequestForTrack(sourceTrack))
+        : await fetchLyricsOnline(trackId);
       setLyrics(response);
       setStatus(response.is_synced ? "Fetched synced lyrics" : "Fetched lyrics");
       return response;
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not fetch lyrics";
+      const rawMessage = error instanceof Error ? error.message : "Could not fetch lyrics";
+      const message =
+        useMetadataLookup && /not found|no lyrics/i.test(rawMessage)
+          ? "No matching lyrics found for this CD track"
+          : rawMessage;
       setStatus(message);
       throw error;
     }
@@ -4383,9 +4565,47 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
-    if (!currentTrack || currentTrack.id <= 0 || currentTrack.is_preview) {
+    if (!currentTrack) {
       setLyrics(null);
       setIsLyricsLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (shouldLookupLyricsByMetadata(currentTrack)) {
+      const emptyLyrics: LyricsResponse = {
+        track_id: currentTrack.id,
+        lyrics: null,
+        source: null,
+        is_synced: false,
+      };
+      if (!uiPreferences.autoFetchLyrics) {
+        setLyrics(emptyLyrics);
+        setIsLyricsLoading(false);
+        return () => {
+          cancelled = true;
+        };
+      }
+
+      setIsLyricsLoading(true);
+      void fetchLyricsByMetadata(lyricsLookupRequestForTrack(currentTrack))
+        .then((response) => {
+          if (!cancelled) {
+            setLyrics(response);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setLyrics(emptyLyrics);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setIsLyricsLoading(false);
+          }
+        });
+
       return () => {
         cancelled = true;
       };
@@ -4426,7 +4646,18 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [currentTrack?.id, uiPreferences.autoFetchLyrics, uiPreferences.autoFetchLrcWhenPlainPresent]);
+  }, [
+    currentTrack?.id,
+    currentTrack?.path,
+    currentTrack?.title,
+    currentTrack?.artist,
+    currentTrack?.album,
+    currentTrack?.album_artist,
+    currentTrack?.duration_seconds,
+    currentTrack?.is_preview,
+    uiPreferences.autoFetchLyrics,
+    uiPreferences.autoFetchLrcWhenPlainPresent,
+  ]);
 
   useEffect(() => {
     if (activePage !== "artist") {
@@ -4447,26 +4678,6 @@ export default function App() {
         Object.keys(clapStatus.dependency_errors ?? {}).length > 0),
   );
   const cdDriveDetected = Boolean(cdRipSetup?.drives.length);
-  const cdDriveIdFromTrack = (track: Track | null | undefined) => {
-    if (!track) {
-      return null;
-    }
-    const pathMatch = track.path?.match(/^cdda:\/\/([^/]+)/);
-    if (pathMatch?.[1]) {
-      return decodeURIComponent(pathMatch[1]);
-    }
-    if (!track.audio_url?.includes("/library/tools/cd-rip/playback/")) {
-      return null;
-    }
-    try {
-      const parsed = new URL(track.audio_url);
-      return parsed.searchParams.get("drive_id");
-    } catch {
-      return null;
-    }
-  };
-  const cdTrackLooksActive = (track: Track | null | undefined) =>
-    Boolean(track?.path?.startsWith("cdda://") || track?.audio_url?.includes("/library/tools/cd-rip/playback/"));
   const currentCdPlaybackDriveId = cdDriveIdFromTrack(currentTrack) ?? cdDriveIdFromTrack(externalTrackRequest?.track);
   const isCdPlaybackActive = Boolean(
     currentCdPlaybackDriveId ||
@@ -4475,7 +4686,7 @@ export default function App() {
   );
   const showCdPage =
     uiPreferences.cdSidebarMode === "always" ||
-    (uiPreferences.cdSidebarMode === "drive" && cdDriveDetected);
+    (uiPreferences.cdSidebarMode === "drive" && (cdDriveDetected || isCdPlaybackActive));
 
   useEffect(() => {
     if (activePage === "cd" && !showCdPage) {
@@ -4802,6 +5013,7 @@ export default function App() {
           ) : activePage === "cd" ? (
             <CdPage
               currentCdPlaybackDriveId={currentCdPlaybackDriveId}
+              cdAutoLookupMetadata={cdAutoLookupMetadata}
               defaultTargetFolder={defaultCdRipTarget(folderPath)}
               isCdPlaybackActive={isCdPlaybackActive}
               onBrowseTarget={handleBrowseCdRipTarget}
@@ -4901,6 +5113,7 @@ export default function App() {
               onInstallAudioConversionFfmpeg={handleInstallAudioConversionFfmpeg}
               onBrowseAudioConversionTarget={handleBrowseAudioConversionTarget}
               onBrowseCdRipTarget={handleBrowseCdRipTarget}
+              cdAutoLookupMetadata={cdAutoLookupMetadata}
               currentCdPlaybackDriveId={currentCdPlaybackDriveId}
               isCdPlaybackActive={isCdPlaybackActive}
               onPlayCdPreviewTrack={handlePlayCdPreviewTrack}
@@ -4973,6 +5186,8 @@ export default function App() {
               onWriteRatingsToFilesChange={(value) => void handleWriteRatingsToFiles(value)}
               autoWriteFetchedLyricsSidecars={autoWriteFetchedLyricsSidecars}
               onAutoWriteFetchedLyricsSidecarsChange={(value) => void handleAutoWriteFetchedLyricsSidecars(value)}
+              cdAutoLookupMetadata={cdAutoLookupMetadata}
+              onCdAutoLookupMetadataChange={(value) => void handleCdAutoLookupMetadata(value)}
               onAcoustIdApiKeyChange={(apiKey) => void handleAcoustIdApiKeyChange(apiKey)}
               onLastFmApiCredentialsChange={(apiKey, apiSecret) => void handleLastFmApiCredentialsChange(apiKey, apiSecret)}
               setStatus={setStatus}
