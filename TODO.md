@@ -36,7 +36,7 @@
 - Finish album-artwork cache storage in Rust; embedded artwork extraction/writes stay Python until Rust tag-writing safety is proven.
 - Keep MusicBrainz/AcoustID matching heuristics in Python until the matching code is decomposed and covered by golden tests.
 - Move CD drive detection, CD sidebar availability, active play/rip mutual exclusion, Windows CD TOC reading, disc ID generation, live stream token management, live audio streaming, rip job state, ETA, cancellation, verification hashes, and target path generation into Rust.
-- Move audio conversion job progress, cancellation, FFmpeg process orchestration, and FFmpeg output parsing into Rust.
+- Harden native audio conversion cancellation so a cancel request can terminate an in-flight FFmpeg child process instead of waiting for the current file to finish.
 - Keep actual audio metadata writes for ReplayGain tags in Python until Rust tag-writing support is validated.
 - Add Rust route hammer coverage for native-only routes as a sibling to `scripts/hammer_backend_routes.py`.
 - Add benchmarks for worker-spawn overhead versus native Rust for large-library query, AutoDJ, folder watch, scan diff, and file organizer workloads.
@@ -81,6 +81,7 @@
 - Moved LRCLIB online lyric lookup into Rust for both track fetches and metadata/CD lookups while keeping embedded lyric reads/writes in Python.
 - Moved album artwork local sidecar selection, simple web sidecar downloads, cache invalidation, and direct album-art media serving into Rust while keeping embedded artwork extraction/writes in Python.
 - Moved FFmpeg installer job state, download progress, ZIP extraction, and saved tool-path configuration into Rust.
+- Moved audio conversion job state, progress/ETA, cancellation requests, FFmpeg command construction/process orchestration, and stderr-tail error reporting into Rust while keeping embedded artwork copy as a Python mutagen worker action.
 - Added `flaccafe-media://localhost/python-bytes/...` for Python-owned byte responses such as album art and CD live audio.
 - Switched `npm run dev` to desktop dev so local development exercises the same Rust-to-Python worker path as packaged builds.
 

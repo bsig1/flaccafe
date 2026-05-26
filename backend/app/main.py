@@ -18,6 +18,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Thread
+from types import SimpleNamespace
 from urllib import error as urlerror
 from urllib import parse, request as urlrequest
 
@@ -63,6 +64,7 @@ from .musicbrainz_autotag import (
 )
 from .audio_conversion_jobs import (
     cancel_audio_conversion_job,
+    copy_converted_artwork as copy_converted_artwork_impl,
     conversion_preview,
     ffmpeg_status,
     get_audio_conversion_job,
@@ -3919,6 +3921,16 @@ def cancel_audio_conversion(job_id: str) -> dict:
     if job is None:
         raise ActionError(status_code=404, detail="Audio conversion job not found")
     return job
+def copy_converted_artwork(request_body: dict) -> dict:
+    source = Path(str(request_body.get("source_path") or ""))
+    target = Path(str(request_body.get("target_path") or ""))
+    output_format = str(request_body.get("output_format") or target.suffix.lstrip(".") or "").lower()
+    copied = copy_converted_artwork_impl(
+        source,
+        target,
+        SimpleNamespace(copy_artwork=True, output_format=output_format),
+    )
+    return {"copied": copied}
 def get_cd_rip_setup() -> CdRipSetupResponse:
     return CdRipSetupResponse(**cd_rip_setup())
 def get_cd_rip_metadata(request: CdRipMetadataRequest) -> CdRipMetadataResponse:

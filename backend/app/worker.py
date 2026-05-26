@@ -66,6 +66,7 @@ PYTHON_ACTIONS: frozenset[str] = frozenset(
         "start_audio_conversion",
         "get_audio_conversion_progress",
         "cancel_audio_conversion",
+        "copy_converted_artwork",
         "get_cd_rip_setup",
         "get_cd_rip_metadata",
         "start_cd_rip",

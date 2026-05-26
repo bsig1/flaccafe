@@ -310,6 +310,19 @@ pub(super) fn try_handle_native_json(
         "preview_audio_conversion" => Some(to_json(
             native_library::audio_conversion::native_audio_conversion_preview(body.clone())?,
         )?),
+        "start_audio_conversion" => Some(to_json(
+            native_library::audio_conversion::native_start_audio_conversion(body.clone())?,
+        )?),
+        "get_audio_conversion_progress" => Some(to_json(
+            native_library::audio_conversion::native_audio_conversion_progress(
+                required_param_string(params, "job_id")?,
+            )?,
+        )?),
+        "cancel_audio_conversion" => Some(to_json(
+            native_library::audio_conversion::native_cancel_audio_conversion(
+                required_param_string(params, "job_id")?,
+            )?,
+        )?),
         "start_audio_conversion_ffmpeg_install" => Some(to_json(
             native_library::audio_conversion::native_start_ffmpeg_install(body.clone())?,
         )?),

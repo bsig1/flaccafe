@@ -550,6 +550,28 @@ pub struct NativeAudioConversionPreviewResponse {
 }
 
 #[derive(Clone, Serialize)]
+pub struct NativeAudioConversionProgress {
+    pub(crate) job_id: String,
+    pub(crate) target_folder: String,
+    pub(crate) output_format: String,
+    pub(crate) status: String,
+    pub(crate) phase: Option<String>,
+    pub(crate) message: Option<String>,
+    pub(crate) total_tracks: i64,
+    pub(crate) processed_tracks: i64,
+    pub(crate) converted: i64,
+    pub(crate) skipped: i64,
+    pub(crate) errors: Vec<String>,
+    pub(crate) current_track: Option<String>,
+    pub(crate) started_at: String,
+    pub(crate) finished_at: Option<String>,
+    pub(crate) elapsed_seconds: f64,
+    pub(crate) eta_seconds: Option<f64>,
+    pub(crate) percent: f64,
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
 pub struct NativeAudioConversionInstallProgress {
     pub(crate) job_id: String,
     pub(crate) status: String,

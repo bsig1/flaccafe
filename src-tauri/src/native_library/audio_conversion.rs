@@ -1,5 +1,5 @@
 use rusqlite::{params_from_iter, ToSql};
-use serde_json::Value as JsonValue;
+use serde_json::{json, Value as JsonValue};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -12,6 +12,12 @@ use time::OffsetDateTime;
 
 use super::storage::{app_storage_root, get_setting, open_database, set_setting};
 use super::types::*;
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 const FFMPEG_WINDOWS_URL: &str = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip";
 const DOWNLOAD_CHUNK_SIZE: usize = 1024 * 1024;
@@ -38,15 +44,39 @@ struct ConversionTrack {
     duration_seconds: Option<f64>,
 }
 
+#[derive(Clone)]
 struct ConversionRequest {
     target_folder: PathBuf,
     output_format: String,
     track_ids: Option<Vec<i64>>,
     preserve_structure: bool,
+    copy_tags: bool,
+    copy_artwork: bool,
+    normalize_volume: bool,
     overwrite: bool,
     sample_rate_hz: Option<i64>,
     bitrate_kbps: Option<i64>,
     limit: Option<usize>,
+}
+
+#[derive(Clone)]
+struct AudioConversionJob {
+    job_id: String,
+    request: ConversionRequest,
+    status: String,
+    phase: String,
+    message: Option<String>,
+    total_tracks: i64,
+    processed_tracks: i64,
+    converted: i64,
+    skipped: i64,
+    errors: Vec<String>,
+    current_track: Option<String>,
+    started_at: String,
+    finished_at: Option<String>,
+    started_instant: Instant,
+    error: Option<String>,
+    cancel_requested: bool,
 }
 
 #[derive(Clone)]
@@ -70,6 +100,10 @@ struct FfmpegInstallJob {
 static FFMPEG_INSTALL_JOBS: OnceLock<Mutex<std::collections::HashMap<String, FfmpegInstallJob>>> =
     OnceLock::new();
 static FFMPEG_INSTALL_COUNTER: AtomicU64 = AtomicU64::new(1);
+static AUDIO_CONVERSION_JOBS: OnceLock<
+    Mutex<std::collections::HashMap<String, AudioConversionJob>>,
+> = OnceLock::new();
+static AUDIO_CONVERSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) fn native_audio_conversion_preview(
     body: JsonValue,
@@ -156,6 +190,412 @@ pub(crate) fn native_audio_conversion_preview(
         estimated_tracks,
         changes,
     })
+}
+
+pub(crate) fn native_start_audio_conversion(
+    body: JsonValue,
+) -> Result<NativeAudioConversionProgress, String> {
+    let request = ConversionRequest::from_body(&body)?;
+    let ffmpeg_path = resolved_ffmpeg_path()?.ok_or_else(|| {
+        "FFmpeg was not found. Save an ffmpeg.exe path before starting conversion.".to_string()
+    })?;
+    let job_id = new_audio_conversion_job_id();
+    let job = AudioConversionJob {
+        job_id: job_id.clone(),
+        request,
+        status: "pending".to_string(),
+        phase: "queued".to_string(),
+        message: Some("Waiting to start".to_string()),
+        total_tracks: 0,
+        processed_tracks: 0,
+        converted: 0,
+        skipped: 0,
+        errors: Vec::new(),
+        current_track: None,
+        started_at: utc_now(),
+        finished_at: None,
+        started_instant: Instant::now(),
+        error: None,
+        cancel_requested: false,
+    };
+    let response = job.snapshot();
+    audio_jobs()
+        .lock()
+        .map_err(|_| "Audio conversion job registry is unavailable".to_string())?
+        .insert(job_id.clone(), job);
+    thread::spawn(move || run_audio_conversion_thread(job_id, ffmpeg_path));
+    Ok(response)
+}
+
+pub(crate) fn native_audio_conversion_progress(
+    job_id: String,
+) -> Result<NativeAudioConversionProgress, String> {
+    let jobs = audio_jobs()
+        .lock()
+        .map_err(|_| "Audio conversion job registry is unavailable".to_string())?;
+    jobs.get(&job_id)
+        .map(AudioConversionJob::snapshot)
+        .ok_or_else(|| "Audio conversion job not found".to_string())
+}
+
+pub(crate) fn native_cancel_audio_conversion(
+    job_id: String,
+) -> Result<NativeAudioConversionProgress, String> {
+    {
+        let mut jobs = audio_jobs()
+            .lock()
+            .map_err(|_| "Audio conversion job registry is unavailable".to_string())?;
+        let job = jobs
+            .get_mut(&job_id)
+            .ok_or_else(|| "Audio conversion job not found".to_string())?;
+        if !matches!(job.status.as_str(), "completed" | "failed" | "canceled") {
+            job.cancel_requested = true;
+            job.status = "canceling".to_string();
+            job.phase = "canceling".to_string();
+            job.message = Some("Cancel requested. The current file will finish first.".to_string());
+        }
+    }
+    native_audio_conversion_progress(job_id)
+}
+
+fn run_audio_conversion_thread(job_id: String, ffmpeg_path: PathBuf) {
+    let result = run_audio_conversion(&job_id, &ffmpeg_path);
+    let mut jobs = match audio_jobs().lock() {
+        Ok(jobs) => jobs,
+        Err(_) => return,
+    };
+    if let Some(job) = jobs.get_mut(&job_id) {
+        match result {
+            Ok(()) if job.status != "canceled" => {
+                job.status = "completed".to_string();
+                job.phase = "completed".to_string();
+                job.message = Some(format!(
+                    "Converted {} track{}.",
+                    job.converted,
+                    if job.converted == 1 { "" } else { "s" }
+                ));
+                job.current_track = None;
+                job.finished_at = Some(utc_now());
+                job.error = None;
+            }
+            Ok(()) => {}
+            Err(error) => {
+                job.status = "failed".to_string();
+                job.phase = "failed".to_string();
+                job.message = Some(error.clone());
+                job.error = Some(error);
+                job.current_track = None;
+                job.finished_at = Some(utc_now());
+            }
+        }
+    }
+}
+
+fn run_audio_conversion(job_id: &str, ffmpeg_path: &Path) -> Result<(), String> {
+    let request = update_audio_job(job_id, |job| job.request.clone())?;
+    let connection = open_database()?;
+    let library_root = get_setting(&connection, "library_path").map(PathBuf::from);
+    let tracks = selected_tracks(&connection, request.track_ids.as_deref(), request.limit)?;
+    drop(connection);
+    update_audio_job(job_id, |job| {
+        job.status = "running".to_string();
+        job.phase = "transcoding".to_string();
+        job.total_tracks = tracks.len() as i64;
+        job.message = Some(format!(
+            "Converting {} track{}.",
+            tracks.len(),
+            if tracks.len() == 1 { "" } else { "s" }
+        ));
+    })?;
+
+    for (index, track) in tracks.iter().enumerate() {
+        if update_audio_job(job_id, |job| job.cancel_requested)? {
+            update_audio_job(job_id, |job| {
+                job.status = "canceled".to_string();
+                job.phase = "canceled".to_string();
+                job.message = Some("Conversion canceled.".to_string());
+                job.current_track = None;
+                job.finished_at = Some(utc_now());
+            })?;
+            return Ok(());
+        }
+
+        let source = PathBuf::from(&track.path);
+        let target = conversion_target_path(
+            track,
+            &request.target_folder,
+            &request.output_format,
+            request.preserve_structure,
+            library_root.as_deref(),
+        );
+        update_audio_job(job_id, |job| {
+            job.current_track = Some(track.title.clone().unwrap_or_else(|| track.path.clone()));
+            job.message = Some(format!("Converting {} of {}", index + 1, tracks.len()));
+        })?;
+
+        let outcome = convert_one_track(ffmpeg_path, &request, &source, &target)
+            .and_then(|_| copy_converted_artwork_if_needed(&request, &source, &target));
+        update_audio_job(job_id, |job| {
+            match outcome {
+                Ok(artwork_warning) => {
+                    job.converted += 1;
+                    if let Some(warning) = artwork_warning {
+                        job.errors.push(warning);
+                    }
+                }
+                Err(error) => {
+                    job.skipped += 1;
+                    let name = source
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .map(str::to_string)
+                        .unwrap_or_else(|| source.to_string_lossy().to_string());
+                    job.errors.push(format!("{name}: {error}"));
+                }
+            }
+            if job.errors.len() > 50 {
+                let excess = job.errors.len() - 50;
+                job.errors.drain(0..excess);
+            }
+            job.processed_tracks = (index + 1) as i64;
+        })?;
+    }
+    Ok(())
+}
+
+fn convert_one_track(
+    ffmpeg_path: &Path,
+    request: &ConversionRequest,
+    source: &Path,
+    target: &Path,
+) -> Result<(), String> {
+    if !source.is_file() {
+        return Err("Source file is missing".to_string());
+    }
+    if target.exists() && !request.overwrite {
+        return Err("target exists".to_string());
+    }
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("Could not create target folder: {error}"))?;
+    }
+    let args = ffmpeg_args(source, target, request);
+    let mut command = std::process::Command::new(ffmpeg_path);
+    command.args(&args);
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    let output = command
+        .output()
+        .map_err(|error| format!("Could not start FFmpeg: {error}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let text = String::from_utf8_lossy(if output.stderr.is_empty() {
+            &output.stdout
+        } else {
+            &output.stderr
+        });
+        let tail = text
+            .chars()
+            .rev()
+            .take(1200)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect::<String>();
+        Err(if tail.trim().is_empty() {
+            format!("FFmpeg exited with {:?}", output.status.code())
+        } else {
+            tail.trim().to_string()
+        })
+    }
+}
+
+fn ffmpeg_args(source: &Path, target: &Path, request: &ConversionRequest) -> Vec<String> {
+    let mut args = vec![
+        "-hide_banner".to_string(),
+        if request.overwrite { "-y" } else { "-n" }.to_string(),
+        "-i".to_string(),
+        source.to_string_lossy().to_string(),
+        "-map".to_string(),
+        "0:a:0".to_string(),
+        "-vn".to_string(),
+        "-map_metadata".to_string(),
+        if request.copy_tags { "0" } else { "-1" }.to_string(),
+    ];
+    if request.normalize_volume {
+        args.extend([
+            "-af".to_string(),
+            "loudnorm=I=-16:TP=-1.5:LRA=11".to_string(),
+        ]);
+    }
+    args.extend(audio_codec_args(
+        &request.output_format,
+        request.bitrate_kbps,
+    ));
+    if let Some(sample_rate) = request.sample_rate_hz {
+        args.extend(["-ar".to_string(), sample_rate.to_string()]);
+    }
+    args.push(target.to_string_lossy().to_string());
+    args
+}
+
+fn audio_codec_args(output_format: &str, bitrate_kbps: Option<i64>) -> Vec<String> {
+    match output_format {
+        "flac" => vec!["-c:a".to_string(), "flac".to_string()],
+        "mp3" => vec![
+            "-c:a".to_string(),
+            "libmp3lame".to_string(),
+            "-b:a".to_string(),
+            format!("{}k", bitrate_kbps.unwrap_or(320)),
+        ],
+        "m4a" => vec![
+            "-c:a".to_string(),
+            "aac".to_string(),
+            "-b:a".to_string(),
+            format!("{}k", bitrate_kbps.unwrap_or(256)),
+        ],
+        "opus" => vec![
+            "-c:a".to_string(),
+            "libopus".to_string(),
+            "-b:a".to_string(),
+            format!("{}k", bitrate_kbps.unwrap_or(160)),
+        ],
+        "wav" => vec!["-c:a".to_string(), "pcm_s16le".to_string()],
+        _ => Vec::new(),
+    }
+}
+
+fn copy_converted_artwork_if_needed(
+    request: &ConversionRequest,
+    source: &Path,
+    target: &Path,
+) -> Result<Option<String>, String> {
+    if !request.copy_artwork || request.output_format == "wav" {
+        return Ok(None);
+    }
+    match crate::python_worker::call_python_action_json(
+        "copy_converted_artwork",
+        json!({}),
+        Some(json!({
+            "source_path": source.to_string_lossy(),
+            "target_path": target.to_string_lossy(),
+            "output_format": request.output_format,
+        })),
+    ) {
+        Ok(_) => Ok(None),
+        Err(error) => Ok(Some(format!(
+            "{}: converted, but artwork copy failed: {error}",
+            source
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("track")
+        ))),
+    }
+}
+
+fn audio_jobs() -> &'static Mutex<std::collections::HashMap<String, AudioConversionJob>> {
+    AUDIO_CONVERSION_JOBS.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+fn update_audio_job<T>(
+    job_id: &str,
+    update: impl FnOnce(&mut AudioConversionJob) -> T,
+) -> Result<T, String> {
+    let mut jobs = audio_jobs()
+        .lock()
+        .map_err(|_| "Audio conversion job registry is unavailable".to_string())?;
+    let job = jobs
+        .get_mut(job_id)
+        .ok_or_else(|| "Audio conversion job not found".to_string())?;
+    Ok(update(job))
+}
+
+fn new_audio_conversion_job_id() -> String {
+    let counter = AUDIO_CONVERSION_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let now = OffsetDateTime::now_utc().unix_timestamp_nanos();
+    format!("convert-{now:x}-{counter:x}")
+}
+
+fn resolved_ffmpeg_path() -> Result<Option<PathBuf>, String> {
+    let connection = open_database()?;
+    let configured = get_setting(&connection, "ffmpeg_path");
+    let executable = if cfg!(windows) {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    };
+    let mut candidates = Vec::new();
+    if let Some(configured) = configured
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        let path = PathBuf::from(configured.trim());
+        candidates.push(if path.is_dir() {
+            path.join(executable)
+        } else {
+            path
+        });
+    }
+    candidates.push(ffmpeg_tool_dir().join(executable));
+    candidates.push(app_storage_root().join("tools").join(executable));
+    if let Some(paths) = std::env::var_os("PATH") {
+        candidates.extend(std::env::split_paths(&paths).map(|path| path.join(executable)));
+    }
+    Ok(candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .map(|path| path.canonicalize().unwrap_or(path)))
+}
+
+impl AudioConversionJob {
+    fn snapshot(&self) -> NativeAudioConversionProgress {
+        let elapsed_seconds = self.started_instant.elapsed().as_secs_f64();
+        let percent = if self.total_tracks > 0 {
+            ((self.processed_tracks as f64 / self.total_tracks as f64) * 100.0).min(100.0)
+        } else if self.status == "completed" {
+            100.0
+        } else {
+            0.0
+        };
+        let eta_seconds = if self.status == "running" && self.processed_tracks > 0 {
+            let seconds_per_track = elapsed_seconds / self.processed_tracks as f64;
+            Some(((self.total_tracks - self.processed_tracks).max(0) as f64) * seconds_per_track)
+        } else if self.status == "completed" {
+            Some(0.0)
+        } else {
+            None
+        };
+        NativeAudioConversionProgress {
+            job_id: self.job_id.clone(),
+            target_folder: self.request.target_folder.to_string_lossy().to_string(),
+            output_format: self.request.output_format.clone(),
+            status: self.status.clone(),
+            phase: Some(self.phase.clone()),
+            message: self.message.clone(),
+            total_tracks: self.total_tracks,
+            processed_tracks: self.processed_tracks,
+            converted: self.converted,
+            skipped: self.skipped,
+            errors: self
+                .errors
+                .iter()
+                .rev()
+                .take(50)
+                .cloned()
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect(),
+            current_track: self.current_track.clone(),
+            started_at: self.started_at.clone(),
+            finished_at: self.finished_at.clone(),
+            elapsed_seconds,
+            eta_seconds,
+            percent,
+            error: self.error.clone(),
+        }
+    }
 }
 
 pub(crate) fn native_start_ffmpeg_install(
@@ -474,6 +914,15 @@ impl ConversionRequest {
             preserve_structure: body_bool(body, "preserve_structure")
                 .or_else(|| body_bool(body, "preserveStructure"))
                 .unwrap_or(true),
+            copy_tags: body_bool(body, "copy_tags")
+                .or_else(|| body_bool(body, "copyTags"))
+                .unwrap_or(true),
+            copy_artwork: body_bool(body, "copy_artwork")
+                .or_else(|| body_bool(body, "copyArtwork"))
+                .unwrap_or(true),
+            normalize_volume: body_bool(body, "normalize_volume")
+                .or_else(|| body_bool(body, "normalizeVolume"))
+                .unwrap_or(false),
             overwrite: body_bool(body, "overwrite").unwrap_or(false),
             sample_rate_hz: body_i64(body, "sample_rate_hz")
                 .or_else(|| body_i64(body, "sampleRateHz"))
