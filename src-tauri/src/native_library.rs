@@ -4083,6 +4083,239 @@ pub fn native_duplicate_action(
     }
 }
 
+fn metadata_write_field_names(include_metadata: bool, include_rating: bool) -> Vec<&'static str> {
+    let mut fields = Vec::new();
+    if include_metadata {
+        fields.extend([
+            "title",
+            "artist",
+            "album",
+            "album_artist",
+            "track_number",
+            "disc_number",
+            "genre",
+            "year",
+        ]);
+    }
+    if include_rating {
+        fields.push("rating");
+    }
+    fields
+}
+
+fn track_database_file_tag_values(track: &NativeTrack, fields: &[&str]) -> serde_json::Value {
+    let mut values = serde_json::Map::new();
+    for field in fields {
+        let value = match *field {
+            "title" => json!(track.title.as_deref()),
+            "artist" => json!(track.artist.as_deref()),
+            "album" => json!(track.album.as_deref()),
+            "album_artist" => json!(track.album_artist.as_deref()),
+            "track_number" => json!(track.track_number),
+            "disc_number" => json!(track.disc_number),
+            "genre" => json!(track.genre.as_deref()),
+            "year" => json!(track.year),
+            "rating" => json!(track.rating),
+            _ => serde_json::Value::Null,
+        };
+        values.insert((*field).to_string(), value);
+    }
+    serde_json::Value::Object(values)
+}
+
+fn metadata_file_tag_values(metadata: &serde_json::Value, fields: &[&str]) -> serde_json::Value {
+    let mut values = serde_json::Map::new();
+    for field in fields {
+        values.insert(
+            (*field).to_string(),
+            metadata
+                .get(*field)
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        );
+    }
+    serde_json::Value::Object(values)
+}
+
+fn tag_value_is_empty(value: &serde_json::Value) -> bool {
+    value.is_null() || value.as_str().is_some_and(|text| text.trim().is_empty())
+}
+
+fn tag_values_equal(left: Option<&serde_json::Value>, right: Option<&serde_json::Value>) -> bool {
+    let left = left.unwrap_or(&serde_json::Value::Null);
+    let right = right.unwrap_or(&serde_json::Value::Null);
+    if tag_value_is_empty(left) {
+        return tag_value_is_empty(right);
+    }
+    if tag_value_is_empty(right) {
+        return false;
+    }
+    if left.is_number() || right.is_number() {
+        return left
+            .as_f64()
+            .or_else(|| {
+                left.as_str()
+                    .and_then(|text| text.trim().parse::<f64>().ok())
+            })
+            .zip(right.as_f64().or_else(|| {
+                right
+                    .as_str()
+                    .and_then(|text| text.trim().parse::<f64>().ok())
+            }))
+            .is_some_and(|(left, right)| (left - right).abs() < 0.01);
+    }
+    let left_text = left
+        .as_str()
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| left.to_string());
+    let right_text = right
+        .as_str()
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| right.to_string());
+    left_text.trim().eq_ignore_ascii_case(right_text.trim())
+}
+
+fn changed_metadata_write_fields(
+    database: &serde_json::Value,
+    file: &serde_json::Value,
+    fields: &[&str],
+) -> Vec<String> {
+    fields
+        .iter()
+        .filter(|field| !tag_values_equal(database.get(**field), file.get(**field)))
+        .map(|field| (*field).to_string())
+        .collect()
+}
+
+pub fn native_track_file_metadata_write_preview(
+    track_ids: Option<Vec<i64>>,
+    include_metadata: Option<bool>,
+    include_rating: Option<bool>,
+    limit: Option<usize>,
+) -> Result<NativeTrackFileMetadataWriteResponse, String> {
+    let include_metadata = include_metadata.unwrap_or(true);
+    let include_rating = include_rating.unwrap_or(true);
+    if !include_metadata && !include_rating {
+        return Err("Choose metadata, ratings, or both to write".to_string());
+    }
+    let limit = limit.unwrap_or(500).clamp(1, 10_000);
+    let connection = open_database()?;
+    let (tracks, missing_track_ids) = if let Some(mut ids) = track_ids {
+        ids.retain(|id| *id > 0);
+        ids.truncate(limit);
+        let (track_map, missing) = tracks_by_id_map(&connection, &ids)?;
+        let tracks = ids
+            .into_iter()
+            .filter_map(|id| track_map.get(&id).cloned())
+            .collect::<Vec<_>>();
+        (tracks, missing)
+    } else {
+        let mut statement = connection
+            .prepare(&format!(
+                "SELECT {TRACK_COLUMNS}
+                 FROM tracks
+                 WHERE {music_filter}
+                 ORDER BY datetime(file_modified_at) DESC, id DESC
+                 LIMIT ?",
+                music_filter = music_only_clause()
+            ))
+            .map_err(|error| format!("Could not prepare metadata write preview query: {error}"))?;
+        let tracks = statement
+            .query_map(params![limit as i64], track_from_row)
+            .map_err(|error| format!("Could not read metadata write preview tracks: {error}"))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| format!("Could not decode metadata write preview tracks: {error}"))?;
+        (tracks, Vec::new())
+    };
+    let fields = metadata_write_field_names(include_metadata, include_rating);
+    let files = tracks
+        .iter()
+        .map(|track| json!({ "path": track.path }))
+        .collect::<Vec<_>>();
+    let metadata_response = crate::python_worker::call_python_action_json(
+        "read_scan_metadata_batch",
+        json!({}),
+        Some(json!({ "files": files })),
+    )?;
+    let metadata_by_path = metadata_response
+        .get("results")
+        .and_then(serde_json::Value::as_array)
+        .map(|results| {
+            results
+                .iter()
+                .filter_map(|result| {
+                    result
+                        .get("path")
+                        .and_then(serde_json::Value::as_str)
+                        .map(|path| (normalized_path_key(path), result.clone()))
+                })
+                .collect::<HashMap<_, _>>()
+        })
+        .unwrap_or_default();
+
+    let mut previews = Vec::new();
+    let mut errors = Vec::new();
+    for track in tracks {
+        let database = track_database_file_tag_values(&track, &fields);
+        let mut preview = NativeTrackFileMetadataWritePreview {
+            track_id: track.id,
+            path: track.path.clone(),
+            title: track.title.clone(),
+            artist: track.artist.clone(),
+            changed_fields: Vec::new(),
+            database,
+            file: json!({}),
+            applied: false,
+            error: None,
+        };
+        let path = PathBuf::from(&track.path);
+        if !path.is_file() {
+            preview.error = Some("Audio file is missing on disk".to_string());
+            errors.push(format!(
+                "{}: Audio file is missing on disk",
+                track.title.as_deref().unwrap_or(&track.path)
+            ));
+            previews.push(preview);
+            continue;
+        }
+        let key = normalized_path_key(&track.path);
+        let Some(result) = metadata_by_path.get(&key) else {
+            preview.error = Some("Metadata worker did not return this file".to_string());
+            errors.push(format!(
+                "{}: Metadata worker did not return this file",
+                track.title.as_deref().unwrap_or(&track.path)
+            ));
+            previews.push(preview);
+            continue;
+        };
+        if let Some(error) = result.get("error").and_then(serde_json::Value::as_str) {
+            preview.error = Some(error.to_string());
+            errors.push(format!(
+                "{}: {error}",
+                track.title.as_deref().unwrap_or(&track.path)
+            ));
+            previews.push(preview);
+            continue;
+        }
+        let metadata = result.get("metadata").unwrap_or(&serde_json::Value::Null);
+        let file = metadata_file_tag_values(metadata, &fields);
+        preview.changed_fields = changed_metadata_write_fields(&preview.database, &file, &fields);
+        preview.file = file;
+        previews.push(preview);
+    }
+    Ok(NativeTrackFileMetadataWriteResponse {
+        total: previews.len() as i64,
+        changed: previews
+            .iter()
+            .filter(|preview| !preview.changed_fields.is_empty())
+            .count() as i64,
+        applied: 0,
+        missing_track_ids,
+        errors: errors.into_iter().take(100).collect(),
+        previews,
+    })
+}
+
 fn primary_artist_name(value: &str) -> String {
     let separators = [';', '|'];
     let mut artist = value

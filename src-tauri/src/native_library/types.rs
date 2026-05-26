@@ -1015,3 +1015,26 @@ pub struct NativeDuplicateActionResponse {
     pub(crate) report_path: Option<String>,
     pub(crate) errors: Vec<String>,
 }
+
+#[derive(Serialize)]
+pub struct NativeTrackFileMetadataWritePreview {
+    pub(crate) track_id: i64,
+    pub(crate) path: String,
+    pub(crate) title: Option<String>,
+    pub(crate) artist: Option<String>,
+    pub(crate) changed_fields: Vec<String>,
+    pub(crate) database: serde_json::Value,
+    pub(crate) file: serde_json::Value,
+    pub(crate) applied: bool,
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct NativeTrackFileMetadataWriteResponse {
+    pub(crate) total: i64,
+    pub(crate) changed: i64,
+    pub(crate) applied: i64,
+    pub(crate) missing_track_ids: Vec<i64>,
+    pub(crate) errors: Vec<String>,
+    pub(crate) previews: Vec<NativeTrackFileMetadataWritePreview>,
+}

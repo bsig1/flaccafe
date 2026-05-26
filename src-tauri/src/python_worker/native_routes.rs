@@ -111,6 +111,18 @@ pub(super) fn try_handle_native_json(
             state,
             body_i64_vec(&body, "track_ids").or_else(|| body_i64_vec(&body, "trackIds")).unwrap_or_default(),
         )?)?),
+        "write_track_metadata_to_files" => {
+            if body_bool(&body, "apply").unwrap_or(false) {
+                None
+            } else {
+                Some(to_json(native_library::native_track_file_metadata_write_preview(
+                    body_i64_vec(&body, "track_ids").or_else(|| body_i64_vec(&body, "trackIds")),
+                    body_bool(&body, "include_metadata").or_else(|| body_bool(&body, "includeMetadata")),
+                    body_bool(&body, "include_rating").or_else(|| body_bool(&body, "includeRating")),
+                    body_usize(&body, "limit"),
+                )?)?)
+            }
+        }
         "get_track" => Some(to_json(native_library::native_track(
             state,
             required_param_i64(params, "track_id")?,

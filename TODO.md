@@ -37,7 +37,6 @@
 - Move duplicate embedding similarity math into Rust.
 - Move tag backup/restore JSON handling and CSV metadata export/import/report generation into Rust.
 - Move device sync detected-drive probing, preview, copy jobs, and playlist export into Rust where Windows APIs or filesystem operations are involved.
-- Move metadata write preview diffing into Rust, but keep actual audio tag writes in Python until Rust tag-writing crates are proven safe for MP3, FLAC, M4A, OGG/Opus, WAV, and AIFF.
 - Move lyric database reads/writes and cached sidecar file management into Rust. Consider moving LRCLIB HTTP lookup to Rust; keep embedded lyrics reads/writes in Python until Rust tag-writing safety is proven.
 - Move album artwork sidecar discovery, cache lookup, cache storage, local image serving, and simple cover-art downloads into Rust; keep embedded artwork extraction/writes in Python until Rust tag-writing safety is proven.
 - Move AcoustID/fpcalc process invocation and fingerprint job state into Rust. Keep MusicBrainz matching heuristics in Python until the matching code is decomposed and covered by golden tests.
@@ -72,6 +71,7 @@
 - Added `docs/rust-route-migration-checklist.md` with the per-route Rust migration exit checklist.
 - Moved duplicate ignore, clear-ignored, report export, keep-best, and remove-selected SQLite actions into Rust; delete-from-disk still falls back to Python for Recycle Bin handling.
 - Evaluated podcast RSS/feed parsing and episode downloads; keeping them in Python for now because the current feed/download/MIME/library-ingest flow is more convenient than adding Rust `rss`/`reqwest` plumbing.
+- Moved metadata-write preview diffing into Rust while keeping actual mutagen audio tag writes in the Python expert worker.
 - Added `flaccafe-media://localhost/python-bytes/...` for Python-owned byte responses such as album art and CD live audio.
 - Switched `npm run dev` to desktop dev so local development exercises the same Rust-to-Python worker path as packaged builds.
 
