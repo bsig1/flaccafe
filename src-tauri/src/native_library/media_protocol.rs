@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::params;
 use tauri::http::{header, Method, Request, Response, StatusCode};
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 use crate::python_worker;
 
@@ -245,19 +247,75 @@ fn sidecar_artwork(path: &Path) -> Option<(Vec<u8>, &'static str)> {
     None
 }
 
+fn file_state(path: &Path) -> Option<(String, i64)> {
+    let metadata = path.metadata().ok()?;
+    let modified = metadata.modified().ok()?;
+    let modified_at = OffsetDateTime::from(modified)
+        .replace_microsecond(0)
+        .ok()?
+        .format(&Rfc3339)
+        .ok()?;
+    Some((modified_at, i64::try_from(metadata.len()).ok()?))
+}
+
+fn store_artwork_cache(
+    connection: &rusqlite::Connection,
+    path: &Path,
+    path_key: &str,
+    file_modified_at: &str,
+    file_size: i64,
+    media_type: &str,
+    data: &[u8],
+) {
+    let _ = connection.execute(
+        "INSERT INTO artwork_cache(path_key, path, file_modified_at, file_size, media_type, data, updated_at)
+         VALUES(?, ?, ?, ?, ?, ?, datetime('now'))
+         ON CONFLICT(path_key) DO UPDATE SET
+           path = excluded.path,
+           file_modified_at = excluded.file_modified_at,
+           file_size = excluded.file_size,
+           media_type = excluded.media_type,
+           data = excluded.data,
+           updated_at = excluded.updated_at",
+        params![
+            path_key,
+            path.to_string_lossy(),
+            file_modified_at,
+            file_size,
+            media_type,
+            data
+        ],
+    );
+}
+
 fn cached_artwork(track_id: i64) -> Option<(Vec<u8>, String)> {
     let path = track_path(track_id).ok()?;
     let connection = open_database().ok()?;
     let path_key = normalized_path_key(&path.to_string_lossy());
+    let (file_modified_at, file_size) = file_state(&path)?;
     let cached = connection
         .query_row(
-            "SELECT data, media_type FROM artwork_cache WHERE path_key = ? ORDER BY updated_at DESC LIMIT 1",
-            params![path_key],
+            "SELECT data, media_type
+             FROM artwork_cache
+             WHERE path_key = ? AND file_modified_at = ? AND file_size = ?
+             ORDER BY updated_at DESC LIMIT 1",
+            params![path_key, file_modified_at, file_size],
             |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
         )
         .ok();
     cached.or_else(|| {
-        sidecar_artwork(&path).map(|(bytes, media_type)| (bytes, media_type.to_string()))
+        sidecar_artwork(&path).map(|(bytes, media_type)| {
+            store_artwork_cache(
+                &connection,
+                &path,
+                &path_key,
+                &file_modified_at,
+                file_size,
+                media_type,
+                &bytes,
+            );
+            (bytes, media_type.to_string())
+        })
     })
 }
 
