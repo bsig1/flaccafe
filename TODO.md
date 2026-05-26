@@ -47,7 +47,6 @@
 - Keep actual audio metadata writes for ReplayGain tags in Python until Rust tag-writing support is validated.
 - Add Rust route hammer coverage for native-only routes as a sibling to `scripts/hammer_backend_routes.py`.
 - Add a migration checklist per moved route: Rust implementation, Python parity test, frontend path check, hammer good/bad cases, docs update, then remove Python fallback.
-- Track which Python worker actions are still called in dev with a low-noise counter so migrations are prioritized by real usage, not guesswork.
 - Add benchmarks for worker-spawn overhead versus native Rust for large-library query, AutoDJ, folder watch, scan diff, and file organizer workloads.
 - Keep Python as the expert worker for CLAP/Torch inference, mutagen reads/writes, tricky embedded artwork/lyrics writes, and any library where the Python ecosystem is clearly safer than current Rust crates.
 - Revisit the "keep Python" list only after each feature has golden test fixtures made from real messy files.
@@ -71,6 +70,7 @@
 - Expanded native playlist import parsing and import creation for M3U/M3U8, PLS, XSPF, WPL, and iTunes XML while ignoring remote stream entries.
 - Moved extension discovery, manifest validation, and user extension folder creation into Rust; theme/source folder opening was already Rust-owned through Tauri commands.
 - Moved JSON report file reading into Rust so File Management report viewing no longer spawns Python.
+- Added a low-noise Rust counter for remaining Python worker action calls, exposed at `/diagnostics/python-worker-usage`.
 - Added `flaccafe-media://localhost/python-bytes/...` for Python-owned byte responses such as album art and CD live audio.
 - Switched `npm run dev` to desktop dev so local development exercises the same Rust-to-Python worker path as packaged builds.
 

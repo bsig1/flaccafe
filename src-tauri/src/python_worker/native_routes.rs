@@ -34,6 +34,7 @@ pub(super) fn try_handle_native_json(
         "build_support_bundle" => Some(to_json(
             native_library::maintenance::native_create_support_bundle()?,
         )?),
+        "get_python_worker_usage" => Some(to_json(super::python_worker_usage_snapshot())?),
         "list_extensions" => Some(to_json(native_library::extensions::native_extensions()?)?),
         "reload_extensions" => Some(to_json(
             native_library::extensions::native_reload_extensions()?,

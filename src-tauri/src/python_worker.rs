@@ -1,10 +1,14 @@
 use base64::{engine::general_purpose, Engine as _};
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 use tauri::State;
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 mod native_routes;
 mod routes;
@@ -17,6 +21,72 @@ pub struct BackendBytesResponse {
     pub reason: String,
     pub headers: HashMap<String, String>,
     pub body: Vec<u8>,
+}
+
+#[derive(Clone, Default)]
+struct WorkerUsageEntry {
+    count: u64,
+    last_called_at: String,
+}
+
+#[derive(Serialize)]
+struct WorkerUsageAction {
+    action: String,
+    count: u64,
+    last_called_at: String,
+}
+
+#[derive(Serialize)]
+pub(super) struct WorkerUsageSnapshot {
+    total_calls: u64,
+    actions: Vec<WorkerUsageAction>,
+}
+
+static PYTHON_WORKER_USAGE: OnceLock<Mutex<HashMap<String, WorkerUsageEntry>>> = OnceLock::new();
+
+fn usage_now() -> String {
+    OffsetDateTime::now_utc()
+        .replace_microsecond(0)
+        .unwrap_or_else(|_| OffsetDateTime::now_utc())
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+}
+
+fn record_python_worker_action(action: &str) {
+    let lock = PYTHON_WORKER_USAGE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut usage) = lock.lock() {
+        let entry = usage.entry(action.to_string()).or_default();
+        entry.count += 1;
+        entry.last_called_at = usage_now();
+    }
+}
+
+pub(super) fn python_worker_usage_snapshot() -> WorkerUsageSnapshot {
+    let lock = PYTHON_WORKER_USAGE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut actions = lock
+        .lock()
+        .map(|usage| {
+            usage
+                .iter()
+                .map(|(action, entry)| WorkerUsageAction {
+                    action: action.clone(),
+                    count: entry.count,
+                    last_called_at: entry.last_called_at.clone(),
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    actions.sort_by(|left, right| {
+        right
+            .count
+            .cmp(&left.count)
+            .then_with(|| left.action.cmp(&right.action))
+    });
+    let total_calls = actions.iter().map(|entry| entry.count).sum();
+    WorkerUsageSnapshot {
+        total_calls,
+        actions,
+    }
 }
 
 fn repo_root() -> Option<PathBuf> {
@@ -115,6 +185,7 @@ fn worker_action_request_bytes(
     metadata_only: bool,
 ) -> Result<BackendBytesResponse, String> {
     crate::native_library::ensure_database_ready()?;
+    record_python_worker_action(action);
     let body = body.filter(|value| !value.is_null());
     let payload = json!({
         "action": action,

@@ -181,6 +181,11 @@ static PYTHON_ROUTES: &[PythonRoute] = &[
     },
     PythonRoute {
         method: "GET",
+        template: "/diagnostics/python-worker-usage",
+        action: "get_python_worker_usage",
+    },
+    PythonRoute {
+        method: "GET",
         template: "/settings",
         action: "get_settings",
     },

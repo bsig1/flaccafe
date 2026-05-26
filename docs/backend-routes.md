@@ -8,6 +8,7 @@ Rust owns the app-facing API shape in `src-tauri/src/python_worker/routes.rs`. T
 - `GET /diagnostics/startup` returns startup checks for database, storage, runtime, and optional ML paths.
 - `GET /diagnostics/logs/backend` tails the backend log.
 - `POST /diagnostics/support-bundle` creates a redacted zip for troubleshooting.
+- `GET /diagnostics/python-worker-usage` returns in-process counts of Python worker actions that Rust still had to spawn.
 - `GET /settings` returns library path, database path, and user flags.
 - `PATCH /settings` updates user flags such as file tag writing.
 - `POST /settings/library-sources/remove` removes a source folder from saved settings and removes matching tracks from SQLite without deleting audio files.
