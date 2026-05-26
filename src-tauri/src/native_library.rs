@@ -3136,7 +3136,7 @@ pub fn native_library_reconcile_preview(
     })
 }
 
-fn normalized_path_key(path: &str) -> String {
+pub(super) fn normalized_path_key(path: &str) -> String {
     let candidate = PathBuf::from(path.trim());
     let resolved = candidate.canonicalize().unwrap_or(candidate);
     resolved.to_string_lossy().to_lowercase()

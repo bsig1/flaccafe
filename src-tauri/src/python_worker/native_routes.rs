@@ -572,6 +572,30 @@ pub(super) fn try_handle_native_json(
                 body_usize(&body, "limit"),
             )?,
         )?),
+        "import_metadata_csv" => Some(to_json(
+            native_library::metadata_csv::native_import_metadata_csv(
+                body_string(&body, "csv_path").or_else(|| body_string(&body, "csvPath")),
+                body_i64_vec(&body, "track_ids").or_else(|| body_i64_vec(&body, "trackIds")),
+                body.get("column_map").cloned().or_else(|| body.get("columnMap").cloned()),
+                body_bool(&body, "missing_only").or_else(|| body_bool(&body, "missingOnly")),
+                body_bool(&body, "clear_blank_fields")
+                    .or_else(|| body_bool(&body, "clearBlankFields")),
+                body_bool(&body, "apply"),
+                body_usize(&body, "limit"),
+            )?,
+        )?),
+        "export_metadata_csv_import_report" => Some(to_json(
+            native_library::metadata_csv::native_export_metadata_csv_import_report(
+                body_string(&body, "csv_path").or_else(|| body_string(&body, "csvPath")),
+                body_string(&body, "report_path").or_else(|| body_string(&body, "reportPath")),
+                body_i64_vec(&body, "track_ids").or_else(|| body_i64_vec(&body, "trackIds")),
+                body.get("column_map").cloned().or_else(|| body.get("columnMap").cloned()),
+                body_bool(&body, "missing_only").or_else(|| body_bool(&body, "missingOnly")),
+                body_bool(&body, "clear_blank_fields")
+                    .or_else(|| body_bool(&body, "clearBlankFields")),
+                body_usize(&body, "limit"),
+            )?,
+        )?),
         "get_podcast_subscriptions" => Some(to_json(
             native_library::podcasts::native_podcast_subscriptions(state)?,
         )?),

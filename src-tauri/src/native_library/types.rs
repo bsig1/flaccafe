@@ -1047,6 +1047,41 @@ pub struct NativeCsvMetadataExportResponse {
 }
 
 #[derive(Serialize)]
+pub struct NativeCsvMetadataImportPreview {
+    pub(crate) row_number: i64,
+    pub(crate) track_id: Option<i64>,
+    pub(crate) path: Option<String>,
+    pub(crate) matched: bool,
+    pub(crate) current: serde_json::Value,
+    pub(crate) imported: serde_json::Value,
+    pub(crate) changed_fields: Vec<String>,
+    pub(crate) conflict_fields: Vec<String>,
+    pub(crate) applied: bool,
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct NativeCsvMetadataImportResponse {
+    pub(crate) csv_path: String,
+    pub(crate) total: i64,
+    pub(crate) matched: i64,
+    pub(crate) changed: i64,
+    pub(crate) applied: i64,
+    pub(crate) errors: Vec<String>,
+    pub(crate) previews: Vec<NativeCsvMetadataImportPreview>,
+}
+
+#[derive(Serialize)]
+pub struct NativeCsvMetadataImportReportResponse {
+    pub(crate) report_path: String,
+    pub(crate) csv_path: String,
+    pub(crate) total: i64,
+    pub(crate) matched: i64,
+    pub(crate) changed: i64,
+    pub(crate) errors: i64,
+}
+
+#[derive(Serialize)]
 pub struct NativeTagBackupResponse {
     pub(crate) backup_path: String,
     pub(crate) track_count: i64,
