@@ -143,6 +143,13 @@ pub struct NativeAudiobookChapter {
 }
 
 #[derive(Serialize)]
+pub struct NativeAudiobookSyncExportResponse {
+    pub(crate) export_path: String,
+    pub(crate) track_count: i64,
+    pub(crate) generated_at: String,
+}
+
+#[derive(Serialize)]
 pub struct NativeRadioStation {
     pub(crate) id: i64,
     pub(crate) name: String,

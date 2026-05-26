@@ -162,6 +162,12 @@ pub(super) fn try_handle_native_json(
         "cancel_scan_job" => Some(to_json(native_library::scan::native_cancel_scan(
             required_param_string(params, "job_id")?,
         )?)?),
+        "export_audiobook_sync_metadata" => Some(to_json(
+            native_library::native_export_audiobook_sync_metadata(
+                body_i64_vec(&body, "track_ids").or_else(|| body_i64_vec(&body, "trackIds")),
+                body_usize(&body, "limit"),
+            )?,
+        )?),
         "play_history" => Some(to_json(native_library::history::native_history(
             state,
             param_usize(params, "limit"),

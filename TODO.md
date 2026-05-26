@@ -32,7 +32,6 @@
 - Consider persistent worker pooling only if one-shot worker startup becomes visible on long-running operations. Prefer correctness and simple process isolation until profiling proves it is too slow.
 
 ## Rust Native Migration Backlog
-- Move audiobook sync export into Rust.
 - Expand native playlist import parsing beyond simple local playlist handling if M3U, PLS, XSPF, WPL, and iTunes XML crate support stays small and reliable.
 - Keep RSS/feed parsing and episode downloading in Python for now only if current Python libraries remain more convenient; otherwise evaluate Rust `rss` plus `reqwest`.
 - Consider moving ListenBrainz and Last.fm HTTP submission to Rust because signing and JSON/form posts are not Python-specialist work.
@@ -70,6 +69,7 @@
 - Moved folder-watch state, polling loop, pending change detection, notifications, acknowledgement, and apply actions into Rust while keeping tag reads for added/modified/moved files in the Python mutagen batch worker.
 - Finished native missing-file cleanup and orphan-album cleanup for scan, folder-watch apply, and source-removal paths.
 - Confirmed album completion display is native for local inferred/stored counts while MusicBrainz online lookup remains Python-owned until golden fixtures exist.
+- Moved audiobook sync export into Rust so SQLite progress/bookmark/chapter snapshots are written without spawning Python.
 - Added `flaccafe-media://localhost/python-bytes/...` for Python-owned byte responses such as album art and CD live audio.
 - Switched `npm run dev` to desktop dev so local development exercises the same Rust-to-Python worker path as packaged builds.
 

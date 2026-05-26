@@ -2232,6 +2232,13 @@ pub fn native_audiobook_chapters(
     track_id: i64,
 ) -> Result<Vec<NativeAudiobookChapter>, String> {
     let connection = open_database()?;
+    native_audiobook_chapters_for_connection(&connection, track_id)
+}
+
+fn native_audiobook_chapters_for_connection(
+    connection: &Connection,
+    track_id: i64,
+) -> Result<Vec<NativeAudiobookChapter>, String> {
     let mut statement = connection
         .prepare(
             "SELECT id, track_id, chapter_index, title, start_seconds, end_seconds, created_at, updated_at
@@ -2335,6 +2342,208 @@ pub fn native_save_audiobook_chapters(
         .commit()
         .map_err(|error| format!("Could not commit native audiobook chapters: {error}"))?;
     native_audiobook_chapters(_state, track_id)
+}
+
+pub fn native_export_audiobook_sync_metadata(
+    track_ids: Option<Vec<i64>>,
+    limit: Option<usize>,
+) -> Result<NativeAudiobookSyncExportResponse, String> {
+    let limit = limit.unwrap_or(10_000).clamp(1, 100_000);
+    let connection = open_database()?;
+    let audiobook_filter = audiobook_where_clause();
+    let mut query_params: Vec<Value> = Vec::new();
+    let id_filter = if let Some(track_ids) = track_ids {
+        let ids = track_ids
+            .into_iter()
+            .filter(|track_id| *track_id > 0)
+            .collect::<Vec<_>>();
+        if ids.is_empty() {
+            String::new()
+        } else {
+            query_params.extend(ids.iter().copied().map(Value::Integer));
+            format!(
+                " AND tracks.id IN ({})",
+                std::iter::repeat("?")
+                    .take(ids.len())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        }
+    } else {
+        String::new()
+    };
+    query_params.push(Value::Integer(limit as i64));
+    let mut statement = connection
+        .prepare(&format!(
+            "
+            SELECT
+                tracks.id AS id,
+                tracks.path AS path,
+                tracks.title AS title,
+                tracks.artist AS artist,
+                tracks.album AS album,
+                tracks.album_artist AS album_artist,
+                tracks.track_number AS track_number,
+                tracks.disc_number AS disc_number,
+                tracks.genre AS genre,
+                tracks.year AS year,
+                tracks.duration_seconds AS duration_seconds,
+                tracks.rating AS rating,
+                tracks.play_count AS play_count,
+                tracks.last_played_at AS last_played_at,
+                tracks.date_added AS date_added,
+                audiobook_progress.position_seconds AS position_seconds,
+                audiobook_progress.updated_at AS progress_updated_at
+            FROM tracks
+            LEFT JOIN audiobook_progress ON audiobook_progress.track_id = tracks.id
+            WHERE {audiobook_filter}
+              {id_filter}
+            ORDER BY lower(coalesce(tracks.album_artist, tracks.artist, '')),
+                     lower(coalesce(tracks.album, '')),
+                     coalesce(tracks.track_number, 0)
+            LIMIT ?
+            "
+        ))
+        .map_err(|error| format!("Could not prepare audiobook sync export: {error}"))?;
+    let track_rows = statement
+        .query_map(params_from_iter(query_params), |row| {
+            row_to_json_object(
+                row,
+                &[
+                    "id",
+                    "path",
+                    "title",
+                    "artist",
+                    "album",
+                    "album_artist",
+                    "track_number",
+                    "disc_number",
+                    "genre",
+                    "year",
+                    "duration_seconds",
+                    "rating",
+                    "play_count",
+                    "last_played_at",
+                    "date_added",
+                    "position_seconds",
+                    "progress_updated_at",
+                ],
+            )
+        })
+        .map_err(|error| format!("Could not read audiobook sync export rows: {error}"))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| format!("Could not decode audiobook sync export rows: {error}"))?;
+
+    let mut payload_tracks = Vec::new();
+    for track in track_rows {
+        let track_id = track
+            .get("id")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        payload_tracks.push(json!({
+            "track": track,
+            "bookmarks": audiobook_bookmarks_json(&connection, track_id)?,
+            "chapters": audiobook_chapters_json(&connection, track_id)?,
+        }));
+    }
+    let generated_at = scan::utc_now();
+    let export_dir = app_storage_root().join("exports");
+    std::fs::create_dir_all(&export_dir).map_err(|error| {
+        format!(
+            "Could not create audiobook sync export folder {}: {error}",
+            export_dir.display()
+        )
+    })?;
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let target = export_dir.join(format!("flac-cafe-audiobook-sync-{stamp}.json"));
+    let payload = json!({
+        "generated_at": generated_at,
+        "format": "flac-cafe-audiobook-sync-v1",
+        "tracks": payload_tracks,
+    });
+    let text = serde_json::to_string_pretty(&payload)
+        .map_err(|error| format!("Could not encode audiobook sync export: {error}"))?;
+    std::fs::write(&target, text).map_err(|error| {
+        format!(
+            "Could not write audiobook sync export {}: {error}",
+            target.display()
+        )
+    })?;
+    Ok(NativeAudiobookSyncExportResponse {
+        export_path: target.to_string_lossy().to_string(),
+        track_count: payload
+            .get("tracks")
+            .and_then(serde_json::Value::as_array)
+            .map(|tracks| tracks.len() as i64)
+            .unwrap_or(0),
+        generated_at,
+    })
+}
+
+fn audiobook_bookmarks_json(
+    connection: &Connection,
+    track_id: i64,
+) -> Result<Vec<serde_json::Value>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT id, track_id, position_seconds, label, note, created_at
+             FROM audiobook_bookmarks
+             WHERE track_id = ?
+             ORDER BY position_seconds ASC, id ASC",
+        )
+        .map_err(|error| format!("Could not prepare audiobook bookmark export: {error}"))?;
+    let rows = statement
+        .query_map(params![track_id], |row| {
+            row_to_json_object(
+                row,
+                &[
+                    "id",
+                    "track_id",
+                    "position_seconds",
+                    "label",
+                    "note",
+                    "created_at",
+                ],
+            )
+        })
+        .map_err(|error| format!("Could not read audiobook bookmark export: {error}"))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| format!("Could not decode audiobook bookmark export: {error}"))
+}
+
+fn audiobook_chapters_json(
+    connection: &Connection,
+    track_id: i64,
+) -> Result<Vec<serde_json::Value>, String> {
+    let chapters = native_audiobook_chapters_for_connection(connection, track_id)?;
+    serde_json::to_value(chapters)
+        .map(|value| value.as_array().cloned().unwrap_or_default())
+        .map_err(|error| format!("Could not encode audiobook chapters: {error}"))
+}
+
+fn row_to_json_object(
+    row: &rusqlite::Row<'_>,
+    columns: &[&str],
+) -> rusqlite::Result<serde_json::Value> {
+    let mut object = serde_json::Map::new();
+    for column in columns {
+        let value: Value = row.get(*column)?;
+        object.insert((*column).to_string(), sqlite_value_to_json(value));
+    }
+    Ok(serde_json::Value::Object(object))
+}
+
+fn sqlite_value_to_json(value: Value) -> serde_json::Value {
+    match value {
+        Value::Null => serde_json::Value::Null,
+        Value::Integer(value) => json!(value),
+        Value::Real(value) => json!(value),
+        Value::Text(value) => serde_json::Value::String(value),
+        Value::Blob(_) => serde_json::Value::String("[blob]".to_string()),
+    }
 }
 
 fn native_radio_station_by_id(
