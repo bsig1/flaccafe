@@ -222,6 +222,31 @@ pub struct NativeDeletedResponse {
 }
 
 #[derive(Serialize)]
+pub struct NativeTrackDeleteResponse {
+    pub(crate) track_id: i64,
+    pub(crate) removed_from_library: bool,
+    pub(crate) deleted_file: bool,
+    pub(crate) file_missing: bool,
+}
+
+#[derive(Serialize)]
+pub struct NativeTracksDeleteResponse {
+    pub(crate) removed_track_ids: Vec<i64>,
+    pub(crate) removed_count: i64,
+    pub(crate) deleted_files: i64,
+    pub(crate) missing_track_ids: Vec<i64>,
+    pub(crate) errors: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct NativeTrackMetadataSyncResponse {
+    pub(crate) synced_track_ids: Vec<i64>,
+    pub(crate) synced_count: i64,
+    pub(crate) missing_track_ids: Vec<i64>,
+    pub(crate) errors: Vec<String>,
+}
+
+#[derive(Serialize)]
 pub struct NativeLovedTrack {
     pub(crate) track_id: i64,
     pub(crate) loved: bool,
@@ -1068,6 +1093,22 @@ pub struct NativePodcastEpisode {
 }
 
 #[derive(Serialize)]
+pub struct NativePodcastRefreshResponse {
+    pub(crate) subscription: NativePodcastSubscription,
+    pub(crate) inserted: i64,
+    pub(crate) updated: i64,
+    pub(crate) total: i64,
+}
+
+#[derive(Serialize)]
+pub struct NativePodcastDeleteDownloadResponse {
+    pub(crate) episode: NativePodcastEpisode,
+    pub(crate) deleted_file: bool,
+    pub(crate) missing_file: bool,
+    pub(crate) removed_track: bool,
+}
+
+#[derive(Serialize)]
 pub struct NativeScrobbleAccount {
     pub(crate) service: String,
     pub(crate) enabled: bool,
@@ -1108,6 +1149,112 @@ pub struct NativeScrobbleSubmitResponse {
     pub(crate) submitted: i64,
     pub(crate) failed: i64,
     pub(crate) errors: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct NativeLastFmLoginStartResponse {
+    pub(crate) token: String,
+    pub(crate) auth_url: String,
+}
+
+#[derive(Serialize)]
+pub struct NativeLastFmLoginCompleteResponse {
+    pub(crate) account: NativeScrobbleAccount,
+}
+
+#[derive(Serialize)]
+pub struct NativeScrobbleHistoryImportPreview {
+    pub(crate) row: i64,
+    pub(crate) matched: bool,
+    pub(crate) track_id: Option<i64>,
+    pub(crate) artist: Option<String>,
+    pub(crate) title: Option<String>,
+    pub(crate) changes: serde_json::Value,
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct NativeScrobbleHistoryImportResponse {
+    pub(crate) total: i64,
+    pub(crate) updated: i64,
+    pub(crate) previews: Vec<NativeScrobbleHistoryImportPreview>,
+}
+
+#[derive(Serialize)]
+pub struct NativeLibraryStatsImportPreview {
+    pub(crate) row_number: i64,
+    pub(crate) source: String,
+    pub(crate) path: Option<String>,
+    pub(crate) title: Option<String>,
+    pub(crate) artist: Option<String>,
+    pub(crate) album: Option<String>,
+    pub(crate) track_id: Option<i64>,
+    pub(crate) matched_by: Option<String>,
+    pub(crate) imported_rating: Option<f64>,
+    pub(crate) imported_play_count: Option<i64>,
+    pub(crate) imported_last_played_at: Option<String>,
+    pub(crate) current_rating: Option<f64>,
+    pub(crate) current_play_count: Option<i64>,
+    pub(crate) current_last_played_at: Option<String>,
+    pub(crate) changed_fields: Vec<String>,
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct NativeLibraryStatsImportResponse {
+    pub(crate) source: String,
+    pub(crate) import_path: String,
+    pub(crate) total_rows: i64,
+    pub(crate) matched: i64,
+    pub(crate) changed: i64,
+    pub(crate) applied: i64,
+    pub(crate) errors: i64,
+    pub(crate) previews: Vec<NativeLibraryStatsImportPreview>,
+}
+
+#[derive(Serialize)]
+pub struct NativeAlbumCompletionLookupResponse {
+    pub(crate) album_id: i64,
+    pub(crate) expected_track_count: Option<i64>,
+    pub(crate) missing_track_count: i64,
+    pub(crate) source: Option<String>,
+    pub(crate) release_id: Option<String>,
+    pub(crate) release_title: Option<String>,
+    pub(crate) confidence: f64,
+    pub(crate) checked_at: Option<String>,
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct NativeAutoTagPreview {
+    pub(crate) track_id: i64,
+    pub(crate) path: String,
+    pub(crate) current: serde_json::Value,
+    pub(crate) proposed: serde_json::Value,
+    pub(crate) changed_fields: Vec<String>,
+    pub(crate) confidence: f64,
+    pub(crate) match_type: String,
+    pub(crate) source: String,
+    pub(crate) release_id: Option<String>,
+    pub(crate) release_title: Option<String>,
+    pub(crate) recording_id: Option<String>,
+    pub(crate) artwork_url: Option<String>,
+    pub(crate) artwork_thumbnail_url: Option<String>,
+    pub(crate) applied: bool,
+    pub(crate) artwork_saved: bool,
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct NativeAutoTagResponse {
+    pub(crate) total: i64,
+    pub(crate) matched: i64,
+    pub(crate) changed: i64,
+    pub(crate) applied: i64,
+    pub(crate) artwork_matches: i64,
+    pub(crate) artwork_saved: i64,
+    pub(crate) errors: Vec<String>,
+    pub(crate) previews: Vec<NativeAutoTagPreview>,
 }
 
 #[derive(Serialize)]

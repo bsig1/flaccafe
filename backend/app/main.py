@@ -35,7 +35,6 @@ from .file_tags import write_custom_tags, write_track_artwork, write_track_lyric
 from .gapless import gapless_validate
 from .volume_tags import build_volume_tag_response
 from . import inbox as inbox_service
-from .library_importers import import_library_stats
 from .library_tools import (
     changed_metadata,
     infer_metadata_from_filename,
@@ -51,17 +50,6 @@ from .library_watcher import (
     start_folder_watcher_from_settings,
     stop_folder_watcher,
 )
-from .musicbrainz_autotag import (
-    artist_credit_phrase,
-    cover_art_for_release,
-    lookup_release,
-    metadata_changes,
-    parse_year,
-    preview_auto_tags,
-    release_track_entries,
-    search_releases,
-    text_similarity,
-)
 from .audio_conversion_jobs import (
     cancel_audio_conversion_job,
     copy_converted_artwork as copy_converted_artwork_impl,
@@ -76,18 +64,6 @@ from .audiobooks import (
     audiobook_where_clause,
     audiobook_sync_export,
 )
-from .cd_ripping import (
-    active_cd_playback_for_drive,
-    active_cd_rip_job_for_drive,
-    cancel_cd_rip_job,
-    cd_live_wav_stream,
-    cd_rip_setup,
-    get_cd_rip_job,
-    lookup_cd_metadata,
-    prepare_cd_live_track,
-    start_cd_rip_job,
-    stop_cd_playback,
-)
 from .device_sync_profiles import (
     delete_device_sync_profile,
     detected_device_sync_devices,
@@ -95,18 +71,7 @@ from .device_sync_profiles import (
     save_device_sync_profile,
 )
 from .playlist import export_m3u
-from .podcasts import (
-    delete_episode_download as delete_podcast_episode_download,
-    delete_subscription as delete_podcast_subscription,
-    download_episode,
-    ensure_episode_track as ensure_podcast_episode_track,
-    list_episodes as list_podcast_episodes,
-    list_subscriptions as list_podcast_subscriptions,
-    podcast_where_clause,
-    refresh_subscription as refresh_podcast_subscription,
-    subscription_download_folder as podcast_subscription_download_folder,
-    upsert_subscription as upsert_podcast_subscription,
-)
+from .content_filters import podcast_where_clause
 from .recommender import (
     album_token,
     artist_tokens,
@@ -119,17 +84,6 @@ from .recommender import (
 )
 from .scanner import ScanStats, file_state, is_path_under_folder, native_file_snapshots, path_key, read_metadata, scan_folder, upsert_track
 from .scan_jobs import get_scan_job, start_scan_job
-from .scrobbling import (
-    complete_lastfm_login,
-    configured_lastfm_credentials,
-    import_history_csv as import_scrobble_history_csv,
-    list_accounts as list_scrobble_accounts,
-    outbox as list_scrobble_outbox,
-    queue_history as queue_scrobble_history,
-    save_account as save_scrobble_account,
-    start_lastfm_login,
-    submit_outbox as submit_scrobble_outbox,
-)
 from .schemas import (
     AlbumCompletionLookupResponse,
     AlbumSummary,
@@ -3010,6 +2964,100 @@ def get_backend_log(limit: int = Param(default=200, ge=1, le=2000)) -> LogTailRe
     return read_log_tail(backend_log_path(), limit)
 def build_support_bundle() -> SupportBundleResponse:
     return create_support_bundle()
+
+
+def cd_rip_setup() -> dict:
+    from .cd_ripping import cd_rip_setup as impl
+
+    return impl()
+
+
+def lookup_cd_metadata(request: CdRipMetadataRequest) -> dict:
+    from .cd_ripping import lookup_cd_metadata as impl
+
+    return impl(request)
+
+
+def active_cd_rip_job_for_drive(drive_id: str | None) -> dict | None:
+    from .cd_ripping import active_cd_rip_job_for_drive as impl
+
+    return impl(drive_id)
+
+
+def active_cd_playback_for_drive(drive_id: str | None) -> bool:
+    from .cd_ripping import active_cd_playback_for_drive as impl
+
+    return impl(drive_id)
+
+
+def start_cd_rip_job(request: CdRipStartRequest) -> dict:
+    from .cd_ripping import start_cd_rip_job as impl
+
+    return impl(request)
+
+
+def get_cd_rip_job(job_id: str) -> dict | None:
+    from .cd_ripping import get_cd_rip_job as impl
+
+    return impl(job_id)
+
+
+def cancel_cd_rip_job(job_id: str) -> dict | None:
+    from .cd_ripping import cancel_cd_rip_job as impl
+
+    return impl(job_id)
+
+
+def prepare_cd_live_track(request: CdPlaybackRequest) -> dict:
+    from .cd_ripping import prepare_cd_live_track as impl
+
+    return impl(request)
+
+
+def cd_live_wav_stream(drive_id: str, track_number: int, token: str | None) -> Iterator[bytes]:
+    from .cd_ripping import cd_live_wav_stream as impl
+
+    return impl(drive_id, track_number, token)
+
+
+def stop_cd_playback() -> dict:
+    from .cd_ripping import stop_cd_playback as impl
+
+    return impl()
+
+
+def _lastfm_saved_credentials() -> tuple[str | None, str | None]:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT api_key, api_secret FROM scrobble_accounts WHERE service = 'lastfm'"
+        ).fetchone()
+    if not row:
+        return None, None
+    return row["api_key"], row["api_secret"]
+
+
+def _lastfm_env_credentials() -> tuple[str | None, str | None]:
+    api_key = os.environ.get("FLAC_CAFE_LASTFM_API_KEY") or None
+    api_secret = os.environ.get("FLAC_CAFE_LASTFM_API_SECRET") or None
+    return api_key, api_secret
+
+
+def _save_lastfm_credentials(api_key: str | None, api_secret: str | None) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO scrobble_accounts(service, enabled, api_key, api_secret, updated_at)
+            VALUES('lastfm', 0, ?, ?, datetime('now'))
+            ON CONFLICT(service) DO UPDATE SET
+              api_key = excluded.api_key,
+              api_secret = excluded.api_secret,
+              updated_at = datetime('now')
+            """,
+            (api_key, api_secret),
+        )
+        conn.commit()
+
+
 def get_settings() -> SettingsResponse:
     with connect() as conn:
         library_path = get_setting(conn, "library_path")
@@ -3018,9 +3066,9 @@ def get_settings() -> SettingsResponse:
         auto_write_fetched_lyrics_sidecars = get_auto_write_fetched_lyrics_sidecars(conn)
         cd_auto_lookup_metadata = get_cd_auto_lookup_metadata(conn)
         acoustid_api_key_configured = bool((get_setting(conn, "acoustid_api_key") or "").strip())
-    lastfm_account = next((account for account in list_scrobble_accounts() if account.get("service") == "lastfm"), {})
-    lastfm_saved_configured = bool((lastfm_account.get("api_key") or "").strip() and (lastfm_account.get("api_secret") or "").strip())
-    lastfm_env_key, lastfm_env_secret = configured_lastfm_credentials()
+    lastfm_key, lastfm_secret = _lastfm_saved_credentials()
+    lastfm_saved_configured = bool((lastfm_key or "").strip() and (lastfm_secret or "").strip())
+    lastfm_env_key, lastfm_env_secret = _lastfm_env_credentials()
     lastfm_env_configured = bool(lastfm_env_key and lastfm_env_secret)
     lastfm_source = (
         "environment+saved"
@@ -3058,12 +3106,12 @@ def update_settings(request: SettingsUpdateRequest) -> SettingsResponse:
             set_setting(conn, "acoustid_api_key", request.acoustid_api_key.strip() or None)
         conn.commit()
     if request.clear_lastfm_api_credentials:
-        save_scrobble_account("lastfm", {"api_key": None, "api_secret": None})
+        _save_lastfm_credentials(None, None)
     elif request.lastfm_api_key is not None or request.lastfm_api_secret is not None:
-        existing = next((account for account in list_scrobble_accounts() if account.get("service") == "lastfm"), {})
-        api_key = request.lastfm_api_key.strip() if request.lastfm_api_key is not None else str(existing.get("api_key") or "").strip()
-        api_secret = request.lastfm_api_secret.strip() if request.lastfm_api_secret is not None else str(existing.get("api_secret") or "").strip()
-        save_scrobble_account("lastfm", {"api_key": api_key or None, "api_secret": api_secret or None})
+        existing_key, existing_secret = _lastfm_saved_credentials()
+        api_key = request.lastfm_api_key.strip() if request.lastfm_api_key is not None else (existing_key or "").strip()
+        api_secret = request.lastfm_api_secret.strip() if request.lastfm_api_secret is not None else (existing_secret or "").strip()
+        _save_lastfm_credentials(api_key or None, api_secret or None)
     return get_settings()
 def remove_library_source(request: LibrarySourceRemoveRequest) -> LibrarySourceRemoveResponse:
     with connect() as conn:

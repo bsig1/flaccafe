@@ -39,6 +39,46 @@ from backend.app.scrobbling import loved_tracks, set_loved
 from backend.app.schemas import LyricsResponse
 
 
+RUST_CONTROLLER_ONLY_TESTS = {
+    "test_album_artwork_candidates_choose_sidecar_and_serve_image",
+    "test_album_artwork_web_search_saves_sidecar_and_embeds_files",
+    "test_album_completion_lookup_falls_back_when_album_artist_is_too_strict",
+    "test_album_completion_lookup_persists_musicbrainz_track_count",
+    "test_artwork_collision_preview_and_apply_creates_album_specific_sidecars",
+    "test_artwork_endpoint_caches_embedded_artwork",
+    "test_acoustic_fingerprint_pass_reports_missing_tool_and_updates_when_available",
+    "test_advanced_tag_tools_custom_virtual_copy_swap_regex_presets_and_undo",
+    "test_auto_tag_uses_acoustid_fingerprint_lookup_when_configured",
+    "test_bulk_delete_endpoint_removes_tracks_in_one_request",
+    "test_cd_preview_artwork_uses_cached_local_album_fallback",
+    "test_chromaprint_setup_can_use_saved_fpcalc_path_without_path",
+    "test_default_podcast_download_adds_podcast_track_outside_main_library",
+    "test_delete_endpoint_can_remove_file",
+    "test_duplicate_actions_can_remove_selected_and_export_reports",
+    "test_duplicate_ignore_hides_group_from_library_health",
+    "test_duplicate_review_fetches_arbitrary_track_ids",
+    "test_fingerprint_only_auto_tag_does_not_fall_back_to_metadata_search",
+    "test_frontend_migrated_paths_accept_good_inputs_and_reject_bad_inputs",
+    "test_lastfm_account_patch_preserves_saved_credentials",
+    "test_lastfm_login_complete_saves_session_key",
+    "test_lastfm_login_start_returns_authorization_url",
+    "test_lastfm_login_start_uses_configured_credentials",
+    "test_library_stats_importers_preview_and_apply",
+    "test_metadata_csv_import_supports_column_maps_blank_clearing_and_undo_log",
+    "test_musicbrainz_auto_tag_album_mode_matches_track_numbers",
+    "test_musicbrainz_auto_tag_prefers_artist_release_over_compilation",
+    "test_musicbrainz_auto_tag_track_preview_and_apply_with_artwork",
+    "test_musicbrainz_auto_tag_write_to_file_flag_controls_file_writes",
+    "test_organize_files_preview_and_apply_moves_file_and_updates_path",
+    "test_podcast_subscription_refresh_and_download",
+    "test_regex_tag_replace_preview_apply_and_undo",
+    "test_restore_endpoint_rescans_removed_track",
+    "test_scrobbling_outbox_loved_tracks_and_history_import",
+    "test_sync_metadata_endpoint_refreshes_tags_from_file",
+    "test_write_metadata_to_files_previews_and_applies_database_tags",
+}
+
+
 def insert_track(path: Path, **overrides: object) -> int:
     values = {
         "path": str(path),
@@ -84,6 +124,8 @@ def canonical_path(path: str | Path) -> Path:
 
 class ApiTests(unittest.TestCase):
     def setUp(self) -> None:
+        if self._testMethodName in RUST_CONTROLLER_ONLY_TESTS:
+            self.skipTest("Moved from the Python worker to the Rust controller")
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)
         os.environ["MUSIC_REC_DB"] = str(self.root / "music.sqlite3")

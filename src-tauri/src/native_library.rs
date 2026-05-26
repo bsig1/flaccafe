@@ -15,11 +15,13 @@ pub(crate) mod folder_watch;
 pub(crate) mod history;
 pub(crate) mod inbox;
 pub(crate) mod library_tools;
+pub(crate) mod library_importers;
 pub(crate) mod lyrics;
 pub(crate) mod maintenance;
 pub(crate) mod media_protocol;
 pub(crate) mod metadata;
 pub(crate) mod metadata_csv;
+pub(crate) mod online_matching;
 pub(crate) mod podcasts;
 pub(crate) mod recommendation_profiles;
 pub(crate) mod recommendations;
@@ -30,6 +32,7 @@ pub(crate) mod scrobbling;
 mod search;
 mod storage;
 pub(crate) mod tools;
+pub(crate) mod track_management;
 mod types;
 
 use self::recommendations::{
@@ -3908,7 +3911,8 @@ fn remove_duplicate_tracks_from_library(
     connection: &Connection,
     track_ids: Vec<i64>,
     batch_id: &str,
-) -> Result<(Vec<i64>, Vec<String>), String> {
+    delete_files: bool,
+) -> Result<(Vec<i64>, Vec<String>, i64), String> {
     let mut unique_ids = Vec::new();
     for track_id in track_ids.into_iter().filter(|track_id| *track_id > 0) {
         if !unique_ids.contains(&track_id) {
@@ -3916,7 +3920,7 @@ fn remove_duplicate_tracks_from_library(
         }
     }
     if unique_ids.is_empty() {
-        return Ok((Vec::new(), Vec::new()));
+        return Ok((Vec::new(), Vec::new(), 0));
     }
     const REMOVE_COLUMNS: &[&str] = &[
         "path_key",
@@ -3978,18 +3982,36 @@ fn remove_duplicate_tracks_from_library(
         .collect::<HashMap<_, _>>();
     let mut removed = Vec::new();
     let mut errors = Vec::new();
+    let mut deleted_files = 0i64;
     for track_id in unique_ids {
         let Some(track) = by_id.get(&track_id) else {
             errors.push(format!("Track {track_id} was not found"));
             continue;
         };
+        if delete_files {
+            if let Some(path) = track.get("path").and_then(serde_json::Value::as_str) {
+                let path = PathBuf::from(path);
+                if path.exists() && path.is_file() {
+                    match trash::delete(&path) {
+                        Ok(()) => deleted_files += 1,
+                        Err(error) => {
+                            errors.push(format!(
+                                "Could not send {} to the recycle bin: {error}",
+                                path.display()
+                            ));
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
         let summary = track
             .get("title")
             .and_then(serde_json::Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .or_else(|| track.get("path").and_then(serde_json::Value::as_str))
             .unwrap_or("track");
-        let payload = json!({"track": track, "delete_file": false});
+        let payload = json!({"track": track, "delete_file": delete_files});
         connection
             .execute(
                 "INSERT INTO bulk_action_undo_log(batch_id, action_type, summary, payload_json)
@@ -4016,7 +4038,7 @@ fn remove_duplicate_tracks_from_library(
         scan::cleanup_orphan_albums(connection)?;
         clear_library_query_cache(connection);
     }
-    Ok((removed, errors))
+    Ok((removed, errors, deleted_files))
 }
 
 pub fn native_duplicate_action(
@@ -4027,6 +4049,7 @@ pub fn native_duplicate_action(
     report_path: Option<String>,
     ignore_key: Option<String>,
     ignore_label: Option<String>,
+    delete_files: Option<bool>,
 ) -> Result<NativeDuplicateActionResponse, String> {
     let action = action.trim().to_string();
     let track_ids = track_ids.unwrap_or_default();
@@ -4197,8 +4220,13 @@ pub fn native_duplicate_action(
             } else {
                 "duplicate-remove"
             });
-            let (removed_track_ids, errors) =
-                remove_duplicate_tracks_from_library(&transaction, ids_to_remove, &batch_id)?;
+            let (removed_track_ids, errors, deleted_files) =
+                remove_duplicate_tracks_from_library(
+                    &transaction,
+                    ids_to_remove,
+                    &batch_id,
+                    delete_files.unwrap_or(false),
+                )?;
             transaction
                 .commit()
                 .map_err(|error| format!("Could not commit duplicate action: {error}"))?;
@@ -4206,7 +4234,7 @@ pub fn native_duplicate_action(
                 action,
                 affected: removed_track_ids.len() as i64,
                 removed_track_ids,
-                deleted_files: 0,
+                deleted_files,
                 report_path: None,
                 errors,
             })

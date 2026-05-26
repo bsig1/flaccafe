@@ -1,6 +1,6 @@
 # Rust Route Migration Checklist
 
-Use this checklist before removing a Python worker fallback for a route. The goal is to make route migrations boring, measurable, and reversible while Python remains the expert worker for CLAP/Torch inference, embedded artwork/lyrics writes, MusicBrainz/AcoustID matching, feeds/downloads, and other library-heavy tasks.
+Use this checklist before removing a Python worker fallback for a route. The goal is to make route migrations boring and measurable while Python remains the expert worker only for CLAP/Torch inference, specialized embedded artwork/lyrics writes, CD/audio helper work that has not moved yet, and other tasks where the Python ecosystem is clearly safer.
 
 ## Per-Route Checklist
 
@@ -9,14 +9,14 @@ Use this checklist before removing a Python worker fallback for a route. The goa
 - Frontend path check: confirm the relevant `frontend/src/lib/api.ts` helper still calls the same app-facing route and receives the same response shape.
 - Hammer cases: add at least five good and five bad direct-route cases when the route has meaningful validation behavior.
 - Docs update: update `docs/backend-routes.md` and any feature guide touched by the route.
-- Fallback removal: remove the Python action only after the Rust path has parity coverage and no known feature loss.
+- Fallback removal: remove the Python action after the Rust path has parity coverage or after an intentional beta-era behavior reset has been accepted.
 
 ## Keep Python When
 
 - The route reads or writes audio tags that Lofty does not cover safely yet.
 - The route runs actual CLAP/Torch inference or another Python-first ML stack.
 - The route depends on messy embedded artwork or embedded lyrics behavior that does not yet have golden fixtures.
-- The Rust ecosystem path is less mature than the current Python library for that exact file format or service.
+- The Rust ecosystem path is less mature than the current Python library for that exact file format or local audio operation.
 
 ## Migration Notes
 

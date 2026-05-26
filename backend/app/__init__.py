@@ -1,2 +1,1 @@
-"""Python backend for the local music recommender prototype."""
-
+"""Python expert-worker modules used by the Rust FLAC Cafe controller."""

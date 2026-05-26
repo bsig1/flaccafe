@@ -21,9 +21,9 @@ pub(super) fn try_handle_native_json(
 
     // This adapter preserves the old HTTP-shaped surface while letting the
     // Rust controller handle routes that no longer need a Python worker.
-    // Python remains the expert worker for CLAP/Torch, network matching,
-    // feed/download flows, and byte/tag operations that still need Python
-    // libraries.
+    // Python remains the expert worker for CLAP/Torch and the few file-tag
+    // operations that still need Python libraries. Rust owns HTTP routing and
+    // the app-controller work here.
     let response = match action.action {
         "health" => Some(to_json(native_library::native_health()?)?),
         "get_startup_diagnostics" => Some(to_json(
@@ -200,6 +200,43 @@ pub(super) fn try_handle_native_json(
                 body_bool(&body, "write_to_file").or_else(|| body_bool(&body, "writeToFile")),
             )?)?)
         }
+        "delete_track" => Some(to_json(
+            native_library::track_management::native_delete_track(
+                state,
+                required_param_i64(params, "track_id")?,
+                param_bool(params, "delete_file")
+                    .or_else(|| param_bool(params, "deleteFile"))
+                    .or_else(|| body_bool(&body, "delete_file"))
+                    .or_else(|| body_bool(&body, "deleteFile"))
+                    .unwrap_or(false),
+            )?,
+        )?),
+        "delete_tracks" => Some(to_json(
+            native_library::track_management::native_delete_tracks(
+                state,
+                body_i64_vec(&body, "track_ids")
+                    .or_else(|| body_i64_vec(&body, "trackIds"))
+                    .unwrap_or_default(),
+                body_bool(&body, "delete_file")
+                    .or_else(|| body_bool(&body, "deleteFile"))
+                    .unwrap_or(false),
+            )?,
+        )?),
+        "sync_track_metadata_from_files" => Some(to_json(
+            native_library::track_management::native_sync_track_metadata_from_files(
+                state,
+                body_i64_vec(&body, "track_ids")
+                    .or_else(|| body_i64_vec(&body, "trackIds"))
+                    .unwrap_or_default(),
+            )?,
+        )?),
+        "restore_track" => Some(to_json(
+            native_library::track_management::native_restore_track(
+                state,
+                required_body_string(&body, "path")?,
+                body_f64(&body, "rating"),
+            )?,
+        )?),
         "mark_track_played" => Some(to_json(native_library::native_mark_track_played(
             state,
             required_param_i64(params, "track_id")?,
@@ -590,21 +627,16 @@ pub(super) fn try_handle_native_json(
         )?)?),
         "apply_duplicate_action" => {
             let action = required_body_string(&body, "action")?;
-            if matches!(action.as_str(), "keep_best" | "remove_selected")
-                && body_bool(&body, "delete_files").unwrap_or(false)
-            {
-                None
-            } else {
-                Some(to_json(native_library::native_duplicate_action(
-                    state,
-                    action,
-                    body_i64_vec(&body, "track_ids"),
-                    body_i64_groups(&body, "groups"),
-                    body_string(&body, "report_path"),
-                    body_string(&body, "ignore_key"),
-                    body_string(&body, "ignore_label"),
-                )?)?)
-            }
+            Some(to_json(native_library::native_duplicate_action(
+                state,
+                action,
+                body_i64_vec(&body, "track_ids"),
+                body_i64_groups(&body, "groups"),
+                body_string(&body, "report_path"),
+                body_string(&body, "ignore_key"),
+                body_string(&body, "ignore_label"),
+                body_bool(&body, "delete_files").or_else(|| body_bool(&body, "deleteFiles")),
+            )?)?)
         }
         "validate_gapless_playback" => Some(to_json(native_library::native_gapless_validate(
             state,
@@ -618,6 +650,12 @@ pub(super) fn try_handle_native_json(
             param_usize(params, "limit"),
             param_usize(params, "offset"),
         )?)?),
+        "lookup_album_completion" => Some(to_json(
+            native_library::online_matching::native_lookup_album_completion(
+                state,
+                required_param_i64(params, "album_id")?,
+            )?,
+        )?),
         "album_tracks" => Some(to_json(native_library::native_album_tracks(
             state,
             required_param_i64(params, "album_id")?,
@@ -627,8 +665,21 @@ pub(super) fn try_handle_native_json(
             body.clone(),
         )? {
             Some(response) => Some(to_json(response)?),
-            None => None,
+            None => return Err("Embedded artwork writes are not available in Rust yet".to_string()),
         },
+        "list_album_artwork_candidates" => Some(to_json(
+            native_library::online_matching::native_album_artwork_candidates(required_param_i64(
+                params, "album_id",
+            )?)?,
+        )?),
+        "search_album_artwork" => Some(to_json(
+            native_library::online_matching::native_search_album_artwork(required_param_i64(
+                params, "album_id",
+            )?)?,
+        )?),
+        "artwork_collision_repair" => Some(to_json(
+            native_library::online_matching::native_artwork_collision_repair(body.clone())?,
+        )?),
         "list_artists" => Some(to_json(native_library::native_artists(
             state,
             param_string(params, "search"),
@@ -768,6 +819,32 @@ pub(super) fn try_handle_native_json(
                 param_usize(params, "limit"),
             )?,
         )?),
+        "refresh_podcast_subscription_route" => Some(to_json(
+            native_library::podcasts::native_refresh_podcast_subscription(
+                state,
+                required_param_i64(params, "subscription_id")?,
+            )?,
+        )?),
+        "download_podcast_episode_route" => Some(to_json(
+            native_library::podcasts::native_download_podcast_episode(
+                state,
+                required_param_i64(params, "episode_id")?,
+                body_string(&body, "download_folder")
+                    .or_else(|| body_string(&body, "downloadFolder")),
+            )?,
+        )?),
+        "delete_podcast_episode_download_route" => Some(to_json(
+            native_library::podcasts::native_delete_podcast_episode_download(
+                state,
+                required_param_i64(params, "episode_id")?,
+            )?,
+        )?),
+        "ensure_podcast_episode_track_route" => Some(to_json(
+            native_library::podcasts::native_ensure_podcast_episode_track(
+                state,
+                required_param_i64(params, "episode_id")?,
+            )?,
+        )?),
         "get_scrobble_accounts" => Some(to_json(
             native_library::scrobbling::native_scrobble_accounts(state)?,
         )?),
@@ -804,6 +881,44 @@ pub(super) fn try_handle_native_json(
                 required_body_string(&body, "service")?,
                 body_usize(&body, "limit"),
             )?,
+        )?),
+        "start_lastfm_login_route" => Some(to_json(
+            native_library::scrobbling::native_start_lastfm_login(
+                state,
+                body_string(&body, "api_key").or_else(|| body_string(&body, "apiKey")),
+                body_string(&body, "api_secret").or_else(|| body_string(&body, "apiSecret")),
+            )?,
+        )?),
+        "complete_lastfm_login_route" => Some(to_json(
+            native_library::scrobbling::native_complete_lastfm_login(
+                state,
+                body_string(&body, "api_key").or_else(|| body_string(&body, "apiKey")),
+                body_string(&body, "api_secret").or_else(|| body_string(&body, "apiSecret")),
+                required_body_string(&body, "token")?,
+                body_bool(&body, "enabled"),
+            )?,
+        )?),
+        "import_scrobbling_history" => Some(to_json(
+            native_library::scrobbling::native_import_scrobbling_history(
+                state,
+                required_body_string(&body, "path")
+                    .or_else(|_| required_body_string(&body, "import_path"))?,
+                body_bool(&body, "apply"),
+                body_usize(&body, "limit"),
+            )?,
+        )?),
+        "import_external_library_stats" => Some(to_json(
+            native_library::library_importers::native_import_external_library_stats(
+                required_body_string(&body, "source")?,
+                required_body_string(&body, "import_path")
+                    .or_else(|_| required_body_string(&body, "importPath"))?,
+                body_bool(&body, "apply"),
+                body_bool(&body, "missing_only").or_else(|| body_bool(&body, "missingOnly")),
+                body_usize(&body, "limit"),
+            )?,
+        )?),
+        "auto_tag_musicbrainz" => Some(to_json(
+            native_library::online_matching::native_auto_tag_musicbrainz(state, body.clone())?,
         )?),
         "generate_autodj" => Some(to_json(native_library::recommendations::native_generate_autodj(
             state,

@@ -47,15 +47,15 @@ Windows beta installers are published on the [GitHub Releases page](https://gith
 
 - Desktop shell: Tauri v2
 - Frontend: React, TypeScript, Vite, Tailwind CSS
-- Backend: Rust app-facing controller plus Python expert workers for online matching, embedded artwork/lyrics writes, feed/download jobs, and optional ML
+- Backend: Rust app-facing controller plus Python expert workers for optional ML, CD/audio tooling, and the remaining specialized embedded file writes
 - Optional analysis: CLAP through Transformers and Torch
 
-The MVP started with FastAPI because it kept music logic in Python and made early testing simple. The desktop build now uses Rust as the app-facing controller for SQLite reads, lightweight mutations, local media URLs, Lofty-based common tag reads/writes, and all frontend-facing dispatch. Python remains the expert worker for MusicBrainz/AcoustID matching, feed/network jobs, embedded artwork/lyrics writes, and optional ML. Most Python actions are short-lived named workers; CLAP analysis uses a persistent Python model worker so Torch stays warm during a batch. Rust resolves app paths to named Python actions, so the packaged app no longer bundles, starts, or routes through a Python HTTP server.
+The MVP started with FastAPI because it kept music logic in Python and made early testing simple. The desktop build now uses Rust as the app-facing controller for SQLite reads, lightweight mutations, local media URLs, Lofty-based common tag reads/writes, MusicBrainz/AcoustID matching, podcast feed/download work, scrobbling flows, external-library imports, and all frontend-facing dispatch. Python remains an expert worker for the places where the Python ecosystem is still clearly useful: CLAP/Torch inference, CD/audio conversion helpers, and a shrinking set of specialized embedded file writes. Most Python actions are short-lived named workers; CLAP analysis uses a persistent Python model worker so Torch stays warm during a batch. Rust resolves app paths to named actions, so the packaged app no longer bundles, starts, or routes through a Python HTTP server.
 
 ## Repo Layout
 
 ```text
-backend/       Python worker modules, SQLite, scanner, recommender, library tools
+backend/       Python expert-worker modules and shared schema/data helpers
 frontend/      React/TypeScript UI, typed API clients, themes, player surfaces
 src-tauri/     Tauri v2 shell, Rust commands, Python worker bridge, Windows media controls, Rust playback
 scripts/       Windows dev, test, validation, packaging, and runtime helpers

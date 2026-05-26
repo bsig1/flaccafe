@@ -9,7 +9,7 @@ use time::OffsetDateTime;
 
 use crate::python_worker;
 
-use super::{normalized_path_key, open_database};
+use super::{metadata, normalized_path_key, open_database};
 
 fn response_with_status(status: StatusCode, message: &str) -> Response<Vec<u8>> {
     Response::builder()
@@ -317,6 +317,22 @@ fn cached_artwork(track_id: i64) -> Option<(Vec<u8>, String)> {
             (bytes, media_type.to_string())
         })
     })
+    .or_else(|| {
+        metadata::read_embedded_artwork(&path).ok().flatten().map(
+            |(bytes, media_type)| {
+                store_artwork_cache(
+                    &connection,
+                    &path,
+                    &path_key,
+                    &file_modified_at,
+                    file_size,
+                    &media_type,
+                    &bytes,
+                );
+                (bytes, media_type)
+            },
+        )
+    })
 }
 
 fn serve_track_artwork(track_id: i64) -> Response<Vec<u8>> {
@@ -331,32 +347,7 @@ fn serve_track_artwork(track_id: i64) -> Response<Vec<u8>> {
                 .unwrap_or_else(|_| Response::new(Vec::new()));
         }
     }
-    match python_worker::backend_request_bytes(
-        "GET",
-        &format!("/tracks/{track_id}/artwork"),
-        None,
-        None,
-    ) {
-        Ok(response) if (200..300).contains(&response.status) => {
-            let content_type = response
-                .headers
-                .get("content-type")
-                .cloned()
-                .unwrap_or_else(|| "application/octet-stream".to_string());
-            Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, content_type)
-                .header(header::CACHE_CONTROL, "no-store")
-                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                .body(response.body)
-                .unwrap_or_else(|_| Response::new(Vec::new()))
-        }
-        Ok(response) => response_with_status(
-            StatusCode::from_u16(response.status).unwrap_or(StatusCode::NOT_FOUND),
-            &response.reason,
-        ),
-        Err(error) => response_with_status(StatusCode::NOT_FOUND, &error),
-    }
+    response_with_status(StatusCode::NOT_FOUND, "Track artwork not found")
 }
 
 fn album_track_ids(album_id: i64) -> Result<(Option<String>, Vec<i64>), String> {
@@ -431,32 +422,7 @@ fn serve_album_artwork(request: &Request<Vec<u8>>, album_id: i64) -> Response<Ve
             }
         }
     }
-    let path = format!("/albums/{album_id}/artwork");
-    match python_worker::backend_request_bytes(request.method().as_str(), &path, None, None) {
-        Ok(response) if (200..300).contains(&response.status) => {
-            let content_type = response
-                .headers
-                .get("content-type")
-                .cloned()
-                .unwrap_or_else(|| "application/octet-stream".to_string());
-            Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, content_type)
-                .header(header::CACHE_CONTROL, "no-store")
-                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                .body(if request.method() == Method::HEAD {
-                    Vec::new()
-                } else {
-                    response.body
-                })
-                .unwrap_or_else(|_| Response::new(Vec::new()))
-        }
-        Ok(response) => response_with_status(
-            StatusCode::from_u16(response.status).unwrap_or(StatusCode::NOT_FOUND),
-            &response.reason,
-        ),
-        Err(error) => response_with_status(StatusCode::NOT_FOUND, &error),
-    }
+    response_with_status(StatusCode::NOT_FOUND, "Album artwork not found")
 }
 
 fn serve_python_worker_bytes(request: &Request<Vec<u8>>, encoded_path: &str) -> Response<Vec<u8>> {

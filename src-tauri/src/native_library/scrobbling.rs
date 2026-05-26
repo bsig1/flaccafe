@@ -1,14 +1,17 @@
 use super::open_database;
 use super::types::*;
 use rusqlite::{params, Connection, OptionalExtension};
-use serde_json::json;
+use serde_json::{json, Value as JsonValue};
 use std::collections::BTreeMap;
+use std::env;
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
 
 const SERVICES: &[&str] = &["listenbrainz", "lastfm"];
 const LISTENBRAINZ_SUBMIT_URL: &str = "https://api.listenbrainz.org/1/submit-listens";
 const LASTFM_API_URL: &str = "https://ws.audioscrobbler.com/2.0/";
+const LASTFM_AUTH_URL: &str = "https://www.last.fm/api/auth/";
 
 fn account_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NativeScrobbleAccount> {
     Ok(NativeScrobbleAccount {
@@ -325,6 +328,219 @@ pub fn native_submit_scrobble_outbox(
     })
 }
 
+#[tauri::command]
+pub fn native_start_lastfm_login(
+    _state: State<'_, NativeLibraryState>,
+    api_key: Option<String>,
+    api_secret: Option<String>,
+) -> Result<NativeLastFmLoginStartResponse, String> {
+    let (api_key, api_secret) = resolve_lastfm_credentials(api_key, api_secret)?;
+    let mut params = BTreeMap::new();
+    params.insert("method".to_string(), "auth.getToken".to_string());
+    params.insert("api_key".to_string(), api_key.clone());
+    params.insert("format".to_string(), "json".to_string());
+    params.insert("api_sig".to_string(), lastfm_signature(&params, &api_secret));
+    let payload = lastfm_api_post(&params)?;
+    let token = payload
+        .get("token")
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Last.fm did not return an auth token".to_string())?
+        .to_string();
+    Ok(NativeLastFmLoginStartResponse {
+        auth_url: format!(
+            "{LASTFM_AUTH_URL}?api_key={}&token={}",
+            urlencoding::encode(&api_key),
+            urlencoding::encode(&token)
+        ),
+        token,
+    })
+}
+
+#[tauri::command]
+pub fn native_complete_lastfm_login(
+    _state: State<'_, NativeLibraryState>,
+    api_key: Option<String>,
+    api_secret: Option<String>,
+    token: String,
+    enabled: Option<bool>,
+) -> Result<NativeLastFmLoginCompleteResponse, String> {
+    let (api_key, api_secret) = resolve_lastfm_credentials(api_key, api_secret)?;
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        return Err("Last.fm approved token is required".to_string());
+    }
+    let mut params = BTreeMap::new();
+    params.insert("method".to_string(), "auth.getSession".to_string());
+    params.insert("api_key".to_string(), api_key.clone());
+    params.insert("token".to_string(), token);
+    params.insert("format".to_string(), "json".to_string());
+    params.insert("api_sig".to_string(), lastfm_signature(&params, &api_secret));
+    let payload = lastfm_api_post(&params)?;
+    let session = payload
+        .get("session")
+        .and_then(JsonValue::as_object)
+        .ok_or_else(|| "Last.fm did not return a session".to_string())?;
+    let session_key = session
+        .get("key")
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Last.fm did not return a session key".to_string())?
+        .to_string();
+    let username = session
+        .get("name")
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let account = save_lastfm_account(
+        enabled.unwrap_or(true),
+        username,
+        api_key,
+        api_secret,
+        session_key,
+    )?;
+    Ok(NativeLastFmLoginCompleteResponse { account })
+}
+
+#[tauri::command]
+pub fn native_import_scrobbling_history(
+    _state: State<'_, NativeLibraryState>,
+    path: String,
+    apply: Option<bool>,
+    limit: Option<usize>,
+) -> Result<NativeScrobbleHistoryImportResponse, String> {
+    let csv_path = PathBuf::from(path.trim());
+    if !csv_path.exists() {
+        return Err(format!("CSV file not found: {}", csv_path.display()));
+    }
+    let apply = apply.unwrap_or(false);
+    let limit = limit.unwrap_or(500).clamp(1, 100_000);
+    let mut reader = csv::ReaderBuilder::new()
+        .flexible(true)
+        .from_path(&csv_path)
+        .map_err(|error| format!("Could not open scrobble history CSV: {error}"))?;
+    let headers = reader
+        .headers()
+        .map_err(|error| format!("Could not read scrobble history headers: {error}"))?
+        .clone();
+    let mut previews = Vec::new();
+    let mut updated = 0i64;
+    let connection = open_database()?;
+    for (index, row) in reader.records().enumerate() {
+        if index >= limit {
+            break;
+        }
+        let row_number = index as i64 + 1;
+        let record = row.map_err(|error| format!("Could not read history row: {error}"))?;
+        let artist = csv_value(&headers, &record, &["artist", "Artist"]);
+        let title = csv_value(&headers, &record, &["title", "Title", "track", "Track"]);
+        if artist.is_none() || title.is_none() {
+            previews.push(NativeScrobbleHistoryImportPreview {
+                row: row_number,
+                matched: false,
+                track_id: None,
+                artist,
+                title,
+                changes: json!({}),
+                error: Some("artist/title required".to_string()),
+            });
+            continue;
+        }
+        let artist_text = artist.clone().unwrap_or_default();
+        let title_text = title.clone().unwrap_or_default();
+        let track = connection
+            .query_row(
+                "SELECT id, play_count, rating
+                 FROM tracks
+                 WHERE lower(coalesce(artist, '')) = lower(?)
+                   AND lower(coalesce(title, '')) = lower(?)
+                 ORDER BY id LIMIT 1",
+                params![artist_text, title_text],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>("id")?,
+                        row.get::<_, Option<i64>>("play_count")?.unwrap_or(0),
+                        row.get::<_, Option<f64>>("rating")?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|error| format!("Could not match scrobble history row: {error}"))?;
+        let Some((track_id, _play_count, _rating)) = track else {
+            previews.push(NativeScrobbleHistoryImportPreview {
+                row: row_number,
+                matched: false,
+                track_id: None,
+                artist,
+                title,
+                changes: json!({}),
+                error: None,
+            });
+            continue;
+        };
+        let play_count = csv_value(&headers, &record, &["play_count", "Play Count", "plays"])
+            .and_then(|value| value.parse::<f64>().ok())
+            .map(|value| value.max(0.0) as i64);
+        let rating = csv_value(&headers, &record, &["rating", "Rating"])
+            .and_then(|value| value.parse::<f64>().ok());
+        let loved = csv_value(&headers, &record, &["loved", "Loved"])
+            .map(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "love" | "loved"))
+            .unwrap_or(false);
+        let mut changes = serde_json::Map::new();
+        if let Some(play_count) = play_count {
+            changes.insert("play_count".to_string(), json!(play_count));
+        }
+        if let Some(rating) = rating {
+            changes.insert("rating".to_string(), json!(rating));
+        }
+        if loved {
+            changes.insert("loved".to_string(), json!(true));
+        }
+        if apply && !changes.is_empty() {
+            connection
+                .execute(
+                    "UPDATE tracks
+                     SET play_count = coalesce(?, play_count),
+                         rating = coalesce(?, rating),
+                         updated_at = datetime('now')
+                     WHERE id = ?",
+                    params![play_count, rating, track_id],
+                )
+                .map_err(|error| format!("Could not apply scrobble history row: {error}"))?;
+            if loved {
+                connection
+                    .execute(
+                        "INSERT INTO track_loves(track_id, loved, source, updated_at)
+                         VALUES(?, 1, 'history-import', datetime('now'))
+                         ON CONFLICT(track_id) DO UPDATE SET
+                           loved = 1, source = 'history-import', updated_at = datetime('now')",
+                        params![track_id],
+                    )
+                    .map_err(|error| format!("Could not import loved-track state: {error}"))?;
+            }
+            super::scan::clear_library_query_cache(&connection);
+            updated += 1;
+        }
+        previews.push(NativeScrobbleHistoryImportPreview {
+            row: row_number,
+            matched: true,
+            track_id: Some(track_id),
+            artist,
+            title,
+            changes: JsonValue::Object(changes),
+            error: None,
+        });
+    }
+    Ok(NativeScrobbleHistoryImportResponse {
+        total: previews.len() as i64,
+        updated,
+        previews,
+    })
+}
+
 fn pending_outbox_rows(
     connection: &Connection,
     service: &str,
@@ -390,6 +606,95 @@ fn submit_listenbrainz(
     response_to_unit(response, "ListenBrainz")
 }
 
+fn resolve_lastfm_credentials(
+    api_key: Option<String>,
+    api_secret: Option<String>,
+) -> Result<(String, String), String> {
+    let explicit_key = clean_secret(api_key);
+    let explicit_secret = clean_secret(api_secret);
+    if let (Some(key), Some(secret)) = (explicit_key, explicit_secret) {
+        return Ok((key, secret));
+    }
+    let env_key = clean_secret(env::var("FLAC_CAFE_LASTFM_API_KEY").ok())
+        .or_else(|| clean_secret(env::var("LASTFM_API_KEY").ok()));
+    let env_secret = clean_secret(env::var("FLAC_CAFE_LASTFM_API_SECRET").ok())
+        .or_else(|| clean_secret(env::var("LASTFM_API_SECRET").ok()));
+    if let (Some(key), Some(secret)) = (env_key, env_secret) {
+        return Ok((key, secret));
+    }
+    let connection = open_database()?;
+    let saved = account_by_service(&connection, "lastfm")?;
+    if let (Some(key), Some(secret)) = (
+        clean_secret(saved.api_key.clone()),
+        clean_secret(saved.api_secret.clone()),
+    ) {
+        return Ok((key, secret));
+    }
+    Err(
+        "Last.fm app credentials are not configured. Add an API key and shared secret in Settings -> API Keys."
+            .to_string(),
+    )
+}
+
+fn clean_secret(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn save_lastfm_account(
+    enabled: bool,
+    username: Option<String>,
+    api_key: String,
+    api_secret: String,
+    session_key: String,
+) -> Result<NativeScrobbleAccount, String> {
+    let connection = open_database()?;
+    connection
+        .execute(
+            "INSERT INTO scrobble_accounts(service, enabled, username, token, api_key, api_secret, session_key, updated_at)
+             VALUES('lastfm', ?, ?, NULL, ?, ?, ?, datetime('now'))
+             ON CONFLICT(service) DO UPDATE SET
+               enabled = excluded.enabled,
+               username = excluded.username,
+               api_key = excluded.api_key,
+               api_secret = excluded.api_secret,
+               session_key = excluded.session_key,
+               updated_at = datetime('now')",
+            params![if enabled { 1 } else { 0 }, username, api_key, api_secret, session_key],
+        )
+        .map_err(|error| format!("Could not save Last.fm account: {error}"))?;
+    account_by_service(&connection, "lastfm")
+}
+
+fn lastfm_api_post(params: &BTreeMap<String, String>) -> Result<JsonValue, String> {
+    let form_pairs = params
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
+    let response = ureq::post(LASTFM_API_URL)
+        .set("Content-Type", "application/x-www-form-urlencoded")
+        .send_form(&form_pairs);
+    match response {
+        Ok(response) => {
+            let payload = response
+                .into_json::<JsonValue>()
+                .map_err(|error| format!("Could not decode Last.fm response: {error}"))?;
+            if let Some(message) = payload.get("message").and_then(JsonValue::as_str) {
+                if payload.get("error").is_some() {
+                    return Err(message.to_string());
+                }
+            }
+            Ok(payload)
+        }
+        Err(ureq::Error::Status(status, response)) => {
+            let message = response.into_string().unwrap_or_default();
+            Err(format!("Last.fm HTTP {status}: {message}"))
+        }
+        Err(error) => Err(format!("Last.fm: {error}")),
+    }
+}
+
 fn submit_lastfm(
     row: &NativeScrobbleOutboxEntry,
     account: &NativeScrobbleAccount,
@@ -452,6 +757,35 @@ fn required_account_secret<'a>(value: Option<&'a str>, label: &str) -> Result<&'
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| format!("{label} is required"))
+}
+
+fn csv_value(
+    headers: &csv::StringRecord,
+    record: &csv::StringRecord,
+    aliases: &[&str],
+) -> Option<String> {
+    for alias in aliases {
+        if let Some(index) = headers
+            .iter()
+            .position(|header| normalize_header(header) == normalize_header(alias))
+        {
+            if let Some(value) = record.get(index) {
+                let value = value.trim();
+                if !value.is_empty() {
+                    return Some(value.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn normalize_header(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 fn lastfm_signature(params: &BTreeMap<String, String>, secret: &str) -> String {

@@ -15,7 +15,7 @@ Start here when you need the maintainer or user docs without hunting through the
 
 ## Maintainer Guides
 
-- [Architecture](architecture.md): runtime boundaries and the React -> Rust -> Python worker -> SQLite shape.
+- [Architecture](architecture.md): runtime boundaries and the React -> Rust controller -> Python expert-worker -> SQLite shape.
 - [Project Structure](project-structure.md): where new files belong and which generated paths stay ignored.
 - [Backend Routes](backend-routes.md): app endpoint reference and Rust-to-Python worker dispatch notes.
 - [Rust Route Migration Checklist](rust-route-migration-checklist.md): parity and cleanup checklist for moving routes out of Python.

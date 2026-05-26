@@ -10,7 +10,7 @@ from uuid import uuid4
 from .audiobooks import audiobook_where_clause
 from .clap_analysis import ClapAnalyzer, load_config, model_cached, save_track_analysis
 from .database import connect, invalidate_library_query_cache, rows_to_dicts
-from .podcasts import podcast_where_clause
+from .content_filters import podcast_where_clause
 
 
 def utc_now() -> datetime:

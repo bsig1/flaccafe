@@ -5,11 +5,11 @@ FLAC Cafe keeps UI concerns separate from library and recommendation logic.
 ```text
 React UI
   -> typed API helpers and Tauri commands
-  -> Rust app controller, media protocol, SQLite fast paths, or Python worker bridge
+  -> Rust app controller, media protocol, SQLite paths, or Python expert-worker bridge
   -> SQLite, Lofty metadata reader/writer, recommender, CLAP analysis
 ```
 
-The app started with a local HTTP backend because the scanner, metadata handling, and recommender are Python-first. React still talks through typed helpers, but desktop builds now use Rust as the app-facing controller. High-traffic SQLite-only paths run directly in Rust, local media bytes are served through the `flaccafe-media://` Tauri protocol, and features that need Python expertise are called as named Python worker actions. Rust owns the app-facing path mapping; Python does not receive or dispatch HTTP requests in the desktop runtime.
+The app started with a local HTTP backend because the scanner, metadata handling, and recommender were Python-first. React still talks through typed helpers, but desktop builds now use Rust as the app-facing controller. High-traffic SQLite paths, local media bytes, MusicBrainz/AcoustID matching, podcast RSS/download work, scrobbling flows, external-library imports, and common tag reads/writes run in Rust. Features that still need Python expertise are called as named Python worker actions. Rust owns the app-facing path mapping; Python does not receive or dispatch HTTP requests in the desktop runtime.
 
 ## Runtime Shape
 
@@ -26,13 +26,13 @@ For the maintained file-tree guide, see [Project Structure](project-structure.md
 ```text
 backend/
   app/
-    main.py               Python worker action functions and thin domain orchestration
+    main.py               Python expert-worker action functions and thin domain orchestration
     duplicates.py         duplicate scoring and grouping helpers
     worker.py             one-shot named-action worker entry point used by Rust
     clap_worker.py        persistent JSON-lines worker for CLAP batch inference
     database.py           Python test/worker DB helpers that share the Rust-owned schema file
     schema.sql            shared SQLite schema used by Rust before Python worker startup
-    scanner.py            legacy/test scanner helpers and Python worker batch compatibility
+    scanner.py            test scanner helpers and Python worker batch compatibility
     file_tags.py          specialized embedded artwork/lyrics and volume-tag writes
     recommender.py        scoring, cooldowns, similarity, and temperature sampling
     clap_analysis.py      optional CLAP genre and embedding analysis
@@ -71,7 +71,7 @@ src-tauri/
   src/native_playback.rs  rodio/cpal/Symphonia playback session commands
   src/native_playback/    playback DSP, EQ, limiter, and source wrappers
   src/native_library.rs   Rust app-controller command glue and shared DB helpers
-  src/native_library/     Rust app-controller feature modules, media protocol, CLAP/audio jobs, recommendations, history, inbox, and profiles
+  src/native_library/     Rust app-controller feature modules, media protocol, CLAP/audio jobs, online matching, podcasts, recommendations, history, inbox, and profiles
 
   scripts/
   dev.ps1                 Windows-friendly desktop dev runner
@@ -101,10 +101,10 @@ Tauri owns desktop integration work and selected SQLite fast paths. It can:
 - Clear worker state and stop any legacy backend process left on the old dev port.
 - Open folders, reveal files, and show desktop dialogs.
 - Play local audio through the optional Rust playback engine.
-- Serve WebView local track audio and artwork through the `flaccafe-media://` protocol, with Python fallback when embedded artwork still needs a specialist writer.
+- Serve WebView local track audio and artwork through the `flaccafe-media://` protocol.
 - Publish Windows System Media Transport Controls state.
-- Create and migrate the SQLite database before Python worker actions are spawned, run maintenance paths such as backup/reset/support bundles/startup self-checks/log tails, own scan and folder-watch orchestration plus filesystem diffing, read/write common audio tags with Lofty, then serve high-traffic SQLite reads and simple DB mutations when they mirror tested route behavior, including library browsing, albums/artists/playlists, history/stats, inbox review state, local podcast/scrobble state, saved recommendation profiles, local tool presets, device sync profiles, AutoDJ generation, FFmpeg install/conversion job orchestration, CLAP job orchestration, CLAP genre-tag previews, and local artwork cache serving.
+- Create and migrate the SQLite database before Python worker actions are spawned, run maintenance paths such as backup/reset/support bundles/startup self-checks/log tails, own scan and folder-watch orchestration plus filesystem diffing, read/write common audio tags with Lofty, then serve high-traffic SQLite reads and simple DB mutations when they mirror tested route behavior, including library browsing, albums/artists/playlists, history/stats, inbox review state, podcasts, scrobbling, external library imports, MusicBrainz/AcoustID matching, saved recommendation profiles, local tool presets, device sync profiles, AutoDJ generation, FFmpeg install/conversion job orchestration, CLAP job orchestration, CLAP genre-tag previews, and local artwork cache serving.
 - Resolve app paths through `src-tauri/src/python_worker/native_routes.rs` first, then forward only Python-owned work to named worker actions without exposing Python as an HTTP controller.
 - Package the app and declare capabilities.
 
-Python remains the owner for feed/download flows, MusicBrainz and AcoustID matching heuristics, embedded artwork/lyrics writes, and CLAP/Torch inference. Rust fast paths should stay deterministic and grouped by feature area as they grow; Python worker calls are the preferred bridge when the implementation depends on Python libraries that are still safer or more mature than the Rust equivalent.
+Python remains the owner for CLAP/Torch inference, CD ripping/playback helpers that have not moved yet, audio-conversion artwork copy helpers, and specialized embedded artwork/lyrics writes that still need safer fixtures before Rust writes them directly. Rust paths should stay deterministic and grouped by feature area as they grow; Python worker calls are reserved for expert tasks where the Python ecosystem is still materially safer than the Rust equivalent.

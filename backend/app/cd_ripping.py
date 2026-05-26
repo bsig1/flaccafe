@@ -21,7 +21,6 @@ from uuid import uuid4
 from .audio_conversion_jobs import audio_codec_args, creation_flags, resolve_ffmpeg_path, safe_component
 from .config import APP_STORAGE_ROOT
 from .database import connect
-from .musicbrainz_autotag import artist_credit_phrase, cover_art_for_release, lookup_discid_releases, lookup_release, parse_year, search_releases, text_similarity
 
 
 CD_OUTPUT_EXTENSIONS = {
@@ -74,6 +73,48 @@ def utc_now() -> datetime:
 
 def iso(value: datetime | None) -> str | None:
     return None if value is None else value.isoformat()
+
+
+def artist_credit_phrase(*args, **kwargs):
+    from .musicbrainz_autotag import artist_credit_phrase as impl
+
+    return impl(*args, **kwargs)
+
+
+def cover_art_for_release(*args, **kwargs):
+    from .musicbrainz_autotag import cover_art_for_release as impl
+
+    return impl(*args, **kwargs)
+
+
+def lookup_discid_releases(*args, **kwargs):
+    from .musicbrainz_autotag import lookup_discid_releases as impl
+
+    return impl(*args, **kwargs)
+
+
+def lookup_release(*args, **kwargs):
+    from .musicbrainz_autotag import lookup_release as impl
+
+    return impl(*args, **kwargs)
+
+
+def parse_year(*args, **kwargs):
+    from .musicbrainz_autotag import parse_year as impl
+
+    return impl(*args, **kwargs)
+
+
+def search_releases(*args, **kwargs):
+    from .musicbrainz_autotag import search_releases as impl
+
+    return impl(*args, **kwargs)
+
+
+def text_similarity(*args, **kwargs):
+    from .musicbrainz_autotag import text_similarity as impl
+
+    return impl(*args, **kwargs)
 
 
 def cd_tool_dir() -> Path:

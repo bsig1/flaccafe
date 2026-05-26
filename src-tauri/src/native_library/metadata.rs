@@ -106,6 +106,24 @@ pub(crate) fn write_common_rating(path: &Path, rating: Option<f64>) -> Result<()
         .map_err(|error| format!("Could not save audio rating tags with Lofty: {error}"))
 }
 
+pub(crate) fn read_embedded_artwork(path: &Path) -> Result<Option<(Vec<u8>, String)>, String> {
+    if !path.exists() || !path.is_file() {
+        return Ok(None);
+    }
+    let tagged_file = lofty::read_from_path(path)
+        .map_err(|error| format!("Could not read embedded artwork with Lofty: {error}"))?;
+    for tag in ordered_tags(&tagged_file) {
+        if let Some(picture) = tag.pictures().first() {
+            let media_type = picture
+                .mime_type()
+                .map(|mime| mime.as_str().to_string())
+                .unwrap_or_else(|| "image/jpeg".to_string());
+            return Ok(Some((picture.data().to_vec(), media_type)));
+        }
+    }
+    Ok(None)
+}
+
 fn read_file_metadata(
     path: &Path,
     path_text: Option<String>,

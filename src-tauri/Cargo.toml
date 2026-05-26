@@ -18,6 +18,10 @@ csv = "1"
 base64 = "0.22"
 sha1 = "0.10"
 md5 = "0.7"
+plist = "1"
+roxmltree = "0.20"
+trash = "5"
+urlencoding = "2"
 time = { version = "0.3", features = ["formatting"] }
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 ureq = { version = "2", features = ["json"] }

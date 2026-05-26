@@ -1,6 +1,6 @@
 # Project Structure
 
-FLAC Cafe is split by runtime boundary first, then by responsibility. The important rule is still: React owns presentation, Rust owns the app-facing controller and desktop integration work, and Python remains the expert worker for mature audio, metadata, network, and ML libraries.
+FLAC Cafe is split by runtime boundary first, then by responsibility. The important rule is still: React owns presentation, Rust owns the app-facing controller and desktop integration work, and Python remains the expert worker only where a Python library is still materially safer or more useful.
 
 ## Top-Level Tree
 
@@ -76,7 +76,7 @@ backend/
 └── requirements-clap.txt    optional CLAP/Torch-side dependencies
 ```
 
-Add backend features by starting with the narrowest module that owns the behavior. Keep `main.py` as the Python worker action surface, but move reusable scanner, recommender, metadata, duplicate, and file-operation logic into focused modules. Rust maps frontend paths to Rust handlers first, then to named worker actions only when Python expertise is needed. Startup-sensitive optional systems should stay behind lazy imports, action-local helpers, or persistent workers that Rust starts explicitly for a batch; `backend/app/startup_profile.py` records lightweight timing breadcrumbs for backend launch checks. Tests belong in `backend/tests/`.
+Add backend features by starting with the narrowest module that owns the behavior. Rust maps frontend paths to Rust handlers first, then to named worker actions only when Python expertise is needed. The Python worker is no longer the owner for MusicBrainz/AcoustID matching, podcasts, scrobbling flows, external-library imports, or file deletion/restoration. Startup-sensitive optional systems should stay behind lazy imports, action-local helpers, or persistent workers that Rust starts explicitly for a batch; `backend/app/startup_profile.py` records lightweight timing breadcrumbs for backend launch checks. Tests belong in `backend/tests/`.
 
 ## Frontend
 
@@ -152,7 +152,7 @@ src-tauri/
 └── build.rs
 ```
 
-Tauri should stay thin outside desktop integration concerns and selected SQLite fast paths. Put windowing, dialogs, process management, file reveal/open, Windows media-control work, the optional Rust playback engine, local media serving, small Rust-first database routes, common Lofty tag reads/writes, and Python worker dispatch here. Python remains the owner for embedded artwork/lyrics writes, MusicBrainz/AcoustID matching, feed/download flows, and CLAP/Torch inference; Rust should call the Python worker bridge for expert paths that still depend on stronger Python libraries.
+Tauri should stay thin outside desktop integration concerns and selected SQLite paths. Put windowing, dialogs, process management, file reveal/open, Windows media-control work, the optional Rust playback engine, local media serving, Rust-first database routes, common Lofty tag reads/writes, online matching, podcast/scrobbling/import flows, and Python worker dispatch here. Python remains the owner for CLAP/Torch inference, CD/audio helper work that has not moved yet, and specialized embedded artwork/lyrics writes; Rust should call the Python worker bridge only for expert paths that still depend on stronger Python libraries.
 
 ## Scripts
 
