@@ -152,6 +152,16 @@ pub(super) fn try_handle_native_json(
             state,
             required_param_i64(params, "entry_id")?,
         )?)?),
+        "scan_library" => Some(to_json(native_library::scan::native_scan_library(body)?)?),
+        "start_scan_library" => {
+            Some(to_json(native_library::scan::native_start_scan_library(body)?)?)
+        }
+        "get_scan_progress" => Some(to_json(native_library::scan::native_scan_progress(
+            required_param_string(params, "job_id")?,
+        )?)?),
+        "cancel_scan_job" => Some(to_json(native_library::scan::native_cancel_scan(
+            required_param_string(params, "job_id")?,
+        )?)?),
         "play_history" => Some(to_json(native_library::history::native_history(
             state,
             param_usize(params, "limit"),

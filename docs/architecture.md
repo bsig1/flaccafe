@@ -101,7 +101,7 @@ Tauri owns desktop-native work and selected SQLite fast paths. It can:
 - Play local audio through the optional Rust playback engine.
 - Serve WebView local track audio and artwork through the `flaccafe-media://` protocol, with Python fallback when embedded artwork still needs mutagen.
 - Publish Windows System Media Transport Controls state.
-- Create and migrate the SQLite database before Python worker actions are spawned, run maintenance paths such as backup/reset/support bundles/startup self-checks/log tails, then serve high-traffic SQLite reads and simple DB mutations when they mirror tested Python route behavior, including library browsing, albums/artists/playlists, history/stats, inbox review state, local podcast/scrobble state, saved recommendation profiles, local tool presets, device sync profiles, and AutoDJ generation.
+- Create and migrate the SQLite database before Python worker actions are spawned, run maintenance paths such as backup/reset/support bundles/startup self-checks/log tails, own scan job orchestration and filesystem diffing while batching mutagen reads through Python, then serve high-traffic SQLite reads and simple DB mutations when they mirror tested Python route behavior, including library browsing, albums/artists/playlists, history/stats, inbox review state, local podcast/scrobble state, saved recommendation profiles, local tool presets, device sync profiles, and AutoDJ generation.
 - Resolve app paths through `src-tauri/src/python_worker/native_routes.rs` first, then forward only Python-owned work to named worker actions without exposing Python as an HTTP controller.
 - Package the app and declare capabilities.
 

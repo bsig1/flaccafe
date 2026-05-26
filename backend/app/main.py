@@ -7415,6 +7415,32 @@ def native_snapshot_files_and_errors(request) -> tuple[list[dict] | None, list[s
     )
 
 
+def read_scan_metadata_batch(request: dict) -> dict:
+    """Python expert worker action for Rust-owned scanner jobs.
+
+    Rust owns discovery, diffing, progress, and SQLite writes. This action keeps
+    mutagen and the metadata cache in Python and only reads tags for paths Rust
+    has already decided are new or changed.
+    """
+
+    snapshots = native_file_snapshots(list(request.get("files") or [])) or []
+    results: list[dict] = []
+    with connect() as conn:
+        for snapshot in snapshots:
+            try:
+                metadata = read_metadata_cached(
+                    conn,
+                    snapshot.path,
+                    modified_at=snapshot.modified_at,
+                    file_size=snapshot.file_size,
+                )
+                results.append({"path": str(snapshot.path.resolve()), "metadata": metadata})
+            except Exception as exc:
+                results.append({"path": str(snapshot.path), "error": str(exc)})
+        conn.commit()
+    return {"results": results}
+
+
 def scan_library_paths(
     paths: list[str],
     save_paths: list[str] | None = None,

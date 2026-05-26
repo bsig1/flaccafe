@@ -107,6 +107,7 @@ Rust owns the app-facing API shape in `src-tauri/src/python_worker/routes.rs`. T
 - `POST /scan` runs a synchronous library scan.
 - `POST /scan/start` starts an asynchronous scan job.
 - `GET /scan/jobs/{job_id}` returns scan progress.
+- `POST /scan/jobs/{job_id}/cancel` requests cancellation for a running scan job.
 
 ## Playback Assets And Context
 

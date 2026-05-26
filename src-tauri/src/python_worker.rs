@@ -75,10 +75,51 @@ fn backend_worker_request_bytes(
     crate::native_library::ensure_database_ready()?;
     let body = body.filter(|value| !value.is_null());
     let action = routes::action_for_request(method, path)?;
+    worker_action_request_bytes(
+        action.action,
+        json!(action.params),
+        body,
+        action.metadata_only,
+    )
+}
+
+pub(crate) fn call_python_action_json(
+    action: &str,
+    params: Value,
+    body: Option<Value>,
+) -> Result<Value, String> {
+    let response = worker_action_request_bytes(action, params, body, false)?;
+    let parsed = if response.body.is_empty() {
+        json!({})
+    } else {
+        serde_json::from_slice::<Value>(&response.body)
+            .map_err(|error| format!("Python worker returned non-JSON data: {error}"))?
+    };
+    if !(200..300).contains(&response.status) {
+        let message = parsed
+            .get("detail")
+            .or_else(|| parsed.get("message"))
+            .or_else(|| parsed.get("error"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("{} {}", response.status, response.reason));
+        return Err(message);
+    }
+    Ok(parsed)
+}
+
+fn worker_action_request_bytes(
+    action: &str,
+    params: Value,
+    body: Option<Value>,
+    metadata_only: bool,
+) -> Result<BackendBytesResponse, String> {
+    crate::native_library::ensure_database_ready()?;
+    let body = body.filter(|value| !value.is_null());
     let payload = json!({
-        "action": action.action,
-        "params": action.params,
-        "metadata_only": action.metadata_only,
+        "action": action,
+        "params": params,
+        "metadata_only": metadata_only,
         "body": body,
     });
     let payload_text = serde_json::to_string(&payload)

@@ -157,6 +157,7 @@ PYTHON_ACTIONS: frozenset[str] = frozenset(
         "scan_library",
         "start_scan_library",
         "get_scan_progress",
+        "read_scan_metadata_batch",
         "update_rating",
         "stream_track_audio",
         "track_artwork",

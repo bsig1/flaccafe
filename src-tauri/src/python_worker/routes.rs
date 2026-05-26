@@ -895,6 +895,11 @@ static PYTHON_ROUTES: &[PythonRoute] = &[
         action: "get_scan_progress",
     },
     PythonRoute {
+        method: "POST",
+        template: "/scan/jobs/{job_id}/cancel",
+        action: "cancel_scan_job",
+    },
+    PythonRoute {
         method: "PATCH",
         template: "/tracks/{track_id}/rating",
         action: "update_rating",
