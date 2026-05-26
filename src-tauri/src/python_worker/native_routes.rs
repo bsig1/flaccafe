@@ -134,6 +134,12 @@ pub(super) fn try_handle_native_json(
             Some(response) => Some(to_json(response)?),
             None => None,
         },
+        "fetch_track_lyrics" => Some(to_json(
+            native_library::lyrics::native_fetch_track_lyrics(
+                state,
+                required_param_i64(params, "track_id")?,
+            )?,
+        )?),
         "update_track_lyrics" => {
             let target = body_string(&body, "target").unwrap_or_else(|| "database".to_string());
             if target.eq_ignore_ascii_case("file") {
