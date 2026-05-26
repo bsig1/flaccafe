@@ -140,6 +140,9 @@ pub(super) fn try_handle_native_json(
                 required_param_i64(params, "track_id")?,
             )?,
         )?),
+        "lookup_lyrics_by_metadata" => Some(to_json(
+            native_library::lyrics::native_lookup_lyrics_by_metadata(state, body.clone())?,
+        )?),
         "update_track_lyrics" => {
             let target = body_string(&body, "target").unwrap_or_else(|| "database".to_string());
             if target.eq_ignore_ascii_case("file") {

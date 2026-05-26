@@ -1,5 +1,5 @@
 use rusqlite::{params, OptionalExtension};
-use serde_json::{json, Value as JsonValue};
+use serde_json::Value as JsonValue;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::State;
@@ -8,6 +8,10 @@ use super::{
     database_path, get_setting, open_database, track_from_row, NativeLibraryState,
     NativeLyricsResponse, NativeTrack, TRACK_COLUMNS,
 };
+
+const LRCLIB_API_URL: &str = "https://lrclib.net/api/get";
+const LRCLIB_SEARCH_URL: &str = "https://lrclib.net/api/search";
+const FLAC_CAFE_USER_AGENT: &str = "FLAC Cafe/0.5";
 
 fn normalize_lyrics(value: Option<String>) -> Option<String> {
     value
@@ -170,34 +174,135 @@ fn cached_lyrics_path(track: &NativeTrack, is_synced: bool) -> PathBuf {
     ))
 }
 
-fn lyrics_response_from_json(
-    track_id: i64,
-    value: JsonValue,
-) -> Result<NativeLyricsResponse, String> {
-    Ok(NativeLyricsResponse {
-        track_id: value
-            .get("track_id")
-            .and_then(JsonValue::as_i64)
-            .unwrap_or(track_id),
-        lyrics: value
-            .get("lyrics")
+fn lyrics_response_from_json(track_id: i64, payload: &JsonValue) -> Option<NativeLyricsResponse> {
+    let synced = normalize_lyrics(
+        payload
+            .get("syncedLyrics")
             .and_then(JsonValue::as_str)
             .map(str::to_string),
-        source: value
-            .get("source")
+    );
+    let plain = normalize_lyrics(
+        payload
+            .get("plainLyrics")
             .and_then(JsonValue::as_str)
             .map(str::to_string),
-        is_synced: value
-            .get("is_synced")
-            .or_else(|| value.get("isSynced"))
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false),
-        sidecar_path: value
-            .get("sidecar_path")
-            .or_else(|| value.get("sidecarPath"))
-            .and_then(JsonValue::as_str)
-            .map(str::to_string),
+    );
+    let text = synced.clone().or(plain);
+    text.map(|lyrics| NativeLyricsResponse {
+        track_id,
+        lyrics: Some(lyrics),
+        source: Some(if synced.is_some() {
+            "lrclib:synced".to_string()
+        } else {
+            "lrclib:plain".to_string()
+        }),
+        is_synced: synced.is_some(),
+        sidecar_path: None,
     })
+}
+
+fn primary_artist_name(value: &str) -> String {
+    let first = value
+        .split([';', '|'])
+        .next()
+        .unwrap_or(value)
+        .trim()
+        .to_string();
+    let lower = first.to_ascii_lowercase();
+    for marker in [" feat.", " feat ", " featuring ", " with "] {
+        if let Some(index) = lower.find(marker) {
+            return first[..index].trim().to_string();
+        }
+    }
+    if first.is_empty() {
+        value.trim().to_string()
+    } else {
+        first
+    }
+}
+
+fn lrclib_read_json(url: &str, params: &[(&str, String)]) -> Result<JsonValue, String> {
+    let mut request = ureq::get(url).set("User-Agent", FLAC_CAFE_USER_AGENT);
+    for (key, value) in params {
+        request = request.query(key, value);
+    }
+    match request.call() {
+        Ok(response) => response
+            .into_json::<JsonValue>()
+            .map_err(|error| format!("Lyric lookup returned invalid JSON: {error}")),
+        Err(ureq::Error::Status(404, _)) => Err("not_found".to_string()),
+        Err(ureq::Error::Status(status, response)) => {
+            let message = response
+                .into_string()
+                .unwrap_or_default()
+                .trim()
+                .chars()
+                .take(300)
+                .collect::<String>();
+            if message.is_empty() {
+                Err(format!("HTTP {status}"))
+            } else {
+                Err(format!("HTTP {status}: {message}"))
+            }
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn lrclib_fetch(
+    track_id: i64,
+    title: &str,
+    artist: &str,
+    album: Option<&str>,
+    duration_seconds: Option<f64>,
+) -> Result<NativeLyricsResponse, String> {
+    let mut params = vec![
+        ("track_name", title.trim().to_string()),
+        ("artist_name", primary_artist_name(artist)),
+    ];
+    if let Some(album) = album.map(str::trim).filter(|value| !value.is_empty()) {
+        params.push(("album_name", album.to_string()));
+    }
+    let mut last_error: Option<String> = None;
+    if params.iter().any(|(key, _)| *key == "album_name") {
+        if let Some(duration) = duration_seconds.filter(|value| *value > 0.0) {
+            let mut exact_params = params.clone();
+            exact_params.push(("duration", duration.round().to_string()));
+            match lrclib_read_json(LRCLIB_API_URL, &exact_params) {
+                Ok(payload) => {
+                    if let Some(response) = lyrics_response_from_json(track_id, &payload) {
+                        return Ok(response);
+                    }
+                }
+                Err(error) if error == "not_found" => last_error = Some(error),
+                Err(error) if error.starts_with("HTTP ") => {
+                    return Err(format!("Lyric lookup failed: {error}"));
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+    }
+
+    match lrclib_read_json(LRCLIB_SEARCH_URL, &params) {
+        Ok(JsonValue::Array(candidates)) => {
+            for candidate in candidates {
+                if let Some(response) = lyrics_response_from_json(track_id, &candidate) {
+                    return Ok(response);
+                }
+            }
+        }
+        Ok(payload) => {
+            if let Some(response) = lyrics_response_from_json(track_id, &payload) {
+                return Ok(response);
+            }
+        }
+        Err(error) if error == "not_found" => return Err("No matching lyrics found".to_string()),
+        Err(error) => {
+            let detail = last_error.unwrap_or(error);
+            return Err(format!("Lyric lookup failed: {detail}"));
+        }
+    }
+    Err("No lyrics text found".to_string())
 }
 
 pub fn native_track_database_lyrics(
@@ -251,6 +356,29 @@ pub fn native_update_database_lyrics(
     save_database_lyrics(track_id, text, source, synced, None)
 }
 
+pub fn native_lookup_lyrics_by_metadata(
+    _state: State<'_, NativeLibraryState>,
+    body: JsonValue,
+) -> Result<NativeLyricsResponse, String> {
+    let title = json_string(&body, "title")
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "Track title and artist are required for lyric lookup".to_string())?;
+    let artist = json_string(&body, "artist")
+        .or_else(|| json_string(&body, "album_artist"))
+        .or_else(|| json_string(&body, "albumArtist"))
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "Track title and artist are required for lyric lookup".to_string())?;
+    lrclib_fetch(
+        json_i64(&body, "track_id")
+            .or_else(|| json_i64(&body, "trackId"))
+            .unwrap_or(0),
+        title.trim(),
+        artist.trim(),
+        json_string(&body, "album").as_deref(),
+        None,
+    )
+}
+
 pub fn native_fetch_track_lyrics(
     _state: State<'_, NativeLibraryState>,
     track_id: i64,
@@ -261,20 +389,13 @@ pub fn native_fetch_track_lyrics(
         &connection,
         "auto_write_fetched_lyrics_sidecars",
     ));
-    let response = crate::python_worker::call_python_action_json(
-        "lookup_lyrics_by_metadata",
-        json!({}),
-        Some(json!({
-            "track_id": track.id,
-            "title": display_title(&track),
-            "artist": track.artist.as_deref(),
-            "album": track.album.as_deref(),
-            "album_artist": track.album_artist.as_deref(),
-            "duration_seconds": track.duration_seconds,
-            "path": track.path.as_str(),
-        })),
+    let response = lrclib_fetch(
+        track.id,
+        &display_title(&track),
+        track.artist.as_deref().unwrap_or_default(),
+        track.album.as_deref(),
+        track.duration_seconds,
     )?;
-    let response = lyrics_response_from_json(track_id, response)?;
     if !auto_write_sidecar {
         return Ok(response);
     }
@@ -298,4 +419,15 @@ pub fn native_fetch_track_lyrics(
         response.is_synced,
         Some(sidecar.to_string_lossy().to_string()),
     )
+}
+
+fn json_string(value: &JsonValue, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(JsonValue::as_str)
+        .map(str::to_string)
+}
+
+fn json_i64(value: &JsonValue, key: &str) -> Option<i64> {
+    value.get(key).and_then(JsonValue::as_i64)
 }
