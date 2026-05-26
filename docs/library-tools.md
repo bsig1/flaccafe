@@ -97,13 +97,17 @@ Artwork matching uses the Cover Art Archive front image for the matched MusicBra
 
 The CLAP Genre Tags tool uses existing CLAP analysis results to preview predicted genre labels before copying them into the editable `genre` field. It is preview-first, supports a confidence threshold, and can be limited to tracks with empty genre tags.
 
-Applying the preview uses the same metadata writer as manual edits. If file tag writing is enabled in Settings, supported audio files are updated; otherwise the genre changes stay in SQLite.
+Rust builds and applies the preview for SQLite-only changes. If file tag writing is enabled in Settings, the apply step delegates the audio-file write to the Python mutagen metadata worker; otherwise the genre changes stay in SQLite.
 
 ## Volume Tags
 
 The Volume Tags tool scans selected tracks with FFmpeg and previews ReplayGain-style track gain, album gain, and peak values before writing anything. The Library right-click Tagging menu can send the current selection straight to this tool.
 
 Manual mode lets you mark selected tracks with known gain/peak values directly, without running an FFmpeg analysis. Applying stores the values in SQLite for playback normalization. When "Write tags to audio files" is enabled, FLAC Cafe also writes compatible metadata tags for FLAC, MP3, M4A, Ogg, and Opus files. The audio samples are not altered.
+
+## Audio Conversion
+
+Audio conversion preview, target path generation, estimated output sizing, FFmpeg installer jobs, conversion progress, ETA, cancellation, and partial-output cleanup are Rust-owned. FFmpeg does the actual transcoding, and embedded artwork copy still delegates to the Python mutagen worker because container-specific tag writing remains safer there.
 
 ## File Organization
 

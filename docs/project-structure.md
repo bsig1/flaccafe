@@ -1,6 +1,6 @@
 # Project Structure
 
-FLAC Cafe is split by runtime boundary first, then by responsibility. The important rule is still: React owns presentation, Python owns scanner/file/network/ML behavior, Rust owns native desktop work plus selected SQLite fast paths, and Tauri keeps those native and worker paths behind typed bridges.
+FLAC Cafe is split by runtime boundary first, then by responsibility. The important rule is still: React owns presentation, Rust owns the app-facing controller and native desktop work, and Python remains the expert worker for mature audio, metadata, network, and ML libraries.
 
 ## Top-Level Tree
 
@@ -32,8 +32,9 @@ backend/
 ├── app/
 │   ├── main.py              Python worker action functions and thin domain orchestration
 │   ├── worker.py            one-shot named-action worker entry point used by Rust/Tauri
+│   ├── clap_worker.py       persistent JSON-lines worker used during CLAP analysis batches
 │   ├── schemas.py           Pydantic request/response models
-│   ├── database.py          SQLite schema setup and migration helpers
+│   ├── database.py          Python test/worker DB helpers sharing the Rust-owned schema
 â”‚   â”œâ”€â”€ duplicates.py        duplicate scoring and grouping helpers
 │   ├── scanner.py           recursive library scanning and mutagen metadata reads
 │   ├── file_tags.py         opt-in metadata, rating, and lyric writes to audio files
@@ -52,7 +53,7 @@ backend/
 │   ├── radio.py             web radio bookmark storage and last-played tracking
 │   ├── scan_jobs.py         async scan job tracking
 │   ├── scrobbling.py        ListenBrainz/Last.fm outbox, loved tracks, and history import
-│   ├── analysis_jobs.py     async audio-analysis job tracking
+│   ├── analysis_jobs.py     legacy/helper audio-analysis job shapes used by Python-owned flows
 │   ├── cd_ripping.py        CD drive detection, MusicBrainz lookup, ripping jobs, and playback commands
 │   ├── clap_analysis.py     optional CLAP genre/embedding analysis
 │   ├── clap_install_jobs.py optional ML runtime installation jobs
@@ -75,7 +76,7 @@ backend/
 └── requirements-clap.txt    optional CLAP/Torch-side dependencies
 ```
 
-Add backend features by starting with the narrowest module that owns the behavior. Keep `main.py` as the Python worker action surface, but move reusable scanner, recommender, metadata, duplicate, and file-operation logic into focused modules. Rust maps frontend paths to named worker actions before Python is called. Startup-sensitive optional systems should stay behind lazy imports or action-local helpers; `backend/app/startup_profile.py` records lightweight timing breadcrumbs for backend launch checks. Tests belong in `backend/tests/`.
+Add backend features by starting with the narrowest module that owns the behavior. Keep `main.py` as the Python worker action surface, but move reusable scanner, recommender, metadata, duplicate, and file-operation logic into focused modules. Rust maps frontend paths to native handlers first, then to named worker actions only when Python expertise is needed. Startup-sensitive optional systems should stay behind lazy imports, action-local helpers, or persistent workers that Rust starts explicitly for a batch; `backend/app/startup_profile.py` records lightweight timing breadcrumbs for backend launch checks. Tests belong in `backend/tests/`.
 
 ## Frontend
 
@@ -127,6 +128,8 @@ src-tauri/
 │   ├── main.rs              app setup, folder/file commands, desktop command registration
 │   ├── native_library.rs    native SQLite command glue and shared DB helpers
 │   ├── native_library/      native SQLite feature modules
+│   │   ├── analysis/          CLAP job orchestration, persistent worker protocol, and genre-tag tools
+│   │   ├── audio_conversion.rs FFmpeg install/conversion preview and job orchestration
 │   │   ├── inbox.rs           Inbox notes/review state fast paths
 │   │   ├── library_tools.rs   saved local tool state such as presets and sync profiles
 │   │   ├── media_protocol.rs  WebView local audio/artwork protocol
@@ -149,7 +152,7 @@ src-tauri/
 └── build.rs
 ```
 
-Tauri should stay thin outside native desktop concerns and selected SQLite fast paths. Put native windowing, dialogs, process management, file reveal/open, Windows media-control work, the optional Rust playback engine, local media serving, small native-first database routes, and Python worker dispatch here. Python remains the owner for scanning, mutagen writes, online services, optional ML, and complex library tools; Rust should call the Python worker bridge for those expert paths instead of reimplementing mature Python libraries.
+Tauri should stay thin outside native desktop concerns and selected SQLite fast paths. Put native windowing, dialogs, process management, file reveal/open, Windows media-control work, the optional Rust playback engine, local media serving, small native-first database routes, and Python worker dispatch here. Python remains the owner for mutagen file reads/writes, embedded artwork/lyrics writes, MusicBrainz/AcoustID matching, feed/download flows, and CLAP/Torch inference; Rust should call the Python worker bridge for those expert paths instead of reimplementing mature Python libraries.
 
 ## Scripts
 
@@ -159,7 +162,7 @@ scripts/
 ├── run_backend.ps1           Python worker health-check helper
 ├── stop_dev.ps1              stops known dev server/backend processes
 ├── test_backend.ps1          backend unittest helper using `.venv` when available
-├── check_backend_routes.py   verifies route docs against Python route decorators
+├── check_backend_routes.py   verifies route docs against the Rust-owned route table
 ├── build_backend_sidecar.ps1 builds the packaged Python backend folder used by Tauri
 ├── build_msi.ps1             MSI packaging helper
 ├── ci_installer_roundtrip.ps1 installs, health-checks, and uninstalls the MSI in CI/disposable profiles

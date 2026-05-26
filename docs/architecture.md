@@ -15,6 +15,7 @@ The app started with a local HTTP backend because the scanner, metadata handling
 
 - `npm run dev` and `npm run desktop` run the Tauri shell against the Vite preview and Python worker bridge.
 - Packaged builds invoke the bundled Python executable per worker request and hide the console window.
+- CLAP batch analysis is Rust-orchestrated, but uses a persistent Python worker during the batch so the Torch model is loaded once.
 - Optional CLAP/Torch dependencies live outside the bundled backend in an app-managed ML runtime.
 - Startup stays intentionally light: native health is available immediately in desktop builds, and optional CLAP/tool probes remain lazy.
 
@@ -28,6 +29,7 @@ backend/
     main.py               Python worker action functions and thin domain orchestration
     duplicates.py         duplicate scoring and grouping helpers
     worker.py             one-shot named-action worker entry point used by Rust
+    clap_worker.py        persistent JSON-lines worker for CLAP batch inference
     database.py           Python test/worker DB helpers that share the Rust-owned schema file
     schema.sql            shared SQLite schema used by Rust before Python worker startup
     scanner.py            recursive audio scan and mutagen metadata parsing
@@ -69,7 +71,7 @@ src-tauri/
   src/native_playback.rs  rodio/cpal/Symphonia playback session commands
   src/native_playback/    playback DSP, EQ, limiter, and source wrappers
   src/native_library.rs   native SQLite command glue and shared DB helpers
-  src/native_library/     native SQLite response types, storage/search helpers, history, inbox, profiles, media protocol, and recommendation modules
+  src/native_library/     native SQLite feature modules, media protocol, CLAP/audio jobs, recommendations, history, inbox, and profiles
 
   scripts/
   dev.ps1                 Windows-friendly desktop dev runner
@@ -101,8 +103,8 @@ Tauri owns desktop-native work and selected SQLite fast paths. It can:
 - Play local audio through the optional Rust playback engine.
 - Serve WebView local track audio and artwork through the `flaccafe-media://` protocol, with Python fallback when embedded artwork still needs mutagen.
 - Publish Windows System Media Transport Controls state.
-- Create and migrate the SQLite database before Python worker actions are spawned, run maintenance paths such as backup/reset/support bundles/startup self-checks/log tails, own scan and folder-watch orchestration plus filesystem diffing while batching mutagen reads through Python, then serve high-traffic SQLite reads and simple DB mutations when they mirror tested Python route behavior, including library browsing, albums/artists/playlists, history/stats, inbox review state, local podcast/scrobble state, saved recommendation profiles, local tool presets, device sync profiles, and AutoDJ generation.
+- Create and migrate the SQLite database before Python worker actions are spawned, run maintenance paths such as backup/reset/support bundles/startup self-checks/log tails, own scan and folder-watch orchestration plus filesystem diffing while batching mutagen reads through Python, then serve high-traffic SQLite reads and simple DB mutations when they mirror tested Python route behavior, including library browsing, albums/artists/playlists, history/stats, inbox review state, local podcast/scrobble state, saved recommendation profiles, local tool presets, device sync profiles, AutoDJ generation, FFmpeg install/conversion job orchestration, CLAP job orchestration, CLAP genre-tag previews, and local artwork cache serving.
 - Resolve app paths through `src-tauri/src/python_worker/native_routes.rs` first, then forward only Python-owned work to named worker actions without exposing Python as an HTTP controller.
 - Package the app and declare capabilities.
 
-Python remains the owner for scanner behavior, mutagen file writes, feed/network jobs, online services, optional ML, and complex library tools. Rust fast paths should stay deterministic and grouped by feature area as they grow; Python worker calls are the preferred bridge when the implementation depends on Python libraries.
+Python remains the owner for mutagen file reads/writes, feed/download flows, MusicBrainz and AcoustID matching heuristics, embedded artwork/lyrics writes, and CLAP/Torch inference. Rust fast paths should stay deterministic and grouped by feature area as they grow; Python worker calls are the preferred bridge when the implementation depends on Python libraries.

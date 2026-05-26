@@ -35,6 +35,12 @@ For manual development installs, use one of these:
 
 The first analysis run downloads the configured Hugging Face model into `backend\models\clap` by default. The Analysis page lets you change the model id, cache directory, and number of seconds analyzed per track.
 
+## Runtime Flow
+
+Rust owns the Analysis page job state: candidate selection, progress, ETA, pause/resume/cancel, failure marking, and SQLite writes for completed analysis rows. During a batch, Rust starts `backend.app.clap_worker` as a persistent JSON-lines Python worker and sends one track at a time to it. That worker owns only the Python-specialist part: loading Transformers/Torch and returning CLAP genre, tag, and embedding data.
+
+This split keeps the app-facing controller native and avoids paying Python/Torch startup for every track, while still leaving CLAP inference in the mature Python ecosystem.
+
 ## Default Model
 
 The default model is `laion/clap-htsat-fused`, which Hugging Face exposes as a Transformers-compatible CLAP model for zero-shot audio classification and audio/text embeddings.
@@ -53,4 +59,4 @@ CLAP output is stored in SQLite only:
 
 AutoDJ uses CLAP embeddings for seed-track audio similarity when the Similarity slider is above zero. Embedded metadata genre is still used automatically.
 
-To turn CLAP's predicted genre into editable metadata, use File Management > CLAP Genre Tags. That tool previews the change first and then applies it through the regular metadata writer, so audio files are only modified when file tag writing is enabled in Settings.
+To turn CLAP's predicted genre into editable metadata, use File Management > CLAP Genre Tags. Rust builds the preview and applies SQLite-only changes directly. If file writing is enabled, the apply step delegates the actual tag write to the Python mutagen worker, so audio files are only modified through the same safety path as manual metadata edits.

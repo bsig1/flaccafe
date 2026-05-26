@@ -1,6 +1,6 @@
 # Rust Route Migration Checklist
 
-Use this checklist before removing a Python worker fallback for a route. The goal is to make route migrations boring, measurable, and reversible while Python remains the expert worker for mutagen, CLAP/Torch, embedded artwork/lyrics writes, and other library-heavy tasks.
+Use this checklist before removing a Python worker fallback for a route. The goal is to make route migrations boring, measurable, and reversible while Python remains the expert worker for mutagen, CLAP/Torch inference, embedded artwork/lyrics writes, MusicBrainz/AcoustID matching, feeds/downloads, and other library-heavy tasks.
 
 ## Per-Route Checklist
 
@@ -14,13 +14,14 @@ Use this checklist before removing a Python worker fallback for a route. The goa
 ## Keep Python When
 
 - The route reads or writes audio tags with mutagen.
-- The route runs CLAP/Torch or another Python-first ML stack.
+- The route runs actual CLAP/Torch inference or another Python-first ML stack.
 - The route depends on messy embedded artwork or embedded lyrics behavior that does not yet have golden fixtures.
 - The Rust ecosystem path is less mature than the current Python library for that exact file format or service.
 
 ## Migration Notes
 
 - Prefer small feature modules under `src-tauri/src/native_library/` over expanding `native_library.rs`.
+- Keep orchestration native when practical. For example, CLAP candidate selection, progress, pause/resume/cancel, and SQLite result writes belong in Rust, while the persistent Python CLAP worker only performs inference.
 - Keep app-facing route names stable. React should not need to know whether Rust or Python handled the route.
 - Use `/diagnostics/python-worker-usage` during dev sessions to see which Python actions still run often.
 - Remove completed migration bullets from `TODO.md` in the same commit as the feature migration.

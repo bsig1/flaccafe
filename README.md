@@ -47,10 +47,10 @@ Windows beta installers are published on the [GitHub Releases page](https://gith
 
 - Desktop shell: Tauri v2
 - Frontend: React, TypeScript, Vite, Tailwind CSS
-- Backend: Rust app-facing controller plus a one-shot Python worker for mutagen, scanning, network jobs, and optional ML
+- Backend: Rust app-facing controller plus Python expert workers for mutagen, scanning, network jobs, and optional ML
 - Optional analysis: CLAP through Transformers and Torch
 
-The MVP started with FastAPI because it kept music logic in Python and made early testing simple. The desktop build now uses Rust as the app-facing controller for SQLite reads, lightweight mutations, local media URLs, and all frontend-facing dispatch. Python remains the expert worker for scanning, mutagen file writes, feed/network jobs, online services, and optional ML. Rust resolves app paths to named Python actions, so the packaged app no longer bundles, starts, or routes through a Python HTTP server.
+The MVP started with FastAPI because it kept music logic in Python and made early testing simple. The desktop build now uses Rust as the app-facing controller for SQLite reads, lightweight mutations, local media URLs, and all frontend-facing dispatch. Python remains the expert worker for scanning, mutagen file writes, feed/network jobs, online services, and optional ML. Most Python actions are short-lived named workers; CLAP analysis uses a persistent Python model worker so Torch stays warm during a batch. Rust resolves app paths to named Python actions, so the packaged app no longer bundles, starts, or routes through a Python HTTP server.
 
 ## Repo Layout
 
@@ -86,7 +86,7 @@ Run the desktop shell:
 npm run desktop
 ```
 
-`npm run dev` is now a Windows-friendly alias for the desktop shell. The Python side runs as one-shot worker calls instead of a long-running HTTP backend. If an old dev server is still running:
+`npm run dev` is now a Windows-friendly alias for the desktop shell. The Python side runs as named worker calls instead of a long-running HTTP backend. If an old dev server is still running:
 
 ```powershell
 .\scripts\stop_dev.ps1

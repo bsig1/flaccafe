@@ -25,9 +25,10 @@
 - Split `backend/app/main.py` into domain worker modules now that Rust owns route dispatch.
 - Continue shrinking `frontend/src/app/pages/LibraryPage.tsx` by moving album, artist, completion, and playlist panes into `pages/library/` components.
 - Continue splitting `src-tauri/src/native_library.rs` into feature modules as native SQLite paths grow.
+- Split the remaining large native feature modules by domain: start with `library_tools.rs` into tags/device-sync/backup/import helpers, then split `audio_conversion.rs` into preview, FFmpeg install, and conversion job modules if it grows again.
 
 ## Rust/Python Runtime Follow-Up
-- Desktop builds now route app-facing calls through Rust first. SQLite-only and media-byte paths stay native; scanner, mutagen, CLAP, CD, podcast/network, lyrics, and tagging paths run through named one-shot Python worker actions.
+- Desktop builds now route app-facing calls through Rust first. SQLite-only and media-byte paths stay native; Python is called only for expert work such as mutagen reads/writes, MusicBrainz/AcoustID matching, feed/download flows, embedded artwork/lyrics writes, and CLAP/Torch inference. Most Python actions are one-shot; CLAP analysis uses a Rust-managed persistent worker for the batch.
 - Add parity tests for the Python worker bridge around CLAP status/jobs, metadata writes, audio conversion, CD setup/playback, podcast downloads, lyrics lookup/update, and MusicBrainz/AcoustID tagging.
 - Consider persistent worker pooling only if one-shot worker startup becomes visible on long-running operations. Prefer correctness and simple process isolation until profiling proves it is too slow.
 
@@ -73,7 +74,7 @@
 - Moved duplicate embedding similarity math into Rust duplicate review groups.
 - Moved device sync drive probing, preview, file copy, target path generation, and playlist export into Rust.
 - Moved Chromaprint `fpcalc` process invocation and acoustic fingerprint pass state into Rust while keeping MusicBrainz/AcoustID matching heuristics in Python.
-- Moved audio conversion preview, target path generation, and estimated output sizing into Rust while keeping FFmpeg job execution and embedded artwork writes in Python.
+- Moved audio conversion preview, target path generation, and estimated output sizing into Rust.
 - Moved ListenBrainz and Last.fm outbox submission into Rust, including Last.fm request signing and submitted/failed row updates.
 - Moved LRCLIB online lyric lookup into Rust for both track fetches and metadata/CD lookups while keeping embedded lyric reads/writes in Python.
 - Moved album artwork local sidecar selection, simple web sidecar downloads, cache invalidation, and direct album-art media serving into Rust while keeping embedded artwork extraction/writes in Python.
@@ -83,6 +84,7 @@
 - Moved CLAP genre-tag preview/application into Rust; explicit file writes still delegate to the Python mutagen metadata worker.
 - Hardened native audio conversion cancellation so canceling terminates the active FFmpeg child process and removes the partial output file.
 - Finished native sidecar artwork cache storage and stale-cache checks; embedded artwork extraction/writes still delegate to Python until Rust tag-writing safety is proven.
+- Split the Rust CLAP analysis module into focused job orchestration, persistent-worker protocol, and genre-tag tool modules.
 - Added `flaccafe-media://localhost/python-bytes/...` for Python-owned byte responses such as album art and CD live audio.
 - Switched `npm run dev` to desktop dev so local development exercises the same Rust-to-Python worker path as packaged builds.
 
