@@ -194,6 +194,7 @@ const VISUALIZER_BINS: usize = 48;
 const VISUALIZER_WAVEFORM_POINTS: usize = 96;
 const VISUALIZER_STALE_MS: u64 = 750;
 const FADE_STOP_PAD_MS: u64 = 80;
+const CLICKLESS_START_RAMP_MS: u64 = 6;
 
 static NEXT_DIAGNOSTIC_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -1123,6 +1124,8 @@ where
     channel_index: usize,
     check_countdown: usize,
     output_gain: f32,
+    startup_ramp_total_frames: u64,
+    startup_ramp_elapsed_frames: u64,
     visualizer_pending_samples: Vec<f32>,
     visualizer_frame_sum: f32,
 }
@@ -1140,6 +1143,7 @@ where
         gain_control: NativeGainControl,
         visualizer: Arc<Mutex<NativeVisualizerState>>,
     ) -> Self {
+        let sample_rate = input.sample_rate().get();
         let active_settings = settings
             .lock()
             .map(|settings| settings.normalized())
@@ -1155,6 +1159,11 @@ where
             channel_index: 0,
             check_countdown: 0,
             output_gain: 1.0,
+            startup_ramp_total_frames: fade_frame_count(
+                Duration::from_millis(CLICKLESS_START_RAMP_MS),
+                sample_rate,
+            ),
+            startup_ramp_elapsed_frames: 0,
             visualizer_pending_samples: Vec::with_capacity(VISUALIZER_FLUSH_SAMPLES),
             visualizer_frame_sum: 0.0,
         };
@@ -1244,7 +1253,7 @@ where
         if self.active_settings.limiter_enabled {
             sample = soft_limit(sample);
         }
-        sample *= self.output_gain;
+        sample *= self.output_gain * self.startup_ramp_gain();
         self.visualizer_frame_sum += sample;
         let frame_complete = self.channel_index + 1 >= channels;
         self.channel_index = (self.channel_index + 1) % channels;
@@ -1254,6 +1263,19 @@ where
             self.push_visualizer_sample(mono);
         }
         sample
+    }
+
+    fn startup_ramp_gain(&mut self) -> f32 {
+        if self.startup_ramp_total_frames == 0
+            || self.startup_ramp_elapsed_frames >= self.startup_ramp_total_frames
+        {
+            return 1.0;
+        }
+        self.startup_ramp_elapsed_frames += 1;
+        smooth_fade_progress(
+            (self.startup_ramp_elapsed_frames as f32 / self.startup_ramp_total_frames as f32)
+                .clamp(0.0, 1.0),
+        )
     }
 
     fn push_visualizer_sample(&mut self, sample: f32) {
@@ -1326,6 +1348,7 @@ where
     fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
         self.input.try_seek(pos)?;
         self.rebuild_filters(true);
+        self.startup_ramp_elapsed_frames = 0;
         Ok(())
     }
 }
@@ -2022,7 +2045,15 @@ mod tests {
         let rendered: Vec<f32> = source.collect();
 
         assert_eq!(rendered.len(), samples.len());
-        for (actual, expected) in rendered.iter().zip(samples.iter()) {
+        let ramp_samples = fade_frame_count(Duration::from_millis(CLICKLESS_START_RAMP_MS), 48_000)
+            as usize
+            * usize::from(channels);
+        assert!(rendered
+            .iter()
+            .zip(samples.iter())
+            .take(ramp_samples)
+            .any(|(actual, expected)| (actual - expected).abs() > f32::EPSILON));
+        for (actual, expected) in rendered.iter().zip(samples.iter()).skip(ramp_samples) {
             assert!((actual - expected).abs() < f32::EPSILON);
         }
     }

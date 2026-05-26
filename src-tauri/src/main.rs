@@ -21,6 +21,8 @@ use std::time::{Duration, Instant};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
+mod folder_watch;
+mod native_library;
 mod native_playback;
 mod path_ops;
 mod smtc;
@@ -419,6 +421,8 @@ fn main() {
     let app = tauri::Builder::default()
         .manage(smtc::SmtcState::default())
         .manage(native_playback::NativePlaybackState::default())
+        .manage(folder_watch::NativeFolderWatchState::default())
+        .manage(native_library::NativeLibraryState::default())
         .manage(BackendState::default())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
@@ -442,6 +446,12 @@ fn main() {
             native_playback::native_prepare_next_file,
             native_playback::native_output_backends,
             native_playback::native_list_output_devices,
+            folder_watch::native_folder_watch_start,
+            folder_watch::native_folder_watch_stop,
+            folder_watch::native_folder_watch_status,
+            folder_watch::native_folder_watch_mark_event,
+            native_library::native_tracks_page,
+            native_library::native_remove_library_source,
             path_ops::native_path_info,
             path_ops::native_scan_audio_paths,
             path_ops::native_recycle_paths,
@@ -469,6 +479,7 @@ fn main() {
             event,
             tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
         ) {
+            folder_watch::stop_native_folder_watch(app_handle);
             stop_packaged_backend(app_handle);
         }
     });

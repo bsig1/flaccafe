@@ -147,7 +147,15 @@ import {
   openExternalUrl,
 } from "../lib/externalLinks";
 import {
+  nativeFetchTrackPage,
+  nativeRemoveLibrarySource,
+} from "../lib/nativeLibrary";
+import {
   isNativeUnavailable,
+  listenNativeFolderWatchEvents,
+  nativeFolderWatchMarkEvent,
+  nativeFolderWatchStart,
+  nativeFolderWatchStop,
   nativePathInfo,
   nativeRecyclePaths,
   nativeScanAudioPaths,
@@ -195,6 +203,7 @@ import type {
   InboxResponse,
   HistoryStatsResponse,
   LibraryHealthResponse,
+  LibrarySourceRemoveResponse,
   LibraryStatsResponse,
   LogTailResponse,
   LyricsLookupRequest,
@@ -215,6 +224,7 @@ import type {
   StartupDiagnosticsResponse,
   TagRegexReplaceResponse,
   Track,
+  TrackPage,
   TrackMetadataUpdate,
 } from "../types/api";
 import { Sidebar } from "./components/Sidebar";
@@ -734,6 +744,7 @@ export default function App() {
   const libraryCacheQueryKeyRef = useRef<string | null>(startupLibrarySnapshot ? defaultLibraryTrackQueryKey() : null);
   const clapStatusRequestIdRef = useRef(0);
   const lastFolderWatchNotificationIdRef = useRef<string | null>(null);
+  const nativeFolderWatchRefreshTimerRef = useRef<number | null>(null);
   const hideFilePaths = uiPreferences.hideFilePaths;
   const libraryVisibleColumns = normalizeLibraryColumns(uiPreferences.libraryVisibleColumns);
   const setHideFilePaths = (value: boolean) =>
@@ -986,6 +997,15 @@ export default function App() {
     return libraryTrackQueryKey(debouncedSearch, debouncedAdvancedTrackSearch, librarySort);
   }
 
+  function hasAdvancedLibraryFilters(filters: AdvancedTrackSearchFilters) {
+    return Object.entries(filters).some(([, value]) => {
+      if (typeof value === "boolean") {
+        return value;
+      }
+      return value !== undefined && value !== null && String(value).trim() !== "" && value !== "any";
+    });
+  }
+
   async function loadTracksPage(reset: boolean, offset = 0, limit = LIBRARY_PAGE_SIZE): Promise<boolean> {
     const boundedOffset = Math.max(0, offset);
     const queryKey = currentLibraryTrackQueryKey();
@@ -1003,7 +1023,22 @@ export default function App() {
     libraryPageRequestsInFlightRef.current.add(requestKey);
     beginLibraryLoad();
     try {
-      const response = await fetchTrackPage({
+      let response: TrackPage | null = null;
+      if (!hasAdvancedLibraryFilters(debouncedAdvancedTrackSearch)) {
+        try {
+          response = await nativeFetchTrackPage({
+            search: debouncedSearch,
+            limit,
+            offset: boundedOffset,
+            sortBy: librarySort.key,
+            sortDirection: librarySort.direction,
+          });
+        } catch (error) {
+          // Native SQLite is a fast path. FastAPI remains the compatibility path
+          // for advanced installs, locked databases, and browser preview.
+        }
+      }
+      response ??= await fetchTrackPage({
         search: debouncedSearch,
         limit,
         offset: boundedOffset,
@@ -1149,7 +1184,17 @@ export default function App() {
 
   async function loadFolderWatchStatus(showError = false) {
     try {
-      applyFolderWatchStatus(await fetchFolderWatchStatus(), false);
+      const response = await fetchFolderWatchStatus();
+      applyFolderWatchStatus(response, false);
+      try {
+        if (response.enabled && response.folder_path) {
+          await nativeFolderWatchStart([response.folder_path], 1200);
+        } else {
+          await nativeFolderWatchStop();
+        }
+      } catch {
+        // Native events are an acceleration layer; Python's watcher remains authoritative.
+      }
     } catch (error) {
       if (showError) {
         setStatus(error instanceof Error ? error.message : "Could not load folder watch status");
@@ -1861,6 +1906,7 @@ export default function App() {
           await startFolderWatch(result.folder_paths[0] ?? result.folder_path, folderWatchStatus?.interval_seconds ?? 45, 300, nativeSnapshot),
           false,
         );
+        await nativeFolderWatchStart([result.folder_paths[0] ?? result.folder_path], 1200);
       } catch {
         await loadFolderWatchStatus();
       }
@@ -1885,7 +1931,12 @@ export default function App() {
 
     setStatus("Removing source from library");
     try {
-      const response = await removeLibrarySource(trimmedPath);
+      let response: LibrarySourceRemoveResponse;
+      try {
+        response = await nativeRemoveLibrarySource(trimmedPath);
+      } catch (error) {
+        response = await removeLibrarySource(trimmedPath);
+      }
       const removedKeys = new Set([sourceFolderKey(trimmedPath), sourceFolderKey(response.path)]);
       const savedKeys = new Set(response.library_paths.map(sourceFolderKey));
       const unsavedLocalFolders = libraryFolders.filter((item) => {
@@ -1932,6 +1983,11 @@ export default function App() {
       const nativeSnapshot = await buildNativeScanSnapshot([targetPath], "Checking watched folder");
       const response = await startFolderWatch(targetPath, intervalSeconds, 300, nativeSnapshot);
       applyFolderWatchStatus(response, false);
+      try {
+        await nativeFolderWatchStart([targetPath], 1200);
+      } catch {
+        // Python polling still covers folder watch when the desktop event watcher is unavailable.
+      }
       setStatus("Folder watch is running. Pending changes will wait for your review.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not start folder watch");
@@ -1942,6 +1998,11 @@ export default function App() {
     try {
       const response = await stopFolderWatch();
       applyFolderWatchStatus(response, false);
+      try {
+        await nativeFolderWatchStop();
+      } catch {
+        // Ignore desktop watcher cleanup failures; Python watch state is already stopped.
+      }
       setStatus("Folder watch stopped");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not stop folder watch");
@@ -1962,6 +2023,30 @@ export default function App() {
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not check watched folder");
     }
+  }
+
+  function scheduleNativeFolderWatchRefresh(eventCount: number, error?: string | null) {
+    if (nativeFolderWatchRefreshTimerRef.current !== null) {
+      window.clearTimeout(nativeFolderWatchRefreshTimerRef.current);
+    }
+    void nativeFolderWatchMarkEvent(eventCount, error).catch(() => {
+      // Best-effort diagnostics only.
+    });
+    nativeFolderWatchRefreshTimerRef.current = window.setTimeout(() => {
+      nativeFolderWatchRefreshTimerRef.current = null;
+      const targetPath = folderWatchStatus?.folder_path || uniqueFolderPaths([...libraryFolders, folderPath])[0] || settings?.library_path || null;
+      if (!targetPath) {
+        return;
+      }
+      void (async () => {
+        try {
+          const nativeSnapshot = await buildNativeScanSnapshot([targetPath], "Updating watched folder changes");
+          applyFolderWatchStatus(await refreshFolderWatch(targetPath, 300, nativeSnapshot), true);
+        } catch {
+          // The normal polling watcher will try again; don't interrupt playback/UI with a background failure.
+        }
+      })();
+    }, 900);
   }
 
   async function applyFolderWatchResponse(response: FolderWatchApplyResponse) {
@@ -4296,8 +4381,34 @@ export default function App() {
       if (undoTimerRef.current !== null) {
         window.clearTimeout(undoTimerRef.current);
       }
+      if (nativeFolderWatchRefreshTimerRef.current !== null) {
+        window.clearTimeout(nativeFolderWatchRefreshTimerRef.current);
+      }
     };
   }, []);
+
+  useEffect(() => {
+    let cleanup: (() => void) | null = null;
+    let disposed = false;
+    void listenNativeFolderWatchEvents((event) => {
+      const error = event.paths.find((path) => path.startsWith("watch-error:") || path.startsWith("watcher-error:")) ?? null;
+      scheduleNativeFolderWatchRefresh(event.event_count, error);
+    })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+        } else {
+          cleanup = unlisten;
+        }
+      })
+      .catch(() => {
+        // Browser preview and older desktop builds do not have the native watcher.
+      });
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
+  }, [folderWatchStatus?.folder_path, libraryFolders, folderPath, settings?.library_path]);
 
   useEffect(() => {
     if (!lastSessionRestoreFinishedRef.current) {

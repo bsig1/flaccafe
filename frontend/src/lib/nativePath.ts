@@ -30,6 +30,20 @@ export interface NativeRecycleResponse {
   errors: string[];
 }
 
+export interface NativeFolderWatchEvent {
+  paths: string[];
+  event_count: number;
+  emitted_at_ms: number;
+}
+
+export interface NativeFolderWatchStatus {
+  running: boolean;
+  watched_paths: string[];
+  pending_events: number;
+  last_event_ms: number | null;
+  last_error: string | null;
+}
+
 async function invokeNative<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<T>(command, args);
@@ -60,6 +74,31 @@ export function nativeScanAudioPaths({
 
 export function nativeRecyclePaths(paths: string[]): Promise<NativeRecycleResponse> {
   return invokeNative<NativeRecycleResponse>("native_recycle_paths", { paths });
+}
+
+export function nativeFolderWatchStart(paths: string[], debounceMs = 1200): Promise<NativeFolderWatchStatus> {
+  return invokeNative<NativeFolderWatchStatus>("native_folder_watch_start", {
+    paths,
+    debounceMs,
+  });
+}
+
+export function nativeFolderWatchStop(): Promise<NativeFolderWatchStatus> {
+  return invokeNative<NativeFolderWatchStatus>("native_folder_watch_stop");
+}
+
+export function nativeFolderWatchMarkEvent(eventCount: number, error?: string | null): Promise<NativeFolderWatchStatus> {
+  return invokeNative<NativeFolderWatchStatus>("native_folder_watch_mark_event", {
+    eventCount,
+    error: error ?? null,
+  });
+}
+
+export async function listenNativeFolderWatchEvents(
+  callback: (event: NativeFolderWatchEvent) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<NativeFolderWatchEvent>("flac-cafe://native-folder-watch", (event) => callback(event.payload));
 }
 
 export function isNativeUnavailable(error: unknown): boolean {
