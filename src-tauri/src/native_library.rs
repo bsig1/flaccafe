@@ -17,6 +17,7 @@ pub(crate) mod media_protocol;
 pub(crate) mod podcasts;
 pub(crate) mod recommendation_profiles;
 pub(crate) mod recommendations;
+pub(crate) mod reports;
 pub(crate) mod scan;
 mod schema;
 pub(crate) mod scrobbling;

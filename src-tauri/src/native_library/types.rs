@@ -711,6 +711,18 @@ pub struct NativeExtensionListResponse {
 }
 
 #[derive(Serialize)]
+pub struct NativeReportFileResponse {
+    pub(crate) report_path: String,
+    pub(crate) exists: bool,
+    pub(crate) size_bytes: i64,
+    pub(crate) modified_at: Option<String>,
+    pub(crate) parsed_json: Option<serde_json::Value>,
+    pub(crate) raw_text: Option<String>,
+    pub(crate) truncated: bool,
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Serialize)]
 pub struct NativeVolumeTagPreview {
     pub(crate) track_id: i64,
     pub(crate) path: String,

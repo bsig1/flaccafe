@@ -156,6 +156,10 @@ pub(super) fn try_handle_native_json(
             state,
             required_param_i64(params, "entry_id")?,
         )?)?),
+        "read_report_file" => Some(to_json(native_library::reports::native_read_report_file(
+            required_body_string(&body, "report_path")?,
+            body_usize(&body, "max_bytes").or_else(|| body_usize(&body, "maxBytes")),
+        )?)?),
         "scan_library" => Some(to_json(native_library::scan::native_scan_library(body)?)?),
         "start_scan_library" => {
             Some(to_json(native_library::scan::native_start_scan_library(body)?)?)
