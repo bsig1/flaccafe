@@ -45,7 +45,6 @@
 - Move CD drive detection, CD sidebar availability, active play/rip mutual exclusion, Windows CD TOC reading, disc ID generation, live stream token management, live audio streaming, rip job state, ETA, cancellation, verification hashes, and target path generation into Rust.
 - Move FFmpeg install job state, installer progress, audio conversion preview, target path generation, estimated output sizing, job progress, cancellation, FFmpeg process orchestration, and FFmpeg output parsing into Rust.
 - Keep actual audio metadata writes for ReplayGain tags in Python until Rust tag-writing support is validated.
-- Move extension discovery, manifest validation, extension folder creation, theme folder discovery, and open-folder helpers into Rust.
 - Add Rust route hammer coverage for native-only routes as a sibling to `scripts/hammer_backend_routes.py`.
 - Add a migration checklist per moved route: Rust implementation, Python parity test, frontend path check, hammer good/bad cases, docs update, then remove Python fallback.
 - Track which Python worker actions are still called in dev with a low-noise counter so migrations are prioritized by real usage, not guesswork.
@@ -70,6 +69,7 @@
 - Confirmed album completion display is native for local inferred/stored counts while MusicBrainz online lookup remains Python-owned until golden fixtures exist.
 - Moved audiobook sync export into Rust so SQLite progress/bookmark/chapter snapshots are written without spawning Python.
 - Expanded native playlist import parsing and import creation for M3U/M3U8, PLS, XSPF, WPL, and iTunes XML while ignoring remote stream entries.
+- Moved extension discovery, manifest validation, and user extension folder creation into Rust; theme/source folder opening was already Rust-owned through Tauri commands.
 - Added `flaccafe-media://localhost/python-bytes/...` for Python-owned byte responses such as album art and CD live audio.
 - Switched `npm run dev` to desktop dev so local development exercises the same Rust-to-Python worker path as packaged builds.
 

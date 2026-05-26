@@ -683,6 +683,34 @@ pub struct NativeExportResponse {
 }
 
 #[derive(Serialize)]
+pub struct NativeExtensionManifest {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) version: String,
+    pub(crate) kind: String,
+    pub(crate) description: Option<String>,
+    pub(crate) author: Option<String>,
+    pub(crate) homepage: Option<String>,
+    pub(crate) entry: Option<String>,
+    pub(crate) entry_path: Option<String>,
+    pub(crate) directory: String,
+    pub(crate) manifest_path: String,
+    pub(crate) capabilities: Vec<String>,
+    pub(crate) permissions: Vec<String>,
+    pub(crate) enabled: bool,
+    pub(crate) valid: bool,
+    pub(crate) errors: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct NativeExtensionListResponse {
+    pub(crate) user_extensions_dir: String,
+    pub(crate) search_directories: Vec<String>,
+    pub(crate) manifest_names: Vec<String>,
+    pub(crate) extensions: Vec<NativeExtensionManifest>,
+}
+
+#[derive(Serialize)]
 pub struct NativeVolumeTagPreview {
     pub(crate) track_id: i64,
     pub(crate) path: String,
