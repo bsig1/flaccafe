@@ -1,9 +1,10 @@
+mod clap_worker;
+mod genre_tags;
+
+use clap_worker::ClapWorker;
 use rusqlite::{params, params_from_iter, ToSql};
-use serde::Deserialize;
 use serde_json::{json, Value as JsonValue};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, ChildStdout, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
@@ -12,14 +13,10 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use super::search::music_only_clause;
-use super::storage::{open_database, truthy_setting};
+use super::storage::open_database;
 use super::types::*;
 
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x08000000;
+pub(crate) use genre_tags::native_clap_genre_tags;
 
 #[derive(Clone)]
 struct AnalysisRequest {
@@ -30,9 +27,9 @@ struct AnalysisRequest {
 }
 
 #[derive(Clone)]
-struct AnalysisCandidate {
-    id: i64,
-    path: String,
+pub(super) struct AnalysisCandidate {
+    pub(super) id: i64,
+    pub(super) path: String,
     title: Option<String>,
 }
 
@@ -57,39 +54,6 @@ struct AnalysisJob {
     error: Option<String>,
     pause_requested: bool,
     cancel_requested: bool,
-}
-
-#[derive(Deserialize)]
-struct ClapWorkerEnvelope {
-    status: String,
-    analysis: Option<JsonValue>,
-    error: Option<String>,
-}
-
-struct ClapGenreTagRequest {
-    track_ids: Option<Vec<i64>>,
-    missing_only: bool,
-    min_confidence: f64,
-    apply: bool,
-    write_to_file: Option<bool>,
-    limit: usize,
-}
-
-struct ClapGenreTagRow {
-    id: i64,
-    path: String,
-    title: Option<String>,
-    artist: Option<String>,
-    album: Option<String>,
-    genre: Option<String>,
-    analysis_genre: Option<String>,
-    confidence: Option<f64>,
-}
-
-struct ClapWorker {
-    child: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
 }
 
 static ANALYSIS_JOBS: OnceLock<Mutex<HashMap<String, AnalysisJob>>> = OnceLock::new();
@@ -198,135 +162,6 @@ pub(crate) fn native_cancel_clap_analysis(
         }
     })?;
     native_get_clap_analysis(job_id)
-}
-
-pub(crate) fn native_clap_genre_tags(
-    body: JsonValue,
-) -> Result<NativeClapGenreTagResponse, String> {
-    let request = ClapGenreTagRequest::from_body(&body);
-    let connection = open_database()?;
-    let mut clauses = vec![
-        "analysis_provider = 'clap'".to_string(),
-        "analysis_genre IS NOT NULL".to_string(),
-        "trim(analysis_genre) <> ''".to_string(),
-    ];
-    let mut params: Vec<Box<dyn ToSql>> = Vec::new();
-    let mut unique_ids = Vec::new();
-    if let Some(track_ids) = request.track_ids.as_deref().filter(|ids| !ids.is_empty()) {
-        for id in track_ids.iter().copied().filter(|id| *id > 0) {
-            if !unique_ids.contains(&id) {
-                unique_ids.push(id);
-            }
-        }
-        if !unique_ids.is_empty() {
-            clauses.push(format!("id IN ({})", vec!["?"; unique_ids.len()].join(",")));
-            params.extend(
-                unique_ids
-                    .iter()
-                    .copied()
-                    .map(|id| Box::new(id) as Box<dyn ToSql>),
-            );
-        }
-    }
-    params.push(Box::new(request.limit as i64));
-    let sql = format!(
-        "SELECT id, path, title, artist, album, genre, analysis_genre, analysis_genre_confidence
-         FROM tracks
-         WHERE {}
-         ORDER BY datetime(date_added) DESC, id DESC
-         LIMIT ?",
-        clauses.join(" AND ")
-    );
-    let param_refs = params
-        .iter()
-        .map(|value| value.as_ref())
-        .collect::<Vec<&dyn ToSql>>();
-    let mut statement = connection
-        .prepare(&sql)
-        .map_err(|error| format!("Could not prepare CLAP genre tag query: {error}"))?;
-    let rows = statement
-        .query_map(params_from_iter(param_refs), |row| {
-            Ok(ClapGenreTagRow {
-                id: row.get("id")?,
-                path: row.get("path")?,
-                title: row.get("title")?,
-                artist: row.get("artist")?,
-                album: row.get("album")?,
-                genre: row.get("genre")?,
-                analysis_genre: row.get("analysis_genre")?,
-                confidence: row.get("analysis_genre_confidence")?,
-            })
-        })
-        .map_err(|error| format!("Could not read CLAP genre tag rows: {error}"))?;
-    let rows = rows
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode CLAP genre tag rows: {error}"))?;
-    drop(statement);
-
-    let found_ids = rows.iter().map(|row| row.id).collect::<Vec<_>>();
-    let mut previews = Vec::new();
-    let mut applied = 0i64;
-    let mut errors = Vec::new();
-    for row in rows {
-        let current_genre = row.genre.unwrap_or_default().trim().to_string();
-        let proposed_genre = row.analysis_genre.unwrap_or_default().trim().to_string();
-        let confidence = row.confidence;
-        let changed = !proposed_genre.is_empty()
-            && (!request.missing_only || current_genre.is_empty())
-            && normalize_genre_token(&current_genre) != normalize_genre_token(&proposed_genre)
-            && confidence.is_none_or(|value| value >= request.min_confidence);
-        let mut preview = NativeClapGenreTagPreview {
-            track_id: row.id,
-            title: row.title,
-            artist: row.artist,
-            album: row.album,
-            current_genre: (!current_genre.is_empty()).then_some(current_genre),
-            proposed_genre: (!proposed_genre.is_empty()).then_some(proposed_genre.clone()),
-            confidence,
-            changed,
-            applied: false,
-            error: None,
-        };
-        if request.apply && changed {
-            match apply_clap_genre_tag(&connection, row.id, &proposed_genre, request.write_to_file)
-            {
-                Ok(()) => {
-                    preview.applied = true;
-                    applied += 1;
-                }
-                Err(error) => {
-                    preview.error = Some(error.clone());
-                    errors.push(format!(
-                        "{}: {error}",
-                        preview
-                            .title
-                            .as_deref()
-                            .filter(|value| !value.trim().is_empty())
-                            .unwrap_or(&row.path)
-                    ));
-                }
-            }
-        }
-        previews.push(preview);
-    }
-    for missing_id in unique_ids.into_iter().filter(|id| !found_ids.contains(id)) {
-        errors.push(format!(
-            "Track {missing_id} was not found or has no CLAP genre analysis"
-        ));
-    }
-    let matched = previews
-        .iter()
-        .filter(|preview| preview.proposed_genre.is_some() && preview.error.is_none())
-        .count() as i64;
-    let changed = previews.iter().filter(|preview| preview.changed).count() as i64;
-    Ok(NativeClapGenreTagResponse {
-        total: previews.len() as i64,
-        matched,
-        changed,
-        applied,
-        errors: errors.into_iter().take(100).collect(),
-        previews,
-    })
 }
 
 fn run_analysis_thread(job_id: String) {
@@ -563,131 +398,6 @@ fn save_analysis_failure(track_id: i64, message: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn apply_clap_genre_tag(
-    connection: &rusqlite::Connection,
-    track_id: i64,
-    genre: &str,
-    write_to_file: Option<bool>,
-) -> Result<(), String> {
-    let should_write_file = write_to_file
-        .unwrap_or_else(|| truthy_setting(connection, "write_ratings_to_files", false));
-    if should_write_file {
-        crate::python_worker::call_python_action_json(
-            "update_track_metadata",
-            json!({ "track_id": track_id }),
-            Some(json!({ "genre": genre, "write_to_file": true })),
-        )?;
-        return Ok(());
-    }
-    connection
-        .execute(
-            "UPDATE tracks SET genre = ?, updated_at = datetime('now') WHERE id = ?",
-            params![genre, track_id],
-        )
-        .map_err(|error| format!("Could not apply CLAP genre tag: {error}"))?;
-    let _ = connection.execute("DELETE FROM library_query_cache", []);
-    Ok(())
-}
-
-fn normalize_genre_token(value: &str) -> String {
-    value
-        .chars()
-        .filter(|character| character.is_ascii_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect()
-}
-
-impl ClapWorker {
-    fn start() -> Result<Self, String> {
-        crate::python_worker::record_python_worker_action("clap_worker_stream");
-        let mut command = crate::python_worker::python_module_command(
-            "backend.app.clap_worker",
-            "--clap-worker",
-        )?;
-        command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        #[cfg(windows)]
-        command.creation_flags(CREATE_NO_WINDOW);
-        let mut child = command
-            .spawn()
-            .map_err(|error| format!("Could not start CLAP worker: {error}"))?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "CLAP worker stdin was unavailable".to_string())?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| "CLAP worker stdout was unavailable".to_string())?;
-        Ok(Self {
-            child,
-            stdin,
-            stdout: BufReader::new(stdout),
-        })
-    }
-
-    fn analyze(&mut self, track: &AnalysisCandidate) -> Result<JsonValue, String> {
-        let payload = json!({
-            "command": "analyze",
-            "track_id": track.id,
-            "path": track.path,
-        });
-        writeln!(
-            self.stdin,
-            "{}",
-            serde_json::to_string(&payload)
-                .map_err(|error| format!("Could not encode CLAP request: {error}"))?
-        )
-        .map_err(|error| format!("Could not send track to CLAP worker: {error}"))?;
-        self.stdin
-            .flush()
-            .map_err(|error| format!("Could not flush CLAP worker request: {error}"))?;
-        let mut line = String::new();
-        let bytes = self
-            .stdout
-            .read_line(&mut line)
-            .map_err(|error| format!("Could not read CLAP worker response: {error}"))?;
-        if bytes == 0 {
-            return Err("CLAP worker exited before returning a result".to_string());
-        }
-        let response =
-            serde_json::from_str::<ClapWorkerEnvelope>(line.trim()).map_err(|error| {
-                format!(
-                    "CLAP worker returned malformed JSON: {error}; raw response: {}",
-                    line.trim()
-                )
-            })?;
-        if response.status == "ok" {
-            response
-                .analysis
-                .ok_or_else(|| "CLAP worker omitted analysis data".to_string())
-        } else {
-            Err(response
-                .error
-                .unwrap_or_else(|| "CLAP worker failed".to_string()))
-        }
-    }
-
-    fn shutdown(&mut self) -> Result<(), String> {
-        let payload = json!({ "command": "shutdown" });
-        let _ = writeln!(self.stdin, "{}", payload);
-        let _ = self.stdin.flush();
-        let _ = self.child.wait();
-        Ok(())
-    }
-}
-
-impl Drop for ClapWorker {
-    fn drop(&mut self) {
-        if self.child.try_wait().ok().flatten().is_none() {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
-        }
-    }
-}
-
 impl AnalysisRequest {
     fn from_body(body: &JsonValue) -> Self {
         Self {
@@ -700,29 +410,6 @@ impl AnalysisRequest {
                 .or_else(|| body_bool(body, "onlyMissing"))
                 .unwrap_or(true),
             track_ids: body_i64_vec(body, "track_ids").or_else(|| body_i64_vec(body, "trackIds")),
-        }
-    }
-}
-
-impl ClapGenreTagRequest {
-    fn from_body(body: &JsonValue) -> Self {
-        Self {
-            track_ids: body_i64_vec(body, "track_ids").or_else(|| body_i64_vec(body, "trackIds")),
-            missing_only: body_bool(body, "missing_only")
-                .or_else(|| body_bool(body, "missingOnly"))
-                .unwrap_or(true),
-            min_confidence: body_f64(body, "min_confidence")
-                .or_else(|| body_f64(body, "minConfidence"))
-                .unwrap_or(0.35)
-                .clamp(0.0, 1.0),
-            apply: body_bool(body, "apply").unwrap_or(false),
-            write_to_file: body_bool(body, "write_to_file")
-                .or_else(|| body_bool(body, "writeToFile")),
-            limit: body_i64(body, "limit")
-                .filter(|value| *value > 0)
-                .and_then(|value| usize::try_from(value).ok())
-                .unwrap_or(200)
-                .clamp(1, 10_000),
         }
     }
 }
@@ -839,7 +526,7 @@ fn trim_tail<T>(values: &mut Vec<T>, max_len: usize) {
     }
 }
 
-fn body_bool(body: &JsonValue, key: &str) -> Option<bool> {
+pub(super) fn body_bool(body: &JsonValue, key: &str) -> Option<bool> {
     match body.get(key) {
         Some(JsonValue::Bool(value)) => Some(*value),
         Some(JsonValue::String(value)) => match value.trim().to_ascii_lowercase().as_str() {
@@ -851,7 +538,7 @@ fn body_bool(body: &JsonValue, key: &str) -> Option<bool> {
     }
 }
 
-fn body_i64(body: &JsonValue, key: &str) -> Option<i64> {
+pub(super) fn body_i64(body: &JsonValue, key: &str) -> Option<i64> {
     match body.get(key) {
         Some(JsonValue::Number(value)) => value.as_i64(),
         Some(JsonValue::String(value)) => value.trim().parse().ok(),
@@ -859,7 +546,7 @@ fn body_i64(body: &JsonValue, key: &str) -> Option<i64> {
     }
 }
 
-fn body_f64(body: &JsonValue, key: &str) -> Option<f64> {
+pub(super) fn body_f64(body: &JsonValue, key: &str) -> Option<f64> {
     match body.get(key) {
         Some(JsonValue::Number(value)) => value.as_f64(),
         Some(JsonValue::String(value)) => value.trim().parse().ok(),
@@ -867,7 +554,7 @@ fn body_f64(body: &JsonValue, key: &str) -> Option<f64> {
     }
 }
 
-fn body_i64_vec(body: &JsonValue, key: &str) -> Option<Vec<i64>> {
+pub(super) fn body_i64_vec(body: &JsonValue, key: &str) -> Option<Vec<i64>> {
     body.get(key).and_then(JsonValue::as_array).map(|values| {
         values
             .iter()
