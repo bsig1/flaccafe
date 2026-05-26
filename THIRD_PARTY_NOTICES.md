@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-FLAC Cafe bundles a few small native command-line tools so common fingerprinting and CD-ripping workflows work without a separate installer. These tools are not owned by FLAC Cafe. They are invoked as separate executables and are included unmodified.
+FLAC Cafe bundles a few small command-line tools so common fingerprinting and CD-ripping workflows work without a separate installer. These tools are not owned by FLAC Cafe. They are invoked as separate executables and are included unmodified.
 
 This file is a practical redistribution disclosure, not legal advice. Keep this notice with source archives and packaged builds that include the bundled tools below.
 

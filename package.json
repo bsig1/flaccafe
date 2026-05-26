@@ -24,7 +24,6 @@
     "test:browser": "playwright test --config frontend/playwright.config.ts",
     "test:backend": "powershell -ExecutionPolicy Bypass -File scripts/test_backend.ps1",
     "test": "npm run check && npm run check:routes && npm run test:frontend && npm run test:backend",
-    "backend:dev": "powershell -ExecutionPolicy Bypass -File scripts/run_backend.ps1",
     "desktop": "tauri dev",
     "package:msi": "powershell -ExecutionPolicy Bypass -File scripts/build_msi.ps1",
     "tauri": "tauri",

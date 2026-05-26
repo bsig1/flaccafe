@@ -266,7 +266,7 @@ def repair_runtime_python_dlls(bootstrap_python: BootstrapPython | None = None) 
 
 
 def add_current_python_dll_directories() -> None:
-    """Expose native package DLL folders for the active Python environment."""
+    """Expose binary package DLL folders for the active Python environment."""
     candidates: list[Path] = []
     try:
         candidates.extend(Path(path) for path in site.getsitepackages())

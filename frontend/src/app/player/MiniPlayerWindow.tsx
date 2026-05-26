@@ -78,7 +78,7 @@ export function MiniPlayerWindow() {
 
   useEffect(() => {
     writeMiniPlayerSize(MINI_PLAYER_WIDTH, MINI_PLAYER_HEIGHT);
-    void applyMiniPlayerChrome(alwaysOnTop, MINI_PLAYER_WIDTH, MINI_PLAYER_HEIGHT);
+    void applyMiniPlayerWindowStyle(alwaysOnTop, MINI_PLAYER_WIDTH, MINI_PLAYER_HEIGHT);
   }, []);
 
   useEffect(() => {
@@ -120,7 +120,7 @@ export function MiniPlayerWindow() {
   async function toggleAlwaysOnTop() {
     try {
       const next = !alwaysOnTop;
-      await applyMiniPlayerChrome(next, MINI_PLAYER_WIDTH, MINI_PLAYER_HEIGHT);
+      await applyMiniPlayerWindowStyle(next, MINI_PLAYER_WIDTH, MINI_PLAYER_HEIGHT);
       writeMiniPlayerAlwaysOnTop(next);
       setAlwaysOnTop(next);
     } catch {
@@ -131,7 +131,7 @@ export function MiniPlayerWindow() {
     }
   }
 
-  async function applyMiniPlayerChrome(nextAlwaysOnTop: boolean, width: number, height: number) {
+  async function applyMiniPlayerWindowStyle(nextAlwaysOnTop: boolean, width: number, height: number) {
     try {
       const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
       const { LogicalSize } = await import("@tauri-apps/api/dpi");
@@ -234,3 +234,4 @@ export function MiniPlayerWindow() {
     </main>
   );
 }
+

@@ -1,0 +1,715 @@
+﻿#[tauri::command]
+pub fn play_file(
+    state: State<'_, PlaybackState>,
+    path: String,
+    volume: f32,
+    start_seconds: Option<f64>,
+    device_id: Option<String>,
+    buffer_frames: Option<u32>,
+    dsp_settings: Option<DesktopDspSettings>,
+) -> Result<PlaybackStatus, String> {
+    let path_buf = PathBuf::from(&path);
+    let mut inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
+    if !path_buf.exists() || !path_buf.is_file() {
+        let message = "Audio file does not exist".to_string();
+        remember_diagnostic(
+            &inner.diagnostics,
+            "error",
+            "file",
+            "validate_audio_file",
+            message.clone(),
+            DesktopDiagnosticContext {
+                path: Some(path.clone()),
+                ..DesktopDiagnosticContext::default()
+            },
+        );
+        return Err(message);
+    }
+    inner.ensure_sink(device_id, buffer_frames)?;
+    if let Ok(mut errors) = inner.stream_errors.lock() {
+        errors.clear();
+    }
+    inner.update_dsp_settings(dsp_settings);
+    let prepared_audio = inner.take_prepared_audio(&path);
+    inner.stop();
+
+    let duration_seconds;
+    let mixer = inner
+        .sink
+        .as_ref()
+        .ok_or_else(|| "Rust audio output is unavailable".to_string())?
+        .mixer()
+        .clone();
+    let player = Arc::new(Player::connect_new(&mixer));
+    let bounded_volume = clamp_volume(volume);
+    player.set_volume(1.0);
+    let gain = DesktopGainControl::new(bounded_volume);
+    if let Some(prepared) = prepared_audio {
+        let decoder = build_prepared_decoder(&prepared, &inner.diagnostics)?;
+        duration_seconds = prepared.duration_seconds;
+        append_dsp_source(
+            &player,
+            decoder,
+            inner.dsp_settings.clone(),
+            gain.clone(),
+            inner.visualizer.clone(),
+        );
+    } else {
+        let (decoder, decoded_duration) = build_decoder(&path_buf, &inner.diagnostics)?;
+        duration_seconds = decoded_duration;
+        append_dsp_source(
+            &player,
+            decoder,
+            inner.dsp_settings.clone(),
+            gain.clone(),
+            inner.visualizer.clone(),
+        );
+    }
+    seek_player(
+        &player,
+        start_seconds,
+        &inner.diagnostics,
+        Some(path.clone()),
+    )?;
+    player.play();
+
+    inner.player = Some(PlaybackHandle { player, gain });
+    inner.current_path = Some(path);
+    inner.duration_seconds = duration_seconds;
+    inner.volume = bounded_volume;
+    Ok(inner.status(None))
+}
+
+#[tauri::command]
+pub fn crossfade_to_file(
+    state: State<'_, PlaybackState>,
+    path: String,
+    volume: f32,
+    duration_ms: u64,
+    start_seconds: Option<f64>,
+    device_id: Option<String>,
+    buffer_frames: Option<u32>,
+    dsp_settings: Option<DesktopDspSettings>,
+) -> Result<PlaybackStatus, String> {
+    let path_buf = PathBuf::from(&path);
+    let mut inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
+    if !path_buf.exists() || !path_buf.is_file() {
+        let message = "Audio file does not exist".to_string();
+        remember_diagnostic(
+            &inner.diagnostics,
+            "error",
+            "file",
+            "validate_crossfade_audio_file",
+            message.clone(),
+            DesktopDiagnosticContext {
+                path: Some(path.clone()),
+                ..DesktopDiagnosticContext::default()
+            },
+        );
+        return Err(message);
+    }
+    inner.ensure_sink(device_id, buffer_frames)?;
+    if let Ok(mut errors) = inner.stream_errors.lock() {
+        errors.clear();
+    }
+    inner.update_dsp_settings(dsp_settings);
+
+    let prepared_audio = inner.take_prepared_audio(&path);
+    let duration_seconds;
+    let mixer = inner
+        .sink
+        .as_ref()
+        .ok_or_else(|| "Rust audio output is unavailable".to_string())?
+        .mixer()
+        .clone();
+    let new_player = Arc::new(Player::connect_new(&mixer));
+    let target_volume = clamp_volume(volume);
+    new_player.set_volume(1.0);
+    let bounded_duration = duration_ms.min(20_000);
+    let fade_duration = Duration::from_millis(bounded_duration);
+    let sample_rate = inner.sample_rate.unwrap_or(48_000);
+    let new_gain = DesktopGainControl::new(if bounded_duration > 0 {
+        0.0
+    } else {
+        target_volume
+    });
+    if let Ok(mut visualizer) = inner.visualizer.lock() {
+        visualizer.reset();
+    }
+    if let Some(prepared) = prepared_audio {
+        let decoder = build_prepared_decoder(&prepared, &inner.diagnostics)?;
+        duration_seconds = prepared.duration_seconds;
+        append_dsp_source(
+            &new_player,
+            decoder,
+            inner.dsp_settings.clone(),
+            new_gain.clone(),
+            inner.visualizer.clone(),
+        );
+    } else {
+        let (decoder, decoded_duration) = build_decoder(&path_buf, &inner.diagnostics)?;
+        duration_seconds = decoded_duration;
+        append_dsp_source(
+            &new_player,
+            decoder,
+            inner.dsp_settings.clone(),
+            new_gain.clone(),
+            inner.visualizer.clone(),
+        );
+    }
+    seek_player(
+        &new_player,
+        start_seconds,
+        &inner.diagnostics,
+        Some(path.clone()),
+    )?;
+    new_player.play();
+
+    let new_handle = PlaybackHandle {
+        player: new_player.clone(),
+        gain: new_gain.clone(),
+    };
+    let old_handle = inner.player.replace(new_handle);
+    inner.fading_player = old_handle.clone();
+    inner.current_path = Some(path);
+    inner.duration_seconds = duration_seconds;
+    inner.volume = target_volume;
+    let status = inner.status(None);
+
+    if let Some(old_handle) = old_handle {
+        old_handle.gain.fade_to(0.0, fade_duration, sample_rate);
+        new_gain.fade_to(target_volume, fade_duration, sample_rate);
+        spawn_stop_after_fade(old_handle.player, bounded_duration);
+    } else {
+        new_gain.set_immediate(target_volume);
+    }
+    Ok(status)
+}
+
+#[tauri::command]
+pub fn resume(state: State<'_, PlaybackState>) -> Result<PlaybackStatus, String> {
+    let inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
+    let player = inner
+        .player
+        .as_ref()
+        .ok_or_else(|| "No Rust audio track is loaded".to_string())?;
+    player.player.play();
+    Ok(inner.status(None))
+}
+
+#[tauri::command]
+pub fn pause(state: State<'_, PlaybackState>) -> Result<PlaybackStatus, String> {
+    let inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
+    let player = inner
+        .player
+        .as_ref()
+        .ok_or_else(|| "No Rust audio track is loaded".to_string())?;
+    player.player.pause();
+    Ok(inner.status(None))
+}
+
+#[tauri::command]
+pub fn stop(state: State<'_, PlaybackState>) -> Result<PlaybackStatus, String> {
+    let mut inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
+    inner.stop();
+    Ok(inner.status(None))
+}
+
+#[tauri::command]
+pub fn seek(state: State<'_, PlaybackState>, seconds: f64) -> Result<PlaybackStatus, String> {
+    let inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
+    let player = inner
+        .player
+        .as_ref()
+        .ok_or_else(|| "No Rust audio track is loaded".to_string())?;
+    let bounded_seconds = if seconds.is_finite() && seconds > 0.0 {
+        seconds
+    } else {
+        0.0
+    };
+    player
+        .player
+        .try_seek(Duration::from_secs_f64(bounded_seconds))
+        .map_err(|error| {
+            diagnostic_error(
+                &inner.diagnostics,
+                "rodio",
+                "seek",
+                format!("Rust seek failed: {error}"),
+                DesktopDiagnosticContext {
+                    path: inner.current_path.clone(),
+                    ..DesktopDiagnosticContext::default()
+                },
+            )
+        })?;
+    if let Ok(mut visualizer) = inner.visualizer.lock() {
+        visualizer.reset();
+    }
+    Ok(inner.status(None))
+}
+
+#[tauri::command]
+pub fn set_volume(state: State<'_, PlaybackState>, volume: f32) -> Result<PlaybackStatus, String> {
+    let mut inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
+    let bounded = clamp_volume(volume);
+    if let Some(handle) = &inner.player {
+        handle.gain.set_immediate(bounded);
+    }
+    inner.volume = bounded;
+    Ok(inner.status(None))
+}
+
+#[tauri::command]
+pub fn fade_volume(
+    state: State<'_, PlaybackState>,
+    volume: f32,
+    duration_ms: u64,
+) -> Result<PlaybackStatus, String> {
+    let mut inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
+    let bounded = clamp_volume(volume);
+    let sample_rate = inner.sample_rate.unwrap_or(48_000);
+    if let Some(handle) = &inner.player {
+        handle.gain.fade_to(
+            bounded,
+            Duration::from_millis(duration_ms.min(20_000)),
+            sample_rate,
+        );
+    }
+    inner.volume = bounded;
+    Ok(inner.status(None))
+}
+
+#[tauri::command]
+pub fn set_dsp(
+    state: State<'_, PlaybackState>,
+    dsp_settings: DesktopDspSettings,
+) -> Result<PlaybackStatus, String> {
+    let inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
+    if let Ok(mut current) = inner.dsp_settings.lock() {
+        *current = dsp_settings;
+    }
+    Ok(inner.status(None))
+}
+
+#[tauri::command]
+pub fn status(state: State<'_, PlaybackState>) -> Result<PlaybackStatus, String> {
+    let inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
+    Ok(inner.status(None))
+}
+
+#[tauri::command]
+pub fn visualizer_frame(state: State<'_, PlaybackState>) -> Result<DesktopVisualizerFrame, String> {
+    let inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
+    let is_playing = inner
+        .player
+        .as_ref()
+        .map(|handle| !handle.player.is_paused() && !handle.player.empty())
+        .unwrap_or(false);
+    let (samples, sample_rate, last_updated_ms) = inner
+        .visualizer
+        .lock()
+        .map(|visualizer| visualizer.snapshot())
+        .unwrap_or_else(|_| (Vec::new(), 44_100, 0));
+    drop(inner);
+    Ok(build_visualizer_frame(
+        samples,
+        sample_rate,
+        last_updated_ms,
+        is_playing,
+    ))
+}
+
+#[tauri::command]
+pub fn diagnostics(state: State<'_, PlaybackState>) -> Result<PlaybackDiagnosticsResponse, String> {
+    let inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
+    Ok(inner.diagnostics_response())
+}
+
+#[tauri::command]
+pub fn clear_diagnostics(
+    state: State<'_, PlaybackState>,
+) -> Result<PlaybackDiagnosticsResponse, String> {
+    let inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
+    if let Ok(mut entries) = inner.diagnostics.lock() {
+        entries.clear();
+    }
+    if let Ok(mut errors) = inner.stream_errors.lock() {
+        errors.clear();
+    }
+    Ok(inner.diagnostics_response())
+}
+
+#[tauri::command]
+pub fn prepare_next_file(
+    state: State<'_, PlaybackState>,
+    path: String,
+) -> Result<DesktopPreparedTrack, String> {
+    let path_buf = PathBuf::from(&path);
+    let mut inner = state
+        .inner
+        .lock()
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
+    if !path_buf.exists() || !path_buf.is_file() {
+        let message = "Next audio file does not exist".to_string();
+        remember_diagnostic(
+            &inner.diagnostics,
+            "warning",
+            "file",
+            "prepare_next_file",
+            message.clone(),
+            DesktopDiagnosticContext {
+                path: Some(path.clone()),
+                ..DesktopDiagnosticContext::default()
+            },
+        );
+        return Err(message);
+    }
+    let bytes = std::fs::read(&path_buf).map_err(|error| {
+        diagnostic_error(
+            &inner.diagnostics,
+            "file",
+            "read_prepare_next_file",
+            format!("Could not preload next audio file: {error}"),
+            DesktopDiagnosticContext {
+                path: Some(path.clone()),
+                ..DesktopDiagnosticContext::default()
+            },
+        )
+    })?;
+    let prepared_bytes: Arc<[u8]> = Arc::from(bytes.into_boxed_slice());
+    let prepared_probe = DesktopPreparedAudio {
+        path: path.clone(),
+        bytes: prepared_bytes.clone(),
+        duration_seconds: None,
+        prepared_at_ms: now_millis(),
+    };
+    let decoder = build_prepared_decoder(&prepared_probe, &inner.diagnostics)?;
+    let duration_seconds = decoder
+        .total_duration()
+        .map(|duration| duration.as_secs_f64());
+    let prepared_at_ms = now_millis();
+    inner.prepared_next_path = Some(path.clone());
+    inner.prepared_next_duration_seconds = duration_seconds;
+    inner.prepared_next_at_ms = Some(prepared_at_ms);
+    inner.prepared_next_audio = Some(DesktopPreparedAudio {
+        path: path.clone(),
+        bytes: prepared_bytes,
+        duration_seconds,
+        prepared_at_ms,
+    });
+    Ok(DesktopPreparedTrack {
+        path,
+        duration_seconds,
+        prepared_at_ms,
+        message: "Next Rust track decoded successfully.".to_string(),
+    })
+}
+
+#[tauri::command]
+pub fn output_backends() -> Result<Vec<DesktopOutputBackend>, String> {
+    Ok(vec![
+        DesktopOutputBackend {
+            id: "cpalShared".to_string(),
+            label: "CPAL / WASAPI shared".to_string(),
+            available: true,
+            exclusive: false,
+            message: "Current Rust backend; supports output-device selection and buffer tuning.".to_string(),
+        },
+        DesktopOutputBackend {
+            id: "wasapiExclusive".to_string(),
+            label: "WASAPI exclusive".to_string(),
+            available: false,
+            exclusive: true,
+            message: "Requires a dedicated Windows WASAPI engine outside the current rodio/cpal shared-mode bridge.".to_string(),
+        },
+        DesktopOutputBackend {
+            id: "asio".to_string(),
+            label: "ASIO".to_string(),
+            available: false,
+            exclusive: true,
+            message: "Requires an ASIO-specific backend and driver setup; the current app reports this as a future backend.".to_string(),
+        },
+    ])
+}
+
+#[tauri::command]
+pub fn list_output_devices(
+    state: State<'_, PlaybackState>,
+) -> Result<Vec<DesktopAudioDevice>, String> {
+    let diagnostics = state
+        .inner
+        .lock()
+        .map_err(|_| "Rust playback lock poisoned".to_string())?
+        .diagnostics
+        .clone();
+    let host = cpal::default_host();
+    let default_name = default_output_device_name();
+    let devices = host.output_devices().map_err(|error| {
+        diagnostic_error(
+            &diagnostics,
+            "cpal",
+            "list_output_devices",
+            format!("Could not list output devices: {error}"),
+            DesktopDiagnosticContext::default(),
+        )
+    })?;
+    let mut response = Vec::new();
+    for (index, device) in devices.enumerate() {
+        let name = device_name(&device);
+        let default_config = device.default_output_config().ok();
+        let supported_configs = match device.supported_output_configs() {
+            Ok(configs) => configs.count(),
+            Err(error) => {
+                remember_diagnostic(
+                    &diagnostics,
+                    "warning",
+                    "cpal",
+                    "list_supported_output_configs",
+                    format!("Could not inspect supported output configs: {error}"),
+                    DesktopDiagnosticContext {
+                        device_id: Some(device_id(index, &name)),
+                        device_name: Some(name.clone()),
+                        ..DesktopDiagnosticContext::default()
+                    },
+                );
+                0
+            }
+        };
+        response.push(DesktopAudioDevice {
+            id: device_id(index, &name),
+            is_default: default_name.as_deref() == Some(name.as_str()),
+            name,
+            default_sample_rate: default_config.as_ref().map(|config| config.sample_rate()),
+            default_channels: default_config.as_ref().map(|config| config.channels()),
+            default_sample_format: default_config
+                .as_ref()
+                .map(|config| format!("{:?}", config.sample_format())),
+            supported_configs,
+        });
+    }
+    Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rodio::{ChannelCount, SampleRate, Source};
+
+    struct VecSource {
+        samples: Vec<f32>,
+        index: usize,
+        channels: u16,
+        sample_rate: u32,
+    }
+
+    impl VecSource {
+        fn new(samples: Vec<f32>, channels: u16, sample_rate: u32) -> Self {
+            Self {
+                samples,
+                index: 0,
+                channels,
+                sample_rate,
+            }
+        }
+    }
+
+    impl Iterator for VecSource {
+        type Item = f32;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            let sample = self.samples.get(self.index).copied();
+            if sample.is_some() {
+                self.index += 1;
+            }
+            sample
+        }
+    }
+
+    impl Source for VecSource {
+        fn current_span_len(&self) -> Option<usize> {
+            Some(self.samples.len().saturating_sub(self.index))
+        }
+
+        fn channels(&self) -> ChannelCount {
+            ChannelCount::new(self.channels).unwrap()
+        }
+
+        fn sample_rate(&self) -> SampleRate {
+            SampleRate::new(self.sample_rate).unwrap()
+        }
+
+        fn total_duration(&self) -> Option<Duration> {
+            None
+        }
+    }
+
+    #[test]
+    fn dsp_settings_normalize_band_count_and_gain_limits() {
+        let settings = DesktopDspSettings {
+            normalization_gain: 2.0,
+            equalizer_enabled: true,
+            equalizer_band_mode: "15".to_string(),
+            equalizer_preamp_db: 30.0,
+            equalizer_gains: vec![18.0, -18.0, 3.5],
+            limiter_enabled: true,
+        };
+
+        let normalized = settings.normalized();
+
+        assert_eq!(normalized.frequencies.len(), 15);
+        assert_eq!(normalized.normalization_gain, 1.5);
+        assert_eq!(normalized.equalizer_gains.len(), 15);
+        assert_eq!(normalized.equalizer_gains[0], EQ_GAIN_MAX_DB);
+        assert_eq!(normalized.equalizer_gains[1], EQ_GAIN_MIN_DB);
+        assert_eq!(normalized.equalizer_gains[2], 3.5);
+        assert_eq!(normalized.equalizer_preamp_db, EQ_PREAMP_MAX_DB);
+    }
+
+    #[test]
+    fn dsp_coefficients_are_finite() {
+        for kind in [
+            DesktopEqBandKind::LowShelf,
+            DesktopEqBandKind::Peaking,
+            DesktopEqBandKind::HighShelf,
+        ] {
+            let coefficients = biquad_coefficients(kind, 1000.0, 6.0, 48_000);
+            assert!(coefficients.b0.is_finite());
+            assert!(coefficients.b1.is_finite());
+            assert!(coefficients.b2.is_finite());
+            assert!(coefficients.a1.is_finite());
+            assert!(coefficients.a2.is_finite());
+        }
+    }
+
+    #[test]
+    fn soft_limiter_caps_extreme_samples() {
+        assert_eq!(soft_limit(f32::NAN), 0.0);
+        assert!(soft_limit(8.0) <= 1.0);
+        assert!(soft_limit(-8.0) >= -1.0);
+        assert_eq!(soft_limit(0.5), 0.5);
+    }
+
+    #[test]
+    fn fade_progress_eases_without_overshoot() {
+        assert_eq!(smooth_fade_progress(-1.0), 0.0);
+        assert_eq!(smooth_fade_progress(0.0), 0.0);
+        assert_eq!(smooth_fade_progress(1.0), 1.0);
+        assert_eq!(smooth_fade_progress(2.0), 1.0);
+        assert!(smooth_fade_progress(0.25) < 0.25);
+        assert!(smooth_fade_progress(0.75) > 0.75);
+    }
+
+    #[test]
+    fn visualizer_frame_uses_recent_audio_samples() {
+        let sample_rate = 48_000_u32;
+        let samples: Vec<f32> = (0..VISUALIZER_ANALYSIS_SAMPLES)
+            .map(|index| {
+                let phase =
+                    2.0 * std::f32::consts::PI * 440.0 * index as f32 / sample_rate as f32;
+                phase.sin() * 0.65
+            })
+            .collect();
+
+        let frame = build_visualizer_frame(samples, sample_rate, now_millis(), true);
+
+        assert!(frame.is_live);
+        assert!(frame.level > 0.05);
+        assert_eq!(frame.frequency_bins.len(), VISUALIZER_BINS);
+        assert_eq!(frame.waveform.len(), VISUALIZER_WAVEFORM_POINTS);
+        assert!(frame.frequency_bins.iter().any(|value| *value > 0.05));
+    }
+
+    #[test]
+    fn dsp_source_does_not_block_when_visualizer_is_busy() {
+        let channels = 2_u16;
+        let frames = VISUALIZER_FLUSH_SAMPLES + 32;
+        let samples: Vec<f32> = (0..frames * usize::from(channels))
+            .map(|index| ((index % 23) as f32 - 11.0) / 100.0)
+            .collect();
+        let visualizer = Arc::new(Mutex::new(DesktopVisualizerState::default()));
+        let _held_visualizer_lock = visualizer.lock().unwrap();
+
+        let source = DesktopDspSource::new(
+            VecSource::new(samples.clone(), channels, 48_000),
+            Arc::new(Mutex::new(DesktopDspSettings::default())),
+            DesktopGainControl::new(1.0),
+            visualizer.clone(),
+        );
+        let rendered: Vec<f32> = source.collect();
+
+        assert_eq!(rendered.len(), samples.len());
+        let ramp_samples = fade_frame_count(Duration::from_millis(CLICKLESS_START_RAMP_MS), 48_000)
+            as usize
+            * usize::from(channels);
+        assert!(rendered
+            .iter()
+            .zip(samples.iter())
+            .take(ramp_samples)
+            .any(|(actual, expected)| (actual - expected).abs() > f32::EPSILON));
+        for (actual, expected) in rendered.iter().zip(samples.iter()).skip(ramp_samples) {
+            assert!((actual - expected).abs() < f32::EPSILON);
+        }
+    }
+
+    #[test]
+    fn diagnostics_keep_recent_entries() {
+        let diagnostics = Arc::new(Mutex::new(Vec::new()));
+        for index in 0..(DIAGNOSTIC_LIMIT + 5) {
+            remember_diagnostic(
+                &diagnostics,
+                "error",
+                "cpal",
+                "test_operation",
+                format!("failure {index}"),
+                DesktopDiagnosticContext::default(),
+            );
+        }
+
+        let entries = diagnostics.lock().unwrap();
+        assert_eq!(entries.len(), DIAGNOSTIC_LIMIT);
+        assert_eq!(entries.first().unwrap().message, "failure 5");
+        assert_eq!(
+            entries.last().unwrap().message,
+            format!("failure {}", DIAGNOSTIC_LIMIT + 4)
+        );
+    }
+}

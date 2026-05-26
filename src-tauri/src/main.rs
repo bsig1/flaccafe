@@ -14,9 +14,9 @@ use std::process::Stdio;
 use std::os::windows::process::CommandExt;
 
 mod folder_watch;
-mod native_library;
-mod native_playback;
+mod library;
 mod path_ops;
+mod playback;
 mod process_runner;
 mod python_worker;
 mod smtc;
@@ -46,53 +46,22 @@ fn explorer_args_for_target(target: &std::path::Path, select_file: bool) -> Vec<
 }
 
 #[cfg(windows)]
-fn chrome_candidates() -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-
-    if let Ok(path) = std::env::var("CHROME") {
-        candidates.push(PathBuf::from(path));
-    }
-    if let Ok(program_files) = std::env::var("ProgramFiles") {
-        candidates.push(PathBuf::from(program_files).join(r"Google\Chrome\Application\chrome.exe"));
-    }
-    if let Ok(program_files_x86) = std::env::var("ProgramFiles(x86)") {
-        candidates
-            .push(PathBuf::from(program_files_x86).join(r"Google\Chrome\Application\chrome.exe"));
-    }
-    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-        candidates
-            .push(PathBuf::from(local_app_data).join(r"Google\Chrome\Application\chrome.exe"));
-    }
-
-    candidates
-}
-
-#[cfg(windows)]
-fn open_url_in_chrome(url: &str) -> bool {
-    for chrome in chrome_candidates() {
-        if !chrome.exists() {
-            continue;
-        }
-        if Command::new(chrome)
-            .arg(url)
-            .creation_flags(0x08000000)
-            .spawn()
-            .is_ok()
-        {
-            return true;
-        }
-    }
-
-    if Command::new("chrome.exe")
-        .arg(url)
+fn open_url_in_default_browser(url: &str) -> Result<(), String> {
+    Command::new("rundll32.exe")
+        .args(["url.dll,FileProtocolHandler", url])
         .creation_flags(0x08000000)
         .spawn()
-        .is_ok()
-    {
-        return true;
-    }
+        .map_err(|error| format!("Could not open link in the default browser: {error}"))?;
+    Ok(())
+}
 
-    false
+#[cfg(not(windows))]
+fn open_url_in_default_browser(url: &str) -> Result<(), String> {
+    Command::new("xdg-open")
+        .arg(url)
+        .spawn()
+        .map_err(|error| format!("Could not open link in the default browser: {error}"))?;
+    Ok(())
 }
 
 #[cfg(any(test, all(windows, not(debug_assertions))))]
@@ -261,25 +230,12 @@ fn open_external_url(url: String) -> Result<(), String> {
 
     #[cfg(windows)]
     {
-        if open_url_in_chrome(trimmed) {
-            return Ok(());
-        }
-
-        Command::new("rundll32.exe")
-            .args(["url.dll,FileProtocolHandler", trimmed])
-            .creation_flags(0x08000000)
-            .spawn()
-            .map_err(|error| format!("Could not open link: {error}"))?;
-        Ok(())
+        open_url_in_default_browser(trimmed)
     }
 
     #[cfg(not(windows))]
     {
-        Command::new("xdg-open")
-            .arg(trimmed)
-            .spawn()
-            .map_err(|error| format!("Could not open link: {error}"))?;
-        Ok(())
+        open_url_in_default_browser(trimmed)
     }
 }
 
@@ -305,152 +261,155 @@ fn open_source_folder(kind: Option<String>) -> Result<(), String> {
 #[tauri::command]
 fn backend_restart(_app: tauri::AppHandle) -> Result<String, String> {
     stop_legacy_backend_server();
-    Ok("Python worker state cleared; it will start on the next Python-owned request.".to_string())
+    Ok("Legacy backend state cleared. Python expert workers start only when an expert task needs one.".to_string())
 }
 
 fn main() {
     let app = tauri::Builder::default()
         .manage(smtc::SmtcState::default())
-        .manage(native_playback::NativePlaybackState::default())
-        .manage(folder_watch::NativeFolderWatchState::default())
-        .manage(native_library::NativeLibraryState::default())
-        .register_uri_scheme_protocol("flaccafe-media", native_library::media_protocol::handle_media_protocol)
+        .manage(playback::PlaybackState::default())
+        .manage(folder_watch::FolderWatchState::default())
+        .manage(library::DesktopLibraryState::default())
+        .register_uri_scheme_protocol(
+            "flaccafe-media",
+            library::media_protocol::handle_media_protocol,
+        )
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             backend_restart,
             open_source_folder,
             open_external_url,
             reveal_in_file_explorer,
-            python_worker::native_backend_json,
-            native_playback::native_play_file,
-            native_playback::native_crossfade_to_file,
-            native_playback::native_resume,
-            native_playback::native_pause,
-            native_playback::native_stop,
-            native_playback::native_seek,
-            native_playback::native_set_dsp,
-            native_playback::native_set_volume,
-            native_playback::native_fade_volume,
-            native_playback::native_status,
-            native_playback::native_visualizer_frame,
-            native_playback::native_diagnostics,
-            native_playback::native_clear_diagnostics,
-            native_playback::native_prepare_next_file,
-            native_playback::native_output_backends,
-            native_playback::native_list_output_devices,
-            folder_watch::native_folder_watch_start,
-            folder_watch::native_folder_watch_stop,
-            folder_watch::native_folder_watch_status,
-            folder_watch::native_folder_watch_mark_event,
-            native_library::native_health,
-            native_library::native_settings,
-            native_library::native_update_settings,
-            native_library::native_clap_coverage,
-            native_library::native_tracks_page,
-            native_library::native_track,
-            native_library::native_tracks_batch,
-            native_library::native_similar_tracks,
-            native_library::native_audiobooks,
-            native_library::native_update_audiobook_progress,
-            native_library::native_audiobook_bookmarks,
-            native_library::native_create_audiobook_bookmark,
-            native_library::native_delete_audiobook_bookmark,
-            native_library::native_audiobook_chapters,
-            native_library::native_save_audiobook_chapters,
-            native_library::native_radio_stations,
-            native_library::native_save_radio_station,
-            native_library::native_delete_radio_station,
-            native_library::native_mark_radio_station_played,
-            native_library::native_loved_tracks,
-            native_library::native_update_track_love,
-            native_library::native_update_track_rating,
-            native_library::native_mark_track_played,
-            native_library::native_mark_track_skipped,
-            native_library::recommendations::native_autodj_avoid_rules,
-            native_library::recommendations::native_create_autodj_avoid_rule,
-            native_library::recommendations::native_delete_autodj_avoid_rule,
-            native_library::native_albums,
-            native_library::native_artists,
-            native_library::native_playlists,
-            native_library::native_create_playlist,
-            native_library::native_delete_playlist,
-            native_library::native_add_playlist_tracks,
-            native_library::native_remove_playlist_track,
-            native_library::native_move_playlist_track,
-            native_library::native_album_tracks,
-            native_library::native_playlist_tracks,
-            native_library::history::native_history,
-            native_library::history::native_history_stats,
-            native_library::native_library_stats,
-            native_library::inbox::native_inbox,
-            native_library::inbox::native_update_inbox_note,
-            native_library::inbox::native_review_inbox,
-            native_library::inbox::native_inbox_auto_review_rules,
-            native_library::inbox::native_create_inbox_auto_review_rule,
-            native_library::inbox::native_update_inbox_auto_review_rule,
-            native_library::inbox::native_delete_inbox_auto_review_rule,
-            native_library::library_tools::native_regex_tag_presets,
-            native_library::library_tools::native_save_regex_tag_preset,
-            native_library::library_tools::native_delete_regex_tag_preset,
-            native_library::library_tools::native_virtual_tags,
-            native_library::library_tools::native_save_virtual_tag,
-            native_library::library_tools::native_delete_virtual_tag,
-            native_library::library_tools::native_infer_filename_tags,
-            native_library::library_tools::native_custom_tags,
-            native_library::library_tools::native_virtual_tag_preview,
-            native_library::library_tools::native_copy_swap_tags,
-            native_library::library_tools::native_regex_tags,
-            native_library::library_tools::native_device_sync_profiles,
-            native_library::library_tools::native_save_device_sync_profile,
-            native_library::library_tools::native_delete_device_sync_profile,
-            native_library::podcasts::native_podcast_subscriptions,
-            native_library::podcasts::native_save_podcast_subscription,
-            native_library::podcasts::native_delete_podcast_subscription,
-            native_library::podcasts::native_podcast_subscription_folder,
-            native_library::podcasts::native_podcast_episodes,
-            native_library::scrobbling::native_scrobble_accounts,
-            native_library::scrobbling::native_save_scrobble_account,
-            native_library::scrobbling::native_scrobble_outbox,
-            native_library::scrobbling::native_queue_scrobble_history,
-            native_library::tools::native_audio_conversion_setup,
-            native_library::tools::native_save_audio_conversion_setup,
-            native_library::tools::native_chromaprint_setup,
-            native_library::tools::native_save_chromaprint_setup,
-            native_library::native_clear_library_caches,
-            native_library::native_bulk_undo_log,
-            native_library::native_bulk_undo_batches,
-            native_library::native_restore_bulk_undo_batch,
-            native_library::native_restore_bulk_undo_entry,
-            native_library::native_library_health,
-            native_library::native_duplicate_review,
-            native_library::native_artist_info,
-            native_library::native_artist_local_tracks,
-            native_library::native_clear_artist_cache,
-            native_library::recommendations::native_generate_autodj,
-            native_library::recommendation_profiles::native_recommendation_profiles,
-            native_library::recommendation_profiles::native_recommendation_history,
-            native_library::recommendation_profiles::native_save_recommendation_profile,
-            native_library::recommendation_profiles::native_set_default_recommendation_profile,
-            native_library::recommendation_profiles::native_delete_recommendation_profile,
-            native_library::recommendation_profiles::native_record_recommendation_feedback,
-            native_library::recommendation_profiles::native_create_recommendation_ab_test,
-            native_library::recommendation_profiles::native_choose_recommendation_ab_test,
-            native_library::recommendation_profiles::native_compare_recommendation_profiles,
-            native_library::recommendation_profiles::native_export_recommendation_profile_comparison,
-            native_library::recommendation_profiles::native_import_recommendation_profile_comparison,
-            native_library::native_library_reconcile_preview,
-            native_library::native_file_organization_preview,
-            native_library::native_parse_playlist,
-            native_library::native_export_m3u,
-            native_library::native_volume_tags_preview,
-            native_library::native_bulk_file_move_preview,
-            native_library::native_gapless_validate,
-            native_library::native_remove_library_source,
-            path_ops::native_path_info,
-            path_ops::native_scan_audio_paths,
-            path_ops::native_recycle_paths,
-            process_runner::native_run_tool,
-            process_runner::native_supervise_audio_conversion,
+            python_worker::backend_json,
+            playback::play_file,
+            playback::crossfade_to_file,
+            playback::resume,
+            playback::pause,
+            playback::stop,
+            playback::seek,
+            playback::set_dsp,
+            playback::set_volume,
+            playback::fade_volume,
+            playback::status,
+            playback::visualizer_frame,
+            playback::diagnostics,
+            playback::clear_diagnostics,
+            playback::prepare_next_file,
+            playback::output_backends,
+            playback::list_output_devices,
+            folder_watch::folder_watch_start,
+            folder_watch::folder_watch_stop,
+            folder_watch::folder_watch_status,
+            folder_watch::folder_watch_mark_event,
+            library::health,
+            library::settings,
+            library::update_settings,
+            library::clap_coverage,
+            library::tracks_page,
+            library::track,
+            library::tracks_batch,
+            library::similar_tracks,
+            library::audiobooks::audiobooks,
+            library::audiobooks::update_audiobook_progress,
+            library::audiobooks::audiobook_bookmarks,
+            library::audiobooks::create_audiobook_bookmark,
+            library::audiobooks::delete_audiobook_bookmark,
+            library::audiobooks::audiobook_chapters,
+            library::audiobooks::save_audiobook_chapters,
+            library::radio::radio_stations,
+            library::radio::save_radio_station,
+            library::radio::delete_radio_station,
+            library::radio::mark_radio_station_played,
+            library::loved_tracks,
+            library::update_track_love,
+            library::update_track_rating,
+            library::mark_track_played,
+            library::mark_track_skipped,
+            library::recommendations::autodj_avoid_rules,
+            library::recommendations::create_autodj_avoid_rule,
+            library::recommendations::delete_autodj_avoid_rule,
+            library::albums,
+            library::artists,
+            library::playlists::playlists,
+            library::playlists::create_playlist,
+            library::playlists::delete_playlist,
+            library::playlists::add_playlist_tracks,
+            library::playlists::remove_playlist_track,
+            library::playlists::move_playlist_track,
+            library::album_tracks,
+            library::playlists::playlist_tracks,
+            library::history::history,
+            library::history::history_stats,
+            library::library_stats,
+            library::inbox::inbox,
+            library::inbox::update_inbox_note,
+            library::inbox::review_inbox,
+            library::inbox::inbox_auto_review_rules,
+            library::inbox::create_inbox_auto_review_rule,
+            library::inbox::update_inbox_auto_review_rule,
+            library::inbox::delete_inbox_auto_review_rule,
+            library::library_tools::regex_tag_presets,
+            library::library_tools::save_regex_tag_preset,
+            library::library_tools::delete_regex_tag_preset,
+            library::library_tools::virtual_tags,
+            library::library_tools::save_virtual_tag,
+            library::library_tools::delete_virtual_tag,
+            library::library_tools::infer_filename_tags,
+            library::library_tools::custom_tags,
+            library::library_tools::virtual_tag_preview,
+            library::library_tools::copy_swap_tags,
+            library::library_tools::regex_tags,
+            library::library_tools::device_sync_profiles,
+            library::library_tools::save_device_sync_profile,
+            library::library_tools::delete_device_sync_profile,
+            library::podcasts::podcast_subscriptions,
+            library::podcasts::save_podcast_subscription,
+            library::podcasts::delete_podcast_subscription,
+            library::podcasts::podcast_subscription_folder,
+            library::podcasts::podcast_episodes,
+            library::scrobbling::scrobble_accounts,
+            library::scrobbling::save_scrobble_account,
+            library::scrobbling::scrobble_outbox,
+            library::scrobbling::queue_scrobble_history,
+            library::tools::audio_conversion_setup,
+            library::tools::save_audio_conversion_setup,
+            library::tools::chromaprint_setup,
+            library::tools::save_chromaprint_setup,
+            library::clear_library_caches,
+            library::bulk_undo_log,
+            library::bulk_undo_batches,
+            library::restore_bulk_undo_batch,
+            library::restore_bulk_undo_entry,
+            library::health::library_health,
+            library::health::duplicate_review,
+            library::artist_info::artist_info,
+            library::artist_info::artist_local_tracks,
+            library::artist_info::clear_artist_cache,
+            library::recommendations::generate_autodj,
+            library::recommendation_profiles::recommendation_profiles,
+            library::recommendation_profiles::recommendation_history,
+            library::recommendation_profiles::save_recommendation_profile,
+            library::recommendation_profiles::set_default_recommendation_profile,
+            library::recommendation_profiles::delete_recommendation_profile,
+            library::recommendation_profiles::record_recommendation_feedback,
+            library::recommendation_profiles::create_recommendation_ab_test,
+            library::recommendation_profiles::choose_recommendation_ab_test,
+            library::recommendation_profiles::compare_recommendation_profiles,
+            library::recommendation_profiles::export_recommendation_profile_comparison,
+            library::recommendation_profiles::import_recommendation_profile_comparison,
+            library::library_reconcile_preview,
+            library::file_organization::file_organization_preview,
+            library::playlist_files::parse_playlist,
+            library::playlist_files::export_m3u,
+            library::volume_tags::volume_tags_preview,
+            library::bulk_file_move_preview,
+            library::gapless_validate,
+            library::remove_library_source,
+            path_ops::path_info,
+            path_ops::scan_audio_paths,
+            path_ops::recycle_paths,
+            process_runner::run_tool,
+            process_runner::supervise_audio_conversion,
             smtc::smtc_update_state,
             smtc::smtc_clear
         ])
@@ -477,7 +436,7 @@ fn main() {
             event,
             tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
         ) {
-            folder_watch::stop_native_folder_watch(app_handle);
+            folder_watch::stop_folder_watch(app_handle);
         }
     });
 }

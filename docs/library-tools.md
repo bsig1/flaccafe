@@ -107,7 +107,7 @@ Manual mode lets you mark selected tracks with known gain/peak values directly, 
 
 ## Audio Conversion
 
-Audio conversion preview, target path generation, estimated output sizing, FFmpeg installer jobs, conversion progress, ETA, cancellation, and partial-output cleanup are Rust-owned. FFmpeg does the actual transcoding, and embedded artwork copy still delegates to the Python specialist worker because container-specific artwork writing remains safer there.
+Audio conversion preview, target path generation, estimated output sizing, FFmpeg installer jobs, conversion progress, ETA, cancellation, partial-output cleanup, and embedded artwork copy are Rust-owned. FFmpeg does the actual transcoding, and Rust/Lofty handles the post-conversion artwork copy when supported by the target container.
 
 ## File Organization
 
@@ -131,9 +131,9 @@ Saved sync profiles store the target folder, device type, music and playlist sub
 
 ## CD Ripper
 
-The CD Ripper panel on the File Management page detects local CD drives, checks for external extraction tools, looks up album metadata through MusicBrainz, and starts background rip jobs to FLAC, MP3, or WAV.
+The CD Ripper panel on the File Management page detects local CD drives, looks up album metadata through MusicBrainz, and starts background rip jobs to FLAC, MP3, or WAV.
 
-Secure extraction is tool-backed. Windows builds bundle a small cdrtools folder with `cdda2wav.exe` for CD extraction and CD-Text; custom `cdparanoia.exe`, `cdda2wav.exe`, or `icedax.exe` paths on `PATH` are still detected. FLAC and MP3 encoding use the same optional FFmpeg setup as Audio Conversion. If an AccurateRip-capable tool is installed, FLAC Cafe reports that capability; current rip jobs always write local SHA-256 verification hashes so a rip has an audit trail even when official AccurateRip database matching is unavailable.
+Windows builds use Rust-owned Windows CDDA reads for live playback and ripping. Custom `cdparanoia.exe`, `cdda2wav.exe`, or `icedax.exe` paths on `PATH` are still detected for diagnostics/CD-Text capability, but app-facing setup, playback, MusicBrainz disc lookup, rip jobs, progress, cancellation, and local SHA-256 verification hashes are Rust-owned. FLAC and MP3 encoding use the same optional FFmpeg setup as Audio Conversion. If an AccurateRip-capable tool is installed, FLAC Cafe reports that capability; current rip jobs always write local SHA-256 verification hashes so a rip has an audit trail even when official AccurateRip database matching is unavailable.
 
 The Optional Dependencies page focuses on installable extras such as FFmpeg and ML runtimes. Chromaprint and the small Windows CD helper tools are bundled with the app and documented in `THIRD_PARTY_NOTICES.md` instead of being presented as user-installed dependencies. AccurateRip-capable helpers are still detected when present, but are not bundled by FLAC Cafe.
 

@@ -37,7 +37,7 @@ The first analysis run downloads the configured Hugging Face model into `backend
 
 ## Runtime Flow
 
-Rust owns the Analysis page job state: candidate selection, progress, ETA, pause/resume/cancel, failure marking, and SQLite writes for completed analysis rows. During a batch, Rust starts `backend.app.clap_worker` as a persistent JSON-lines Python worker and sends one track at a time to it. That worker owns only the Python-specialist part: loading Transformers/Torch and returning CLAP genre, tag, and embedding data.
+Rust owns the Analysis page job state: runtime status/config/install job tracking, candidate selection, progress, ETA, pause/resume/cancel, failure marking, and SQLite writes for completed analysis rows. For setup and status checks, Rust starts `backend.app.clap_expert` as a one-shot JSON subprocess so Python can do the Torch/package/runtime-specific work. During a batch, Rust starts `backend.app.clap_worker` as a persistent JSON-lines Python worker and sends one track at a time to it. That worker owns only the Python-specialist part: loading Transformers/Torch and returning CLAP genre, tag, and embedding data.
 
 This split keeps the app-facing controller Rust and avoids paying Python/Torch startup for every track, while still leaving CLAP inference in the mature Python ecosystem.
 

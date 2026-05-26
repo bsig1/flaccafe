@@ -11,7 +11,7 @@ use std::os::windows::process::CommandExt;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[derive(Serialize)]
-pub struct NativeToolRunResponse {
+pub struct DesktopToolRunResponse {
     executable: String,
     args: Vec<String>,
     exit_code: Option<i32>,
@@ -22,7 +22,7 @@ pub struct NativeToolRunResponse {
 }
 
 #[derive(Serialize)]
-pub struct NativeAudioConversionSupervisionResponse {
+pub struct DesktopAudioConversionSupervisionResponse {
     executable: String,
     args: Vec<String>,
     exit_code: Option<i32>,
@@ -51,7 +51,7 @@ fn run_hidden_tool(
     executable: String,
     args: Vec<String>,
     timeout_ms: Option<u64>,
-) -> Result<NativeToolRunResponse, String> {
+) -> Result<DesktopToolRunResponse, String> {
     let timeout = Duration::from_millis(timeout_ms.unwrap_or(15_000).clamp(250, 10 * 60 * 1000));
     let started = Instant::now();
     let mut child = hidden_command(&executable)
@@ -68,7 +68,7 @@ fn run_hidden_tool(
                 let output = child
                     .wait_with_output()
                     .map_err(|error| format!("Could not collect {executable} output: {error}"))?;
-                return Ok(NativeToolRunResponse {
+                return Ok(DesktopToolRunResponse {
                     executable,
                     args,
                     exit_code: output.status.code(),
@@ -83,7 +83,7 @@ fn run_hidden_tool(
                 let output = child.wait_with_output().map_err(|error| {
                     format!("Could not stop {executable} after timeout: {error}")
                 })?;
-                return Ok(NativeToolRunResponse {
+                return Ok(DesktopToolRunResponse {
                     executable,
                     args,
                     exit_code: output.status.code(),
@@ -109,22 +109,22 @@ fn file_size(path: &Option<String>) -> Option<u64> {
 }
 
 #[tauri::command]
-pub fn native_run_tool(
+pub fn run_tool(
     executable: String,
     args: Option<Vec<String>>,
     timeout_ms: Option<u64>,
-) -> Result<NativeToolRunResponse, String> {
+) -> Result<DesktopToolRunResponse, String> {
     run_hidden_tool(executable, args.unwrap_or_default(), timeout_ms)
 }
 
 #[tauri::command]
-pub fn native_supervise_audio_conversion(
+pub fn supervise_audio_conversion(
     executable: String,
     args: Option<Vec<String>>,
     input_path: Option<String>,
     output_path: Option<String>,
     timeout_ms: Option<u64>,
-) -> Result<NativeAudioConversionSupervisionResponse, String> {
+) -> Result<DesktopAudioConversionSupervisionResponse, String> {
     let result = run_hidden_tool(executable, args.unwrap_or_default(), timeout_ms)?;
     let input_size_bytes = file_size(&input_path);
     let output_size_bytes = file_size(&output_path);
@@ -141,7 +141,7 @@ pub fn native_supervise_audio_conversion(
         .chars()
         .rev()
         .collect();
-    Ok(NativeAudioConversionSupervisionResponse {
+    Ok(DesktopAudioConversionSupervisionResponse {
         executable: result.executable,
         args: result.args,
         exit_code: result.exit_code,

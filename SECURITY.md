@@ -19,9 +19,9 @@ Useful details to include privately:
 
 - FLAC Cafe version and whether it was installed from MSI or run from source.
 - Windows version.
-- The affected workflow, such as scanning, metadata writes, plugin/extension loading, optional dependency installation, or worker/native command access.
+- The affected workflow, such as scanning, metadata writes, plugin/extension loading, optional dependency installation, or worker/desktop command access.
 - Redacted logs or support bundles when relevant.
 
 ## Scope
 
-Security-sensitive areas include local file deletion/moves, metadata writing, bundled native tools, optional dependency installers, extension loading, and any native command or worker action that can touch local files or app data.
+Security-sensitive areas include local file deletion/moves, metadata writing, bundled command-line tools, optional dependency installers, extension loading, and any desktop command or worker action that can touch local files or app data.

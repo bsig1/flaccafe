@@ -1,27 +1,27 @@
 # Rust Route Migration Checklist
 
-Use this checklist before removing a Python worker fallback for a route. The goal is to make route migrations boring and measurable while Python remains the expert worker only for CLAP/Torch inference, specialized embedded artwork/lyrics writes, CD/audio helper work that has not moved yet, and other tasks where the Python ecosystem is clearly safer.
+Use this checklist when moving deterministic work out of Python expert modules
+and into Rust. The old Python route fallback is gone; Python should stay limited
+to CLAP/Torch operations or future libraries where Python is clearly safer.
 
 ## Per-Route Checklist
 
-- Rust implementation: add the route handler in `src-tauri/src/python_worker/native_routes.rs` or a focused `src-tauri/src/native_library/` module.
-- Python parity test: keep or add a backend test that documents the existing behavior before the fallback is removed.
+- Rust implementation: add or update the handler in `src-tauri/src/python_worker/controller_routes/` and a focused `src-tauri/src/library/` module.
+- Behavior fixture: add a Rust test or a small Python expert-boundary test that captures the expected behavior before changing user-visible output.
 - Frontend path check: confirm the relevant `frontend/src/lib/api.ts` helper still calls the same app-facing route and receives the same response shape.
-- Hammer cases: add at least five good and five bad direct-route cases when the route has meaningful validation behavior.
+- Good and bad cases: add representative validation cases for successful requests, missing records, malformed bodies, and filesystem edge cases.
 - Docs update: update `docs/backend-routes.md` and any feature guide touched by the route.
-- Fallback removal: remove the Python action after the Rust path has parity coverage or after an intentional beta-era behavior reset has been accepted.
+- Python cleanup: remove unused Python helper code in the same change once Rust owns the path.
 
 ## Keep Python When
 
-- The route reads or writes audio tags that Lofty does not cover safely yet.
-- The route runs actual CLAP/Torch inference or another Python-first ML stack.
-- The route depends on messy embedded artwork or embedded lyrics behavior that does not yet have golden fixtures.
-- The Rust ecosystem path is less mature than the current Python library for that exact file format or local audio operation.
+- The code runs actual CLAP/Torch inference.
+- The code installs or inspects Python packages in the managed ML runtime.
+- A future feature depends on a Python library that is materially safer than the available Rust crate for that exact task.
 
 ## Migration Notes
 
-- Prefer small feature modules under `src-tauri/src/native_library/` over expanding `native_library.rs`.
-- Keep orchestration in Rust when practical. For example, CLAP candidate selection, progress, pause/resume/cancel, and SQLite result writes belong in Rust, while the persistent Python CLAP worker only performs inference.
-- Keep app-facing route names stable. React should not need to know whether Rust or Python handled the route.
-- Use `/diagnostics/python-worker-usage` during dev sessions to see which Python actions still run often.
-- Remove completed migration bullets from `TODO.md` in the same commit as the feature migration.
+- Prefer small feature modules under `src-tauri/src/library/` over expanding `src-tauri/src/library/mod.rs`.
+- Keep orchestration in Rust when practical. CLAP status/config/install job state, candidate selection, progress, pause/resume/cancel, and SQLite result writes belong in Rust; Python subprocesses perform only dependency/runtime/package work and inference.
+- Keep app-facing route names stable. React should not need to know which internal module handled a route.
+- Use `/diagnostics/python-worker-usage` during dev sessions to see which Python expert actions still run.

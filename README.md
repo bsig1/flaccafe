@@ -47,17 +47,17 @@ Windows beta installers are published on the [GitHub Releases page](https://gith
 
 - Desktop shell: Tauri v2
 - Frontend: React, TypeScript, Vite, Tailwind CSS
-- Backend: Rust app-facing controller plus Python expert workers for optional ML, CD/audio tooling, and the remaining specialized embedded file writes
+- Backend: Rust app-facing controller plus Python expert workers for optional ML library work
 - Optional analysis: CLAP through Transformers and Torch
 
-The MVP started with FastAPI because it kept music logic in Python and made early testing simple. The desktop build now uses Rust as the app-facing controller for SQLite reads, lightweight mutations, local media URLs, Lofty-based common tag reads/writes, MusicBrainz/AcoustID matching, podcast feed/download work, scrobbling flows, external-library imports, and all frontend-facing dispatch. Python remains an expert worker for the places where the Python ecosystem is still clearly useful: CLAP/Torch inference, CD/audio conversion helpers, and a shrinking set of specialized embedded file writes. Most Python actions are short-lived named workers; CLAP analysis uses a persistent Python model worker so Torch stays warm during a batch. Rust resolves app paths to named actions, so the packaged app no longer bundles, starts, or routes through a Python HTTP server.
+The MVP started with FastAPI because it kept music logic in Python and made early testing simple. The desktop build now uses Rust as the app-facing controller for SQLite reads, lightweight mutations, local media URLs, Lofty-based tag reads/writes, MusicBrainz/AcoustID matching, podcast feed/download work, scrobbling flows, external-library imports, CD workflows, audio conversion orchestration, CLAP runtime setup/status jobs, and all frontend-facing dispatch. Python remains an expert subprocess for the places where the Python ecosystem is still clearly useful: CLAP/Torch dependency checks, runtime package installation, and model inference. CLAP analysis uses a persistent Python model worker so Torch stays warm during a batch. The packaged app no longer bundles, starts, or routes through a Python HTTP server.
 
 ## Repo Layout
 
 ```text
 backend/       Python expert-worker modules and shared schema/data helpers
 frontend/      React/TypeScript UI, typed API clients, themes, player surfaces
-src-tauri/     Tauri v2 shell, Rust commands, Python worker bridge, Windows media controls, Rust playback
+src-tauri/     Tauri v2 shell, Rust commands, Python expert bridge, Windows media controls, Rust playback
 scripts/       Windows dev, test, validation, packaging, and runtime helpers
 docs/          maintainer guides, feature docs, release docs, and project structure
 extensions/    sample extension/skin manifests
@@ -67,7 +67,9 @@ For the detailed tree, ownership notes, and ignored/generated directories, see [
 
 ## Development
 
-Create the Python environment:
+Create the Python environment for packaging and optional CLAP development. The
+base sidecar runtime is currently standard-library only, but packaging needs
+PyInstaller:
 
 ```powershell
 python -m venv .venv

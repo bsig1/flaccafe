@@ -2,21 +2,21 @@
 
 This page covers the checks most likely to help during alpha builds.
 
-## Python Runtime Startup
+## Runtime Startup
 
 1. Open Settings and run the startup self-check.
 2. Create a support bundle from Settings if the self-check reports a failure.
-3. Inspect `%LOCALAPPDATA%\FLAC Cafe\logs\backend.log` for recent Python errors.
+3. Inspect `%LOCALAPPDATA%\FLAC Cafe\logs\backend.log` for recent Python expert-worker errors.
 4. In development, run:
 
 ```powershell
-npm run backend:dev
+npm run desktop
 ```
 
 Common causes:
 
-- A stale pre-worker dev backend is still holding port `8765`. Run `.\scripts\stop_dev.ps1` if you previously used an older build.
-- The packaged Python worker was built without a dependency. Rebuild with `npm run package:msi`.
+- A stale old dev backend is still holding a port. Run `.\scripts\stop_dev.ps1` if you previously used an older build.
+- The packaged Python CLAP expert sidecar was built without a needed optional dependency. Rebuild with `npm run package:msi`.
 - Optional ML packages were installed into the main app environment instead of the managed ML runtime.
 
 ## Codec Support

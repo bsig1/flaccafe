@@ -1,2 +1,7 @@
-mutagen==1.47.0
-pydantic>=2.13.4,<3
+# Base Python sidecar build dependencies.
+#
+# Rust owns the app backend and uses Python only for optional expert-worker
+# flows. The sidecar runtime currently uses only the Python standard library,
+# but packaging needs PyInstaller to build dist-backend/flaccafe-backend.
+# Install requirements-clap.txt through the app when CLAP analysis is enabled.
+pyinstaller>=6.20,<7

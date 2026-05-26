@@ -23,7 +23,7 @@ export type LibraryView = "tracks" | "artists" | "albums" | "playlists" | "compl
 export type BackendStatus = "unknown" | "starting" | "ok" | "down" | "restarting";
 export type PlaybackMode = "normal" | "repeatOne" | "repeatQueue" | "stopAfterCurrent";
 export type PlaybackEngine = "webview" | "rust";
-export type NativeOutputBackendMode = "cpalShared" | "wasapiExclusive" | "asio";
+export type desktopOutputBackendMode = "cpalShared" | "wasapiExclusive" | "asio";
 export type SortDirection = "asc" | "desc";
 export type UiDensity = "comfortable" | "compact";
 export type FontScale = "small" | "default" | "large";
@@ -224,9 +224,9 @@ export interface UiPreferences {
   playerFadeMs: number;
   skipThresholdPercent: number;
   playbackEngine: PlaybackEngine;
-  nativeOutputBackend: NativeOutputBackendMode;
-  nativeOutputDeviceId: string;
-  nativeBufferFrames: number;
+  desktopOutputBackend: desktopOutputBackendMode;
+  desktopOutputDeviceId: string;
+  desktopBufferFrames: number;
   startupPage: Page;
   albumGrid: boolean;
   showToasts: boolean;
@@ -1332,7 +1332,7 @@ export function writeStoredAudioControls(volume: number, muted: boolean) {
   }
 }
 
-export function setNativeInputValue(input: HTMLInputElement, value: string) {
+export function setDomInputValue(input: HTMLInputElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
   setter?.call(input, value);
 }
@@ -1366,7 +1366,7 @@ export function useRangeWheelControls() {
       const multiplier = event.shiftKey ? 10 : event.altKey ? 0.25 : 1;
       const precision = rangeStepPrecision(input.step);
       const next = clampNumber(current + direction * step * multiplier, min, max);
-      setNativeInputValue(input, next.toFixed(precision));
+      setDomInputValue(input, next.toFixed(precision));
       input.dispatchEvent(new Event("input", { bubbles: true }));
       input.dispatchEvent(new Event("change", { bubbles: true }));
     }
@@ -1464,9 +1464,9 @@ export function readUiPreferences(): UiPreferences {
     playerFadeMs: DEFAULT_FADE_MS,
     skipThresholdPercent: 35,
     playbackEngine: "webview",
-    nativeOutputBackend: "cpalShared",
-    nativeOutputDeviceId: "",
-    nativeBufferFrames: 0,
+    desktopOutputBackend: "cpalShared",
+    desktopOutputDeviceId: "",
+    desktopBufferFrames: 0,
     startupPage: "library",
     albumGrid: true,
     showToasts: true,
@@ -1504,7 +1504,7 @@ export function readUiPreferences(): UiPreferences {
     if (modern) {
       const parsed = JSON.parse(modern) as Partial<UiPreferences> & { playerLayout?: string };
       const rawPlaybackEngine = (parsed as { playbackEngine?: unknown }).playbackEngine;
-      const parsedPlaybackEngine = rawPlaybackEngine === "native" ? "rust" : rawPlaybackEngine;
+      const parsedPlaybackEngine = rawPlaybackEngine === "desktop" ? "rust" : rawPlaybackEngine;
       // Older builds stored a compact bottom-player mode; the main player now stays full-width.
       const validPages: Page[] = ["library", "analysis", "nowPlaying", "artist", "audiobooks", "podcasts", "radio", "scrobbling", "cd", "history", "autodj", "sources", "fileManagement", "settings"];
       return {
@@ -1531,15 +1531,15 @@ export function readUiPreferences(): UiPreferences {
         playbackEngine: ["webview", "rust"].includes(parsedPlaybackEngine as PlaybackEngine)
           ? (parsedPlaybackEngine as PlaybackEngine)
           : defaults.playbackEngine,
-        nativeOutputBackend: ["cpalShared", "wasapiExclusive", "asio"].includes(parsed.nativeOutputBackend as NativeOutputBackendMode)
-          ? (parsed.nativeOutputBackend as NativeOutputBackendMode)
-          : defaults.nativeOutputBackend,
-        nativeOutputDeviceId:
-          typeof parsed.nativeOutputDeviceId === "string" ? parsed.nativeOutputDeviceId : defaults.nativeOutputDeviceId,
-        nativeBufferFrames:
-          typeof parsed.nativeBufferFrames === "number"
-            ? clampNumber(parsed.nativeBufferFrames, 0, 16_384)
-            : defaults.nativeBufferFrames,
+        desktopOutputBackend: ["cpalShared", "wasapiExclusive", "asio"].includes(parsed.desktopOutputBackend as desktopOutputBackendMode)
+          ? (parsed.desktopOutputBackend as desktopOutputBackendMode)
+          : defaults.desktopOutputBackend,
+        desktopOutputDeviceId:
+          typeof parsed.desktopOutputDeviceId === "string" ? parsed.desktopOutputDeviceId : defaults.desktopOutputDeviceId,
+        desktopBufferFrames:
+          typeof parsed.desktopBufferFrames === "number"
+            ? clampNumber(parsed.desktopBufferFrames, 0, 16_384)
+            : defaults.desktopBufferFrames,
         replayGainPreventClipping:
           typeof parsed.replayGainPreventClipping === "boolean"
             ? parsed.replayGainPreventClipping

@@ -30,20 +30,20 @@ import {
   audioUrl,
 } from "../../lib/api";
 import {
-  nativeCrossfadeToFile,
-  nativeFadeVolume as nativeFadeVolumeCommand,
-  nativePause,
-  nativePlayFile,
-  nativePrepareNextFile,
-  nativeResume,
-  nativeSeek,
-  nativeSetDsp,
-  nativeSetVolume,
-  nativeStatus,
-  nativeStop,
-  nativeVisualizerFrame,
-} from "../../lib/nativePlayback";
-import type { NativeDspSettings } from "../../lib/nativePlayback";
+  desktopCrossfadeToFile,
+  desktopFadeVolume as desktopFadeVolumeCommand,
+  desktopPause,
+  desktopPlayFile,
+  desktopPrepareNextFile,
+  desktopResume,
+  desktopSeek,
+  desktopSetDsp,
+  desktopSetVolume,
+  desktopStatus,
+  desktopStop,
+  desktopVisualizerFrame,
+} from "../../lib/desktopPlayback";
+import type { desktopDspSettings } from "../../lib/desktopPlayback";
 import type { SmtcButtonPayload } from "../../lib/tauriMedia";
 import {
   clearSmtcState,
@@ -112,8 +112,8 @@ export function PlayerBar({
   fadeMs,
   skipThresholdPercent,
   playbackEngine,
-  nativeOutputDeviceId,
-  nativeBufferFrames,
+  desktopOutputDeviceId,
+  desktopBufferFrames,
   miniPlayer,
   replayGainMode,
   replayGainTargetVolumePercent,
@@ -152,8 +152,8 @@ export function PlayerBar({
   fadeMs: number;
   skipThresholdPercent: number;
   playbackEngine: PlaybackEngine;
-  nativeOutputDeviceId: string;
-  nativeBufferFrames: number;
+  desktopOutputDeviceId: string;
+  desktopBufferFrames: number;
   miniPlayer: boolean;
   replayGainMode: "off" | "track" | "album";
   replayGainTargetVolumePercent: number;
@@ -193,7 +193,7 @@ export function PlayerBar({
   const dspModeRef = useRef<EqualizerBandMode | null>(null);
   const dspLimiterRef = useRef<boolean | null>(null);
   const fadeTimerRef = useRef<number | null>(null);
-  const nativeFadeTimerRef = useRef<number | null>(null);
+  const desktopFadeTimerRef = useRef<number | null>(null);
   const crossfadeTimerRef = useRef<number | null>(null);
   const visualizerFrameRef = useRef<number | null>(null);
   const visualizerLastEmitRef = useRef(0);
@@ -204,9 +204,9 @@ export function PlayerBar({
   const handoffRef = useRef<{ trackId: number; currentTime: number } | null>(null);
   const handoffSourceRef = useRef<HTMLAudioElement | null>(null);
   const pendingResumePositionRef = useRef<number | null>(null);
-  const nativeLoadedTrackIdRef = useRef<number | null>(null);
-  const nativeEndedTrackIdRef = useRef<number | null>(null);
-  const lastNativeStreamErrorRef = useRef<string | null>(null);
+  const desktopLoadedTrackIdRef = useRef<number | null>(null);
+  const desktopEndedTrackIdRef = useRef<number | null>(null);
+  const lastPlaybackStreamErrorRef = useRef<string | null>(null);
   const handledExternalTrackRequestRef = useRef<number | null>(null);
   const activeSourceKeyRef = useRef("empty");
   const suppressWebPlaybackErrorsUntilRef = useRef(0);
@@ -233,7 +233,7 @@ export function PlayerBar({
   const hasPrevious = currentIndex > 0;
   const hasNext = currentIndex >= 0 && currentIndex < queue.length - 1;
   const cdSkipIsSettling = isCdPreviewTrack && isPlaying && currentTime < CD_SKIP_SETTLE_SECONDS;
-  const useNativePlayback = playbackEngine === "rust" && !isRadioSource && !currentTrack?.audio_url;
+  const usePlayback = playbackEngine === "rust" && !isRadioSource && !currentTrack?.audio_url;
   const preloadedNextTrack =
     !isRadioSource && hasNext
       ? queue[currentIndex + 1]
@@ -268,7 +268,7 @@ export function PlayerBar({
   const visualizerTrackId = currentTrack?.id ?? (currentRadioStation ? -currentRadioStation.id : null);
   activeSourceKeyRef.current = activeSourceKey;
 
-  function nativeDspSettingsForTrack(track: Track | null): NativeDspSettings {
+  function desktopDspSettingsForTrack(track: Track | null): desktopDspSettings {
     return {
       normalizationGain: replayGainForTrack(track),
       equalizerEnabled,
@@ -279,8 +279,8 @@ export function PlayerBar({
     };
   }
 
-  function currentNativeDspSettings(): NativeDspSettings {
-    return nativeDspSettingsForTrack(currentTrack);
+  function currentPlaybackDspSettings(): desktopDspSettings {
+    return desktopDspSettingsForTrack(currentTrack);
   }
 
   function disconnectAudioNode(node: AudioNode | null) {
@@ -408,7 +408,7 @@ export function PlayerBar({
   }
 
   function ensureWebAudioGraph() {
-    if (useNativePlayback) {
+    if (usePlayback) {
       return null;
     }
     const context = ensureAudioContext();
@@ -654,7 +654,7 @@ export function PlayerBar({
   useEffect(() => {
     return () => {
       cancelFade();
-      cancelNativeFade();
+      cancelPlaybackFade();
       cancelCrossfade();
       clearArtworkPreviewTimer();
       cancelVisualizerLoop();
@@ -662,7 +662,7 @@ export function PlayerBar({
       void audioContextRef.current?.close().catch(() => {
         // Closing the graph is best-effort during app teardown.
       });
-      void nativeStop().catch(() => {
+      void desktopStop().catch(() => {
         // Rust playback is best-effort during shutdown.
       });
     };
@@ -670,9 +670,9 @@ export function PlayerBar({
 
   useEffect(() => {
     writeStoredAudioControls(volume, muted);
-    if (useNativePlayback) {
-      if (nativeFadeTimerRef.current === null) {
-        void nativeSetVolume(outputVolume).catch(() => {
+    if (usePlayback) {
+      if (desktopFadeTimerRef.current === null) {
+        void desktopSetVolume(outputVolume).catch(() => {
           // The Rust audio engine may be unavailable in browser preview.
         });
       }
@@ -682,19 +682,19 @@ export function PlayerBar({
       setWebSourceGain(audioRef.current, currentSourceGainRef, outputVolume);
       setWebSourceGain(nextAudioRef.current, nextSourceGainRef, 0);
     }
-  }, [volume, muted, outputVolume, useNativePlayback]);
+  }, [volume, muted, outputVolume, usePlayback]);
 
   useEffect(() => {
-    if (useNativePlayback) {
+    if (usePlayback) {
       audioRef.current?.pause();
       return;
     }
-    nativeLoadedTrackIdRef.current = null;
-    nativeEndedTrackIdRef.current = null;
-    void nativeStop().catch(() => {
+    desktopLoadedTrackIdRef.current = null;
+    desktopEndedTrackIdRef.current = null;
+    void desktopStop().catch(() => {
       // The command is not available in a plain Vite browser preview.
     });
-  }, [useNativePlayback]);
+  }, [usePlayback]);
 
   useEffect(() => {
     if (!("BroadcastChannel" in window)) {
@@ -728,12 +728,12 @@ export function PlayerBar({
   }, [canPreloadNextTrack, preloadedNextTrack?.id]);
 
   useEffect(() => {
-    if (useNativePlayback) {
+    if (usePlayback) {
       return;
     }
     ensureWebAudioGraph();
   }, [
-    useNativePlayback,
+    usePlayback,
     activeSourceKey,
     preloadedNextTrack?.id,
     equalizerEnabled,
@@ -745,14 +745,14 @@ export function PlayerBar({
   ]);
 
   useEffect(() => {
-    if (!useNativePlayback) {
+    if (!usePlayback) {
       return;
     }
-    void nativeSetDsp(currentNativeDspSettings()).catch(() => {
+    void desktopSetDsp(currentPlaybackDspSettings()).catch(() => {
       // Browser preview and older installed builds may not expose the Rust DSP command.
     });
   }, [
-    useNativePlayback,
+    usePlayback,
     equalizerEnabled,
     equalizerBandMode,
     equalizerPreampDb,
@@ -767,15 +767,15 @@ export function PlayerBar({
     if (!isPlaying || visualizerTrackId === null) {
       return;
     }
-    if (useNativePlayback) {
+    if (usePlayback) {
       if (!currentTrack) {
         return;
       }
-      let nativeVisualizerInFlight = false;
+      let desktopVisualizerInFlight = false;
       const tick = (timestamp: number) => {
-        if (!nativeVisualizerInFlight && timestamp - visualizerLastEmitRef.current >= 33) {
-          nativeVisualizerInFlight = true;
-          void nativeVisualizerFrame()
+        if (!desktopVisualizerInFlight && timestamp - visualizerLastEmitRef.current >= 33) {
+          desktopVisualizerInFlight = true;
+          void desktopVisualizerFrame()
             .then((frame) => {
               emitVisualizerFrame({
                 trackId: currentTrack.id,
@@ -793,7 +793,7 @@ export function PlayerBar({
               visualizerLastEmitRef.current = timestamp;
             })
             .finally(() => {
-              nativeVisualizerInFlight = false;
+              desktopVisualizerInFlight = false;
             });
         }
         visualizerFrameRef.current = window.requestAnimationFrame(tick);
@@ -848,7 +848,7 @@ export function PlayerBar({
 
     visualizerFrameRef.current = window.requestAnimationFrame(tick);
     return cancelVisualizerLoop;
-  }, [useNativePlayback, isPlaying, visualizerTrackId, equalizerEnabled, equalizerBandMode, dspLimiterEnabled, replayGain]);
+  }, [usePlayback, isPlaying, visualizerTrackId, equalizerEnabled, equalizerBandMode, dspLimiterEnabled, replayGain]);
 
   function cancelFade() {
     if (fadeTimerRef.current !== null) {
@@ -858,10 +858,10 @@ export function PlayerBar({
     cancelWebSourceGainAutomation(currentSourceGainRef);
   }
 
-  function cancelNativeFade() {
-    if (nativeFadeTimerRef.current !== null) {
-      window.clearTimeout(nativeFadeTimerRef.current);
-      nativeFadeTimerRef.current = null;
+  function cancelPlaybackFade() {
+    if (desktopFadeTimerRef.current !== null) {
+      window.clearTimeout(desktopFadeTimerRef.current);
+      desktopFadeTimerRef.current = null;
     }
   }
 
@@ -962,61 +962,61 @@ export function PlayerBar({
     }, 16);
   }
 
-  function fadeNativeVolume(targetVolume: number, durationMs: number, afterFade?: () => void, startVolumeOverride?: number) {
-    cancelNativeFade();
+  function fadePlaybackVolume(targetVolume: number, durationMs: number, afterFade?: () => void, startVolumeOverride?: number) {
+    cancelPlaybackFade();
     const clampedTarget = clampNumber(targetVolume, 0, 1.5);
     if (durationMs <= 0) {
-      void nativeSetVolume(clampedTarget).finally(() => afterFade?.());
+      void desktopSetVolume(clampedTarget).finally(() => afterFade?.());
       return;
     }
     const prepareFade =
       typeof startVolumeOverride === "number"
-        ? nativeSetVolume(clampNumber(startVolumeOverride, 0, 1.5))
+        ? desktopSetVolume(clampNumber(startVolumeOverride, 0, 1.5))
         : Promise.resolve();
     void prepareFade
-      .then(() => nativeFadeVolumeCommand(clampedTarget, durationMs))
-      .catch(() => nativeSetVolume(clampedTarget))
+      .then(() => desktopFadeVolumeCommand(clampedTarget, durationMs))
+      .catch(() => desktopSetVolume(clampedTarget))
       .catch(() => {
         // Keep the UI responsive even if the Rust audio engine is unavailable.
       });
-    nativeFadeTimerRef.current = window.setTimeout(() => {
-      nativeFadeTimerRef.current = null;
+    desktopFadeTimerRef.current = window.setTimeout(() => {
+      desktopFadeTimerRef.current = null;
       afterFade?.();
     }, durationMs + 25);
   }
 
-  async function startNativeTrack(track: Track, startSeconds = 0) {
-    cancelNativeFade();
+  async function startPlaybackTrack(track: Track, startSeconds = 0) {
+    cancelPlaybackFade();
     cancelCrossfade();
     const startVolume = fadeMs > 0 ? 0 : outputVolume;
     try {
-      const status = await nativePlayFile({
+      const status = await desktopPlayFile({
         path: track.path,
         volume: startVolume,
         startSeconds,
-        deviceId: nativeOutputDeviceId,
-        bufferFrames: nativeBufferFrames,
-        dspSettings: currentNativeDspSettings(),
+        deviceId: desktopOutputDeviceId,
+        bufferFrames: desktopBufferFrames,
+        dspSettings: currentPlaybackDspSettings(),
       });
-      nativeLoadedTrackIdRef.current = track.id;
-      nativeEndedTrackIdRef.current = null;
-      lastNativeStreamErrorRef.current = null;
+      desktopLoadedTrackIdRef.current = track.id;
+      desktopEndedTrackIdRef.current = null;
+      lastPlaybackStreamErrorRef.current = null;
       setDuration(status.duration_seconds ?? track.duration_seconds ?? 0);
       setCurrentTime(status.position_seconds);
       onPlaybackTime(status.position_seconds);
       pendingResumePositionRef.current = null;
       setIsPlaying(true);
       if (fadeMs > 0) {
-        fadeNativeVolume(outputVolume, fadeMs, undefined, 0);
+        fadePlaybackVolume(outputVolume, fadeMs, undefined, 0);
       }
     } catch (error) {
       setIsPlaying(false);
-      nativeLoadedTrackIdRef.current = null;
+      desktopLoadedTrackIdRef.current = null;
       setStatus(error instanceof Error ? error.message : "Rust playback could not start for this file.");
     }
   }
 
-  async function startNativeCrossfade(
+  async function startPlaybackCrossfade(
     nextTrack: Track,
     recordCompletion = true,
     nextQueue: Track[] = queue,
@@ -1026,19 +1026,19 @@ export function PlayerBar({
       return false;
     }
     crossfadeTrackRef.current = currentTrack.id;
-    cancelNativeFade();
+    cancelPlaybackFade();
     try {
-      const status = await nativeCrossfadeToFile({
+      const status = await desktopCrossfadeToFile({
         path: nextTrack.path,
         volume: outputVolume,
         durationMs: Math.max(0, fadeMs),
-        deviceId: nativeOutputDeviceId,
-        bufferFrames: nativeBufferFrames,
-        dspSettings: nativeDspSettingsForTrack(nextTrack),
+        deviceId: desktopOutputDeviceId,
+        bufferFrames: desktopBufferFrames,
+        dspSettings: desktopDspSettingsForTrack(nextTrack),
       });
-      nativeLoadedTrackIdRef.current = nextTrack.id;
-      nativeEndedTrackIdRef.current = null;
-      lastNativeStreamErrorRef.current = null;
+      desktopLoadedTrackIdRef.current = nextTrack.id;
+      desktopEndedTrackIdRef.current = null;
+      lastPlaybackStreamErrorRef.current = null;
       setDuration(status.duration_seconds ?? nextTrack.duration_seconds ?? 0);
       setCurrentTime(status.position_seconds);
       onPlaybackTime(status.position_seconds);
@@ -1057,21 +1057,21 @@ export function PlayerBar({
     }
   }
 
-  async function resumeNativeWithFade() {
+  async function resumePlaybackWithFade() {
     if (!currentTrack) {
       return;
     }
-    if (nativeLoadedTrackIdRef.current !== currentTrack.id || nativeEndedTrackIdRef.current === currentTrack.id) {
-      await startNativeTrack(currentTrack, currentTime);
+    if (desktopLoadedTrackIdRef.current !== currentTrack.id || desktopEndedTrackIdRef.current === currentTrack.id) {
+      await startPlaybackTrack(currentTrack, currentTime);
       return;
     }
     try {
-      cancelNativeFade();
-      await nativeSetVolume(fadeMs > 0 ? 0 : outputVolume);
-      await nativeResume();
+      cancelPlaybackFade();
+      await desktopSetVolume(fadeMs > 0 ? 0 : outputVolume);
+      await desktopResume();
       setIsPlaying(true);
       if (fadeMs > 0) {
-        fadeNativeVolume(outputVolume, fadeMs, undefined, 0);
+        fadePlaybackVolume(outputVolume, fadeMs, undefined, 0);
       }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Rust playback could not resume.");
@@ -1223,8 +1223,8 @@ export function PlayerBar({
   }
 
   async function playWithFade() {
-    if (useNativePlayback) {
-      await resumeNativeWithFade();
+    if (usePlayback) {
+      await resumePlaybackWithFade();
       return;
     }
     const audio = audioRef.current;
@@ -1264,9 +1264,9 @@ export function PlayerBar({
   }
 
   function pauseWithFade() {
-    if (useNativePlayback) {
-      fadeNativeVolume(0, fadeMs, () => {
-        void nativePause()
+    if (usePlayback) {
+      fadePlaybackVolume(0, fadeMs, () => {
+        void desktopPause()
           .then(() => {
             setIsPlaying(false);
           })
@@ -1307,37 +1307,37 @@ export function PlayerBar({
     }
 
     if (!hasPlayableSource || !isPlaying || trackSwitchFadeMs <= 0) {
-      if (useNativePlayback) {
-        void nativeStop().finally(commitTrackRequest);
+      if (usePlayback) {
+        void desktopStop().finally(commitTrackRequest);
         return;
       }
       commitTrackRequest();
       return;
     }
 
-    if (useNativePlayback) {
+    if (usePlayback) {
       if (trackNeedsWebPlayback(externalTrackRequest.track)) {
         void recordCurrentTrackExit();
-        fadeNativeVolume(0, trackSwitchFadeMs, () => {
-          void nativeStop().finally(() => commitTrackRequest({ suppressExitRecord: true }));
+        fadePlaybackVolume(0, trackSwitchFadeMs, () => {
+          void desktopStop().finally(() => commitTrackRequest({ suppressExitRecord: true }));
         });
         return;
       }
       if (isPlaying && trackSwitchFadeMs > 0) {
         void recordCurrentTrackExit();
-        void startNativeCrossfade(externalTrackRequest.track, false, externalTrackRequest.queue, false).then((started) => {
+        void startPlaybackCrossfade(externalTrackRequest.track, false, externalTrackRequest.queue, false).then((started) => {
           if (started) {
             commitTrackRequest({ suppressExitRecord: true });
             return;
           }
-          fadeNativeVolume(0, trackSwitchFadeMs, () => {
-            void nativeStop().finally(() => commitTrackRequest({ suppressExitRecord: true }));
+          fadePlaybackVolume(0, trackSwitchFadeMs, () => {
+            void desktopStop().finally(() => commitTrackRequest({ suppressExitRecord: true }));
           });
         });
         return;
       }
-      fadeNativeVolume(0, trackSwitchFadeMs, () => {
-        void nativeStop().finally(commitTrackRequest);
+      fadePlaybackVolume(0, trackSwitchFadeMs, () => {
+        void desktopStop().finally(commitTrackRequest);
       });
       return;
     }
@@ -1380,13 +1380,13 @@ export function PlayerBar({
     setIsPlaying(false);
     endFadeTrackRef.current = null;
     crossfadeTrackRef.current = null;
-    nativeEndedTrackIdRef.current = null;
+    desktopEndedTrackIdRef.current = null;
     pendingResumePositionRef.current = null;
 
     if (!hasPlayableSource) {
-      if (useNativePlayback) {
-        nativeLoadedTrackIdRef.current = null;
-        void nativeStop().catch(() => {
+      if (usePlayback) {
+        desktopLoadedTrackIdRef.current = null;
+        void desktopStop().catch(() => {
           // Rust playback may not be available in browser preview.
         });
       }
@@ -1401,13 +1401,13 @@ export function PlayerBar({
     if (!currentTrack) {
       return;
     }
-    if (useNativePlayback) {
+    if (usePlayback) {
       if (autoPlay) {
-        if (nativeLoadedTrackIdRef.current === currentTrack.id) {
+        if (desktopLoadedTrackIdRef.current === currentTrack.id) {
           setIsPlaying(true);
           return;
         }
-        void startNativeTrack(currentTrack);
+        void startPlaybackTrack(currentTrack);
       }
       return;
     }
@@ -1436,7 +1436,7 @@ export function PlayerBar({
     if (autoPlay) {
       void playWithFade();
     }
-  }, [activeSourceKey, radioPlaybackRequestId, autoPlay, useNativePlayback]);
+  }, [activeSourceKey, radioPlaybackRequestId, autoPlay, usePlayback]);
 
   useEffect(() => {
     if (!currentTrack) {
@@ -1463,17 +1463,17 @@ export function PlayerBar({
     pendingResumePositionRef.current = boundedTime;
 
     const audio = audioRef.current;
-    if (!useNativePlayback && audio) {
+    if (!usePlayback && audio) {
       applyPendingResumeToAudio();
-    } else if (useNativePlayback && nativeLoadedTrackIdRef.current === currentTrack.id) {
-      void nativeSeek(boundedTime).catch(() => {
+    } else if (usePlayback && desktopLoadedTrackIdRef.current === currentTrack.id) {
+      void desktopSeek(boundedTime).catch(() => {
         // A restored position can still be used when playback starts.
       });
       pendingResumePositionRef.current = null;
     }
 
     onResumePositionApplied();
-  }, [currentTrack?.id, resumePositionSeconds, useNativePlayback]);
+  }, [currentTrack?.id, resumePositionSeconds, usePlayback]);
 
   function applyPendingResumeToAudio() {
     const audio = audioRef.current;
@@ -1534,8 +1534,8 @@ export function PlayerBar({
     setCurrentTime(boundedTime);
     onPlaybackTime(boundedTime);
     pendingResumePositionRef.current = null;
-    if (useNativePlayback) {
-      void nativeSeek(boundedTime).catch((error) => {
+    if (usePlayback) {
+      void desktopSeek(boundedTime).catch((error) => {
         setStatus(error instanceof Error ? error.message : "Rust seek failed.");
       });
       return;
@@ -1546,7 +1546,7 @@ export function PlayerBar({
   }
 
   async function togglePlayback() {
-    if (useNativePlayback) {
+    if (usePlayback) {
       if (!currentTrack) {
         return;
       }
@@ -1652,21 +1652,21 @@ export function PlayerBar({
         onSelectTrack(nextTrack, queue, { suppressExitRecord: true });
         return;
       }
-      if (useNativePlayback) {
+      if (usePlayback) {
         if (trackNeedsWebPlayback(nextTrack)) {
-          fadeNativeVolume(0, trackSwitchFadeMs, () => {
-            void nativeStop().finally(() => {
+          fadePlaybackVolume(0, trackSwitchFadeMs, () => {
+            void desktopStop().finally(() => {
               onSelectTrack(nextTrack, queue, { suppressExitRecord: true });
             });
           });
           return;
         }
         if (isPlaying && fadeMs > 0) {
-          void startNativeCrossfade(nextTrack, false);
+          void startPlaybackCrossfade(nextTrack, false);
           return;
         }
-        fadeNativeVolume(0, trackSwitchFadeMs, () => {
-          void nativeStop().finally(() => {
+        fadePlaybackVolume(0, trackSwitchFadeMs, () => {
+          void desktopStop().finally(() => {
             onSelectTrack(nextTrack, queue, { suppressExitRecord: true });
           });
         });
@@ -1809,22 +1809,22 @@ export function PlayerBar({
   }
 
   useEffect(() => {
-    if (!useNativePlayback) {
+    if (!usePlayback) {
       return;
     }
     let canceled = false;
-    const pollNativeStatus = async () => {
+    const pollPlaybackStatus = async () => {
       try {
-        const status = await nativeStatus();
+        const status = await desktopStatus();
         if (canceled) {
           return;
         }
-        const waitingForNativeResume =
+        const waitingForPlaybackResume =
           pendingResumePositionRef.current !== null &&
           Boolean(currentTrack) &&
-          nativeLoadedTrackIdRef.current !== currentTrack?.id &&
+          desktopLoadedTrackIdRef.current !== currentTrack?.id &&
           !status.is_playing;
-        if (!waitingForNativeResume) {
+        if (!waitingForPlaybackResume) {
           setIsPlaying(status.is_playing);
           setCurrentTime(status.position_seconds);
           onPlaybackTime(status.position_seconds);
@@ -1835,12 +1835,12 @@ export function PlayerBar({
         const latestStreamError = status.stream_errors.length
           ? status.stream_errors[status.stream_errors.length - 1]
           : null;
-        if (latestStreamError && latestStreamError !== lastNativeStreamErrorRef.current) {
-          lastNativeStreamErrorRef.current = latestStreamError;
+        if (latestStreamError && latestStreamError !== lastPlaybackStreamErrorRef.current) {
+          lastPlaybackStreamErrorRef.current = latestStreamError;
           setStatus(latestStreamError);
         }
-        const nativeDuration = status.duration_seconds ?? currentTrack?.duration_seconds ?? 0;
-        const nativeCrossfadeLeadSeconds = Math.max(0.12, fadeMs / 1000);
+        const desktopDuration = status.duration_seconds ?? currentTrack?.duration_seconds ?? 0;
+        const desktopCrossfadeLeadSeconds = Math.max(0.12, fadeMs / 1000);
         if (
           currentTrack &&
           preloadedNextTrack &&
@@ -1849,44 +1849,44 @@ export function PlayerBar({
           playbackMode !== "repeatOne" &&
           fadeMs > 0 &&
           status.is_playing &&
-          nativeDuration > nativeCrossfadeLeadSeconds * 2 &&
-          nativeDuration - status.position_seconds <= nativeCrossfadeLeadSeconds &&
+          desktopDuration > desktopCrossfadeLeadSeconds * 2 &&
+          desktopDuration - status.position_seconds <= desktopCrossfadeLeadSeconds &&
           crossfadeTrackRef.current !== currentTrack.id
         ) {
-          await startNativeCrossfade(preloadedNextTrack);
+          await startPlaybackCrossfade(preloadedNextTrack);
           return;
         }
         if (
           currentTrack &&
           status.ended &&
-          nativeLoadedTrackIdRef.current === currentTrack.id &&
-          nativeEndedTrackIdRef.current !== currentTrack.id
+          desktopLoadedTrackIdRef.current === currentTrack.id &&
+          desktopEndedTrackIdRef.current !== currentTrack.id
         ) {
-          nativeEndedTrackIdRef.current = currentTrack.id;
+          desktopEndedTrackIdRef.current = currentTrack.id;
           await handleEnded();
         }
       } catch {
         // Rust playback status is unavailable in browser preview and before the desktop command is ready.
       }
     };
-    void pollNativeStatus();
+    void pollPlaybackStatus();
     const timer = window.setInterval(() => {
-      void pollNativeStatus();
+      void pollPlaybackStatus();
     }, 120);
     return () => {
       canceled = true;
       window.clearInterval(timer);
     };
-  }, [useNativePlayback, currentTrack?.id, playbackMode, currentIndex, queue, fadeMs, preloadedNextTrack?.id, canPreloadNextTrack, outputVolume]);
+  }, [usePlayback, currentTrack?.id, playbackMode, currentIndex, queue, fadeMs, preloadedNextTrack?.id, canPreloadNextTrack, outputVolume]);
 
   useEffect(() => {
-    if (!useNativePlayback || !preloadedNextTrack || !canPreloadNextTrack || playbackMode === "stopAfterCurrent") {
+    if (!usePlayback || !preloadedNextTrack || !canPreloadNextTrack || playbackMode === "stopAfterCurrent") {
       return;
     }
-    void nativePrepareNextFile(preloadedNextTrack.path).catch(() => {
+    void desktopPrepareNextFile(preloadedNextTrack.path).catch(() => {
       // Preparation failures are recorded by the Rust playback diagnostics panel.
     });
-  }, [useNativePlayback, preloadedNextTrack?.id, preloadedNextTrack?.path, canPreloadNextTrack, playbackMode]);
+  }, [usePlayback, preloadedNextTrack?.id, preloadedNextTrack?.path, canPreloadNextTrack, playbackMode]);
 
   const artworkSrc =
     currentTrack && !isRadioSource && (!isPreviewTrack || isCdPreviewTrack) && !artworkFailed
@@ -2214,7 +2214,7 @@ export function PlayerBar({
           </button>
         </div>
 
-        {!useNativePlayback && webAudioSourceUrl ? (
+        {!usePlayback && webAudioSourceUrl ? (
           <audio
             key={webAudioKey}
             ref={audioRef}
@@ -2259,10 +2259,10 @@ export function PlayerBar({
               setStatus(message);
             }}
           />
-        ) : !useNativePlayback ? (
+        ) : !usePlayback ? (
           <audio ref={audioRef} className="hidden" crossOrigin="anonymous" />
         ) : null}
-        {!useNativePlayback && preloadedNextTrack && canPreloadNextTrack && (
+        {!usePlayback && preloadedNextTrack && canPreloadNextTrack && (
           <audio
             key={`next-${preloadedNextTrack.id}`}
             ref={nextAudioRef}

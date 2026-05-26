@@ -8,36 +8,36 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-pub const NATIVE_FOLDER_WATCH_EVENT: &str = "flac-cafe://native-folder-watch";
+pub const FOLDER_WATCH_EVENT: &str = "flac-cafe://desktop-folder-watch";
 
 #[derive(Default)]
-pub struct NativeFolderWatchState {
-    inner: Mutex<NativeFolderWatchInner>,
+pub struct FolderWatchState {
+    inner: Mutex<FolderWatchInner>,
 }
 
 #[derive(Default)]
-struct NativeFolderWatchInner {
-    runtime: Option<NativeFolderWatchRuntime>,
+struct FolderWatchInner {
+    runtime: Option<FolderWatchRuntime>,
     watched_paths: Vec<String>,
     pending_events: u64,
     last_event_ms: Option<u128>,
     last_error: Option<String>,
 }
 
-struct NativeFolderWatchRuntime {
+struct FolderWatchRuntime {
     stop: Sender<()>,
     thread: JoinHandle<()>,
 }
 
 #[derive(Clone, Serialize)]
-pub struct NativeFolderWatchEvent {
+pub struct FolderWatchEvent {
     paths: Vec<String>,
     event_count: u64,
     emitted_at_ms: u128,
 }
 
 #[derive(Serialize)]
-pub struct NativeFolderWatchStatus {
+pub struct FolderWatchStatus {
     running: bool,
     watched_paths: Vec<String>,
     pending_events: u64,
@@ -77,8 +77,8 @@ fn normalize_watch_paths(paths: Vec<String>) -> Result<Vec<PathBuf>, String> {
     Ok(normalized)
 }
 
-fn status_from_inner(inner: &NativeFolderWatchInner) -> NativeFolderWatchStatus {
-    NativeFolderWatchStatus {
+fn status_from_inner(inner: &FolderWatchInner) -> FolderWatchStatus {
+    FolderWatchStatus {
         running: inner.runtime.is_some(),
         watched_paths: inner.watched_paths.clone(),
         pending_events: inner.pending_events,
@@ -87,18 +87,18 @@ fn status_from_inner(inner: &NativeFolderWatchInner) -> NativeFolderWatchStatus 
     }
 }
 
-fn stop_runtime(runtime: NativeFolderWatchRuntime) {
+fn stop_runtime(runtime: FolderWatchRuntime) {
     let _ = runtime.stop.send(());
     let _ = runtime.thread.join();
 }
 
 #[tauri::command]
-pub fn native_folder_watch_start(
+pub fn folder_watch_start(
     app: AppHandle,
-    state: State<'_, NativeFolderWatchState>,
+    state: State<'_, FolderWatchState>,
     paths: Vec<String>,
     debounce_ms: Option<u64>,
-) -> Result<NativeFolderWatchStatus, String> {
+) -> Result<FolderWatchStatus, String> {
     let normalized = normalize_watch_paths(paths)?;
     let watched_paths: Vec<String> = normalized
         .iter()
@@ -123,8 +123,8 @@ pub fn native_folder_watch_start(
             Ok(watcher) => watcher,
             Err(error) => {
                 let _ = app_for_thread.emit(
-                    NATIVE_FOLDER_WATCH_EVENT,
-                    NativeFolderWatchEvent {
+                    FOLDER_WATCH_EVENT,
+                    FolderWatchEvent {
                         paths: vec![format!("watcher-error:{error}")],
                         event_count: 1,
                         emitted_at_ms: now_ms(),
@@ -137,8 +137,8 @@ pub fn native_folder_watch_start(
         for path in watched_for_thread {
             if watcher.watch(&path, RecursiveMode::Recursive).is_err() {
                 let _ = app_for_thread.emit(
-                    NATIVE_FOLDER_WATCH_EVENT,
-                    NativeFolderWatchEvent {
+                    FOLDER_WATCH_EVENT,
+                    FolderWatchEvent {
                         paths: vec![format!("watch-error:{}", path.display())],
                         event_count: 1,
                         emitted_at_ms: now_ms(),
@@ -166,12 +166,12 @@ pub fn native_folder_watch_start(
                 }
                 Err(RecvTimeoutError::Timeout) => {
                     if event_count > 0 {
-                        let payload = NativeFolderWatchEvent {
+                        let payload = FolderWatchEvent {
                             paths: pending_paths.iter().cloned().collect(),
                             event_count,
                             emitted_at_ms: now_ms(),
                         };
-                        let _ = app_for_thread.emit(NATIVE_FOLDER_WATCH_EVENT, payload);
+                        let _ = app_for_thread.emit(FOLDER_WATCH_EVENT, payload);
                         pending_paths.clear();
                         event_count = 0;
                     }
@@ -188,7 +188,7 @@ pub fn native_folder_watch_start(
     if let Some(runtime) = inner.runtime.take() {
         stop_runtime(runtime);
     }
-    inner.runtime = Some(NativeFolderWatchRuntime {
+    inner.runtime = Some(FolderWatchRuntime {
         stop: stop_tx,
         thread,
     });
@@ -199,9 +199,7 @@ pub fn native_folder_watch_start(
 }
 
 #[tauri::command]
-pub fn native_folder_watch_stop(
-    state: State<'_, NativeFolderWatchState>,
-) -> Result<NativeFolderWatchStatus, String> {
+pub fn folder_watch_stop(state: State<'_, FolderWatchState>) -> Result<FolderWatchStatus, String> {
     let mut inner = state
         .inner
         .lock()
@@ -214,9 +212,9 @@ pub fn native_folder_watch_stop(
 }
 
 #[tauri::command]
-pub fn native_folder_watch_status(
-    state: State<'_, NativeFolderWatchState>,
-) -> Result<NativeFolderWatchStatus, String> {
+pub fn folder_watch_status(
+    state: State<'_, FolderWatchState>,
+) -> Result<FolderWatchStatus, String> {
     let inner = state
         .inner
         .lock()
@@ -225,11 +223,11 @@ pub fn native_folder_watch_status(
 }
 
 #[tauri::command]
-pub fn native_folder_watch_mark_event(
-    state: State<'_, NativeFolderWatchState>,
+pub fn folder_watch_mark_event(
+    state: State<'_, FolderWatchState>,
     event_count: u64,
     error: Option<String>,
-) -> Result<NativeFolderWatchStatus, String> {
+) -> Result<FolderWatchStatus, String> {
     let mut inner = state
         .inner
         .lock()
@@ -240,8 +238,8 @@ pub fn native_folder_watch_mark_event(
     Ok(status_from_inner(&inner))
 }
 
-pub fn stop_native_folder_watch(app: &AppHandle) {
-    let state = app.state::<NativeFolderWatchState>();
+pub fn stop_folder_watch(app: &AppHandle) {
+    let state = app.state::<FolderWatchState>();
     let runtime = if let Ok(mut inner) = state.inner.lock() {
         inner.runtime.take()
     } else {

@@ -53,10 +53,17 @@ def main() -> int:
         from backend.app.clap_worker import main as clap_worker_main
 
         return clap_worker_main()
+    if "--clap-expert" in sys.argv:
+        from backend.app.clap_expert import main as clap_expert_main
 
-    from backend.app.worker import main as worker_main
+        return clap_expert_main()
 
-    return worker_main()
+    print(
+        "FLAC Cafe Python sidecar only exposes expert-worker entry points. "
+        "Rust owns the app HTTP/API surface.",
+        file=sys.stderr,
+    )
+    return 2
 
 
 if __name__ == "__main__":

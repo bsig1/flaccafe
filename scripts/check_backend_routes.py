@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ROUTES_PATH = ROOT / "src-tauri" / "src" / "python_worker" / "routes.rs"
+ROUTES_PATH = ROOT / "src-tauri" / "src" / "python_worker" / "routes" / "table.rs"
 DOC_PATH = ROOT / "docs" / "backend-routes.md"
 ROUTE_RE = re.compile(
     r'PythonRoute\s*\{\s*method:\s*"(?P<method>[^"]+)",\s*'
@@ -42,7 +42,7 @@ def main() -> int:
         for route in missing:
             print(f"  - {route}")
     if stale:
-        print("Documented but not present in src-tauri/src/python_worker/routes.rs:")
+        print(f"Documented but not present in {ROUTES_PATH.relative_to(ROOT)}:")
         for route in stale:
             print(f"  - {route}")
     return 1

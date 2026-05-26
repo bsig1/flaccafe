@@ -1,6 +1,6 @@
 # Backend Route Reference
 
-Rust owns the app-facing API shape in `src-tauri/src/python_worker/routes.rs`. The React UI calls through `frontend/src/lib/api.ts`; desktop flows use Tauri commands first, including Rust SQLite paths, maintenance/diagnostic routes, the `flaccafe-media://` local media protocol, and a Rust-to-Python JSON worker bridge for the remaining Python expert actions. The bridge checks `src-tauri/src/python_worker/native_routes.rs` before spawning Python, so HTTP-shaped fallbacks for diagnostics, backup/reset/support bundles, library browsing, playlists, inbox, history, local tools, MusicBrainz/AcoustID matching, podcast/scrobble flows, external-library imports, CLAP job state, audio conversion, and AutoDJ stay in the Rust controller. Packaged desktop builds invoke the bundled Python executable for named expert actions instead of bundling or starting FastAPI; CLAP batch analysis uses a persistent Python worker managed by Rust so Torch stays warm for the batch.
+Rust owns the app-facing API shape in `src-tauri/src/python_worker/routes/table.rs`. The React UI calls through `frontend/src/lib/api.ts`; desktop flows use Tauri commands, Rust SQLite paths, maintenance/diagnostic routes, and the `flaccafe-media://` local media protocol. There is no Python HTTP fallback. When a route needs CLAP/Torch expertise, a Rust handler starts a named Python expert subprocess; all route dispatch, validation, and response shaping remain in Rust. Packaged desktop builds invoke the bundled Python executable only for those expert subprocesses instead of bundling or starting FastAPI.
 
 ## Diagnostics And Settings
 
@@ -8,7 +8,7 @@ Rust owns the app-facing API shape in `src-tauri/src/python_worker/routes.rs`. T
 - `GET /diagnostics/startup` returns startup checks for database, storage, runtime, and optional ML paths.
 - `GET /diagnostics/logs/backend` tails the backend log.
 - `POST /diagnostics/support-bundle` creates a redacted zip for troubleshooting.
-- `GET /diagnostics/python-worker-usage` returns in-process counts of Python worker actions that Rust still had to spawn.
+- `GET /diagnostics/python-worker-usage` returns in-process counts of Python expert subprocesses that Rust still had to spawn.
 - `GET /settings` returns library path, database path, and user flags.
 - `PATCH /settings` updates user flags such as file tag writing.
 - `POST /settings/library-sources/remove` removes a source folder from saved settings and removes matching tracks from SQLite without deleting audio files.
@@ -88,8 +88,9 @@ Rust owns the app-facing API shape in `src-tauri/src/python_worker/routes.rs`. T
 - `GET /library/tools/cd-rip/jobs/{job_id}` returns CD ripping progress and verification hashes.
 - `POST /library/tools/cd-rip/jobs/{job_id}/cancel` cancels a CD ripping job after the current track finishes.
 - `POST /library/tools/cd-rip/playback/play` prepares selected CD tracks for playback through the main player.
-- `HEAD /library/tools/cd-rip/playback/live/audio` checks the live CD WAV stream headers.
-- `GET /library/tools/cd-rip/playback/live/audio` streams a selected CD track as live WAV audio.
+- `HEAD /library/tools/cd-rip/playback/live/audio` is the legacy HTTP-shaped CD stream header route; desktop playback now uses the Rust media URL returned by `play`.
+- `GET /library/tools/cd-rip/playback/live/audio` is the legacy HTTP-shaped CD stream route; desktop playback now uses the Rust media URL returned by `play`.
+- `flaccafe-media://localhost/cd-live-audio/{drive}/{track}/{token}` streams the selected CD track as live WAV audio through Rust's local media protocol.
 - `POST /library/tools/cd-rip/playback/stop` stops Windows CD audio playback.
 - `POST /library/tools/export-metadata-csv` exports track metadata for spreadsheet cleanup.
 - `POST /library/tools/import-metadata-csv` previews or applies spreadsheet metadata changes.
@@ -168,9 +169,9 @@ Rust owns the app-facing API shape in `src-tauri/src/python_worker/routes.rs`. T
 
 ## Analysis And Recommendations
 
-- `GET /analysis/clap/status` reports optional CLAP runtime status.
-- `POST /analysis/clap/install` starts optional ML runtime installation.
-- `GET /analysis/clap/install/{job_id}` returns install progress.
+- `GET /analysis/clap/status` reports optional CLAP runtime status through the Rust CLAP manager and Python CLAP expert.
+- `POST /analysis/clap/install` starts optional ML runtime installation with Rust-owned job state and Python package/runtime operations.
+- `GET /analysis/clap/install/{job_id}` returns Rust-owned install progress.
 - `GET /analysis/clap/coverage` reports analysis coverage.
 - `PATCH /analysis/clap/config` updates model settings.
 - `POST /analysis/clap/start` starts analysis.

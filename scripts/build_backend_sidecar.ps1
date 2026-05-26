@@ -9,6 +9,7 @@ $Python = Join-Path $Root ".venv\Scripts\python.exe"
 $DistRoot = Join-Path $Root "dist-backend"
 $OneFileBackend = Join-Path $DistRoot "flaccafe-backend.exe"
 $OneDirBackend = Join-Path $DistRoot "flaccafe-backend"
+$SchemaData = "$(Join-Path $Root "backend\app\schema.sql");backend\app"
 
 if (-not (Test-Path $Python)) {
     throw "Missing Python virtual environment at $Python. Run the backend setup first."
@@ -42,12 +43,14 @@ $Arguments = @(
     "--hidden-import", "sndhdr",
     "--hidden-import", "sunau",
     "--hidden-import", "wave",
-    "--hidden-import", "backend.app.analysis_jobs",
     "--hidden-import", "backend.app.clap_analysis",
-    "--hidden-import", "backend.app.clap_install_jobs",
+    "--hidden-import", "backend.app.clap_expert",
     "--hidden-import", "backend.app.clap_worker",
-    "--hidden-import", "backend.app.worker_types",
-    "--hidden-import", "backend.app.worker",
+    "--hidden-import", "backend.app.config",
+    "--hidden-import", "backend.app.database",
+    "--hidden-import", "backend.app.ml_runtime",
+    "--hidden-import", "backend.app.startup_profile",
+    "--add-data", $SchemaData,
     "--exclude-module", "fastapi",
     "--exclude-module", "starlette",
     "--exclude-module", "uvicorn",

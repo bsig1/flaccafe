@@ -5,14 +5,14 @@ import {
 } from "lucide-react";
 
 import type {
-  NativeAudioDevice,
-  NativeOutputBackend,
-  NativePlaybackDiagnostic,
-  NativePlaybackDiagnosticsResponse,
-} from "../../../lib/nativePlayback";
+  desktopAudioDevice,
+  desktopOutputBackend,
+  PlaybackDiagnostic,
+  PlaybackDiagnosticsResponse,
+} from "../../../lib/desktopPlayback";
 import {
-  summarizeNativeDiagnostics,
-} from "../../../lib/nativePlayback";
+  summarizePlaybackDiagnostics,
+} from "../../../lib/desktopPlayback";
 import {
   DisclosureSection,
   NumberField,
@@ -49,7 +49,7 @@ export const CODEC_TESTS = [
   { label: "AIFF", type: "audio/aiff" },
 ];
 
-export const NATIVE_BUFFER_OPTIONS = [
+export const BUFFER_OPTIONS = [
   { value: 0, label: "Device default" },
   { value: 512, label: "Low latency 512" },
   { value: 1024, label: "Balanced 1024" },
@@ -57,7 +57,7 @@ export const NATIVE_BUFFER_OPTIONS = [
   { value: 4096, label: "Very stable 4096" },
 ];
 
-const NATIVE_CODEC_SUPPORT = [
+const CODEC_SUPPORT = [
   { label: "MP3", support: "supported", detail: "Symphonia MP3 decoder" },
   { label: "FLAC", support: "supported", detail: "Symphonia FLAC decoder" },
   { label: "WAV", support: "supported", detail: "PCM / WAV container" },
@@ -78,14 +78,14 @@ export function detectCodecSupport(): CodecSupportRow[] {
   }));
 }
 
-function formatNativeDiagnosticTime(timestampMs: number): string {
+function formatDesktopDiagnosticTime(timestampMs: number): string {
   if (!timestampMs) {
     return "unknown time";
   }
   return new Date(timestampMs).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
 }
 
-function nativeDiagnosticContext(entry: NativePlaybackDiagnostic): string {
+function desktopDiagnosticContext(entry: PlaybackDiagnostic): string {
   return [
     entry.device_name,
     entry.sample_rate ? `${entry.sample_rate} Hz` : null,
@@ -101,14 +101,14 @@ function nativeDiagnosticContext(entry: NativePlaybackDiagnostic): string {
 export function PlayerSettingsSection({
   uiPreferences,
   setUiPreferences,
-  nativeDevices,
-  nativeBackends,
-  nativeDeviceMessage,
-  onRefreshNativeDevices,
-  nativeDiagnostics,
-  nativeDiagnosticsMessage,
-  onRefreshNativeDiagnostics,
-  onClearNativeDiagnostics,
+  desktopDevices,
+  desktopBackends,
+  desktopDeviceMessage,
+  onRefreshDesktopDevices,
+  desktopDiagnostics,
+  desktopDiagnosticsMessage,
+  onRefreshDesktopDiagnostics,
+  onClearDesktopDiagnostics,
   codecSupport,
   onRefreshCodecSupport,
   autoWriteFetchedLyricsSidecars,
@@ -116,14 +116,14 @@ export function PlayerSettingsSection({
 }: {
   uiPreferences: UiPreferences;
   setUiPreferences: (updater: (current: UiPreferences) => UiPreferences) => void;
-  nativeDevices: NativeAudioDevice[];
-  nativeBackends: NativeOutputBackend[];
-  nativeDeviceMessage: string | null;
-  onRefreshNativeDevices: () => void | Promise<void>;
-  nativeDiagnostics: NativePlaybackDiagnosticsResponse | null;
-  nativeDiagnosticsMessage: string | null;
-  onRefreshNativeDiagnostics: () => void | Promise<void>;
-  onClearNativeDiagnostics: () => void | Promise<void>;
+  desktopDevices: desktopAudioDevice[];
+  desktopBackends: desktopOutputBackend[];
+  desktopDeviceMessage: string | null;
+  onRefreshDesktopDevices: () => void | Promise<void>;
+  desktopDiagnostics: PlaybackDiagnosticsResponse | null;
+  desktopDiagnosticsMessage: string | null;
+  onRefreshDesktopDiagnostics: () => void | Promise<void>;
+  onClearDesktopDiagnostics: () => void | Promise<void>;
   codecSupport: CodecSupportRow[];
   onRefreshCodecSupport: () => void;
   autoWriteFetchedLyricsSidecars: boolean;
@@ -131,7 +131,7 @@ export function PlayerSettingsSection({
 }) {
   const equalizerFrequencies = equalizerFrequenciesForMode(uiPreferences.equalizerBandMode);
   const equalizerGains = normalizeEqualizerGains(uiPreferences.equalizerGains, uiPreferences.equalizerBandMode);
-  const recentNativeDiagnostics = nativeDiagnostics?.entries.slice(-5).reverse() ?? [];
+  const recentDesktopDiagnostics = desktopDiagnostics?.entries.slice(-5).reverse() ?? [];
 
   function updateEqualizerGain(index: number, value: number) {
     setUiPreferences((current) => {
@@ -173,7 +173,7 @@ export function PlayerSettingsSection({
     }));
   }
 
-  const showNativeSettings = uiPreferences.playbackEngine === "rust";
+  const showDesktopSettings = uiPreferences.playbackEngine === "rust";
 
   return (
     <>
@@ -198,14 +198,14 @@ export function PlayerSettingsSection({
             Rust audio uses rodio/cpal/Symphonia for broader local codec support. WebView remains the safest default while the Rust engine matures.
           </span>
         </label>
-        {showNativeSettings && (
+        {showDesktopSettings && (
         <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="font-medium text-white">Rust output</div>
               <div className="text-xs text-muted">Used when Playback Engine is set to Rust audio.</div>
             </div>
-            <button className="secondary-button h-8" type="button" onClick={() => void onRefreshNativeDevices()}>
+            <button className="secondary-button h-8" type="button" onClick={() => void onRefreshDesktopDevices()}>
               <RefreshCw size={14} />
               Recheck
             </button>
@@ -214,22 +214,22 @@ export function PlayerSettingsSection({
             <span className="text-xs uppercase text-muted">Output Backend</span>
             <select
               className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
-              value={uiPreferences.nativeOutputBackend}
+              value={uiPreferences.desktopOutputBackend}
               onChange={(event) =>
                 setUiPreferences((current) => ({
                   ...current,
-                  nativeOutputBackend: event.target.value as UiPreferences["nativeOutputBackend"],
+                  desktopOutputBackend: event.target.value as UiPreferences["desktopOutputBackend"],
                 }))
               }
             >
-              {nativeBackends.map((backend) => (
+              {desktopBackends.map((backend) => (
                 <option key={backend.id} value={backend.id} disabled={!backend.available}>
                   {backend.label}{backend.exclusive ? " (exclusive)" : ""}
                 </option>
               ))}
             </select>
             <span className="text-xs text-muted">
-              {nativeBackends.find((backend) => backend.id === uiPreferences.nativeOutputBackend)?.message
+              {desktopBackends.find((backend) => backend.id === uiPreferences.desktopOutputBackend)?.message
                 ?? "Backend capability information is loaded from the desktop shell."}
             </span>
           </label>
@@ -237,13 +237,13 @@ export function PlayerSettingsSection({
             <span className="text-xs uppercase text-muted">Output Device</span>
             <select
               className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
-              value={uiPreferences.nativeOutputDeviceId}
+              value={uiPreferences.desktopOutputDeviceId}
               onChange={(event) =>
-                setUiPreferences((current) => ({ ...current, nativeOutputDeviceId: event.target.value }))
+                setUiPreferences((current) => ({ ...current, desktopOutputDeviceId: event.target.value }))
               }
             >
               <option value="">System default</option>
-              {nativeDevices.map((device) => (
+              {desktopDevices.map((device) => (
                 <option key={device.id} value={device.id}>
                   {device.name}{device.is_default ? " (default)" : ""}
                 </option>
@@ -254,12 +254,12 @@ export function PlayerSettingsSection({
             <span className="text-xs uppercase text-muted">Output Buffer</span>
             <select
               className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
-              value={uiPreferences.nativeBufferFrames}
+              value={uiPreferences.desktopBufferFrames}
               onChange={(event) =>
-                setUiPreferences((current) => ({ ...current, nativeBufferFrames: Number(event.target.value) }))
+                setUiPreferences((current) => ({ ...current, desktopBufferFrames: Number(event.target.value) }))
               }
             >
-              {NATIVE_BUFFER_OPTIONS.map((option) => (
+              {BUFFER_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>
@@ -269,29 +269,29 @@ export function PlayerSettingsSection({
               If Rust playback skips, try Stable 2048 or Very stable 4096. Larger buffers add a little latency but are safer for decoding, fading, and DSP.
             </span>
           </label>
-          {nativeDeviceMessage && <div className="text-xs text-muted">{nativeDeviceMessage}</div>}
+          {desktopDeviceMessage && <div className="text-xs text-muted">{desktopDeviceMessage}</div>}
           <div className="rounded border border-line/70 bg-panel px-3 py-2 text-xs text-muted">
             The selector reports exclusive backends separately from the current shared-mode engine so future WASAPI/ASIO work can be enabled without changing the settings model.
           </div>
         </div>
         )}
-        {showNativeSettings && (
+        {showDesktopSettings && (
         <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="font-medium text-white">Rust audio diagnostics</div>
-              <div className="text-xs text-muted">{summarizeNativeDiagnostics(nativeDiagnostics)}</div>
+              <div className="text-xs text-muted">{summarizePlaybackDiagnostics(desktopDiagnostics)}</div>
             </div>
             <div className="flex flex-wrap gap-2">
-              <button className="secondary-button h-8" type="button" onClick={() => void onRefreshNativeDiagnostics()}>
+              <button className="secondary-button h-8" type="button" onClick={() => void onRefreshDesktopDiagnostics()}>
                 <RefreshCw size={14} />
                 Refresh
               </button>
               <button
                 className="secondary-button h-8"
                 type="button"
-                disabled={!nativeDiagnostics || (nativeDiagnostics.entries.length === 0 && nativeDiagnostics.stream_errors.length === 0)}
-                onClick={() => void onClearNativeDiagnostics()}
+                disabled={!desktopDiagnostics || (desktopDiagnostics.entries.length === 0 && desktopDiagnostics.stream_errors.length === 0)}
+                onClick={() => void onClearDesktopDiagnostics()}
               >
                 Clear
               </button>
@@ -300,21 +300,21 @@ export function PlayerSettingsSection({
           <div className="grid gap-2 text-xs">
             <div className="grid gap-1 rounded border border-line/70 bg-panel px-3 py-2">
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-muted">
-                <span>Device: {nativeDiagnostics?.device_name ?? "not opened"}</span>
-                <span>Config: {nativeDiagnostics?.sample_rate ? `${nativeDiagnostics.sample_rate} Hz` : "unknown"}</span>
-                <span>{nativeDiagnostics?.channel_count ? `${nativeDiagnostics.channel_count} channels` : "channels unknown"}</span>
-                <span>{nativeDiagnostics?.sample_format ?? "format unknown"}</span>
+                <span>Device: {desktopDiagnostics?.device_name ?? "not opened"}</span>
+                <span>Config: {desktopDiagnostics?.sample_rate ? `${desktopDiagnostics.sample_rate} Hz` : "unknown"}</span>
+                <span>{desktopDiagnostics?.channel_count ? `${desktopDiagnostics.channel_count} channels` : "channels unknown"}</span>
+                <span>{desktopDiagnostics?.sample_format ?? "format unknown"}</span>
               </div>
-              {nativeDiagnostics?.current_path && (
-                <div className="truncate text-muted" title={nativeDiagnostics.current_path}>
-                  Current: {nativeDiagnostics.current_path}
+              {desktopDiagnostics?.current_path && (
+                <div className="truncate text-muted" title={desktopDiagnostics.current_path}>
+                  Current: {desktopDiagnostics.current_path}
                 </div>
               )}
             </div>
-            {nativeDiagnosticsMessage && <div className="text-muted">{nativeDiagnosticsMessage}</div>}
-            {recentNativeDiagnostics.length > 0 ? (
+            {desktopDiagnosticsMessage && <div className="text-muted">{desktopDiagnosticsMessage}</div>}
+            {recentDesktopDiagnostics.length > 0 ? (
               <div className="grid max-h-56 gap-1 overflow-auto pr-1">
-                {recentNativeDiagnostics.map((entry) => (
+                {recentDesktopDiagnostics.map((entry) => (
                   <div key={entry.id} className="grid gap-1 rounded border border-line/60 bg-panel px-3 py-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <span
@@ -329,13 +329,13 @@ export function PlayerSettingsSection({
                       <span className="rounded border border-line px-1.5 py-0.5 text-[10px] uppercase text-muted">
                         {entry.category}
                       </span>
-                      <span className="text-muted">{formatNativeDiagnosticTime(entry.timestamp_ms)}</span>
+                      <span className="text-muted">{formatDesktopDiagnosticTime(entry.timestamp_ms)}</span>
                       <span className="font-medium text-neutral-200">{entry.operation}</span>
                     </div>
                     <div className="text-neutral-200">{entry.message}</div>
-                    {nativeDiagnosticContext(entry) && (
-                      <div className="truncate text-muted" title={nativeDiagnosticContext(entry)}>
-                        {nativeDiagnosticContext(entry)}
+                    {desktopDiagnosticContext(entry) && (
+                      <div className="truncate text-muted" title={desktopDiagnosticContext(entry)}>
+                        {desktopDiagnosticContext(entry)}
                       </div>
                     )}
                   </div>
@@ -651,7 +651,7 @@ export function PlayerSettingsSection({
               </div>
             </div>
             <div className="grid gap-1 text-xs">
-              {NATIVE_CODEC_SUPPORT.map((codec) => (
+              {CODEC_SUPPORT.map((codec) => (
                 <div key={codec.label} className="grid grid-cols-[110px_88px_1fr] gap-3 rounded bg-panel px-2 py-1.5">
                   <span className="text-neutral-200">{codec.label}</span>
                   <span className="text-moss">{codec.support}</span>

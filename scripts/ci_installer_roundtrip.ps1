@@ -37,12 +37,12 @@ function Invoke-Msi {
     }
 }
 
-function Test-PythonWorkerHealth {
-    $payload = '{"action":"health","params":{},"body":null}'
-    $output = $payload | & $BackendExe --worker-once
+function Test-PythonExpertHealth {
+    $payload = '{"command":"status"}'
+    $output = $payload | & $BackendExe --clap-expert
     $response = $output | ConvertFrom-Json
-    if (-not $response.ok -or $response.code -ne 200 -or $response.body.status -ne "ok") {
-        throw "Packaged Python worker did not answer health correctly: $output"
+    if ($response.status -ne "ok" -or $null -eq $response.body.installed) {
+        throw "Packaged Python CLAP expert did not answer status correctly: $output"
     }
 }
 
@@ -59,7 +59,7 @@ try {
         }
     }
 
-    Test-PythonWorkerHealth
+    Test-PythonExpertHealth
 }
 finally {
     Remove-Item Env:\FLAC_CAFE_PORT -ErrorAction SilentlyContinue

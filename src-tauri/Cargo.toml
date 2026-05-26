@@ -17,6 +17,7 @@ regex = "1"
 csv = "1"
 base64 = "0.22"
 sha1 = "0.10"
+sha2 = "0.10"
 md5 = "0.7"
 plist = "1"
 roxmltree = "0.20"
@@ -25,8 +26,11 @@ urlencoding = "2"
 time = { version = "0.3", features = ["formatting"] }
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 ureq = { version = "2", features = ["json"] }
-windows = { version = "0.61.3", features = ["Foundation", "Media", "Win32_Foundation", "Win32_System_WinRT", "Win32_UI_Shell"] }
+windows = { version = "0.61.3", features = ["Foundation", "Media", "Win32_Devices_Cdrom", "Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_WinRT", "Win32_UI_Shell"] }
 rodio = { version = "0.22.2", features = ["symphonia-all"] }
 notify = "6.1.1"
 rusqlite = { version = "0.32.1", features = ["bundled"] }
 lofty = "0.24"
+
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }

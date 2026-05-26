@@ -7,7 +7,7 @@ const DEFAULT_AUDIO_EXTENSIONS: &[&str] =
     &["flac", "mp3", "m4a", "ogg", "opus", "wav", "aiff", "aif"];
 
 #[derive(Serialize)]
-pub struct NativePathInfo {
+pub struct PathInfo {
     input_path: String,
     exists: bool,
     is_file: bool,
@@ -18,24 +18,24 @@ pub struct NativePathInfo {
 }
 
 #[derive(Serialize)]
-pub struct NativeAudioPath {
+pub struct DesktopAudioPath {
     path: String,
     modified_ms: Option<u128>,
     size_bytes: u64,
 }
 
 #[derive(Serialize)]
-pub struct NativeAudioScanResponse {
+pub struct DesktopAudioScanResponse {
     folders: Vec<String>,
     total_files: usize,
     total_bytes: u64,
     elapsed_ms: u128,
-    files: Vec<NativeAudioPath>,
+    files: Vec<DesktopAudioPath>,
     errors: Vec<String>,
 }
 
 #[derive(Serialize)]
-pub struct NativeRecycleResponse {
+pub struct RecycleResponse {
     requested: usize,
     recycled: usize,
     missing: usize,
@@ -73,12 +73,12 @@ fn is_audio_path(path: &Path, extensions: &HashSet<String>) -> bool {
 }
 
 #[tauri::command]
-pub fn native_path_info(path: String) -> NativePathInfo {
+pub fn path_info(path: String) -> PathInfo {
     let input = PathBuf::from(path.trim());
     let exists = input.exists();
     let metadata = input.metadata();
     let canonical = input.canonicalize();
-    NativePathInfo {
+    PathInfo {
         input_path: path,
         exists,
         is_file: metadata
@@ -96,12 +96,12 @@ pub fn native_path_info(path: String) -> NativePathInfo {
 }
 
 #[tauri::command]
-pub fn native_scan_audio_paths(
+pub fn scan_audio_paths(
     paths: Vec<String>,
     extensions: Option<Vec<String>>,
     include_files: Option<bool>,
     limit: Option<usize>,
-) -> NativeAudioScanResponse {
+) -> DesktopAudioScanResponse {
     let started = Instant::now();
     let extensions = normalized_extensions(extensions);
     let include_files = include_files.unwrap_or(false);
@@ -157,7 +157,7 @@ pub fn native_scan_audio_paths(
                                 .ok()
                                 .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
                                 .map(|duration| duration.as_millis());
-                            files.push(NativeAudioPath {
+                            files.push(DesktopAudioPath {
                                 path: path_to_string(&path),
                                 modified_ms,
                                 size_bytes: metadata.len(),
@@ -171,7 +171,7 @@ pub fn native_scan_audio_paths(
         }
     }
 
-    NativeAudioScanResponse {
+    DesktopAudioScanResponse {
         folders,
         total_files,
         total_bytes,
@@ -182,7 +182,7 @@ pub fn native_scan_audio_paths(
 }
 
 #[tauri::command]
-pub fn native_recycle_paths(paths: Vec<String>) -> NativeRecycleResponse {
+pub fn recycle_paths(paths: Vec<String>) -> RecycleResponse {
     let requested = paths.len();
     let mut recycled = 0usize;
     let mut missing = 0usize;
@@ -204,7 +204,7 @@ pub fn native_recycle_paths(paths: Vec<String>) -> NativeRecycleResponse {
         }
     }
 
-    NativeRecycleResponse {
+    RecycleResponse {
         requested,
         recycled,
         missing,
@@ -263,7 +263,7 @@ fn recycle_file(_path: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_audio_path, native_path_info, normalized_extensions};
+    use super::{is_audio_path, normalized_extensions, path_info};
     use std::path::Path;
 
     #[test]
@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn reports_missing_path_without_throwing() {
-        let info = native_path_info("Z:/definitely/not/here.flac".to_string());
+        let info = path_info("Z:/definitely/not/here.flac".to_string());
         assert!(!info.exists);
         assert!(!info.is_file);
         assert!(!info.is_dir);

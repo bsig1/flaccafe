@@ -26,16 +26,16 @@ import {
   themeOrder,
 } from "../../config/theme";
 import {
-  nativeClearDiagnostics,
-  nativeDiagnostics,
-  nativeListOutputDevices,
-  nativeOutputBackends,
-} from "../../lib/nativePlayback";
+  desktopClearDiagnostics,
+  desktopDiagnostics,
+  desktopListOutputDevices,
+  desktopOutputBackends,
+} from "../../lib/desktopPlayback";
 import type {
-  NativeAudioDevice,
-  NativeOutputBackend,
-  NativePlaybackDiagnosticsResponse,
-} from "../../lib/nativePlayback";
+  desktopAudioDevice,
+  desktopOutputBackend,
+  PlaybackDiagnosticsResponse,
+} from "../../lib/desktopPlayback";
 import type {
   LogTailResponse,
   SettingsResponse,
@@ -140,11 +140,11 @@ export function SettingsPage({
   onClearArtistCache: () => void;
 }) {
   const [codecSupport, setCodecSupport] = useState(detectCodecSupport);
-  const [nativeDevices, setNativeDevices] = useState<NativeAudioDevice[]>([]);
-  const [nativeBackends, setNativeBackends] = useState<NativeOutputBackend[]>([]);
-  const [nativeDeviceMessage, setNativeDeviceMessage] = useState<string | null>(null);
-  const [nativePlaybackDiagnostics, setNativePlaybackDiagnostics] = useState<NativePlaybackDiagnosticsResponse | null>(null);
-  const [nativeDiagnosticsMessage, setNativeDiagnosticsMessage] = useState<string | null>(null);
+  const [desktopDevices, setDesktopDevices] = useState<desktopAudioDevice[]>([]);
+  const [desktopBackends, setDesktopBackends] = useState<desktopOutputBackend[]>([]);
+  const [desktopDeviceMessage, setDesktopDeviceMessage] = useState<string | null>(null);
+  const [PlaybackDiagnostics, setPlaybackDiagnostics] = useState<PlaybackDiagnosticsResponse | null>(null);
+  const [desktopDiagnosticsMessage, setDesktopDiagnosticsMessage] = useState<string | null>(null);
   const [settingsSearch, setSettingsSearch] = useState("");
   const [openSettingsSection, setOpenSettingsSection] = useState<string | null>(null);
   const [acoustIdApiKeyDraft, setAcoustIdApiKeyDraft] = useState("");
@@ -189,9 +189,9 @@ export function SettingsPage({
   }
 
   useEffect(() => {
-    void refreshNativeDevices();
-    void refreshNativeBackends();
-    void refreshNativePlaybackDiagnostics();
+    void refreshDesktopDevices();
+    void refreshDesktopBackends();
+    void refreshPlaybackDiagnostics();
   }, []);
 
   useEffect(() => {
@@ -203,11 +203,11 @@ export function SettingsPage({
     onFocusSectionConsumed?.();
   }, [focusSectionId, onFocusSectionConsumed]);
 
-  async function refreshNativeBackends() {
+  async function refreshDesktopBackends() {
     try {
-      setNativeBackends(await nativeOutputBackends());
+      setDesktopBackends(await desktopOutputBackends());
     } catch {
-      setNativeBackends([
+      setDesktopBackends([
         {
           id: "cpalShared",
           label: "CPAL / WASAPI shared",
@@ -219,35 +219,35 @@ export function SettingsPage({
     }
   }
 
-  async function refreshNativeDevices() {
+  async function refreshDesktopDevices() {
     try {
-      const devices = await nativeListOutputDevices();
-      setNativeDevices(devices);
-      setNativeDeviceMessage(devices.length ? null : "No Rust output devices reported.");
+      const devices = await desktopListOutputDevices();
+      setDesktopDevices(devices);
+      setDesktopDeviceMessage(devices.length ? null : "No Rust output devices reported.");
     } catch {
-      setNativeDevices([]);
-      setNativeDeviceMessage("Rust output devices are only available in the desktop app.");
+      setDesktopDevices([]);
+      setDesktopDeviceMessage("Rust output devices are only available in the desktop app.");
     }
   }
 
-  async function refreshNativePlaybackDiagnostics() {
+  async function refreshPlaybackDiagnostics() {
     try {
-      const response = await nativeDiagnostics();
-      setNativePlaybackDiagnostics(response);
-      setNativeDiagnosticsMessage(null);
+      const response = await desktopDiagnostics();
+      setPlaybackDiagnostics(response);
+      setDesktopDiagnosticsMessage(null);
     } catch {
-      setNativePlaybackDiagnostics(null);
-      setNativeDiagnosticsMessage("Rust playback diagnostics are only available in the desktop app.");
+      setPlaybackDiagnostics(null);
+      setDesktopDiagnosticsMessage("Rust playback diagnostics are only available in the desktop app.");
     }
   }
 
-  async function clearNativePlaybackDiagnostics() {
+  async function clearPlaybackDiagnostics() {
     try {
-      const response = await nativeClearDiagnostics();
-      setNativePlaybackDiagnostics(response);
-      setNativeDiagnosticsMessage("Rust playback diagnostics cleared.");
+      const response = await desktopClearDiagnostics();
+      setPlaybackDiagnostics(response);
+      setDesktopDiagnosticsMessage("Rust playback diagnostics cleared.");
     } catch {
-      setNativeDiagnosticsMessage("Could not clear Rust playback diagnostics in this environment.");
+      setDesktopDiagnosticsMessage("Could not clear Rust playback diagnostics in this environment.");
     }
   }
 
@@ -718,14 +718,14 @@ export function SettingsPage({
           <PlayerSettingsSection
             uiPreferences={uiPreferences}
             setUiPreferences={setUiPreferences}
-            nativeBackends={nativeBackends}
-            nativeDevices={nativeDevices}
-            nativeDeviceMessage={nativeDeviceMessage}
-            onRefreshNativeDevices={refreshNativeDevices}
-            nativeDiagnostics={nativePlaybackDiagnostics}
-            nativeDiagnosticsMessage={nativeDiagnosticsMessage}
-            onRefreshNativeDiagnostics={refreshNativePlaybackDiagnostics}
-            onClearNativeDiagnostics={clearNativePlaybackDiagnostics}
+            desktopBackends={desktopBackends}
+            desktopDevices={desktopDevices}
+            desktopDeviceMessage={desktopDeviceMessage}
+            onRefreshDesktopDevices={refreshDesktopDevices}
+            desktopDiagnostics={PlaybackDiagnostics}
+            desktopDiagnosticsMessage={desktopDiagnosticsMessage}
+            onRefreshDesktopDiagnostics={refreshPlaybackDiagnostics}
+            onClearDesktopDiagnostics={clearPlaybackDiagnostics}
             codecSupport={codecSupport}
             onRefreshCodecSupport={() => setCodecSupport(detectCodecSupport())}
             autoWriteFetchedLyricsSidecars={autoWriteFetchedLyricsSidecars}
