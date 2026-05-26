@@ -1038,3 +1038,10 @@ pub struct NativeTrackFileMetadataWriteResponse {
     pub(crate) errors: Vec<String>,
     pub(crate) previews: Vec<NativeTrackFileMetadataWritePreview>,
 }
+
+#[derive(Serialize)]
+pub struct NativeCsvMetadataExportResponse {
+    pub(crate) csv_path: String,
+    pub(crate) track_count: i64,
+    pub(crate) columns: Vec<String>,
+}
