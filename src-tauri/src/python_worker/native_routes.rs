@@ -567,6 +567,13 @@ pub(super) fn try_handle_native_json(
             state,
             required_param_i64(params, "album_id")?,
         )?)?),
+        "update_album_artwork" => match native_library::album_artwork::native_update_album_artwork(
+            required_param_i64(params, "album_id")?,
+            body.clone(),
+        )? {
+            Some(response) => Some(to_json(response)?),
+            None => None,
+        },
         "list_artists" => Some(to_json(native_library::native_artists(
             state,
             param_string(params, "search"),

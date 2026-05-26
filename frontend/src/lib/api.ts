@@ -1450,8 +1450,8 @@ function artworkVersionQuery(version?: string | number | null): string {
 }
 
 export function albumCoverUrl(albumId: number, version?: string | number | null): string {
-  const path = `/albums/${albumId}/artwork${artworkVersionQuery(version)}`;
-  return pythonWorkerMediaUrl(path) ?? "";
+  const query = artworkVersionQuery(version);
+  return desktopMediaUrl(`/album-artwork/${albumId}${query}`) ?? "";
 }
 
 export function previewArtworkCollisions(limit = 200): Promise<AlbumArtworkCollisionResponse> {

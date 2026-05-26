@@ -33,7 +33,7 @@
 
 ## Rust Native Migration Backlog
 - Keep CLAP inference in Python, but move analysis job state, candidate selection, pause/resume/cancel, progress, DB writes, and genre-tag application into Rust.
-- Move album artwork sidecar discovery, cache lookup, cache storage, local image serving, and simple cover-art downloads into Rust; keep embedded artwork extraction/writes in Python until Rust tag-writing safety is proven.
+- Finish album-artwork cache storage in Rust; embedded artwork extraction/writes stay Python until Rust tag-writing safety is proven.
 - Keep MusicBrainz/AcoustID matching heuristics in Python until the matching code is decomposed and covered by golden tests.
 - Move CD drive detection, CD sidebar availability, active play/rip mutual exclusion, Windows CD TOC reading, disc ID generation, live stream token management, live audio streaming, rip job state, ETA, cancellation, verification hashes, and target path generation into Rust.
 - Move FFmpeg install job state, installer progress, audio conversion job progress, cancellation, FFmpeg process orchestration, and FFmpeg output parsing into Rust.
@@ -79,6 +79,7 @@
 - Moved audio conversion preview, target path generation, and estimated output sizing into Rust while keeping FFmpeg job execution and embedded artwork writes in Python.
 - Moved ListenBrainz and Last.fm outbox submission into Rust, including Last.fm request signing and submitted/failed row updates.
 - Moved LRCLIB online lyric lookup into Rust for both track fetches and metadata/CD lookups while keeping embedded lyric reads/writes in Python.
+- Moved album artwork local sidecar selection, simple web sidecar downloads, cache invalidation, and direct album-art media serving into Rust while keeping embedded artwork extraction/writes in Python.
 - Added `flaccafe-media://localhost/python-bytes/...` for Python-owned byte responses such as album art and CD live audio.
 - Switched `npm run dev` to desktop dev so local development exercises the same Rust-to-Python worker path as packaged builds.
 

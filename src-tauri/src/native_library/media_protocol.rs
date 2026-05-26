@@ -301,6 +301,106 @@ fn serve_track_artwork(track_id: i64) -> Response<Vec<u8>> {
     }
 }
 
+fn album_track_ids(album_id: i64) -> Result<(Option<String>, Vec<i64>), String> {
+    let connection = open_database()?;
+    let (album, album_artist, artwork_path): (Option<String>, Option<String>, Option<String>) =
+        connection
+            .query_row(
+                "SELECT album, album_artist, artwork_path FROM albums WHERE id = ?",
+                params![album_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(|_| "Album not found".to_string())?;
+    let mut statement = connection
+        .prepare(
+            r#"
+            SELECT tracks.id
+            FROM tracks
+            JOIN albums AS track_albums ON track_albums.id = tracks.album_id
+            WHERE lower(trim(coalesce(track_albums.album, ''))) = lower(trim(coalesce(?, '')))
+              AND lower(trim(coalesce(track_albums.album_artist, ''))) = lower(trim(coalesce(?, '')))
+            ORDER BY coalesce(tracks.disc_number, 0),
+                     coalesce(tracks.track_number, 0),
+                     lower(coalesce(tracks.title, '')),
+                     tracks.id
+            "#,
+        )
+        .map_err(|error| format!("Could not prepare album artwork tracks: {error}"))?;
+    let rows = statement
+        .query_map(params![album, album_artist], |row| row.get::<_, i64>(0))
+        .map_err(|error| format!("Could not read album artwork tracks: {error}"))?;
+    let track_ids = rows
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| format!("Could not decode album artwork tracks: {error}"))?;
+    Ok((artwork_path, track_ids))
+}
+
+fn serve_album_artwork(request: &Request<Vec<u8>>, album_id: i64) -> Response<Vec<u8>> {
+    if album_id > 0 {
+        if let Ok((artwork_path, track_ids)) = album_track_ids(album_id) {
+            if let Some(artwork_path) = artwork_path {
+                let path = PathBuf::from(artwork_path);
+                if let Some(media_type) = image_media_type(&path) {
+                    if let Ok(bytes) = std::fs::read(&path) {
+                        return Response::builder()
+                            .status(StatusCode::OK)
+                            .header(header::CONTENT_TYPE, media_type)
+                            .header(header::CACHE_CONTROL, "no-store")
+                            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                            .body(if request.method() == Method::HEAD {
+                                Vec::new()
+                            } else {
+                                bytes
+                            })
+                            .unwrap_or_else(|_| Response::new(Vec::new()));
+                    }
+                }
+            }
+            for track_id in track_ids {
+                if let Some((bytes, media_type)) = cached_artwork(track_id) {
+                    return Response::builder()
+                        .status(StatusCode::OK)
+                        .header(header::CONTENT_TYPE, media_type)
+                        .header(header::CACHE_CONTROL, "no-store")
+                        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                        .body(if request.method() == Method::HEAD {
+                            Vec::new()
+                        } else {
+                            bytes
+                        })
+                        .unwrap_or_else(|_| Response::new(Vec::new()));
+                }
+            }
+        }
+    }
+    let path = format!("/albums/{album_id}/artwork");
+    match python_worker::backend_request_bytes(request.method().as_str(), &path, None, None) {
+        Ok(response) if (200..300).contains(&response.status) => {
+            let content_type = response
+                .headers
+                .get("content-type")
+                .cloned()
+                .unwrap_or_else(|| "application/octet-stream".to_string());
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, content_type)
+                .header(header::CACHE_CONTROL, "no-store")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(if request.method() == Method::HEAD {
+                    Vec::new()
+                } else {
+                    response.body
+                })
+                .unwrap_or_else(|_| Response::new(Vec::new()))
+        }
+        Ok(response) => response_with_status(
+            StatusCode::from_u16(response.status).unwrap_or(StatusCode::NOT_FOUND),
+            &response.reason,
+        ),
+        Err(error) => response_with_status(StatusCode::NOT_FOUND, &error),
+    }
+}
+
 fn serve_python_worker_bytes(request: &Request<Vec<u8>>, encoded_path: &str) -> Response<Vec<u8>> {
     let path = match percent_decode(encoded_path) {
         Ok(path) => path,
@@ -351,6 +451,7 @@ pub fn handle_media_protocol<R: tauri::Runtime>(
         Err(_) => return response_with_status(StatusCode::BAD_REQUEST, "Invalid track id"),
     };
     match parts[0] {
+        "album-artwork" => serve_album_artwork(&request, track_id),
         "track-audio" => serve_audio_file(&request, track_id),
         "track-artwork" => serve_track_artwork(track_id),
         _ => response_with_status(StatusCode::NOT_FOUND, "Unknown FLAC Cafe media path"),

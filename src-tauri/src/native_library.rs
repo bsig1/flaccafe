@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
 
+pub(crate) mod album_artwork;
 pub(crate) mod audio_conversion;
 pub(crate) mod extensions;
 pub(crate) mod folder_watch;

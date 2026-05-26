@@ -247,6 +247,30 @@ pub struct NativeArtistInfoResponse {
     pub(crate) error: Option<String>,
 }
 
+#[derive(Clone, Serialize)]
+pub struct NativeAlbumArtworkCandidate {
+    pub(crate) source: String,
+    pub(crate) label: String,
+    pub(crate) path: Option<String>,
+    pub(crate) track_id: Option<i64>,
+    pub(crate) artwork_url: Option<String>,
+    pub(crate) thumbnail_url: Option<String>,
+    pub(crate) release_id: Option<String>,
+    pub(crate) media_type: Option<String>,
+    pub(crate) size_bytes: Option<i64>,
+    pub(crate) modified_at: Option<String>,
+    pub(crate) selected: bool,
+}
+
+#[derive(Serialize)]
+pub struct NativeAlbumArtworkUpdateResponse {
+    pub(crate) album_id: i64,
+    pub(crate) artwork_path: Option<String>,
+    pub(crate) candidates: Vec<NativeAlbumArtworkCandidate>,
+    pub(crate) embedded_updated: i64,
+    pub(crate) errors: Vec<String>,
+}
+
 #[derive(Serialize)]
 pub struct NativePlaylistSummary {
     pub(crate) id: i64,
