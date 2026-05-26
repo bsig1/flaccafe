@@ -46,7 +46,6 @@
 - Move FFmpeg install job state, installer progress, audio conversion preview, target path generation, estimated output sizing, job progress, cancellation, FFmpeg process orchestration, and FFmpeg output parsing into Rust.
 - Keep actual audio metadata writes for ReplayGain tags in Python until Rust tag-writing support is validated.
 - Add Rust route hammer coverage for native-only routes as a sibling to `scripts/hammer_backend_routes.py`.
-- Add a migration checklist per moved route: Rust implementation, Python parity test, frontend path check, hammer good/bad cases, docs update, then remove Python fallback.
 - Add benchmarks for worker-spawn overhead versus native Rust for large-library query, AutoDJ, folder watch, scan diff, and file organizer workloads.
 - Keep Python as the expert worker for CLAP/Torch inference, mutagen reads/writes, tricky embedded artwork/lyrics writes, and any library where the Python ecosystem is clearly safer than current Rust crates.
 - Revisit the "keep Python" list only after each feature has golden test fixtures made from real messy files.
@@ -71,6 +70,7 @@
 - Moved extension discovery, manifest validation, and user extension folder creation into Rust; theme/source folder opening was already Rust-owned through Tauri commands.
 - Moved JSON report file reading into Rust so File Management report viewing no longer spawns Python.
 - Added a low-noise Rust counter for remaining Python worker action calls, exposed at `/diagnostics/python-worker-usage`.
+- Added `docs/rust-route-migration-checklist.md` with the per-route Rust migration exit checklist.
 - Added `flaccafe-media://localhost/python-bytes/...` for Python-owned byte responses such as album art and CD live audio.
 - Switched `npm run dev` to desktop dev so local development exercises the same Rust-to-Python worker path as packaged builds.
 
