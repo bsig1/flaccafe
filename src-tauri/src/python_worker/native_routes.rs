@@ -313,6 +313,14 @@ pub(super) fn try_handle_native_json(
                 body_string(&body, "fpcalc_path"),
             )?,
         )?),
+        "run_acoustic_fingerprint_pass" => Some(to_json(
+            native_library::tools::native_acoustic_fingerprint_pass(
+                state,
+                body_i64_vec(&body, "track_ids").or_else(|| body_i64_vec(&body, "trackIds")),
+                body_bool(&body, "overwrite"),
+                body_usize(&body, "limit"),
+            )?,
+        )?),
         "list_regex_tag_presets" => Some(to_json(
             native_library::library_tools::native_regex_tag_presets(state)?,
         )?),

@@ -485,6 +485,16 @@ pub struct NativeDeviceSyncDevicesResponse {
 }
 
 #[derive(Serialize)]
+pub struct NativeAcousticFingerprintResponse {
+    pub(crate) tool_available: bool,
+    pub(crate) processed: i64,
+    pub(crate) updated: i64,
+    pub(crate) skipped: i64,
+    pub(crate) skipped_reasons: Vec<String>,
+    pub(crate) errors: Vec<String>,
+}
+
+#[derive(Serialize)]
 pub struct NativeBulkUndoLogEntry {
     pub(crate) id: i64,
     pub(crate) batch_id: Option<String>,

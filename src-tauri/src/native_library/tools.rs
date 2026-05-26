@@ -1,5 +1,8 @@
 use super::types::*;
-use super::{app_storage_root, get_setting, open_database, repo_root, set_setting};
+use super::{
+    app_storage_root, get_setting, open_database, repo_root, set_setting, track_from_row,
+    TRACK_COLUMNS,
+};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -127,6 +130,14 @@ fn resolve_tool(candidates: &[PathBuf]) -> Option<PathBuf> {
         .iter()
         .find(|path| path.exists() && path.is_file())
         .and_then(|path| path.canonicalize().ok().or_else(|| Some(path.clone())))
+}
+
+fn resolved_chromaprint_path() -> Result<(Option<PathBuf>, Vec<PathBuf>), String> {
+    let connection = open_database()?;
+    let configured = get_setting(&connection, "chromaprint_fpcalc_path");
+    let candidates = chromaprint_candidates(configured.as_deref());
+    let resolved = resolve_tool(&candidates);
+    Ok((resolved, candidates))
 }
 
 fn tool_version(path: &Path, arg: &str, timeout_label: &str) -> Option<String> {
@@ -304,4 +315,177 @@ pub fn native_save_chromaprint_setup(
         "The saved path was not valid. Choose fpcalc.exe or put it in the FLAC Cafe tool folder.",
         chromaprint_status,
     )
+}
+
+fn acoustic_fingerprint_for_path(path: &Path, fpcalc_path: &Path) -> Result<String, String> {
+    let mut command = Command::new(fpcalc_path);
+    command.arg("-json").arg(path);
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    let output = command
+        .output()
+        .map_err(|error| format!("Could not run fpcalc: {error}"))?;
+    if !output.status.success() {
+        let message = String::from_utf8_lossy(if output.stderr.is_empty() {
+            &output.stdout
+        } else {
+            &output.stderr
+        })
+        .trim()
+        .to_string();
+        return Err(if message.is_empty() {
+            "fpcalc failed".to_string()
+        } else {
+            message
+        });
+    }
+    let payload = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+        .map_err(|error| format!("fpcalc returned invalid JSON: {error}"))?;
+    payload
+        .get("fingerprint")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| "fpcalc did not return a fingerprint".to_string())
+}
+
+fn acoustic_fingerprint_tracks(
+    track_ids: Option<Vec<i64>>,
+    limit: usize,
+) -> Result<Vec<NativeTrack>, String> {
+    let connection = open_database()?;
+    if let Some(track_ids) = track_ids.filter(|ids| !ids.is_empty()) {
+        let mut unique = Vec::new();
+        for id in track_ids.into_iter().filter(|id| *id > 0) {
+            if !unique.contains(&id) {
+                unique.push(id);
+            }
+        }
+        if unique.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = vec!["?"; unique.len()].join(",");
+        let mut statement = connection
+            .prepare(&format!(
+                "SELECT {TRACK_COLUMNS} FROM tracks WHERE id IN ({placeholders}) LIMIT ?"
+            ))
+            .map_err(|error| format!("Could not prepare fingerprint selected tracks: {error}"))?;
+        let mut params = unique
+            .iter()
+            .map(|id| id as &dyn rusqlite::ToSql)
+            .collect::<Vec<_>>();
+        let limit_value = limit as i64;
+        params.push(&limit_value);
+        let rows = statement
+            .query_map(rusqlite::params_from_iter(params), track_from_row)
+            .map_err(|error| format!("Could not read fingerprint selected tracks: {error}"))?;
+        return rows
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| format!("Could not decode fingerprint selected tracks: {error}"));
+    }
+    let mut statement = connection
+        .prepare(&format!(
+            "SELECT {TRACK_COLUMNS}
+             FROM tracks
+             WHERE acoustic_fingerprint IS NULL OR trim(acoustic_fingerprint) = ''
+             ORDER BY datetime(date_added) DESC, id DESC
+             LIMIT ?"
+        ))
+        .map_err(|error| format!("Could not prepare fingerprint candidate query: {error}"))?;
+    let rows = statement
+        .query_map([limit as i64], track_from_row)
+        .map_err(|error| format!("Could not read fingerprint candidates: {error}"))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| format!("Could not decode fingerprint candidates: {error}"))
+}
+
+#[tauri::command]
+pub fn native_acoustic_fingerprint_pass(
+    _state: State<'_, NativeLibraryState>,
+    track_ids: Option<Vec<i64>>,
+    overwrite: Option<bool>,
+    limit: Option<usize>,
+) -> Result<NativeAcousticFingerprintResponse, String> {
+    let limit = limit.unwrap_or(200).clamp(1, 10_000);
+    let overwrite = overwrite.unwrap_or(false);
+    let (fpcalc_path, candidates) = resolved_chromaprint_path()?;
+    let Some(fpcalc_path) = fpcalc_path else {
+        let mut errors = vec![format!(
+            "Chromaprint fpcalc was not found. Save a path in File Management or place fpcalc.exe in {}.",
+            tool_dir("chromaprint").display()
+        )];
+        errors.extend(
+            candidates
+                .into_iter()
+                .take(12)
+                .map(|path| format!("Checked: {}", path.display())),
+        );
+        return Ok(NativeAcousticFingerprintResponse {
+            tool_available: false,
+            processed: 0,
+            updated: 0,
+            skipped: 0,
+            skipped_reasons: Vec::new(),
+            errors,
+        });
+    };
+    let tracks = acoustic_fingerprint_tracks(track_ids, limit)?;
+    let connection = open_database()?;
+    let mut processed = 0i64;
+    let mut updated = 0i64;
+    let mut skipped = 0i64;
+    let mut skipped_reasons = Vec::new();
+    let mut errors = Vec::new();
+    for track in tracks {
+        if track
+            .acoustic_fingerprint
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+            && !overwrite
+        {
+            skipped += 1;
+            skipped_reasons.push(format!(
+                "{}: already has an acoustic fingerprint; enable overwrite to refresh it",
+                track.title.as_deref().unwrap_or(&track.path)
+            ));
+            continue;
+        }
+        processed += 1;
+        let path = PathBuf::from(&track.path);
+        if !path.is_file() {
+            errors.push(format!("{}: missing file", track.path));
+            continue;
+        }
+        match acoustic_fingerprint_for_path(&path, &fpcalc_path) {
+            Ok(fingerprint) => {
+                connection
+                    .execute(
+                        "UPDATE tracks
+                         SET acoustic_fingerprint = ?,
+                             acoustic_fingerprint_updated_at = datetime('now'),
+                             updated_at = datetime('now')
+                         WHERE id = ?",
+                        rusqlite::params![fingerprint, track.id],
+                    )
+                    .map_err(|error| format!("Could not save acoustic fingerprint: {error}"))?;
+                updated += 1;
+            }
+            Err(error) => errors.push(format!(
+                "{}: {error}",
+                track.title.as_deref().unwrap_or(&track.path)
+            )),
+        }
+    }
+    if updated > 0 {
+        let _ = connection.execute("DELETE FROM library_query_cache", []);
+    }
+    Ok(NativeAcousticFingerprintResponse {
+        tool_available: true,
+        processed,
+        updated,
+        skipped,
+        skipped_reasons: skipped_reasons.into_iter().take(100).collect(),
+        errors: errors.into_iter().take(100).collect(),
+    })
 }
