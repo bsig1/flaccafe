@@ -57,6 +57,14 @@ pub(crate) fn database_path() -> PathBuf {
 
 pub(crate) fn open_database() -> Result<Connection, String> {
     let path = database_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "Could not create library database folder {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
     let connection = Connection::open(&path).map_err(|error| {
         format!(
             "Could not open library database at {}: {error}",
@@ -66,6 +74,10 @@ pub(crate) fn open_database() -> Result<Connection, String> {
     connection
         .busy_timeout(Duration::from_secs(3))
         .map_err(|error| format!("Could not configure SQLite busy timeout: {error}"))?;
+    connection
+        .execute("PRAGMA foreign_keys = ON", [])
+        .map_err(|error| format!("Could not enable SQLite foreign keys: {error}"))?;
+    super::schema::ensure_database_schema(&connection)?;
     Ok(connection)
 }
 

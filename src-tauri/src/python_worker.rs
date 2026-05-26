@@ -72,6 +72,7 @@ fn backend_worker_request_bytes(
     path: &str,
     body: Option<Value>,
 ) -> Result<BackendBytesResponse, String> {
+    crate::native_library::ensure_database_ready()?;
     let body = body.filter(|value| !value.is_null());
     let action = routes::action_for_request(method, path)?;
     let payload = json!({

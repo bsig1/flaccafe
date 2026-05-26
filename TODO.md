@@ -32,7 +32,6 @@
 - Consider persistent worker pooling only if one-shot worker startup becomes visible on long-running operations. Prefer correctness and simple process isolation until profiling proves it is too slow.
 
 ## Rust Native Migration Backlog
-- Move SQLite schema creation and migrations from `backend/app/database.py` into Rust so the app controller owns database compatibility before any Python worker is spawned.
 - Move database backup, database reset, support-bundle file collection, startup diagnostics, self-check aggregation, backend log tailing, and log redaction into Rust.
 - Move scan job orchestration into Rust: recursive file discovery, scan diffing, progress accounting, ETA, cancellation, error sampling, and job registry. Keep mutagen tag reads in Python and call it only for files whose tags need reading.
 - Move folder watching state, polling, pending-change generation, notifications, and apply/ignore actions into Rust. Keep Python metadata parsing for watcher tag updates.
@@ -70,6 +69,7 @@
 - Added a Rust native-route adapter before the Python worker bridge for settings, library track pages/batches/details, album/artist/playlist browsing, history/stats, library health, inbox, local tool presets/previews, podcast/scrobble local state, recommendation profiles, AutoDJ, avoid rules, duplicate review, manual volume tags, file organizer preview/application, and gapless validation.
 - Kept deliberate Python fallbacks for cache-miss artist info and file-rating writes, where Python still does network fetches or mutagen writes.
 - Added native half-star rating validation so Rust and Python agree on 0.5-star to 5-star bounds.
+- Moved SQLite schema creation and compatibility migrations into Rust startup/open handling, backed by shared `backend/app/schema.sql`, so the desktop controller prepares the database before Python worker actions spawn.
 - Added `flaccafe-media://localhost/python-bytes/...` for Python-owned byte responses such as album art and CD live audio.
 - Switched `npm run dev` to desktop dev so local development exercises the same Rust-to-Python worker path as packaged builds.
 

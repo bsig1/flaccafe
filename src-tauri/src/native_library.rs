@@ -14,6 +14,7 @@ pub(crate) mod media_protocol;
 pub(crate) mod podcasts;
 pub(crate) mod recommendation_profiles;
 pub(crate) mod recommendations;
+mod schema;
 pub(crate) mod scrobbling;
 mod search;
 mod storage;
@@ -31,6 +32,11 @@ pub(super) use self::storage::{
     set_setting, suggested_music_path, truthy_setting,
 };
 pub use self::types::*;
+
+pub(crate) fn ensure_database_ready() -> Result<(), String> {
+    let _connection = open_database()?;
+    Ok(())
+}
 
 const TRACK_COLUMNS: &str = "
     id, path, title, artist, album, album_artist,

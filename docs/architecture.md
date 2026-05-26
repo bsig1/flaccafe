@@ -28,7 +28,8 @@ backend/
     main.py               Python worker action functions and thin domain orchestration
     duplicates.py         duplicate scoring and grouping helpers
     worker.py             one-shot named-action worker entry point used by Rust
-    database.py           SQLite schema and migration helpers
+    database.py           Python test/worker DB helpers that share the Rust-owned schema file
+    schema.sql            shared SQLite schema used by Rust before Python worker startup
     scanner.py            recursive audio scan and mutagen metadata parsing
     file_tags.py          opt-in metadata/rating/lyrics writes to audio files
     recommender.py        scoring, cooldowns, similarity, and temperature sampling
@@ -100,7 +101,7 @@ Tauri owns desktop-native work and selected SQLite fast paths. It can:
 - Play local audio through the optional Rust playback engine.
 - Serve WebView local track audio and artwork through the `flaccafe-media://` protocol, with Python fallback when embedded artwork still needs mutagen.
 - Publish Windows System Media Transport Controls state.
-- Serve high-traffic SQLite reads and simple DB mutations when they mirror tested Python route behavior, including library browsing, albums/artists/playlists, history/stats, inbox review state, local podcast/scrobble state, saved recommendation profiles, local tool presets, device sync profiles, and AutoDJ generation.
+- Create and migrate the SQLite database before Python worker actions are spawned, then serve high-traffic SQLite reads and simple DB mutations when they mirror tested Python route behavior, including library browsing, albums/artists/playlists, history/stats, inbox review state, local podcast/scrobble state, saved recommendation profiles, local tool presets, device sync profiles, and AutoDJ generation.
 - Resolve app paths through `src-tauri/src/python_worker/native_routes.rs` first, then forward only Python-owned work to named worker actions without exposing Python as an HTTP controller.
 - Package the app and declare capabilities.
 
