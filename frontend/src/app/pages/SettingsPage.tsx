@@ -162,7 +162,7 @@ export function SettingsPage({
     showSettingsSection("library preferences display ratings metadata startup theme font density podcasts file paths delete recycle remember"),
     showSettingsSection("api keys online metadata lastfm last.fm scrobbling acoustid acoustic fingerprint musicbrainz lookup autotag"),
     showSettingsSection("keyboard shortcuts hotkeys local playback controls media keys"),
-    showSettingsSection("player playback audio output lyrics autofetch lrc sidecar cache follow equalizer replaygain fade skip codec native webview"),
+    showSettingsSection("player playback audio output lyrics autofetch lrc sidecar cache follow equalizer replaygain fade skip codec rust webview"),
     showSettingsSection("maintenance backend diagnostics database support bundle source folder logs cache reset local data"),
     showSettingsSection("extensions skins plugins themes manifest customization"),
   ].filter(Boolean).length;
@@ -213,7 +213,7 @@ export function SettingsPage({
           label: "CPAL / WASAPI shared",
           available: false,
           exclusive: false,
-          message: "Native backend information is only available in the desktop app.",
+          message: "Rust audio backend information is only available in the desktop app.",
         },
       ]);
     }
@@ -223,10 +223,10 @@ export function SettingsPage({
     try {
       const devices = await nativeListOutputDevices();
       setNativeDevices(devices);
-      setNativeDeviceMessage(devices.length ? null : "No native output devices reported.");
+      setNativeDeviceMessage(devices.length ? null : "No Rust output devices reported.");
     } catch {
       setNativeDevices([]);
-      setNativeDeviceMessage("Native output devices are only available in the desktop app.");
+      setNativeDeviceMessage("Rust output devices are only available in the desktop app.");
     }
   }
 
@@ -237,7 +237,7 @@ export function SettingsPage({
       setNativeDiagnosticsMessage(null);
     } catch {
       setNativePlaybackDiagnostics(null);
-      setNativeDiagnosticsMessage("Native playback diagnostics are only available in the desktop app.");
+      setNativeDiagnosticsMessage("Rust playback diagnostics are only available in the desktop app.");
     }
   }
 
@@ -245,9 +245,9 @@ export function SettingsPage({
     try {
       const response = await nativeClearDiagnostics();
       setNativePlaybackDiagnostics(response);
-      setNativeDiagnosticsMessage("Native playback diagnostics cleared.");
+      setNativeDiagnosticsMessage("Rust playback diagnostics cleared.");
     } catch {
-      setNativeDiagnosticsMessage("Could not clear native playback diagnostics in this environment.");
+      setNativeDiagnosticsMessage("Could not clear Rust playback diagnostics in this environment.");
     }
   }
 
@@ -714,7 +714,7 @@ export function SettingsPage({
           />
           )}
 
-          {showSettingsSection("player playback audio output lyrics autofetch lrc sidecar cache follow equalizer replaygain fade skip codec native webview") && (
+          {showSettingsSection("player playback audio output lyrics autofetch lrc sidecar cache follow equalizer replaygain fade skip codec rust webview") && (
           <PlayerSettingsSection
             uiPreferences={uiPreferences}
             setUiPreferences={setUiPreferences}

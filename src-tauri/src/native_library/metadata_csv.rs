@@ -145,7 +145,7 @@ pub fn native_export_metadata_csv(
         );
         let mut statement = connection
             .prepare(&query)
-            .map_err(|error| format!("Could not prepare native CSV export query: {error}"))?;
+            .map_err(|error| format!("Could not prepare Rust CSV export query: {error}"))?;
         let mapped = statement
             .query_map([limit as i64], |row| {
                 let mut values = Vec::with_capacity(METADATA_CSV_COLUMNS.len());
@@ -154,10 +154,10 @@ pub fn native_export_metadata_csv(
                 }
                 Ok(values)
             })
-            .map_err(|error| format!("Could not read native CSV export rows: {error}"))?;
+            .map_err(|error| format!("Could not read Rust CSV export rows: {error}"))?;
         mapped
             .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|error| format!("Could not decode native CSV export rows: {error}"))?
+            .map_err(|error| format!("Could not decode Rust CSV export rows: {error}"))?
     } else {
         let ids = ids.into_iter().take(limit).collect::<Vec<_>>();
         let placeholders = vec!["?"; ids.len()].join(",");
@@ -174,7 +174,7 @@ pub fn native_export_metadata_csv(
         let limit_value = limit as i64;
         parameters.push(&limit_value);
         let mut statement = connection.prepare(&query).map_err(|error| {
-            format!("Could not prepare native selected CSV export query: {error}")
+            format!("Could not prepare Rust selected CSV export query: {error}")
         })?;
         let mapped = statement
             .query_map(params_from_iter(parameters), |row| {
@@ -184,10 +184,10 @@ pub fn native_export_metadata_csv(
                 }
                 Ok(values)
             })
-            .map_err(|error| format!("Could not read native selected CSV export rows: {error}"))?;
+            .map_err(|error| format!("Could not read Rust selected CSV export rows: {error}"))?;
         mapped
             .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|error| format!("Could not decode native selected CSV export rows: {error}"))?
+            .map_err(|error| format!("Could not decode Rust selected CSV export rows: {error}"))?
     };
 
     if let Some(parent) = target.parent() {

@@ -1,6 +1,6 @@
 # Backend Route Reference
 
-Rust owns the app-facing API shape in `src-tauri/src/python_worker/routes.rs`. The React UI calls through `frontend/src/lib/api.ts`; desktop flows use Tauri commands first, including native SQLite paths, maintenance/diagnostic routes, the `flaccafe-media://` local media protocol, and a Rust-to-Python JSON worker bridge for Python-owned actions. The bridge now checks `src-tauri/src/python_worker/native_routes.rs` before spawning Python, so HTTP-shaped fallbacks for diagnostics, backup/reset/support bundles, library browsing, playlists, inbox, history, local tools, podcast/scrobble state, CLAP job state, audio conversion, and AutoDJ stay native. Packaged desktop builds invoke the bundled Python executable for named expert actions instead of bundling or starting FastAPI; CLAP batch analysis uses a persistent Python worker managed by Rust so Torch stays warm for the batch.
+Rust owns the app-facing API shape in `src-tauri/src/python_worker/routes.rs`. The React UI calls through `frontend/src/lib/api.ts`; desktop flows use Tauri commands first, including Rust SQLite paths, maintenance/diagnostic routes, the `flaccafe-media://` local media protocol, and a Rust-to-Python JSON worker bridge for Python-owned actions. The bridge now checks `src-tauri/src/python_worker/native_routes.rs` before spawning Python, so HTTP-shaped fallbacks for diagnostics, backup/reset/support bundles, library browsing, playlists, inbox, history, local tools, podcast/scrobble state, CLAP job state, audio conversion, and AutoDJ stay in the Rust controller. Packaged desktop builds invoke the bundled Python executable for named expert actions instead of bundling or starting FastAPI; CLAP batch analysis uses a persistent Python worker managed by Rust so Torch stays warm for the batch.
 
 ## Diagnostics And Settings
 
@@ -23,12 +23,12 @@ Rust owns the app-facing API shape in `src-tauri/src/python_worker/routes.rs`. T
 - `GET /tracks/page` returns paged, sorted music tracks for infinite scrolling, with optional advanced search filters, excluding audiobook-like and podcast-like rows.
 - `POST /tracks/batch` returns selected tracks in requested order for fast session restore.
 - `GET /tracks/{track_id}` returns one track.
-- `PATCH /tracks/{track_id}/metadata` updates editable tags in SQLite, and optionally audio files.
-- `PATCH /tracks/{track_id}/rating` updates a half-star rating in SQLite, and optionally audio files.
+- `PATCH /tracks/{track_id}/metadata` updates editable tags in SQLite, and optionally writes common audio tags through Rust/Lofty.
+- `PATCH /tracks/{track_id}/rating` updates a half-star rating in SQLite, and optionally writes a cross-player popularimeter rating through Rust/Lofty.
 - `DELETE /tracks/{track_id}` removes a track from the library and can optionally delete the file.
 - `POST /tracks/delete` removes many tracks in one request, using batched SQLite deletes and optional file deletion.
 - `POST /tracks/sync-metadata` rereads selected audio files and updates SQLite from file tags.
-- `POST /tracks/write-metadata-to-files` previews or applies SQLite metadata/rating values back into supported audio files.
+- `POST /tracks/write-metadata-to-files` previews or applies SQLite metadata/rating values back into supported audio files through Rust/Lofty.
 - `POST /tracks/restore` rescans a previously removed file back into the library.
 - `GET /library/stats` returns dashboard counts.
 - `GET /library/health` returns missing files, duplicate groups, missing metadata, and unrated tracks.

@@ -213,7 +213,7 @@ export function summarizeNativeDiagnostics(diagnostics: NativePlaybackDiagnostic
   const errors = diagnostics.entries.filter((entry) => entry.severity === "error").length;
   const warnings = diagnostics.entries.filter((entry) => entry.severity === "warning").length;
   if (total === 0 && diagnostics.stream_errors.length === 0) {
-    return "No recent native playback failures";
+    return "No recent Rust playback failures";
   }
   const categories = Array.from(new Set(diagnostics.entries.slice(-8).map((entry) => entry.category))).join(", ");
   const parts = [

@@ -857,7 +857,7 @@ fn open_output_sink(
         remember_stream_error(
             &callback_errors,
             &callback_diagnostics,
-            format!("Native output stream error: {error}"),
+            format!("Rust output stream error: {error}"),
             callback_context.clone(),
         );
     });
@@ -866,7 +866,7 @@ fn open_output_sink(
             &diagnostics,
             "cpal",
             "open_output_sink",
-            format!("Could not open native audio output: {error}"),
+            format!("Could not open Rust audio output: {error}"),
             NativeDiagnosticContext {
                 device_id: resolved_id
                     .clone()
@@ -910,7 +910,7 @@ fn build_decoder(
             diagnostics,
             "symphonia",
             "decode_audio_file",
-            format!("Could not decode audio file with native engine: {error}"),
+            format!("Could not decode audio file with Rust audio engine: {error}"),
             NativeDiagnosticContext {
                 path: Some(path_text),
                 ..NativeDiagnosticContext::default()
@@ -932,7 +932,7 @@ fn build_prepared_decoder(
             diagnostics,
             "symphonia",
             "decode_prepared_audio",
-            format!("Could not decode prepared native audio: {error}"),
+            format!("Could not decode prepared Rust audio: {error}"),
             NativeDiagnosticContext {
                 path: Some(prepared.path.clone()),
                 ..NativeDiagnosticContext::default()
@@ -956,7 +956,7 @@ fn seek_player(
                         diagnostics,
                         "rodio",
                         "seek",
-                        format!("Native seek failed: {error}"),
+                        format!("Rust seek failed: {error}"),
                         NativeDiagnosticContext {
                             path,
                             ..NativeDiagnosticContext::default()
@@ -1000,7 +1000,7 @@ pub fn native_play_file(
     let mut inner = state
         .inner
         .lock()
-        .map_err(|_| "Native playback lock poisoned".to_string())?;
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
     if !path_buf.exists() || !path_buf.is_file() {
         let message = "Audio file does not exist".to_string();
         remember_diagnostic(
@@ -1028,7 +1028,7 @@ pub fn native_play_file(
     let mixer = inner
         .sink
         .as_ref()
-        .ok_or_else(|| "Native audio output is unavailable".to_string())?
+        .ok_or_else(|| "Rust audio output is unavailable".to_string())?
         .mixer()
         .clone();
     let player = Arc::new(Player::connect_new(&mixer));
@@ -1086,7 +1086,7 @@ pub fn native_crossfade_to_file(
     let mut inner = state
         .inner
         .lock()
-        .map_err(|_| "Native playback lock poisoned".to_string())?;
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
     if !path_buf.exists() || !path_buf.is_file() {
         let message = "Audio file does not exist".to_string();
         remember_diagnostic(
@@ -1113,7 +1113,7 @@ pub fn native_crossfade_to_file(
     let mixer = inner
         .sink
         .as_ref()
-        .ok_or_else(|| "Native audio output is unavailable".to_string())?
+        .ok_or_else(|| "Rust audio output is unavailable".to_string())?
         .mixer()
         .clone();
     let new_player = Arc::new(Player::connect_new(&mixer));
@@ -1187,11 +1187,11 @@ pub fn native_resume(
     let inner = state
         .inner
         .lock()
-        .map_err(|_| "Native playback lock poisoned".to_string())?;
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
     let player = inner
         .player
         .as_ref()
-        .ok_or_else(|| "No native track is loaded".to_string())?;
+        .ok_or_else(|| "No Rust audio track is loaded".to_string())?;
     player.player.play();
     Ok(inner.status(None))
 }
@@ -1201,11 +1201,11 @@ pub fn native_pause(state: State<'_, NativePlaybackState>) -> Result<NativePlayb
     let inner = state
         .inner
         .lock()
-        .map_err(|_| "Native playback lock poisoned".to_string())?;
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
     let player = inner
         .player
         .as_ref()
-        .ok_or_else(|| "No native track is loaded".to_string())?;
+        .ok_or_else(|| "No Rust audio track is loaded".to_string())?;
     player.player.pause();
     Ok(inner.status(None))
 }
@@ -1215,7 +1215,7 @@ pub fn native_stop(state: State<'_, NativePlaybackState>) -> Result<NativePlayba
     let mut inner = state
         .inner
         .lock()
-        .map_err(|_| "Native playback lock poisoned".to_string())?;
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
     inner.stop();
     Ok(inner.status(None))
 }
@@ -1228,11 +1228,11 @@ pub fn native_seek(
     let inner = state
         .inner
         .lock()
-        .map_err(|_| "Native playback lock poisoned".to_string())?;
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
     let player = inner
         .player
         .as_ref()
-        .ok_or_else(|| "No native track is loaded".to_string())?;
+        .ok_or_else(|| "No Rust audio track is loaded".to_string())?;
     let bounded_seconds = if seconds.is_finite() && seconds > 0.0 {
         seconds
     } else {
@@ -1246,7 +1246,7 @@ pub fn native_seek(
                 &inner.diagnostics,
                 "rodio",
                 "seek",
-                format!("Native seek failed: {error}"),
+                format!("Rust seek failed: {error}"),
                 NativeDiagnosticContext {
                     path: inner.current_path.clone(),
                     ..NativeDiagnosticContext::default()
@@ -1267,7 +1267,7 @@ pub fn native_set_volume(
     let mut inner = state
         .inner
         .lock()
-        .map_err(|_| "Native playback lock poisoned".to_string())?;
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
     let bounded = clamp_volume(volume);
     if let Some(handle) = &inner.player {
         handle.gain.set_immediate(bounded);
@@ -1285,7 +1285,7 @@ pub fn native_fade_volume(
     let mut inner = state
         .inner
         .lock()
-        .map_err(|_| "Native playback lock poisoned".to_string())?;
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
     let bounded = clamp_volume(volume);
     let sample_rate = inner.sample_rate.unwrap_or(48_000);
     if let Some(handle) = &inner.player {
@@ -1307,7 +1307,7 @@ pub fn native_set_dsp(
     let inner = state
         .inner
         .lock()
-        .map_err(|_| "Native playback lock poisoned".to_string())?;
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
     if let Ok(mut current) = inner.dsp_settings.lock() {
         *current = dsp_settings;
     }
@@ -1321,7 +1321,7 @@ pub fn native_status(
     let inner = state
         .inner
         .lock()
-        .map_err(|_| "Native playback lock poisoned".to_string())?;
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
     Ok(inner.status(None))
 }
 
@@ -1332,7 +1332,7 @@ pub fn native_visualizer_frame(
     let inner = state
         .inner
         .lock()
-        .map_err(|_| "Native playback lock poisoned".to_string())?;
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
     let is_playing = inner
         .player
         .as_ref()
@@ -1359,7 +1359,7 @@ pub fn native_diagnostics(
     let inner = state
         .inner
         .lock()
-        .map_err(|_| "Native playback lock poisoned".to_string())?;
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
     Ok(inner.diagnostics_response())
 }
 
@@ -1370,7 +1370,7 @@ pub fn native_clear_diagnostics(
     let inner = state
         .inner
         .lock()
-        .map_err(|_| "Native playback lock poisoned".to_string())?;
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
     if let Ok(mut entries) = inner.diagnostics.lock() {
         entries.clear();
     }
@@ -1389,7 +1389,7 @@ pub fn native_prepare_next_file(
     let mut inner = state
         .inner
         .lock()
-        .map_err(|_| "Native playback lock poisoned".to_string())?;
+        .map_err(|_| "Rust playback lock poisoned".to_string())?;
     if !path_buf.exists() || !path_buf.is_file() {
         let message = "Next audio file does not exist".to_string();
         remember_diagnostic(
@@ -1442,7 +1442,7 @@ pub fn native_prepare_next_file(
         path,
         duration_seconds,
         prepared_at_ms,
-        message: "Next native track decoded successfully.".to_string(),
+        message: "Next Rust track decoded successfully.".to_string(),
     })
 }
 
@@ -1454,7 +1454,7 @@ pub fn native_output_backends() -> Result<Vec<NativeOutputBackend>, String> {
             label: "CPAL / WASAPI shared".to_string(),
             available: true,
             exclusive: false,
-            message: "Current native backend; supports output-device selection and buffer tuning.".to_string(),
+            message: "Current Rust backend; supports output-device selection and buffer tuning.".to_string(),
         },
         NativeOutputBackend {
             id: "wasapiExclusive".to_string(),
@@ -1480,7 +1480,7 @@ pub fn native_list_output_devices(
     let diagnostics = state
         .inner
         .lock()
-        .map_err(|_| "Native playback lock poisoned".to_string())?
+        .map_err(|_| "Rust playback lock poisoned".to_string())?
         .diagnostics
         .clone();
     let host = cpal::default_host();

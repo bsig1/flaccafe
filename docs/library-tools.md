@@ -97,7 +97,7 @@ Artwork matching uses the Cover Art Archive front image for the matched MusicBra
 
 The CLAP Genre Tags tool uses existing CLAP analysis results to preview predicted genre labels before copying them into the editable `genre` field. It is preview-first, supports a confidence threshold, and can be limited to tracks with empty genre tags.
 
-Rust builds and applies the preview for SQLite-only changes. If file tag writing is enabled in Settings, the apply step delegates the audio-file write to the Python mutagen metadata worker; otherwise the genre changes stay in SQLite.
+Rust builds and applies the preview for SQLite-only changes. If file tag writing is enabled in Settings, common metadata writes go through the Rust/Lofty tag writer; otherwise the genre changes stay in SQLite.
 
 ## Volume Tags
 
@@ -107,7 +107,7 @@ Manual mode lets you mark selected tracks with known gain/peak values directly, 
 
 ## Audio Conversion
 
-Audio conversion preview, target path generation, estimated output sizing, FFmpeg installer jobs, conversion progress, ETA, cancellation, and partial-output cleanup are Rust-owned. FFmpeg does the actual transcoding, and embedded artwork copy still delegates to the Python mutagen worker because container-specific tag writing remains safer there.
+Audio conversion preview, target path generation, estimated output sizing, FFmpeg installer jobs, conversion progress, ETA, cancellation, and partial-output cleanup are Rust-owned. FFmpeg does the actual transcoding, and embedded artwork copy still delegates to the Python specialist worker because container-specific artwork writing remains safer there.
 
 ## File Organization
 

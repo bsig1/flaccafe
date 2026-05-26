@@ -19,7 +19,7 @@ types/      shared TypeScript data shapes returned by the backend
 - `app/player/` contains the bottom player and detached mini-player window.
 - `app/components/` contains reusable app-specific pieces and modals.
 - `app/shared.ts` contains app-level types, constants, formatting helpers, persisted UI preferences, and drag/skip helpers.
-- `lib/api.ts` should stay as the frontend boundary for native commands and Rust-to-Python worker calls.
-- `lib/tauriMedia.ts` should stay as the frontend boundary for native media-control calls.
+- `lib/api.ts` should stay as the frontend boundary for Tauri commands and Rust-to-Python worker calls.
+- `lib/tauriMedia.ts` should stay as the frontend boundary for desktop media-control calls.
 - `config/themes/*.json` are editable palette files. Register new themes in `config/theme.ts`.
 - `types/api.ts` mirrors backend response shapes used by the frontend.

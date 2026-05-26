@@ -123,14 +123,12 @@ fn list_profiles_for_connection(
             ORDER BY is_default DESC, lower(name) ASC
             "#,
         )
-        .map_err(|error| {
-            format!("Could not prepare native recommendation profile query: {error}")
-        })?;
+        .map_err(|error| format!("Could not prepare Rust recommendation profile query: {error}"))?;
     let rows = statement
         .query_map([], recommendation_profile_from_row)
-        .map_err(|error| format!("Could not read native recommendation profiles: {error}"))?;
+        .map_err(|error| format!("Could not read Rust recommendation profiles: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native recommendation profiles: {error}"))
+        .map_err(|error| format!("Could not decode Rust recommendation profiles: {error}"))
 }
 
 fn profile_by_id(
@@ -193,14 +191,12 @@ pub fn native_recommendation_history(
             LIMIT ?
             "#,
         )
-        .map_err(|error| {
-            format!("Could not prepare native recommendation history query: {error}")
-        })?;
+        .map_err(|error| format!("Could not prepare Rust recommendation history query: {error}"))?;
     let rows = statement
         .query_map(params![limit as i64], recommendation_run_from_row)
-        .map_err(|error| format!("Could not read native recommendation history: {error}"))?;
+        .map_err(|error| format!("Could not read Rust recommendation history: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native recommendation history: {error}"))
+        .map_err(|error| format!("Could not decode Rust recommendation history: {error}"))
 }
 
 #[tauri::command]
@@ -221,12 +217,12 @@ pub fn native_save_recommendation_profile(
     let mut connection = open_database()?;
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native recommendation profile save: {error}"))?;
+        .map_err(|error| format!("Could not start Rust recommendation profile save: {error}"))?;
     if is_default {
         transaction
             .execute("UPDATE recommendation_profiles SET is_default = 0", [])
             .map_err(|error| {
-                format!("Could not clear native default recommendation profile: {error}")
+                format!("Could not clear Rust default recommendation profile: {error}")
             })?;
     }
     match profile_id {
@@ -238,9 +234,7 @@ pub fn native_save_recommendation_profile(
                     |row| row.get::<_, i64>(0),
                 )
                 .optional()
-                .map_err(|error| {
-                    format!("Could not verify native recommendation profile: {error}")
-                })?
+                .map_err(|error| format!("Could not verify Rust recommendation profile: {error}"))?
                 .is_some();
             if !exists {
                 return Err("Recommendation profile not found".to_string());
@@ -260,7 +254,7 @@ pub fn native_save_recommendation_profile(
                     ],
                 )
                 .map_err(|error| {
-                    format!("Could not update native recommendation profile: {error}")
+                    format!("Could not update Rust recommendation profile: {error}")
                 })?;
         }
         None => {
@@ -276,9 +270,7 @@ pub fn native_save_recommendation_profile(
                     "#,
                     params![name, settings_json, if is_default { 1 } else { 0 }],
                 )
-                .map_err(|error| {
-                    format!("Could not save native recommendation profile: {error}")
-                })?;
+                .map_err(|error| format!("Could not save Rust recommendation profile: {error}"))?;
         }
     }
     if is_default {
@@ -287,11 +279,11 @@ pub fn native_save_recommendation_profile(
                 "UPDATE recommendation_profiles SET is_default = CASE WHEN lower(name) = lower(?) THEN 1 ELSE 0 END",
                 params![name],
             )
-            .map_err(|error| format!("Could not mark native default recommendation profile: {error}"))?;
+            .map_err(|error| format!("Could not mark Rust default recommendation profile: {error}"))?;
     }
     transaction
         .commit()
-        .map_err(|error| format!("Could not commit native recommendation profile save: {error}"))?;
+        .map_err(|error| format!("Could not commit Rust recommendation profile save: {error}"))?;
 
     match profile_id {
         Some(profile_id) => profile_by_id(&connection, profile_id),
@@ -307,7 +299,7 @@ pub fn native_set_default_recommendation_profile(
     let mut connection = open_database()?;
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native default profile update: {error}"))?;
+        .map_err(|error| format!("Could not start Rust default profile update: {error}"))?;
     let exists = transaction
         .query_row(
             "SELECT id FROM recommendation_profiles WHERE id = ?",
@@ -315,7 +307,7 @@ pub fn native_set_default_recommendation_profile(
             |row| row.get::<_, i64>(0),
         )
         .optional()
-        .map_err(|error| format!("Could not verify native recommendation profile: {error}"))?
+        .map_err(|error| format!("Could not verify Rust recommendation profile: {error}"))?
         .is_some();
     if !exists {
         return Err("Recommendation profile not found".to_string());
@@ -325,11 +317,9 @@ pub fn native_set_default_recommendation_profile(
             "UPDATE recommendation_profiles SET is_default = CASE WHEN id = ? THEN 1 ELSE 0 END",
             params![profile_id],
         )
-        .map_err(|error| {
-            format!("Could not save native default recommendation profile: {error}")
-        })?;
+        .map_err(|error| format!("Could not save Rust default recommendation profile: {error}"))?;
     transaction.commit().map_err(|error| {
-        format!("Could not commit native default recommendation profile: {error}")
+        format!("Could not commit Rust default recommendation profile: {error}")
     })?;
     list_profiles_for_connection(&connection)
 }
@@ -345,7 +335,7 @@ pub fn native_delete_recommendation_profile(
             "DELETE FROM recommendation_profiles WHERE id = ?",
             params![profile_id],
         )
-        .map_err(|error| format!("Could not delete native recommendation profile: {error}"))?;
+        .map_err(|error| format!("Could not delete Rust recommendation profile: {error}"))?;
     list_profiles_for_connection(&connection)
 }
 
@@ -365,7 +355,7 @@ pub fn native_record_recommendation_feedback(
     let mut connection = open_database()?;
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native recommendation feedback save: {error}"))?;
+        .map_err(|error| format!("Could not start Rust recommendation feedback save: {error}"))?;
     let exists = transaction
         .query_row(
             "SELECT id FROM tracks WHERE id = ?",
@@ -373,7 +363,7 @@ pub fn native_record_recommendation_feedback(
             |row| row.get::<_, i64>(0),
         )
         .optional()
-        .map_err(|error| format!("Could not verify native recommendation feedback track: {error}"))?
+        .map_err(|error| format!("Could not verify Rust recommendation feedback track: {error}"))?
         .is_some();
     if !exists {
         return Err("Track not found".to_string());
@@ -386,10 +376,10 @@ pub fn native_record_recommendation_feedback(
             "#,
             params![track_id, event_type, weight.unwrap_or(1.0)],
         )
-        .map_err(|error| format!("Could not record native recommendation feedback: {error}"))?;
+        .map_err(|error| format!("Could not record Rust recommendation feedback: {error}"))?;
     transaction
         .commit()
-        .map_err(|error| format!("Could not commit native recommendation feedback: {error}"))?;
+        .map_err(|error| format!("Could not commit Rust recommendation feedback: {error}"))?;
     Ok(NativeStatusResponse {
         status: "ok".to_string(),
     })
@@ -547,15 +537,15 @@ pub fn native_choose_recommendation_ab_test(
                 "SELECT id FROM tracks WHERE id IN ({placeholders})"
             ))
             .map_err(|error| {
-                format!("Could not prepare native A/B feedback track lookup: {error}")
+                format!("Could not prepare Rust A/B feedback track lookup: {error}")
             })?;
         let rows = statement
             .query_map(rusqlite::params_from_iter(unique_ids.iter()), |row| {
                 row.get::<_, i64>(0)
             })
-            .map_err(|error| format!("Could not read native A/B feedback tracks: {error}"))?;
+            .map_err(|error| format!("Could not read Rust A/B feedback tracks: {error}"))?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|error| format!("Could not decode native A/B feedback tracks: {error}"))?
+            .map_err(|error| format!("Could not decode Rust A/B feedback tracks: {error}"))?
     };
     let mut inserted = 0i64;
     for track_id in unique_ids {
@@ -568,7 +558,7 @@ pub fn native_choose_recommendation_ab_test(
                  VALUES(?, 'add_to_queue', ?)",
                 params![track_id, feedback_weight.unwrap_or(1.0)],
             )
-            .map_err(|error| format!("Could not record native A/B feedback: {error}"))?;
+            .map_err(|error| format!("Could not record Rust A/B feedback: {error}"))?;
         inserted += count as i64;
     }
     Ok(NativeRecommendationAbChoiceResponse {
@@ -604,18 +594,16 @@ fn selected_profile_rows(
                  WHERE id IN ({placeholders})
                  ORDER BY is_default DESC, lower(name) ASC"
             ))
-            .map_err(|error| {
-                format!("Could not prepare native profile comparison query: {error}")
-            })?;
+            .map_err(|error| format!("Could not prepare Rust profile comparison query: {error}"))?;
         let rows = statement
             .query_map(
                 rusqlite::params_from_iter(unique_ids.iter()),
                 raw_profile_from_row,
             )
-            .map_err(|error| format!("Could not read native profile comparison rows: {error}"))?;
+            .map_err(|error| format!("Could not read Rust profile comparison rows: {error}"))?;
         return rows
             .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|error| format!("Could not decode native profile comparison rows: {error}"));
+            .map_err(|error| format!("Could not decode Rust profile comparison rows: {error}"));
     }
     let mut statement = connection
         .prepare(
@@ -624,12 +612,12 @@ fn selected_profile_rows(
              ORDER BY is_default DESC, lower(name) ASC
              LIMIT 8",
         )
-        .map_err(|error| format!("Could not prepare native profile comparison query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust profile comparison query: {error}"))?;
     let rows = statement
         .query_map([], raw_profile_from_row)
-        .map_err(|error| format!("Could not read native profile comparison rows: {error}"))?;
+        .map_err(|error| format!("Could not read Rust profile comparison rows: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native profile comparison rows: {error}"))
+        .map_err(|error| format!("Could not decode Rust profile comparison rows: {error}"))
 }
 
 fn build_profile_comparisons(

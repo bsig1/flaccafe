@@ -18,6 +18,7 @@ pub(crate) mod library_tools;
 pub(crate) mod lyrics;
 pub(crate) mod maintenance;
 pub(crate) mod media_protocol;
+pub(crate) mod metadata;
 pub(crate) mod metadata_csv;
 pub(crate) mod podcasts;
 pub(crate) mod recommendation_profiles;
@@ -262,7 +263,7 @@ pub fn native_tracks_page(
             params_from_iter(params.clone()),
             |row| row.get(0),
         )
-        .map_err(|error| format!("Could not count native tracks: {error}"))?;
+        .map_err(|error| format!("Could not count Rust tracks: {error}"))?;
 
     params.push(Value::Integer(limit as i64));
     params.push(Value::Integer(offset as i64));
@@ -270,13 +271,13 @@ pub fn native_tracks_page(
         .prepare(&format!(
             "SELECT {TRACK_COLUMNS} FROM tracks {where_clause} {order_clause} LIMIT ? OFFSET ?"
         ))
-        .map_err(|error| format!("Could not prepare native track query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust track query: {error}"))?;
     let rows = statement
         .query_map(params_from_iter(params), track_from_row)
-        .map_err(|error| format!("Could not read native track page: {error}"))?;
+        .map_err(|error| format!("Could not read Rust track page: {error}"))?;
     let tracks = rows
         .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native track page: {error}"))?;
+        .map_err(|error| format!("Could not decode Rust track page: {error}"))?;
     Ok(NativeTrackPage {
         tracks,
         total,
@@ -320,7 +321,7 @@ pub fn native_clap_coverage(
                 ))
             },
         )
-        .map_err(|error| format!("Could not read native CLAP coverage: {error}"))?;
+        .map_err(|error| format!("Could not read Rust CLAP coverage: {error}"))?;
     let (total_tracks, analyzed_tracks, failed_tracks) = row;
     let coverage_percent = if total_tracks > 0 {
         ((analyzed_tracks as f64 / total_tracks as f64) * 10_000.0).round() / 100.0
@@ -450,7 +451,7 @@ pub fn native_albums(
             "#,
             music_filter = music_only_clause()
         ))
-        .map_err(|error| format!("Could not prepare native albums query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust albums query: {error}"))?;
     let rows = statement
         .query_map(params_from_iter(query_params), |row| {
             let years = csv_ints(row.get("years_csv")?);
@@ -484,9 +485,9 @@ pub fn native_albums(
                 completion_checked_at: row.get("completion_checked_at")?,
             })
         })
-        .map_err(|error| format!("Could not read native albums: {error}"))?;
+        .map_err(|error| format!("Could not read Rust albums: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native albums: {error}"))
+        .map_err(|error| format!("Could not decode Rust albums: {error}"))
 }
 
 fn primary_artist_expression(alias: &str) -> String {
@@ -561,7 +562,7 @@ pub fn native_artists(
             "#,
             music_filter = music_only_clause()
         ))
-        .map_err(|error| format!("Could not prepare native artists query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust artists query: {error}"))?;
     let rows = statement
         .query_map(params_from_iter(query_params), |row| {
             Ok(NativeArtistSummary {
@@ -577,9 +578,9 @@ pub fn native_artists(
                 artwork_track_id: row.get("artwork_track_id")?,
             })
         })
-        .map_err(|error| format!("Could not read native artists: {error}"))?;
+        .map_err(|error| format!("Could not read Rust artists: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native artists: {error}"))
+        .map_err(|error| format!("Could not decode Rust artists: {error}"))
 }
 
 #[tauri::command]
@@ -610,7 +611,7 @@ fn native_playlists_for_connection(
             ORDER BY lower(playlists.name) ASC
             "#,
         )
-        .map_err(|error| format!("Could not prepare native playlists query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust playlists query: {error}"))?;
     let rows = statement
         .query_map([], |row| {
             Ok(NativePlaylistSummary {
@@ -626,9 +627,9 @@ fn native_playlists_for_connection(
                     .unwrap_or_default(),
             })
         })
-        .map_err(|error| format!("Could not read native playlists: {error}"))?;
+        .map_err(|error| format!("Could not read Rust playlists: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native playlists: {error}"))
+        .map_err(|error| format!("Could not decode Rust playlists: {error}"))
 }
 
 fn playlist_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NativePlaylistSummary> {
@@ -669,7 +670,7 @@ fn native_playlist_summary_by_id(
             params![playlist_id],
             playlist_summary_from_row,
         )
-        .map_err(|error| format!("Could not read native playlist summary: {error}"))
+        .map_err(|error| format!("Could not read Rust playlist summary: {error}"))
 }
 
 #[tauri::command]
@@ -705,12 +706,12 @@ fn native_playlist_tracks_for_connection(
             ORDER BY playlist_tracks.position ASC, playlist_tracks.id ASC
             "#
         ))
-        .map_err(|error| format!("Could not prepare native playlist tracks query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust playlist tracks query: {error}"))?;
     let rows = statement
         .query_map(params![playlist_id], track_from_row)
-        .map_err(|error| format!("Could not read native playlist tracks: {error}"))?;
+        .map_err(|error| format!("Could not read Rust playlist tracks: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native playlist tracks: {error}"))
+        .map_err(|error| format!("Could not decode Rust playlist tracks: {error}"))
 }
 
 fn compact_native_playlist_positions(
@@ -721,19 +722,19 @@ fn compact_native_playlist_positions(
         .prepare(
             "SELECT id FROM playlist_tracks WHERE playlist_id = ? ORDER BY position ASC, id ASC",
         )
-        .map_err(|error| format!("Could not prepare native playlist compact query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust playlist compact query: {error}"))?;
     let ids = statement
         .query_map(params![playlist_id], |row| row.get::<_, i64>(0))
-        .map_err(|error| format!("Could not read native playlist positions: {error}"))?
+        .map_err(|error| format!("Could not read Rust playlist positions: {error}"))?
         .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native playlist positions: {error}"))?;
+        .map_err(|error| format!("Could not decode Rust playlist positions: {error}"))?;
     for (index, id) in ids.into_iter().enumerate() {
         connection
             .execute(
                 "UPDATE playlist_tracks SET position = ? WHERE id = ?",
                 params![(index + 1) as i64, id],
             )
-            .map_err(|error| format!("Could not compact native playlist positions: {error}"))?;
+            .map_err(|error| format!("Could not compact Rust playlist positions: {error}"))?;
     }
     Ok(())
 }
@@ -750,10 +751,10 @@ pub fn native_create_playlist(
     }
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native playlist create: {error}"))?;
+        .map_err(|error| format!("Could not start Rust playlist create: {error}"))?;
     transaction
         .execute("INSERT INTO playlists(name) VALUES(?)", params![clean_name])
-        .map_err(|error| format!("Could not create native playlist: {error}"))?;
+        .map_err(|error| format!("Could not create Rust playlist: {error}"))?;
     let playlist = transaction
         .query_row(
             "SELECT id, name, 0 AS track_count, NULL AS duration_seconds, created_at, updated_at
@@ -762,10 +763,10 @@ pub fn native_create_playlist(
             params![clean_name],
             playlist_summary_from_row,
         )
-        .map_err(|error| format!("Could not read native playlist after create: {error}"))?;
+        .map_err(|error| format!("Could not read Rust playlist after create: {error}"))?;
     transaction
         .commit()
-        .map_err(|error| format!("Could not save native playlist create: {error}"))?;
+        .map_err(|error| format!("Could not save Rust playlist create: {error}"))?;
     Ok(playlist)
 }
 
@@ -777,16 +778,16 @@ pub fn native_delete_playlist(
     let mut connection = open_database()?;
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native playlist delete: {error}"))?;
+        .map_err(|error| format!("Could not start Rust playlist delete: {error}"))?;
     let deleted = transaction
         .execute("DELETE FROM playlists WHERE id = ?", params![playlist_id])
-        .map_err(|error| format!("Could not delete native playlist: {error}"))?;
+        .map_err(|error| format!("Could not delete Rust playlist: {error}"))?;
     if deleted == 0 {
         return Err("Playlist not found".to_string());
     }
     transaction
         .commit()
-        .map_err(|error| format!("Could not save native playlist delete: {error}"))?;
+        .map_err(|error| format!("Could not save Rust playlist delete: {error}"))?;
     native_playlists_for_connection(&connection)
 }
 
@@ -812,7 +813,7 @@ pub fn native_add_playlist_tracks(
     }
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native playlist add: {error}"))?;
+        .map_err(|error| format!("Could not start Rust playlist add: {error}"))?;
     let playlist_exists: Option<i64> = transaction
         .query_row(
             "SELECT id FROM playlists WHERE id = ?",
@@ -828,14 +829,14 @@ pub fn native_add_playlist_tracks(
         .prepare(&format!(
             "SELECT id FROM tracks WHERE id IN ({placeholders})"
         ))
-        .map_err(|error| format!("Could not prepare native playlist track check: {error}"))?
+        .map_err(|error| format!("Could not prepare Rust playlist track check: {error}"))?
         .query_map(
             params_from_iter(unique_ids.iter().copied().map(Value::Integer)),
             |row| row.get::<_, i64>(0),
         )
-        .map_err(|error| format!("Could not read native playlist track check: {error}"))?
+        .map_err(|error| format!("Could not read Rust playlist track check: {error}"))?
         .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native playlist track check: {error}"))?
+        .map_err(|error| format!("Could not decode Rust playlist track check: {error}"))?
         .into_iter()
         .collect();
     if let Some(missing_id) = unique_ids.iter().find(|id| !existing.contains(id)) {
@@ -855,7 +856,7 @@ pub fn native_add_playlist_tracks(
                 "INSERT OR IGNORE INTO playlist_tracks(playlist_id, track_id, position) VALUES(?, ?, ?)",
                 params![playlist_id, track_id, position],
             )
-            .map_err(|error| format!("Could not add native playlist track: {error}"))?;
+            .map_err(|error| format!("Could not add Rust playlist track: {error}"))?;
     }
     compact_native_playlist_positions(&transaction, playlist_id)?;
     transaction
@@ -863,10 +864,10 @@ pub fn native_add_playlist_tracks(
             "UPDATE playlists SET updated_at = datetime('now') WHERE id = ?",
             params![playlist_id],
         )
-        .map_err(|error| format!("Could not touch native playlist: {error}"))?;
+        .map_err(|error| format!("Could not touch Rust playlist: {error}"))?;
     transaction
         .commit()
-        .map_err(|error| format!("Could not save native playlist tracks: {error}"))?;
+        .map_err(|error| format!("Could not save Rust playlist tracks: {error}"))?;
     native_playlist_tracks_for_connection(&connection, playlist_id)
 }
 
@@ -879,7 +880,7 @@ pub fn native_remove_playlist_track(
     let mut connection = open_database()?;
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native playlist remove: {error}"))?;
+        .map_err(|error| format!("Could not start Rust playlist remove: {error}"))?;
     let playlist_exists: Option<i64> = transaction
         .query_row(
             "SELECT id FROM playlists WHERE id = ?",
@@ -895,17 +896,17 @@ pub fn native_remove_playlist_track(
             "DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?",
             params![playlist_id, track_id],
         )
-        .map_err(|error| format!("Could not remove native playlist track: {error}"))?;
+        .map_err(|error| format!("Could not remove Rust playlist track: {error}"))?;
     compact_native_playlist_positions(&transaction, playlist_id)?;
     transaction
         .execute(
             "UPDATE playlists SET updated_at = datetime('now') WHERE id = ?",
             params![playlist_id],
         )
-        .map_err(|error| format!("Could not touch native playlist: {error}"))?;
+        .map_err(|error| format!("Could not touch Rust playlist: {error}"))?;
     transaction
         .commit()
-        .map_err(|error| format!("Could not save native playlist remove: {error}"))?;
+        .map_err(|error| format!("Could not save Rust playlist remove: {error}"))?;
     native_playlist_tracks_for_connection(&connection, playlist_id)
 }
 
@@ -919,7 +920,7 @@ pub fn native_move_playlist_track(
     let mut connection = open_database()?;
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native playlist move: {error}"))?;
+        .map_err(|error| format!("Could not start Rust playlist move: {error}"))?;
     let row = transaction
         .query_row(
             "SELECT id, position FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?",
@@ -952,23 +953,23 @@ pub fn native_move_playlist_track(
                 "UPDATE playlist_tracks SET position = ? WHERE id = ?",
                 params![swap.1, row.0],
             )
-            .map_err(|error| format!("Could not move native playlist track: {error}"))?;
+            .map_err(|error| format!("Could not move Rust playlist track: {error}"))?;
         transaction
             .execute(
                 "UPDATE playlist_tracks SET position = ? WHERE id = ?",
                 params![row.1, swap.0],
             )
-            .map_err(|error| format!("Could not move native playlist swap: {error}"))?;
+            .map_err(|error| format!("Could not move Rust playlist swap: {error}"))?;
         transaction
             .execute(
                 "UPDATE playlists SET updated_at = datetime('now') WHERE id = ?",
                 params![playlist_id],
             )
-            .map_err(|error| format!("Could not touch native playlist: {error}"))?;
+            .map_err(|error| format!("Could not touch Rust playlist: {error}"))?;
     }
     transaction
         .commit()
-        .map_err(|error| format!("Could not save native playlist move: {error}"))?;
+        .map_err(|error| format!("Could not save Rust playlist move: {error}"))?;
     native_playlist_tracks_for_connection(&connection, playlist_id)
 }
 
@@ -1001,7 +1002,7 @@ pub fn native_library_stats(
                 ))
             },
         )
-        .map_err(|error| format!("Could not read native library stats: {error}"))?;
+        .map_err(|error| format!("Could not read Rust library stats: {error}"))?;
     let total_playlists = connection
         .query_row("SELECT count(*) AS count FROM playlists", [], |row| {
             row.get::<_, Option<i64>>("count")
@@ -1048,7 +1049,7 @@ pub fn native_clear_library_caches(
     let mut connection = open_database()?;
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native cache clear: {error}"))?;
+        .map_err(|error| format!("Could not start Rust cache clear: {error}"))?;
     let mut cleared = BTreeMap::new();
     for target in targets {
         let table = match target.as_str() {
@@ -1064,12 +1065,12 @@ pub fn native_clear_library_caches(
         }
         let count = transaction
             .execute(&format!("DELETE FROM {table}"), [])
-            .map_err(|error| format!("Could not clear native cache target {target}: {error}"))?;
+            .map_err(|error| format!("Could not clear Rust cache target {target}: {error}"))?;
         cleared.insert(target, count as i64);
     }
     transaction
         .commit()
-        .map_err(|error| format!("Could not save native cache clear: {error}"))?;
+        .map_err(|error| format!("Could not save Rust cache clear: {error}"))?;
     Ok(NativeCacheClearResponse { cleared })
 }
 
@@ -1087,7 +1088,7 @@ pub fn native_bulk_undo_log(
              ORDER BY datetime(created_at) DESC, id DESC
              LIMIT ?",
         )
-        .map_err(|error| format!("Could not prepare native undo log query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust undo log query: {error}"))?;
     let rows = statement
         .query_map(params![limit as i64], |row| {
             let payload_text = row
@@ -1107,9 +1108,9 @@ pub fn native_bulk_undo_log(
                     .unwrap_or_default(),
             })
         })
-        .map_err(|error| format!("Could not read native undo log: {error}"))?;
+        .map_err(|error| format!("Could not read Rust undo log: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native undo log: {error}"))
+        .map_err(|error| format!("Could not decode Rust undo log: {error}"))
 }
 
 #[tauri::command]
@@ -1138,7 +1139,7 @@ pub fn native_bulk_undo_batches(
              ORDER BY datetime(max(created_at)) DESC, max(id) DESC
              LIMIT ?",
         )
-        .map_err(|error| format!("Could not prepare native undo batch query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust undo batch query: {error}"))?;
     let rows = statement
         .query_map(params![limit as i64], |row| {
             Ok(NativeBulkUndoBatchEntry {
@@ -1158,9 +1159,9 @@ pub fn native_bulk_undo_batches(
                     .unwrap_or_default(),
             })
         })
-        .map_err(|error| format!("Could not read native undo batches: {error}"))?;
+        .map_err(|error| format!("Could not read Rust undo batches: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native undo batches: {error}"))
+        .map_err(|error| format!("Could not decode Rust undo batches: {error}"))
 }
 
 fn json_sql_value(value: Option<&serde_json::Value>) -> Value {
@@ -1619,7 +1620,7 @@ pub fn native_restore_bulk_undo_batch(
                    )
                  ORDER BY id DESC",
             )
-            .map_err(|error| format!("Could not prepare native undo batch restore: {error}"))?;
+            .map_err(|error| format!("Could not prepare Rust undo batch restore: {error}"))?;
         let rows = statement
             .query_map(params![batch_id.trim()], |row| {
                 Ok((
@@ -1630,16 +1631,16 @@ pub fn native_restore_bulk_undo_batch(
                         .unwrap_or_default(),
                 ))
             })
-            .map_err(|error| format!("Could not read native undo batch: {error}"))?;
+            .map_err(|error| format!("Could not read Rust undo batch: {error}"))?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|error| format!("Could not decode native undo batch: {error}"))?
+            .map_err(|error| format!("Could not decode Rust undo batch: {error}"))?
     };
     if rows.is_empty() {
         return Err("Undo batch was not found".to_string());
     }
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native undo batch restore: {error}"))?;
+        .map_err(|error| format!("Could not start Rust undo batch restore: {error}"))?;
     let mut affected = Vec::<i64>::new();
     let mut errors = Vec::<String>::new();
     let action_type = rows
@@ -1687,7 +1688,7 @@ pub fn native_restore_bulk_undo_batch(
     }
     transaction
         .commit()
-        .map_err(|error| format!("Could not commit native undo batch restore: {error}"))?;
+        .map_err(|error| format!("Could not commit Rust undo batch restore: {error}"))?;
     let mut unique = Vec::new();
     for track_id in affected {
         if !unique.contains(&track_id) {
@@ -1732,7 +1733,7 @@ pub fn native_restore_bulk_undo_entry(
         .map_err(|_| "Undo log entry payload is invalid".to_string())?;
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native undo restore: {error}"))?;
+        .map_err(|error| format!("Could not start Rust undo restore: {error}"))?;
     let (affected, errors) =
         match restore_bulk_undo_entry_native(&transaction, &action_type, &payload) {
             Ok(track_ids) => (track_ids, Vec::new()),
@@ -1754,7 +1755,7 @@ pub fn native_restore_bulk_undo_entry(
     }
     transaction
         .commit()
-        .map_err(|error| format!("Could not commit native undo restore: {error}"))?;
+        .map_err(|error| format!("Could not commit Rust undo restore: {error}"))?;
     Ok(NativeBulkUndoRestoreResponse {
         entry_id,
         batch_id,
@@ -1961,16 +1962,16 @@ pub fn native_tracks_batch(
         .prepare(&format!(
             "SELECT {TRACK_COLUMNS} FROM tracks WHERE id IN ({placeholders})"
         ))
-        .map_err(|error| format!("Could not prepare native batch track query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust batch track query: {error}"))?;
     let rows = statement
         .query_map(
             params_from_iter(unique_ids.iter().copied().map(Value::Integer)),
             track_from_row,
         )
-        .map_err(|error| format!("Could not read native batch tracks: {error}"))?;
+        .map_err(|error| format!("Could not read Rust batch tracks: {error}"))?;
     let tracks = rows
         .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native batch tracks: {error}"))?;
+        .map_err(|error| format!("Could not decode Rust batch tracks: {error}"))?;
     let mut by_id: HashMap<i64, NativeTrack> =
         tracks.into_iter().map(|track| (track.id, track)).collect();
     let mut ordered = Vec::new();
@@ -2002,15 +2003,14 @@ pub fn native_similar_tracks(
             "SELECT {TRACK_COLUMNS} FROM tracks WHERE id <> ? AND {music_filter}",
             music_filter = music_only_clause()
         ))
-        .map_err(|error| format!("Could not prepare native similar-track query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust similar-track query: {error}"))?;
     let rows = statement
         .query_map(params![track_id], track_from_row)
-        .map_err(|error| format!("Could not read native similar tracks: {error}"))?;
+        .map_err(|error| format!("Could not read Rust similar tracks: {error}"))?;
     let mut candidates = Vec::new();
     let settings = native_autodj_settings(json!({ "similarity_weight": 1.0 }));
     for row in rows {
-        let track =
-            row.map_err(|error| format!("Could not decode native similar track: {error}"))?;
+        let track = row.map_err(|error| format!("Could not decode Rust similar track: {error}"))?;
         let (mut score, reason) = similarity_adjustment(&track, Some(&seed_track), &settings);
         let audio_similarity = cosine_similarity(
             track.analysis_embedding.as_deref(),
@@ -2070,7 +2070,7 @@ pub fn native_audiobooks(
             [],
             |row| row.get::<_, i64>(0),
         )
-        .map_err(|error| format!("Could not count native audiobooks: {error}"))?;
+        .map_err(|error| format!("Could not count audiobooks: {error}"))?;
     let mut statement = connection
         .prepare(&format!(
             r#"
@@ -2094,7 +2094,7 @@ pub fn native_audiobooks(
             LIMIT ? OFFSET ?
             "#
         ))
-        .map_err(|error| format!("Could not prepare native audiobook query: {error}"))?;
+        .map_err(|error| format!("Could not prepare audiobook query: {error}"))?;
     let rows = statement
         .query_map(params![limit as i64, offset as i64], |row| {
             let mut track = track_from_row(row)?;
@@ -2113,10 +2113,10 @@ pub fn native_audiobooks(
                 progress_updated_at: row.get("progress_updated_at")?,
             })
         })
-        .map_err(|error| format!("Could not read native audiobooks: {error}"))?;
+        .map_err(|error| format!("Could not read audiobooks: {error}"))?;
     let tracks = rows
         .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native audiobooks: {error}"))?;
+        .map_err(|error| format!("Could not decode audiobooks: {error}"))?;
     Ok(NativeAudiobookListResponse { total, tracks })
 }
 
@@ -2133,7 +2133,7 @@ pub fn native_update_audiobook_progress(
     let mut connection = open_database()?;
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native audiobook progress update: {error}"))?;
+        .map_err(|error| format!("Could not start audiobook progress update: {error}"))?;
     let track_duration: Option<f64> = transaction
         .query_row(
             "SELECT duration_seconds FROM tracks WHERE id = ?",
@@ -2154,10 +2154,10 @@ pub fn native_update_audiobook_progress(
             "#,
             params![track_id, position_seconds.max(0.0), duration],
         )
-        .map_err(|error| format!("Could not save native audiobook progress: {error}"))?;
+        .map_err(|error| format!("Could not save audiobook progress: {error}"))?;
     transaction
         .commit()
-        .map_err(|error| format!("Could not commit native audiobook progress: {error}"))?;
+        .map_err(|error| format!("Could not commit audiobook progress: {error}"))?;
     connection
         .query_row(
             "SELECT track_id, position_seconds, duration_seconds, updated_at FROM audiobook_progress WHERE track_id = ?",
@@ -2171,7 +2171,7 @@ pub fn native_update_audiobook_progress(
                 })
             },
         )
-        .map_err(|error| format!("Could not read native audiobook progress: {error}"))
+        .map_err(|error| format!("Could not read audiobook progress: {error}"))
 }
 
 #[tauri::command]
@@ -2187,12 +2187,12 @@ pub fn native_audiobook_bookmarks(
              WHERE track_id = ?
              ORDER BY position_seconds, id",
         )
-        .map_err(|error| format!("Could not prepare native audiobook bookmark query: {error}"))?;
+        .map_err(|error| format!("Could not prepare audiobook bookmark query: {error}"))?;
     let rows = statement
         .query_map(params![track_id], audiobook_bookmark_from_row)
-        .map_err(|error| format!("Could not read native audiobook bookmarks: {error}"))?;
+        .map_err(|error| format!("Could not read audiobook bookmarks: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native audiobook bookmarks: {error}"))
+        .map_err(|error| format!("Could not decode audiobook bookmarks: {error}"))
 }
 
 #[tauri::command]
@@ -2209,7 +2209,7 @@ pub fn native_create_audiobook_bookmark(
     let mut connection = open_database()?;
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native audiobook bookmark insert: {error}"))?;
+        .map_err(|error| format!("Could not start audiobook bookmark insert: {error}"))?;
     let present: Option<i64> = transaction
         .query_row(
             "SELECT id FROM tracks WHERE id = ?",
@@ -2226,21 +2226,21 @@ pub fn native_create_audiobook_bookmark(
             "INSERT INTO audiobook_bookmarks(track_id, position_seconds, label, note) VALUES(?, ?, ?, ?)",
             params![track_id, position_seconds.max(0.0), label, clean_optional_text(note)],
         )
-        .map_err(|error| format!("Could not save native audiobook bookmark: {error}"))?;
+        .map_err(|error| format!("Could not save audiobook bookmark: {error}"))?;
     let bookmark_id = transaction.last_insert_rowid();
     if cursor == 0 {
-        return Err("Could not save native audiobook bookmark".to_string());
+        return Err("Could not save audiobook bookmark".to_string());
     }
     transaction
         .commit()
-        .map_err(|error| format!("Could not commit native audiobook bookmark: {error}"))?;
+        .map_err(|error| format!("Could not commit audiobook bookmark: {error}"))?;
     connection
         .query_row(
             "SELECT id, track_id, position_seconds, label, note, created_at FROM audiobook_bookmarks WHERE id = ?",
             params![bookmark_id],
             audiobook_bookmark_from_row,
         )
-        .map_err(|error| format!("Could not read native audiobook bookmark: {error}"))
+        .map_err(|error| format!("Could not read audiobook bookmark: {error}"))
 }
 
 #[tauri::command]
@@ -2254,7 +2254,7 @@ pub fn native_delete_audiobook_bookmark(
             "DELETE FROM audiobook_bookmarks WHERE id = ?",
             params![bookmark_id],
         )
-        .map_err(|error| format!("Could not delete native audiobook bookmark: {error}"))?;
+        .map_err(|error| format!("Could not delete audiobook bookmark: {error}"))?;
     if deleted == 0 {
         return Err("Audiobook bookmark not found".to_string());
     }
@@ -2281,13 +2281,13 @@ fn native_audiobook_chapters_for_connection(
              WHERE track_id = ?
              ORDER BY chapter_index",
         )
-        .map_err(|error| format!("Could not prepare native audiobook chapter query: {error}"))?;
+        .map_err(|error| format!("Could not prepare audiobook chapter query: {error}"))?;
     let rows = statement
         .query_map(params![track_id], audiobook_chapter_from_row)
-        .map_err(|error| format!("Could not read native audiobook chapters: {error}"))?;
+        .map_err(|error| format!("Could not read audiobook chapters: {error}"))?;
     let chapters = rows
         .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native audiobook chapters: {error}"))?;
+        .map_err(|error| format!("Could not decode audiobook chapters: {error}"))?;
     if !chapters.is_empty() {
         return Ok(chapters);
     }
@@ -2327,7 +2327,7 @@ pub fn native_save_audiobook_chapters(
     let mut connection = open_database()?;
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native audiobook chapter update: {error}"))?;
+        .map_err(|error| format!("Could not start audiobook chapter update: {error}"))?;
     let present: Option<i64> = transaction
         .query_row(
             "SELECT id FROM tracks WHERE id = ?",
@@ -2343,7 +2343,7 @@ pub fn native_save_audiobook_chapters(
             "DELETE FROM audiobook_chapters WHERE track_id = ?",
             params![track_id],
         )
-        .map_err(|error| format!("Could not replace native audiobook chapters: {error}"))?;
+        .map_err(|error| format!("Could not replace audiobook chapters: {error}"))?;
     for (index, chapter) in chapters.iter().enumerate() {
         let chapter_index = chapter
             .get("chapter_index")
@@ -2371,11 +2371,11 @@ pub fn native_save_audiobook_chapters(
                 "INSERT INTO audiobook_chapters(track_id, chapter_index, title, start_seconds, end_seconds) VALUES(?, ?, ?, ?, ?)",
                 params![track_id, chapter_index, title, start_seconds, end_seconds],
             )
-            .map_err(|error| format!("Could not save native audiobook chapter: {error}"))?;
+            .map_err(|error| format!("Could not save audiobook chapter: {error}"))?;
     }
     transaction
         .commit()
-        .map_err(|error| format!("Could not commit native audiobook chapters: {error}"))?;
+        .map_err(|error| format!("Could not commit audiobook chapters: {error}"))?;
     native_audiobook_chapters(_state, track_id)
 }
 
@@ -2607,12 +2607,12 @@ pub fn native_radio_stations(
              FROM radio_stations
              ORDER BY coalesce(last_played_at, '') DESC, lower(name)",
         )
-        .map_err(|error| format!("Could not prepare native radio station query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust radio station query: {error}"))?;
     let rows = statement
         .query_map([], radio_station_from_row)
-        .map_err(|error| format!("Could not read native radio stations: {error}"))?;
+        .map_err(|error| format!("Could not read Rust radio stations: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native radio stations: {error}"))
+        .map_err(|error| format!("Could not decode Rust radio stations: {error}"))
 }
 
 #[tauri::command]
@@ -2643,7 +2643,7 @@ pub fn native_save_radio_station(
                     station_id
                 ],
             )
-            .map_err(|error| format!("Could not update native radio station: {error}"))?;
+            .map_err(|error| format!("Could not update Rust radio station: {error}"))?;
         if updated == 0 {
             return Err("Radio station not found".to_string());
         }
@@ -2667,7 +2667,7 @@ pub fn native_save_radio_station(
                     clean_optional_text(notes)
                 ],
             )
-            .map_err(|error| format!("Could not save native radio station: {error}"))?;
+            .map_err(|error| format!("Could not save Rust radio station: {error}"))?;
         connection.last_insert_rowid()
     };
     let resolved_id = if row_id > 0 {
@@ -2679,7 +2679,7 @@ pub fn native_save_radio_station(
                 params![stream_url],
                 |row| row.get::<_, i64>(0),
             )
-            .map_err(|error| format!("Could not find native radio station after save: {error}"))?
+            .map_err(|error| format!("Could not find Rust radio station after save: {error}"))?
     };
     native_radio_station_by_id(&connection, resolved_id)
 }
@@ -2695,7 +2695,7 @@ pub fn native_delete_radio_station(
             "DELETE FROM radio_stations WHERE id = ?",
             params![station_id],
         )
-        .map_err(|error| format!("Could not delete native radio station: {error}"))?;
+        .map_err(|error| format!("Could not delete Rust radio station: {error}"))?;
     if deleted == 0 {
         return Err("Radio station not found".to_string());
     }
@@ -2715,7 +2715,7 @@ pub fn native_mark_radio_station_played(
              WHERE id = ?",
             params![station_id],
         )
-        .map_err(|error| format!("Could not update native radio station playback: {error}"))?;
+        .map_err(|error| format!("Could not update Rust radio station playback: {error}"))?;
     if updated == 0 {
         return Err("Radio station not found".to_string());
     }
@@ -2739,7 +2739,7 @@ pub fn native_loved_tracks(
              ORDER BY datetime(track_loves.updated_at) DESC
              LIMIT ?",
         )
-        .map_err(|error| format!("Could not prepare native loved-track query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust loved-track query: {error}"))?;
     let rows = statement
         .query_map(params![limit as i64], |row| {
             Ok(NativeLovedTrack {
@@ -2756,9 +2756,9 @@ pub fn native_loved_tracks(
                 album: row.get("album")?,
             })
         })
-        .map_err(|error| format!("Could not read native loved tracks: {error}"))?;
+        .map_err(|error| format!("Could not read Rust loved tracks: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native loved tracks: {error}"))
+        .map_err(|error| format!("Could not decode Rust loved tracks: {error}"))
 }
 
 #[tauri::command]
@@ -2771,7 +2771,7 @@ pub fn native_update_track_love(
     let mut connection = open_database()?;
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native loved-track update: {error}"))?;
+        .map_err(|error| format!("Could not start Rust loved-track update: {error}"))?;
     let track: Option<(
         Option<String>,
         Option<String>,
@@ -2805,7 +2805,7 @@ pub fn native_update_track_love(
                updated_at = datetime('now')",
             params![track_id, if loved { 1 } else { 0 }, source],
         )
-        .map_err(|error| format!("Could not save native loved-track state: {error}"))?;
+        .map_err(|error| format!("Could not save Rust loved-track state: {error}"))?;
     if loved {
         if let (Some(artist), Some(title)) = (
             artist.filter(|v| !v.trim().is_empty()),
@@ -2817,12 +2817,12 @@ pub fn native_update_track_love(
                      VALUES('lastfm', ?, 'loved', ?, ?, ?, ?, strftime('%s', 'now'))",
                     params![track_id, artist, title, album, album_artist],
                 )
-                .map_err(|error| format!("Could not queue native loved-track scrobble: {error}"))?;
+                .map_err(|error| format!("Could not queue Rust loved-track scrobble: {error}"))?;
         }
     }
     transaction
         .commit()
-        .map_err(|error| format!("Could not commit native loved-track update: {error}"))?;
+        .map_err(|error| format!("Could not commit Rust loved-track update: {error}"))?;
     connection
         .query_row(
             "SELECT track_id, loved, source, updated_at FROM track_loves WHERE track_id = ?",
@@ -2840,7 +2840,7 @@ pub fn native_update_track_love(
                 })
             },
         )
-        .map_err(|error| format!("Could not read native loved-track state: {error}"))
+        .map_err(|error| format!("Could not read Rust loved-track state: {error}"))
 }
 
 #[tauri::command]
@@ -2856,48 +2856,161 @@ pub fn native_update_track_rating(
         }
     }
     let mut connection = open_database()?;
-    if truthy_setting(&connection, "write_ratings_to_files", false) {
-        return Err(
-            "Native rating update is deferring because file rating writes are enabled.".to_string(),
-        );
-    }
+    let write_to_file = truthy_setting(&connection, "write_ratings_to_files", false);
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native rating update: {error}"))?;
-    let present: Option<i64> = transaction
+        .map_err(|error| format!("Could not start Rust rating update: {error}"))?;
+    let row: Option<(i64, String)> = transaction
         .query_row(
-            "SELECT id FROM tracks WHERE id = ?",
+            "SELECT id, path FROM tracks WHERE id = ?",
             params![track_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .ok();
-    if present.is_none() {
-        return Err("Track not found".to_string());
+    let (_, path) = row.ok_or_else(|| "Track not found".to_string())?;
+    let mut file_modified_at = None;
+    if write_to_file {
+        let path = Path::new(&path);
+        metadata::write_common_rating(path, rating)?;
+        file_modified_at = metadata::modified_time_iso(path);
     }
     transaction
         .execute(
-            "UPDATE tracks SET rating = ?, updated_at = datetime('now') WHERE id = ?",
-            params![rating, track_id],
+            "UPDATE tracks
+             SET rating = ?,
+                 file_modified_at = coalesce(?, file_modified_at),
+                 updated_at = datetime('now')
+             WHERE id = ?",
+            params![rating, file_modified_at, track_id],
         )
-        .map_err(|error| format!("Could not update native rating: {error}"))?;
+        .map_err(|error| format!("Could not update Rust rating: {error}"))?;
     transaction
         .execute(
             "INSERT INTO play_events(track_id, event_type, metadata_json) VALUES(?, 'rated', ?)",
             params![track_id, json!({ "rating": rating }).to_string()],
         )
-        .map_err(|error| format!("Could not record native rating event: {error}"))?;
+        .map_err(|error| format!("Could not record Rust rating event: {error}"))?;
     clear_library_query_cache(&transaction);
     transaction
         .commit()
-        .map_err(|error| format!("Could not save native rating update: {error}"))?;
+        .map_err(|error| format!("Could not save Rust rating update: {error}"))?;
     track_by_id(&connection, track_id)
+}
+
+pub fn native_update_track_metadata(
+    _state: State<'_, NativeLibraryState>,
+    track_id: i64,
+    updates: serde_json::Map<String, serde_json::Value>,
+    write_to_file: Option<bool>,
+) -> Result<NativeTrack, String> {
+    let clean_updates = updates
+        .into_iter()
+        .filter(|(field, _)| {
+            matches!(
+                field.as_str(),
+                "title"
+                    | "artist"
+                    | "album"
+                    | "album_artist"
+                    | "track_number"
+                    | "disc_number"
+                    | "genre"
+                    | "year"
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    let mut connection = open_database()?;
+    if clean_updates.is_empty() {
+        return track_by_id(&connection, track_id);
+    }
+    let mut current = track_to_metadata_map(&track_by_id(&connection, track_id)?);
+    for (field, value) in clean_updates {
+        current.insert(field, value);
+    }
+    let should_write_to_file = write_to_file
+        .unwrap_or_else(|| truthy_setting(&connection, "write_ratings_to_files", false));
+    let path = current
+        .get("path")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "Track path is missing".to_string())?
+        .to_string();
+    let mut file_modified_at = None;
+    if should_write_to_file {
+        metadata::write_common_metadata(Path::new(&path), &current)?;
+        file_modified_at = metadata::modified_time_iso(Path::new(&path));
+    }
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Could not start track metadata update: {error}"))?;
+    let album_id = scan::ensure_album(&transaction, &current)?;
+    transaction
+        .execute(
+            "
+            UPDATE tracks
+            SET title = ?,
+                artist = ?,
+                album = ?,
+                album_artist = ?,
+                album_id = ?,
+                track_number = ?,
+                disc_number = ?,
+                genre = ?,
+                year = ?,
+                file_modified_at = coalesce(?, file_modified_at),
+                updated_at = datetime('now')
+            WHERE id = ?
+            ",
+            params![
+                json_text(current.get("title")),
+                json_text(current.get("artist")),
+                json_text(current.get("album")),
+                json_text(current.get("album_artist")),
+                album_id,
+                json_i64(current.get("track_number")),
+                json_i64(current.get("disc_number")),
+                json_text(current.get("genre")),
+                json_i64(current.get("year")),
+                file_modified_at,
+                track_id,
+            ],
+        )
+        .map_err(|error| format!("Could not update track metadata: {error}"))?;
+    transaction
+        .execute(
+            "DELETE FROM track_metadata_cache WHERE path_key = ?",
+            params![normalized_path_key(&path)],
+        )
+        .map_err(|error| format!("Could not clear metadata cache: {error}"))?;
+    scan::cleanup_orphan_albums(&transaction)?;
+    clear_library_query_cache(&transaction);
+    transaction
+        .commit()
+        .map_err(|error| format!("Could not save track metadata update: {error}"))?;
+    track_by_id(&connection, track_id)
+}
+
+fn track_to_metadata_map(track: &NativeTrack) -> serde_json::Map<String, serde_json::Value> {
+    let mut values = serde_json::Map::new();
+    values.insert("path".to_string(), json!(track.path));
+    values.insert("title".to_string(), json!(track.title.as_deref()));
+    values.insert("artist".to_string(), json!(track.artist.as_deref()));
+    values.insert("album".to_string(), json!(track.album.as_deref()));
+    values.insert(
+        "album_artist".to_string(),
+        json!(track.album_artist.as_deref()),
+    );
+    values.insert("track_number".to_string(), json!(track.track_number));
+    values.insert("disc_number".to_string(), json!(track.disc_number));
+    values.insert("genre".to_string(), json!(track.genre.as_deref()));
+    values.insert("year".to_string(), json!(track.year));
+    values
 }
 
 fn native_mark_track_event(track_id: i64, event_type: &str) -> Result<NativeTrack, String> {
     let mut connection = open_database()?;
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native playback event: {error}"))?;
+        .map_err(|error| format!("Could not start playback event: {error}"))?;
     let present: Option<i64> = transaction
         .query_row(
             "SELECT id FROM tracks WHERE id = ?",
@@ -2924,7 +3037,7 @@ fn native_mark_track_event(track_id: i64, event_type: &str) -> Result<NativeTrac
             ),
             params![track_id],
         )
-        .map_err(|error| format!("Could not update native {event_type} event: {error}"))?;
+        .map_err(|error| format!("Could not update Rust {event_type} event: {error}"))?;
     transaction
         .execute(
             "INSERT INTO play_events(track_id, event_type, metadata_json) VALUES(?, ?, ?)",
@@ -2934,11 +3047,11 @@ fn native_mark_track_event(track_id: i64, event_type: &str) -> Result<NativeTrac
                 json!({ "source": "player" }).to_string()
             ],
         )
-        .map_err(|error| format!("Could not record native {event_type} event: {error}"))?;
+        .map_err(|error| format!("Could not record Rust {event_type} event: {error}"))?;
     clear_library_query_cache(&transaction);
     transaction
         .commit()
-        .map_err(|error| format!("Could not save native {event_type} event: {error}"))?;
+        .map_err(|error| format!("Could not save Rust {event_type} event: {error}"))?;
     track_by_id(&connection, track_id)
 }
 
@@ -3055,7 +3168,7 @@ pub fn native_library_reconcile_preview(
     let rows = {
         let mut statement = connection
             .prepare("SELECT path, file_modified_at FROM tracks")
-            .map_err(|error| format!("Could not prepare native reconcile query: {error}"))?;
+            .map_err(|error| format!("Could not prepare Rust reconcile query: {error}"))?;
         let rows = statement
             .query_map([], |row| {
                 Ok((
@@ -3063,9 +3176,9 @@ pub fn native_library_reconcile_preview(
                     row.get::<_, Option<String>>("file_modified_at")?,
                 ))
             })
-            .map_err(|error| format!("Could not read native reconcile tracks: {error}"))?;
+            .map_err(|error| format!("Could not read Rust reconcile tracks: {error}"))?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|error| format!("Could not decode native reconcile tracks: {error}"))?
+            .map_err(|error| format!("Could not decode Rust reconcile tracks: {error}"))?
     };
 
     let folder_paths: Vec<PathBuf> = folders.iter().map(PathBuf::from).collect();
@@ -3195,25 +3308,25 @@ fn select_tracks_by_ids_or_limit(
             .prepare(&format!(
                 "SELECT {TRACK_COLUMNS} FROM tracks WHERE id IN ({placeholders}) ORDER BY lower(coalesce(artist, '')), lower(coalesce(album, '')), coalesce(disc_number, 0), coalesce(track_number, 0), lower(coalesce(title, '')) LIMIT ?"
             ))
-            .map_err(|error| format!("Could not prepare native selected track query: {error}"))?;
+            .map_err(|error| format!("Could not prepare Rust selected track query: {error}"))?;
         let rows = statement
             .query_map(params_from_iter(params), track_from_row)
-            .map_err(|error| format!("Could not read native selected tracks: {error}"))?;
+            .map_err(|error| format!("Could not read Rust selected tracks: {error}"))?;
         return rows
             .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|error| format!("Could not decode native selected tracks: {error}"));
+            .map_err(|error| format!("Could not decode Rust selected tracks: {error}"));
     }
     let mut statement = connection
         .prepare(&format!(
             "SELECT {TRACK_COLUMNS} FROM tracks WHERE {music_filter} ORDER BY lower(coalesce(artist, '')), lower(coalesce(album, '')), coalesce(disc_number, 0), coalesce(track_number, 0), lower(coalesce(title, '')) LIMIT ?",
             music_filter = music_only_clause()
         ))
-        .map_err(|error| format!("Could not prepare native track query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust track query: {error}"))?;
     let rows = statement
         .query_map(params![bounded_limit as i64], track_from_row)
-        .map_err(|error| format!("Could not read native tracks: {error}"))?;
+        .map_err(|error| format!("Could not read Rust tracks: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native tracks: {error}"))
+        .map_err(|error| format!("Could not decode Rust tracks: {error}"))
 }
 
 fn file_path_root(path: &str) -> String {
@@ -3380,12 +3493,12 @@ fn album_tracks_by_id(connection: &Connection, album_id: i64) -> Result<Vec<Nati
                      id ASC
             "#
         ))
-        .map_err(|error| format!("Could not prepare native album tracks query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust album tracks query: {error}"))?;
     let rows = statement
         .query_map(params![album.0, album.1], track_from_row)
-        .map_err(|error| format!("Could not read native album tracks: {error}"))?;
+        .map_err(|error| format!("Could not read Rust album tracks: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native album tracks: {error}"))
+        .map_err(|error| format!("Could not decode Rust album tracks: {error}"))
 }
 
 #[tauri::command]
@@ -3422,12 +3535,12 @@ pub fn native_library_health(
         .unwrap_or(0);
     let mut statement = connection
         .prepare(&missing_metadata_query)
-        .map_err(|error| format!("Could not prepare native missing metadata query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust missing metadata query: {error}"))?;
     let missing_metadata = statement
         .query_map(params![limit as i64], track_from_row)
-        .map_err(|error| format!("Could not read native missing metadata: {error}"))?
+        .map_err(|error| format!("Could not read Rust missing metadata: {error}"))?
         .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native missing metadata: {error}"))?;
+        .map_err(|error| format!("Could not decode Rust missing metadata: {error}"))?;
 
     let unrated_query = format!(
         "SELECT {TRACK_COLUMNS} FROM tracks WHERE {music_filter} AND rating IS NULL ORDER BY date_added DESC LIMIT ?",
@@ -3435,12 +3548,12 @@ pub fn native_library_health(
     );
     let mut unrated_statement = connection
         .prepare(&unrated_query)
-        .map_err(|error| format!("Could not prepare native unrated query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust unrated query: {error}"))?;
     let unrated_tracks = unrated_statement
         .query_map(params![limit as i64], track_from_row)
-        .map_err(|error| format!("Could not read native unrated tracks: {error}"))?
+        .map_err(|error| format!("Could not read Rust unrated tracks: {error}"))?
         .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native unrated tracks: {error}"))?;
+        .map_err(|error| format!("Could not decode Rust unrated tracks: {error}"))?;
 
     let mut groups: HashMap<String, Vec<NativeTrack>> = HashMap::new();
     for track in all_tracks {
@@ -3512,7 +3625,7 @@ pub fn native_library_health(
             })
             .count() as i64;
         duplicate_groups.push(NativeDuplicateGroup {
-            ignore_key: format!("native:{key}"),
+            ignore_key: format!("duplicate:{key}"),
             key,
             tracks,
             match_reason: "same normalized artist and title".to_string(),
@@ -3627,7 +3740,7 @@ fn duplicate_group_from_native_tracks(
         None
     };
     NativeDuplicateGroup {
-        ignore_key: format!("native:{key}"),
+        ignore_key: format!("duplicate:{key}"),
         key,
         tracks,
         match_reason: "same normalized artist and title".to_string(),
@@ -3656,15 +3769,13 @@ fn tracks_by_id_map(
         .prepare(&format!(
             "SELECT {TRACK_COLUMNS} FROM tracks WHERE id IN ({placeholders})"
         ))
-        .map_err(|error| {
-            format!("Could not prepare native duplicate review track query: {error}")
-        })?;
+        .map_err(|error| format!("Could not prepare Rust duplicate review track query: {error}"))?;
     let rows = statement
         .query_map(params_from_iter(ids.iter()), track_from_row)
-        .map_err(|error| format!("Could not read native duplicate review tracks: {error}"))?;
+        .map_err(|error| format!("Could not read Rust duplicate review tracks: {error}"))?;
     let tracks = rows
         .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native duplicate review tracks: {error}"))?;
+        .map_err(|error| format!("Could not decode Rust duplicate review tracks: {error}"))?;
     let map: HashMap<i64, NativeTrack> =
         tracks.into_iter().map(|track| (track.id, track)).collect();
     let missing = ids
@@ -3725,14 +3836,12 @@ pub fn native_duplicate_review(
                     "SELECT {TRACK_COLUMNS} FROM tracks WHERE {music_filter} ORDER BY lower(coalesce(artist, '')), lower(coalesce(title, '')) LIMIT ?",
                     music_filter = music_only_clause()
                 ))
-                .map_err(|error| format!("Could not prepare native duplicate candidate query: {error}"))?;
+                .map_err(|error| format!("Could not prepare Rust duplicate candidate query: {error}"))?;
             let rows = statement
                 .query_map(params![limit as i64], track_from_row)
-                .map_err(|error| format!("Could not read native duplicate candidates: {error}"))?
+                .map_err(|error| format!("Could not read Rust duplicate candidates: {error}"))?
                 .collect::<rusqlite::Result<Vec<_>>>()
-                .map_err(|error| {
-                    format!("Could not decode native duplicate candidates: {error}")
-                })?;
+                .map_err(|error| format!("Could not decode Rust duplicate candidates: {error}"))?;
             rows
         } else {
             tracks.clone()
@@ -4214,10 +4323,12 @@ pub fn native_track_file_metadata_write_preview(
     track_ids: Option<Vec<i64>>,
     include_metadata: Option<bool>,
     include_rating: Option<bool>,
+    apply: Option<bool>,
     limit: Option<usize>,
 ) -> Result<NativeTrackFileMetadataWriteResponse, String> {
     let include_metadata = include_metadata.unwrap_or(true);
     let include_rating = include_rating.unwrap_or(true);
+    let apply = apply.unwrap_or(false);
     if !include_metadata && !include_rating {
         return Err("Choose metadata, ratings, or both to write".to_string());
     }
@@ -4251,33 +4362,17 @@ pub fn native_track_file_metadata_write_preview(
         (tracks, Vec::new())
     };
     let fields = metadata_write_field_names(include_metadata, include_rating);
-    let files = tracks
+    let metadata_by_path = tracks
         .iter()
-        .map(|track| json!({ "path": track.path }))
-        .collect::<Vec<_>>();
-    let metadata_response = crate::python_worker::call_python_action_json(
-        "read_scan_metadata_batch",
-        json!({}),
-        Some(json!({ "files": files })),
-    )?;
-    let metadata_by_path = metadata_response
-        .get("results")
-        .and_then(serde_json::Value::as_array)
-        .map(|results| {
-            results
-                .iter()
-                .filter_map(|result| {
-                    result
-                        .get("path")
-                        .and_then(serde_json::Value::as_str)
-                        .map(|path| (normalized_path_key(path), result.clone()))
-                })
-                .collect::<HashMap<_, _>>()
+        .map(|track| {
+            let result = metadata::read_file_metadata_result(Path::new(&track.path));
+            (normalized_path_key(&track.path), result)
         })
-        .unwrap_or_default();
+        .collect::<HashMap<_, _>>();
 
     let mut previews = Vec::new();
     let mut errors = Vec::new();
+    let mut applied = 0;
     for track in tracks {
         let database = track_database_file_tag_values(&track, &fields);
         let mut preview = NativeTrackFileMetadataWritePreview {
@@ -4324,7 +4419,69 @@ pub fn native_track_file_metadata_write_preview(
         let file = metadata_file_tag_values(metadata, &fields);
         preview.changed_fields = changed_metadata_write_fields(&preview.database, &file, &fields);
         preview.file = file;
+        if apply && !preview.changed_fields.is_empty() {
+            let changed_metadata = include_metadata
+                && preview
+                    .changed_fields
+                    .iter()
+                    .any(|field| field.as_str() != "rating");
+            let changed_rating = include_rating
+                && preview
+                    .changed_fields
+                    .iter()
+                    .any(|field| field.as_str() == "rating");
+            let write_result = (|| {
+                if changed_metadata {
+                    let database = preview
+                        .database
+                        .as_object()
+                        .ok_or_else(|| "Metadata preview is missing database values".to_string())?;
+                    metadata::write_common_metadata(&path, database)?;
+                }
+                if changed_rating {
+                    metadata::write_common_rating(&path, track.rating)?;
+                }
+                Ok::<(), String>(())
+            })();
+            match write_result {
+                Ok(()) => {
+                    preview.applied = true;
+                    applied += 1;
+                    connection
+                        .execute(
+                            "UPDATE tracks
+                             SET file_modified_at = coalesce(?, file_modified_at),
+                                 updated_at = datetime('now')
+                             WHERE id = ?",
+                            params![metadata::modified_time_iso(&path), track.id],
+                        )
+                        .map_err(|error| {
+                            format!("Could not update track after writing file tags: {error}")
+                        })?;
+                    connection
+                        .execute(
+                            "DELETE FROM track_metadata_cache WHERE path_key = ?",
+                            params![normalized_path_key(&track.path)],
+                        )
+                        .map_err(|error| {
+                            format!(
+                                "Could not clear metadata cache after writing file tags: {error}"
+                            )
+                        })?;
+                }
+                Err(error) => {
+                    preview.error = Some(error.clone());
+                    errors.push(format!(
+                        "{}: {error}",
+                        track.title.as_deref().unwrap_or(&track.path)
+                    ));
+                }
+            }
+        }
         previews.push(preview);
+    }
+    if applied > 0 {
+        clear_library_query_cache(&connection);
     }
     Ok(NativeTrackFileMetadataWriteResponse {
         total: previews.len() as i64,
@@ -4332,7 +4489,7 @@ pub fn native_track_file_metadata_write_preview(
             .iter()
             .filter(|preview| !preview.changed_fields.is_empty())
             .count() as i64,
-        applied: 0,
+        applied,
         missing_track_ids,
         errors: errors.into_iter().take(100).collect(),
         previews,
@@ -4447,12 +4604,12 @@ pub fn native_artist_local_tracks(
             track_columns = TRACK_COLUMNS,
             music_filter = music_only_clause()
         ))
-        .map_err(|error| format!("Could not prepare native artist track query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust artist track query: {error}"))?;
     let rows = statement
         .query_map(params![artist, limit as i64], track_from_row)
-        .map_err(|error| format!("Could not read native artist tracks: {error}"))?;
+        .map_err(|error| format!("Could not read Rust artist tracks: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native artist tracks: {error}"))
+        .map_err(|error| format!("Could not decode Rust artist tracks: {error}"))
 }
 
 #[tauri::command]
@@ -4462,7 +4619,7 @@ pub fn native_clear_artist_cache(
     let connection = open_database()?;
     let deleted = connection
         .execute("DELETE FROM artist_info_cache", [])
-        .map_err(|error| format!("Could not clear native artist cache: {error}"))?;
+        .map_err(|error| format!("Could not clear Rust artist cache: {error}"))?;
     Ok(json!({ "deleted": deleted as i64 }))
 }
 
@@ -4517,13 +4674,14 @@ pub fn native_file_organization_preview(
     } else {
         None
     };
-    let transaction = if apply {
-        Some(connection.transaction().map_err(|error| {
-            format!("Could not start native file organizer transaction: {error}")
-        })?)
-    } else {
-        None
-    };
+    let transaction =
+        if apply {
+            Some(connection.transaction().map_err(|error| {
+                format!("Could not start Rust file organizer transaction: {error}")
+            })?)
+        } else {
+            None
+        };
     for track in tracks {
         let mut target = organization_target_path(&template, &base_folder, &track);
         let current_key = normalized_path_key(&track.path);
@@ -4668,7 +4826,7 @@ pub fn native_file_organization_preview(
         }
         transaction
             .commit()
-            .map_err(|error| format!("Could not save native file organizer changes: {error}"))?;
+            .map_err(|error| format!("Could not save Rust file organizer changes: {error}"))?;
     }
     let changed_count = changes.iter().filter(|change| change.changed).count() as i64;
     Ok(NativeFileOrganizationResponse {
@@ -4919,7 +5077,7 @@ pub fn native_import_playlist(
     let mut connection = open_database()?;
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native playlist import: {error}"))?;
+        .map_err(|error| format!("Could not start Rust playlist import: {error}"))?;
     let mut playlist_name = base_name.clone();
     let mut suffix = 2;
     while transaction
@@ -5201,7 +5359,7 @@ pub fn native_gapless_validate(
         } else if !metadata_compatible {
             vec!["Adjacent files use different container/codec extensions.".to_string()]
         } else {
-            vec!["Native validation can schedule this pair, but exact sample metadata needs decoder inspection.".to_string()]
+            vec!["Rust validation can schedule this pair, but exact sample metadata needs decoder inspection.".to_string()]
         };
         pairs.push(NativeGaplessPairValidation {
             left_track_id: left.id,
@@ -5226,7 +5384,7 @@ pub fn native_gapless_validate(
         message: if pairs.is_empty() {
             "Need at least two tracks before validating gapless transitions.".to_string()
         } else if sample_accurate_ready_count == pairs.len() as i64 {
-            "Native scheduler sees these transitions as gapless-friendly.".to_string()
+            "Rust scheduler sees these transitions as gapless-friendly.".to_string()
         } else {
             "Some adjacent tracks need decoder inspection before claiming sample-accurate gapless playback.".to_string()
         },

@@ -19,10 +19,11 @@ pub(super) fn try_handle_native_json(
     let params = &action.params;
     let body = body.unwrap_or(Value::Null);
 
-    // This route layer is intentionally a thin adapter: it preserves the old
-    // HTTP-shaped surface while letting Rust handle routes that are already
-    // implemented as native Tauri commands. Python remains the expert worker
-    // for mutagen, CLAP/Torch, network lookups, and byte streaming.
+    // This adapter preserves the old HTTP-shaped surface while letting the
+    // Rust controller handle routes that no longer need a Python worker.
+    // Python remains the expert worker for CLAP/Torch, network matching,
+    // feed/download flows, and byte/tag operations that still need Python
+    // libraries.
     let response = match action.action {
         "health" => Some(to_json(native_library::native_health()?)?),
         "get_startup_diagnostics" => Some(to_json(
@@ -138,16 +139,13 @@ pub(super) fn try_handle_native_json(
             body_i64_vec(&body, "track_ids").or_else(|| body_i64_vec(&body, "trackIds")).unwrap_or_default(),
         )?)?),
         "write_track_metadata_to_files" => {
-            if body_bool(&body, "apply").unwrap_or(false) {
-                None
-            } else {
-                Some(to_json(native_library::native_track_file_metadata_write_preview(
-                    body_i64_vec(&body, "track_ids").or_else(|| body_i64_vec(&body, "trackIds")),
-                    body_bool(&body, "include_metadata").or_else(|| body_bool(&body, "includeMetadata")),
-                    body_bool(&body, "include_rating").or_else(|| body_bool(&body, "includeRating")),
-                    body_usize(&body, "limit"),
-                )?)?)
-            }
+            Some(to_json(native_library::native_track_file_metadata_write_preview(
+                body_i64_vec(&body, "track_ids").or_else(|| body_i64_vec(&body, "trackIds")),
+                body_bool(&body, "include_metadata").or_else(|| body_bool(&body, "includeMetadata")),
+                body_bool(&body, "include_rating").or_else(|| body_bool(&body, "includeRating")),
+                body_bool(&body, "apply"),
+                body_usize(&body, "limit"),
+            )?)?)
         }
         "get_track" => Some(to_json(native_library::native_track(
             state,
@@ -191,6 +189,16 @@ pub(super) fn try_handle_native_json(
                 Err(message) if message.contains("deferring") => None,
                 Err(message) => return Err(message),
             }
+        }
+        "update_track_metadata" => {
+            let track_id = required_param_i64(params, "track_id")?;
+            let updates = body.as_object().cloned().unwrap_or_default();
+            Some(to_json(native_library::native_update_track_metadata(
+                state,
+                track_id,
+                updates,
+                body_bool(&body, "write_to_file").or_else(|| body_bool(&body, "writeToFile")),
+            )?)?)
         }
         "mark_track_played" => Some(to_json(native_library::native_mark_track_played(
             state,
@@ -910,8 +918,7 @@ pub(super) fn try_handle_native_json(
 }
 
 fn to_json<T: Serialize>(value: T) -> Result<Value, String> {
-    serde_json::to_value(value)
-        .map_err(|error| format!("Could not encode native response: {error}"))
+    serde_json::to_value(value).map_err(|error| format!("Could not encode Rust response: {error}"))
 }
 
 fn param_string(params: &Map<String, Value>, key: &str) -> Option<String> {

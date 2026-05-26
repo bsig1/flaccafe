@@ -35,7 +35,7 @@ Windows beta installers are published on the [GitHub Releases page](https://gith
 - SQLite-backed ratings, play history, playlists, lyrics, recommendation history, podcasts, audiobooks, and web radio bookmarks.
 - Optional metadata and rating writes back to files when the setting is enabled.
 - MusicBee-inspired library tools for filename-to-tag inference, MusicBrainz auto-tagging, acoustic fingerprints, volume tags, tag backups, CSV cleanup, file organization previews, desktop-library stats import, and cache cleanup.
-- Local playback through the Tauri WebView or experimental native Rust engine, with queue controls, fade/crossfade, sleep timer, lyrics, visualizers, artist info, and media-key integration.
+- Local playback through the Tauri WebView or experimental Rust audio engine, with queue controls, fade/crossfade, sleep timer, lyrics, visualizers, artist info, and media-key integration.
 - AutoDJ with beginner and advanced controls, temperature sampling, cooldowns, unrated exploration, seed-track similarity, and optional CLAP audio embeddings.
 - Album, artist, playlist, audiobook, podcast, radio, source-folder, history, and file-management views.
 - Optional CD detection, live CD preview/playback, MusicBrainz disc lookup, and FLAC/MP3/WAV ripping workflows.
@@ -47,17 +47,17 @@ Windows beta installers are published on the [GitHub Releases page](https://gith
 
 - Desktop shell: Tauri v2
 - Frontend: React, TypeScript, Vite, Tailwind CSS
-- Backend: Rust app-facing controller plus Python expert workers for mutagen, scanning, network jobs, and optional ML
+- Backend: Rust app-facing controller plus Python expert workers for online matching, embedded artwork/lyrics writes, feed/download jobs, and optional ML
 - Optional analysis: CLAP through Transformers and Torch
 
-The MVP started with FastAPI because it kept music logic in Python and made early testing simple. The desktop build now uses Rust as the app-facing controller for SQLite reads, lightweight mutations, local media URLs, and all frontend-facing dispatch. Python remains the expert worker for scanning, mutagen file writes, feed/network jobs, online services, and optional ML. Most Python actions are short-lived named workers; CLAP analysis uses a persistent Python model worker so Torch stays warm during a batch. Rust resolves app paths to named Python actions, so the packaged app no longer bundles, starts, or routes through a Python HTTP server.
+The MVP started with FastAPI because it kept music logic in Python and made early testing simple. The desktop build now uses Rust as the app-facing controller for SQLite reads, lightweight mutations, local media URLs, Lofty-based common tag reads/writes, and all frontend-facing dispatch. Python remains the expert worker for MusicBrainz/AcoustID matching, feed/network jobs, embedded artwork/lyrics writes, and optional ML. Most Python actions are short-lived named workers; CLAP analysis uses a persistent Python model worker so Torch stays warm during a batch. Rust resolves app paths to named Python actions, so the packaged app no longer bundles, starts, or routes through a Python HTTP server.
 
 ## Repo Layout
 
 ```text
 backend/       Python worker modules, SQLite, scanner, recommender, library tools
 frontend/      React/TypeScript UI, typed API clients, themes, player surfaces
-src-tauri/     Tauri v2 shell, native commands, Python worker bridge, Windows media controls, native playback
+src-tauri/     Tauri v2 shell, Rust commands, Python worker bridge, Windows media controls, Rust playback
 scripts/       Windows dev, test, validation, packaging, and runtime helpers
 docs/          maintainer guides, feature docs, release docs, and project structure
 extensions/    sample extension/skin manifests

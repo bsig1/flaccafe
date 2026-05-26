@@ -138,7 +138,7 @@ fn native_autodj_avoid_rules_for_connection(
              FROM autodj_avoid_rules
              ORDER BY scope, lower(label)",
         )
-        .map_err(|error| format!("Could not prepare native AutoDJ avoid query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust AutoDJ avoid query: {error}"))?;
     let rows = statement
         .query_map([], |row| {
             Ok(NativeAutoDjAvoidRule {
@@ -156,9 +156,9 @@ fn native_autodj_avoid_rules_for_connection(
                     .unwrap_or_default(),
             })
         })
-        .map_err(|error| format!("Could not read native AutoDJ avoid rules: {error}"))?;
+        .map_err(|error| format!("Could not read Rust AutoDJ avoid rules: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native AutoDJ avoid rules: {error}"))
+        .map_err(|error| format!("Could not decode Rust AutoDJ avoid rules: {error}"))
 }
 
 fn avoid_key_and_label(
@@ -256,7 +256,7 @@ pub fn native_create_autodj_avoid_rule(
     let (key, label) = avoid_key_and_label(&connection, &scope, track_id, value)?;
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native AutoDJ avoid update: {error}"))?;
+        .map_err(|error| format!("Could not start Rust AutoDJ avoid update: {error}"))?;
     transaction
         .execute(
             "INSERT INTO autodj_avoid_rules(scope, target_key, label)
@@ -264,7 +264,7 @@ pub fn native_create_autodj_avoid_rule(
              ON CONFLICT(scope, target_key) DO UPDATE SET label = excluded.label, updated_at = datetime('now')",
             params![scope, key, label],
         )
-        .map_err(|error| format!("Could not save native AutoDJ avoid rule: {error}"))?;
+        .map_err(|error| format!("Could not save Rust AutoDJ avoid rule: {error}"))?;
     let row = transaction
         .query_row(
             "SELECT id, scope, target_key, label, created_at, updated_at
@@ -288,10 +288,10 @@ pub fn native_create_autodj_avoid_rule(
                 })
             },
         )
-        .map_err(|error| format!("Could not read native AutoDJ avoid rule: {error}"))?;
+        .map_err(|error| format!("Could not read Rust AutoDJ avoid rule: {error}"))?;
     transaction
         .commit()
-        .map_err(|error| format!("Could not save native AutoDJ avoid transaction: {error}"))?;
+        .map_err(|error| format!("Could not save Rust AutoDJ avoid transaction: {error}"))?;
     Ok(row)
 }
 
@@ -303,16 +303,16 @@ pub fn native_delete_autodj_avoid_rule(
     let mut connection = open_database()?;
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native AutoDJ avoid delete: {error}"))?;
+        .map_err(|error| format!("Could not start Rust AutoDJ avoid delete: {error}"))?;
     transaction
         .execute(
             "DELETE FROM autodj_avoid_rules WHERE id = ?",
             params![rule_id],
         )
-        .map_err(|error| format!("Could not delete native AutoDJ avoid rule: {error}"))?;
+        .map_err(|error| format!("Could not delete Rust AutoDJ avoid rule: {error}"))?;
     transaction
         .commit()
-        .map_err(|error| format!("Could not save native AutoDJ avoid delete: {error}"))?;
+        .map_err(|error| format!("Could not save Rust AutoDJ avoid delete: {error}"))?;
     native_autodj_avoid_rules_for_connection(&connection)
 }
 
@@ -879,7 +879,7 @@ fn read_autodj_candidates(connection: &Connection) -> Result<Vec<NativeCandidate
             ORDER BY tracks.artist, tracks.album, tracks.disc_number, tracks.track_number, tracks.title
             "#
         ))
-        .map_err(|error| format!("Could not prepare native AutoDJ candidates: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust AutoDJ candidates: {error}"))?;
     let rows = statement
         .query_map([], |row| {
             Ok(NativeCandidateTrack {
@@ -889,9 +889,9 @@ fn read_autodj_candidates(connection: &Connection) -> Result<Vec<NativeCandidate
                 days_since_skipped: row.get("days_since_skipped")?,
             })
         })
-        .map_err(|error| format!("Could not read native AutoDJ candidates: {error}"))?;
+        .map_err(|error| format!("Could not read Rust AutoDJ candidates: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native AutoDJ candidates: {error}"))
+        .map_err(|error| format!("Could not decode Rust AutoDJ candidates: {error}"))
 }
 
 fn read_autodj_avoid_rules(
@@ -905,7 +905,7 @@ fn read_autodj_avoid_rules(
     ]);
     let mut statement = connection
         .prepare("SELECT scope, target_key FROM autodj_avoid_rules")
-        .map_err(|error| format!("Could not prepare native AutoDJ avoid rules: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust AutoDJ avoid rules: {error}"))?;
     let rows = statement
         .query_map([], |row| {
             Ok((
@@ -914,10 +914,10 @@ fn read_autodj_avoid_rules(
                     .unwrap_or_default(),
             ))
         })
-        .map_err(|error| format!("Could not read native AutoDJ avoid rules: {error}"))?;
+        .map_err(|error| format!("Could not read Rust AutoDJ avoid rules: {error}"))?;
     for row in rows {
         let (scope, target_key) =
-            row.map_err(|error| format!("Could not decode native AutoDJ avoid rules: {error}"))?;
+            row.map_err(|error| format!("Could not decode Rust AutoDJ avoid rules: {error}"))?;
         avoid_rules.entry(scope).or_default().insert(target_key);
     }
     Ok(avoid_rules)

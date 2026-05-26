@@ -535,7 +535,7 @@ export default function App() {
       }
     } catch {
       // If the worker path is unavailable here, callers can still fall back to
-      // deleting library rows without native recycle-bin support.
+      // deleting library rows without Rust recycle-bin support.
     }
     return uniqueIds.map((trackId) => cachedById.get(trackId)).filter((track): track is Track => Boolean(track));
   }
@@ -591,7 +591,7 @@ export default function App() {
       const suffix = snapshot.errors.length
         ? ` (${snapshot.errors.length.toLocaleString()} folder error${snapshot.errors.length === 1 ? "" : "s"})`
         : "";
-      setStatus(`Found ${snapshot.total_files.toLocaleString()} audio file${snapshot.total_files === 1 ? "" : "s"} with the native scanner${suffix}`);
+      setStatus(`Found ${snapshot.total_files.toLocaleString()} audio file${snapshot.total_files === 1 ? "" : "s"} with the Rust scanner${suffix}`);
       return snapshot;
     } catch (error) {
       if (isNativeUnavailable(error)) {
@@ -768,7 +768,7 @@ export default function App() {
             sortDirection: librarySort.direction,
           });
         } catch (error) {
-          // Native SQLite is the fast path. The typed API helper falls back to
+          // Rust SQLite is the fast path. The typed API helper falls back to
           // the Rust-to-Python worker when a Python-owned feature is needed.
         }
       }
@@ -927,7 +927,7 @@ export default function App() {
           await nativeFolderWatchStop();
         }
       } catch {
-        // Native events are an acceleration layer; Python's watcher remains authoritative.
+        // Rust events are an acceleration layer; Python's watcher remains authoritative.
       }
     } catch (error) {
       if (showError) {
@@ -4136,7 +4136,7 @@ export default function App() {
         }
       })
       .catch(() => {
-        // Browser preview and older desktop builds do not have the native watcher.
+        // Browser preview and older desktop builds do not have the Rust watcher.
       });
     return () => {
       disposed = true;

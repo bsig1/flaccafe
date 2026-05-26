@@ -22,7 +22,7 @@ export type Page = "library" | "analysis" | "nowPlaying" | "artist" | "history" 
 export type LibraryView = "tracks" | "artists" | "albums" | "playlists" | "completion" | "inbox" | "smart" | "health";
 export type BackendStatus = "unknown" | "starting" | "ok" | "down" | "restarting";
 export type PlaybackMode = "normal" | "repeatOne" | "repeatQueue" | "stopAfterCurrent";
-export type PlaybackEngine = "webview" | "native";
+export type PlaybackEngine = "webview" | "rust";
 export type NativeOutputBackendMode = "cpalShared" | "wasapiExclusive" | "asio";
 export type SortDirection = "asc" | "desc";
 export type UiDensity = "comfortable" | "compact";
@@ -1503,6 +1503,8 @@ export function readUiPreferences(): UiPreferences {
     const modern = window.localStorage.getItem(storageKeys.uiPreferences) ?? window.localStorage.getItem(legacyStorageKeys.uiPreferences);
     if (modern) {
       const parsed = JSON.parse(modern) as Partial<UiPreferences> & { playerLayout?: string };
+      const rawPlaybackEngine = (parsed as { playbackEngine?: unknown }).playbackEngine;
+      const parsedPlaybackEngine = rawPlaybackEngine === "native" ? "rust" : rawPlaybackEngine;
       // Older builds stored a compact bottom-player mode; the main player now stays full-width.
       const validPages: Page[] = ["library", "analysis", "nowPlaying", "artist", "audiobooks", "podcasts", "radio", "scrobbling", "cd", "history", "autodj", "sources", "fileManagement", "settings"];
       return {
@@ -1526,8 +1528,8 @@ export function readUiPreferences(): UiPreferences {
             : typeof (parsed as { replayGainTargetLufs?: unknown }).replayGainTargetLufs === "number"
               ? replayGainTargetPercentFromLegacyLufs((parsed as { replayGainTargetLufs: number }).replayGainTargetLufs)
               : defaults.replayGainTargetVolumePercent,
-        playbackEngine: ["webview", "native"].includes(parsed.playbackEngine as PlaybackEngine)
-          ? (parsed.playbackEngine as PlaybackEngine)
+        playbackEngine: ["webview", "rust"].includes(parsedPlaybackEngine as PlaybackEngine)
+          ? (parsedPlaybackEngine as PlaybackEngine)
           : defaults.playbackEngine,
         nativeOutputBackend: ["cpalShared", "wasapiExclusive", "asio"].includes(parsed.nativeOutputBackend as NativeOutputBackendMode)
           ? (parsed.nativeOutputBackend as NativeOutputBackendMode)

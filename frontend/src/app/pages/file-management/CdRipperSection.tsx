@@ -196,7 +196,7 @@ export function CdRipperSection({
   const playBlockedByRip = activeJob || setupRipOnSelectedDrive;
   const visibleSetupWarnings = setupWarnings.filter(
     (warning) =>
-      !warning.includes("native Windows CDDA") &&
+      !warning.includes("Windows CDDA") &&
       !warning.includes("FLAC/MP3 encoding requires FFmpeg") &&
       !warning.includes("AccurateRip") &&
       !warning.includes("SHA-256 verification"),
@@ -714,7 +714,7 @@ export function CdRipperSection({
                       title={
                         setup?.secure_ripping_available
                           ? "Use secure/paranoia extraction when available."
-                          : "Secure/paranoia tools are not installed; FLAC Cafe will use the native Windows CD reader."
+                          : "Secure/paranoia tools are not installed; FLAC Cafe will use the Windows CD reader."
                       }
                       onChange={(event) => setSecureMode(event.target.checked)}
                     />

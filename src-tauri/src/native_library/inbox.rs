@@ -43,7 +43,7 @@ fn inbox_counts(connection: &Connection) -> Result<(i64, i64), String> {
                 ))
             },
         )
-        .map_err(|error| format!("Could not count native inbox tracks: {error}"))
+        .map_err(|error| format!("Could not count Rust inbox tracks: {error}"))
 }
 
 fn inbox_note_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NativeInboxTrackNote> {
@@ -93,12 +93,12 @@ fn list_inbox_notes(
             ORDER BY datetime(updated_at) DESC, track_id DESC
             "#
         ))
-        .map_err(|error| format!("Could not prepare native inbox note query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust inbox note query: {error}"))?;
     let rows = statement
         .query_map(params_from_iter(track_ids.iter()), inbox_note_from_row)
-        .map_err(|error| format!("Could not read native inbox notes: {error}"))?;
+        .map_err(|error| format!("Could not read Rust inbox notes: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native inbox notes: {error}"))
+        .map_err(|error| format!("Could not decode Rust inbox notes: {error}"))
 }
 
 fn list_auto_review_rules(
@@ -112,12 +112,12 @@ fn list_auto_review_rules(
             ORDER BY enabled DESC, lower(name), id
             "#,
         )
-        .map_err(|error| format!("Could not prepare native inbox auto-review query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust inbox auto-review query: {error}"))?;
     let rows = statement
         .query_map([], inbox_rule_from_row)
-        .map_err(|error| format!("Could not read native inbox auto-review rules: {error}"))?;
+        .map_err(|error| format!("Could not read Rust inbox auto-review rules: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native inbox auto-review rules: {error}"))
+        .map_err(|error| format!("Could not decode Rust inbox auto-review rules: {error}"))
 }
 
 fn auto_review_rule_by_id(
@@ -235,7 +235,7 @@ fn save_note_if_empty(
             |row| row.get::<_, Option<String>>(0),
         )
         .optional()
-        .map_err(|error| format!("Could not read native inbox note: {error}"))?
+        .map_err(|error| format!("Could not read Rust inbox note: {error}"))?
         .flatten()
         .unwrap_or_default();
     if !existing.trim().is_empty() {
@@ -252,7 +252,7 @@ fn save_note_if_empty(
             "#,
             params![track_id, note],
         )
-        .map_err(|error| format!("Could not save native auto-review note: {error}"))?;
+        .map_err(|error| format!("Could not save Rust auto-review note: {error}"))?;
     Ok(())
 }
 
@@ -271,16 +271,16 @@ fn apply_auto_review_rule(connection: &Connection, rule_id: i64) -> Result<i64, 
             WHERE coalesce(track_inbox_state.status, 'new') = 'new'
             "#,
         )
-        .map_err(|error| format!("Could not prepare native auto-review scan: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust auto-review scan: {error}"))?;
     let rows = statement
         .query_map([], |row| {
             Ok((row.get::<_, i64>("id")?, candidate_value(row, &rule.field)?))
         })
-        .map_err(|error| format!("Could not read native auto-review scan: {error}"))?;
+        .map_err(|error| format!("Could not read Rust auto-review scan: {error}"))?;
     let mut updated = 0i64;
     for row in rows {
         let (track_id, value) =
-            row.map_err(|error| format!("Could not decode native auto-review row: {error}"))?;
+            row.map_err(|error| format!("Could not decode Rust auto-review row: {error}"))?;
         if !rule_matches(&rule, &value) {
             continue;
         }
@@ -296,7 +296,7 @@ fn apply_auto_review_rule(connection: &Connection, rule_id: i64) -> Result<i64, 
                 "#,
                 params![track_id],
             )
-            .map_err(|error| format!("Could not mark native auto-review match: {error}"))?;
+            .map_err(|error| format!("Could not mark Rust auto-review match: {error}"))?;
         save_note_if_empty(connection, track_id, rule.note.as_deref())?;
         updated += 1;
     }
@@ -325,13 +325,13 @@ pub fn native_inbox(
             LIMIT ? OFFSET ?
             "#
         ))
-        .map_err(|error| format!("Could not prepare native inbox query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust inbox query: {error}"))?;
     let rows = statement
         .query_map(params![limit as i64, offset as i64], track_from_row)
-        .map_err(|error| format!("Could not read native inbox tracks: {error}"))?;
+        .map_err(|error| format!("Could not read Rust inbox tracks: {error}"))?;
     let tracks = rows
         .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native inbox tracks: {error}"))?;
+        .map_err(|error| format!("Could not decode Rust inbox tracks: {error}"))?;
     let track_ids: Vec<i64> = tracks.iter().map(|track| track.id).collect();
     let notes = list_inbox_notes(&connection, &track_ids)?;
     let auto_review_rules = list_auto_review_rules(&connection)?;
@@ -356,7 +356,7 @@ pub fn native_update_inbox_note(
     let mut connection = open_database()?;
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native inbox note update: {error}"))?;
+        .map_err(|error| format!("Could not start Rust inbox note update: {error}"))?;
     let exists = transaction
         .query_row(
             "SELECT id FROM tracks WHERE id = ?",
@@ -364,7 +364,7 @@ pub fn native_update_inbox_note(
             |row| row.get::<_, i64>(0),
         )
         .optional()
-        .map_err(|error| format!("Could not verify native inbox track: {error}"))?
+        .map_err(|error| format!("Could not verify Rust inbox track: {error}"))?
         .is_some();
     if !exists {
         return Err("Track not found".to_string());
@@ -376,10 +376,10 @@ pub fn native_update_inbox_note(
                 "DELETE FROM track_inbox_notes WHERE track_id = ?",
                 params![track_id],
             )
-            .map_err(|error| format!("Could not delete native inbox note: {error}"))?;
+            .map_err(|error| format!("Could not delete Rust inbox note: {error}"))?;
         transaction
             .commit()
-            .map_err(|error| format!("Could not save native inbox note delete: {error}"))?;
+            .map_err(|error| format!("Could not save Rust inbox note delete: {error}"))?;
         return Ok(None);
     }
     transaction
@@ -393,10 +393,10 @@ pub fn native_update_inbox_note(
             "#,
             params![track_id, text],
         )
-        .map_err(|error| format!("Could not save native inbox note: {error}"))?;
+        .map_err(|error| format!("Could not save Rust inbox note: {error}"))?;
     transaction
         .commit()
-        .map_err(|error| format!("Could not commit native inbox note: {error}"))?;
+        .map_err(|error| format!("Could not commit Rust inbox note: {error}"))?;
 
     let note = connection
         .query_row(
@@ -404,7 +404,7 @@ pub fn native_update_inbox_note(
             params![track_id],
             inbox_note_from_row,
         )
-        .map_err(|error| format!("Could not read saved native inbox note: {error}"))?;
+        .map_err(|error| format!("Could not read saved Rust inbox note: {error}"))?;
     Ok(Some(note))
 }
 
@@ -417,7 +417,7 @@ pub fn native_review_inbox(
     let mut connection = open_database()?;
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native inbox review: {error}"))?;
+        .map_err(|error| format!("Could not start Rust inbox review: {error}"))?;
     let updated = if all_new.unwrap_or(false) {
         let before_new = transaction
             .query_row(
@@ -429,7 +429,7 @@ pub fn native_review_inbox(
                 [],
                 |row| Ok(row.get::<_, Option<i64>>(0)?.unwrap_or(0)),
             )
-            .map_err(|error| format!("Could not count native inbox review candidates: {error}"))?;
+            .map_err(|error| format!("Could not count Rust inbox review candidates: {error}"))?;
         transaction
             .execute(
                 r#"
@@ -441,7 +441,7 @@ pub fn native_review_inbox(
                 "#,
                 [],
             )
-            .map_err(|error| format!("Could not seed native inbox review states: {error}"))?;
+            .map_err(|error| format!("Could not seed Rust inbox review states: {error}"))?;
         transaction
             .execute(
                 r#"
@@ -453,7 +453,7 @@ pub fn native_review_inbox(
                 "#,
                 [],
             )
-            .map_err(|error| format!("Could not review native inbox tracks: {error}"))?;
+            .map_err(|error| format!("Could not review Rust inbox tracks: {error}"))?;
         before_new
     } else {
         let unique_ids: Vec<i64> = track_ids
@@ -475,16 +475,16 @@ pub fn native_review_inbox(
                     "SELECT id FROM tracks WHERE id IN ({placeholders})"
                 ))
                 .map_err(|error| {
-                    format!("Could not prepare native inbox review track query: {error}")
+                    format!("Could not prepare Rust inbox review track query: {error}")
                 })?;
             let existing_rows = existing_statement
                 .query_map(params_from_iter(unique_ids.iter()), |row| {
                     row.get::<_, i64>(0)
                 })
-                .map_err(|error| format!("Could not read native inbox review tracks: {error}"))?;
+                .map_err(|error| format!("Could not read Rust inbox review tracks: {error}"))?;
             let existing_ids = existing_rows
                 .collect::<rusqlite::Result<Vec<_>>>()
-                .map_err(|error| format!("Could not decode native inbox review tracks: {error}"))?;
+                .map_err(|error| format!("Could not decode Rust inbox review tracks: {error}"))?;
             drop(existing_statement);
 
             let mut updated = 0i64;
@@ -503,7 +503,7 @@ pub fn native_review_inbox(
                         params![track_id],
                     )
                     .map_err(|error| {
-                        format!("Could not mark native inbox track reviewed: {error}")
+                        format!("Could not mark Rust inbox track reviewed: {error}")
                     })?;
                 updated += row_count as i64;
             }
@@ -512,7 +512,7 @@ pub fn native_review_inbox(
     };
     transaction
         .commit()
-        .map_err(|error| format!("Could not commit native inbox review: {error}"))?;
+        .map_err(|error| format!("Could not commit Rust inbox review: {error}"))?;
     let (total_new, total_reviewed) = inbox_counts(&connection)?;
     Ok(NativeInboxReviewResponse {
         updated,
@@ -544,7 +544,7 @@ pub fn native_create_inbox_auto_review_rule(
     let mut connection = open_database()?;
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native auto-review rule create: {error}"))?;
+        .map_err(|error| format!("Could not start Rust auto-review rule create: {error}"))?;
     let (name, enabled, field, match_type, value, note) =
         clean_rule_parts(name, enabled, field, match_type, value, note)?;
     transaction
@@ -555,7 +555,7 @@ pub fn native_create_inbox_auto_review_rule(
             "#,
             params![name, enabled, field, match_type, value, note],
         )
-        .map_err(|error| format!("Could not create native auto-review rule: {error}"))?;
+        .map_err(|error| format!("Could not create Rust auto-review rule: {error}"))?;
     let rule_id = transaction.last_insert_rowid();
     let applied = if apply_existing.unwrap_or(false) {
         apply_auto_review_rule(&transaction, rule_id)?
@@ -565,7 +565,7 @@ pub fn native_create_inbox_auto_review_rule(
     let rule = auto_review_rule_by_id(&transaction, rule_id)?;
     transaction
         .commit()
-        .map_err(|error| format!("Could not commit native auto-review rule: {error}"))?;
+        .map_err(|error| format!("Could not commit Rust auto-review rule: {error}"))?;
     let (total_new, total_reviewed) = inbox_counts(&connection)?;
     Ok(NativeInboxAutoReviewRuleApplyResponse {
         rule,
@@ -591,7 +591,7 @@ pub fn native_update_inbox_auto_review_rule(
     let mut connection = open_database()?;
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native auto-review rule update: {error}"))?;
+        .map_err(|error| format!("Could not start Rust auto-review rule update: {error}"))?;
     let (name, enabled, field, match_type, value, note) =
         clean_rule_parts(name, enabled, field, match_type, value, note)?;
     let updated = transaction
@@ -603,7 +603,7 @@ pub fn native_update_inbox_auto_review_rule(
             "#,
             params![name, enabled, field, match_type, value, note, rule_id],
         )
-        .map_err(|error| format!("Could not update native auto-review rule: {error}"))?;
+        .map_err(|error| format!("Could not update Rust auto-review rule: {error}"))?;
     if updated == 0 {
         return Err("Auto-review rule not found".to_string());
     }
@@ -615,7 +615,7 @@ pub fn native_update_inbox_auto_review_rule(
     let rule = auto_review_rule_by_id(&transaction, rule_id)?;
     transaction
         .commit()
-        .map_err(|error| format!("Could not commit native auto-review rule update: {error}"))?;
+        .map_err(|error| format!("Could not commit Rust auto-review rule update: {error}"))?;
     let (total_new, total_reviewed) = inbox_counts(&connection)?;
     Ok(NativeInboxAutoReviewRuleApplyResponse {
         rule,
@@ -636,7 +636,7 @@ pub fn native_delete_inbox_auto_review_rule(
             "DELETE FROM inbox_auto_review_rules WHERE id = ?",
             params![rule_id],
         )
-        .map_err(|error| format!("Could not delete native auto-review rule: {error}"))?
+        .map_err(|error| format!("Could not delete Rust auto-review rule: {error}"))?
         > 0;
     let (total_new, total_reviewed) = inbox_counts(&connection)?;
     Ok(NativeInboxAutoReviewRuleDeleteResponse {

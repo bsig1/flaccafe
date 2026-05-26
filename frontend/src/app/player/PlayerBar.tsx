@@ -233,7 +233,7 @@ export function PlayerBar({
   const hasPrevious = currentIndex > 0;
   const hasNext = currentIndex >= 0 && currentIndex < queue.length - 1;
   const cdSkipIsSettling = isCdPreviewTrack && isPlaying && currentTime < CD_SKIP_SETTLE_SECONDS;
-  const useNativePlayback = playbackEngine === "native" && !isRadioSource && !currentTrack?.audio_url;
+  const useNativePlayback = playbackEngine === "rust" && !isRadioSource && !currentTrack?.audio_url;
   const preloadedNextTrack =
     !isRadioSource && hasNext
       ? queue[currentIndex + 1]
@@ -663,7 +663,7 @@ export function PlayerBar({
         // Closing the graph is best-effort during app teardown.
       });
       void nativeStop().catch(() => {
-        // Native playback is best-effort during shutdown.
+        // Rust playback is best-effort during shutdown.
       });
     };
   }, []);
@@ -673,7 +673,7 @@ export function PlayerBar({
     if (useNativePlayback) {
       if (nativeFadeTimerRef.current === null) {
         void nativeSetVolume(outputVolume).catch(() => {
-          // The native engine may be unavailable in browser preview.
+          // The Rust audio engine may be unavailable in browser preview.
         });
       }
       return;
@@ -749,7 +749,7 @@ export function PlayerBar({
       return;
     }
     void nativeSetDsp(currentNativeDspSettings()).catch(() => {
-      // Browser preview and older installed builds may not expose the native DSP command.
+      // Browser preview and older installed builds may not expose the Rust DSP command.
     });
   }, [
     useNativePlayback,
@@ -977,7 +977,7 @@ export function PlayerBar({
       .then(() => nativeFadeVolumeCommand(clampedTarget, durationMs))
       .catch(() => nativeSetVolume(clampedTarget))
       .catch(() => {
-        // Keep the UI responsive even if the native engine is unavailable.
+        // Keep the UI responsive even if the Rust audio engine is unavailable.
       });
     nativeFadeTimerRef.current = window.setTimeout(() => {
       nativeFadeTimerRef.current = null;
@@ -1012,7 +1012,7 @@ export function PlayerBar({
     } catch (error) {
       setIsPlaying(false);
       nativeLoadedTrackIdRef.current = null;
-      setStatus(error instanceof Error ? error.message : "Native playback could not start for this file.");
+      setStatus(error instanceof Error ? error.message : "Rust playback could not start for this file.");
     }
   }
 
@@ -1052,7 +1052,7 @@ export function PlayerBar({
       return true;
     } catch (error) {
       crossfadeTrackRef.current = null;
-      setStatus(error instanceof Error ? error.message : "Native crossfade could not start.");
+      setStatus(error instanceof Error ? error.message : "Rust crossfade could not start.");
       return false;
     }
   }
@@ -1074,7 +1074,7 @@ export function PlayerBar({
         fadeNativeVolume(outputVolume, fadeMs, undefined, 0);
       }
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Native playback could not resume.");
+      setStatus(error instanceof Error ? error.message : "Rust playback could not resume.");
     }
   }
 
@@ -1271,7 +1271,7 @@ export function PlayerBar({
             setIsPlaying(false);
           })
           .catch((error) => {
-            setStatus(error instanceof Error ? error.message : "Native playback could not pause.");
+            setStatus(error instanceof Error ? error.message : "Rust playback could not pause.");
           });
       });
       return;
@@ -1387,7 +1387,7 @@ export function PlayerBar({
       if (useNativePlayback) {
         nativeLoadedTrackIdRef.current = null;
         void nativeStop().catch(() => {
-          // Native playback may not be available in browser preview.
+          // Rust playback may not be available in browser preview.
         });
       }
       return;
@@ -1536,7 +1536,7 @@ export function PlayerBar({
     pendingResumePositionRef.current = null;
     if (useNativePlayback) {
       void nativeSeek(boundedTime).catch((error) => {
-        setStatus(error instanceof Error ? error.message : "Native seek failed.");
+        setStatus(error instanceof Error ? error.message : "Rust seek failed.");
       });
       return;
     }
@@ -1866,7 +1866,7 @@ export function PlayerBar({
           await handleEnded();
         }
       } catch {
-        // Native status is unavailable in browser preview and before the desktop command is ready.
+        // Rust playback status is unavailable in browser preview and before the desktop command is ready.
       }
     };
     void pollNativeStatus();
@@ -1884,7 +1884,7 @@ export function PlayerBar({
       return;
     }
     void nativePrepareNextFile(preloadedNextTrack.path).catch(() => {
-      // Preparation failures are recorded by the native diagnostics panel.
+      // Preparation failures are recorded by the Rust playback diagnostics panel.
     });
   }, [useNativePlayback, preloadedNextTrack?.id, preloadedNextTrack?.path, canPreloadNextTrack, playbackMode]);
 

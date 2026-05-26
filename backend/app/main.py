@@ -7428,11 +7428,11 @@ def native_snapshot_files_and_errors(request) -> tuple[list[dict] | None, list[s
 
 
 def read_scan_metadata_batch(request: dict) -> dict:
-    """Python expert worker action for Rust-owned scanner jobs.
+    """Legacy Python metadata batch reader kept for tests and fallback tools.
 
-    Rust owns discovery, diffing, progress, and SQLite writes. This action keeps
-    mutagen and the metadata cache in Python and only reads tags for paths Rust
-    has already decided are new or changed.
+    Desktop scanning now uses Rust/Lofty for common tag reads. This action
+    remains available for older scripts and Python-only workflows that still
+    exercise the historical scanner path.
     """
 
     snapshots = native_file_snapshots(list(request.get("files") or [])) or []

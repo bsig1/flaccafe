@@ -21,13 +21,13 @@ Common causes:
 
 ## Codec Support
 
-WebView playback depends on WebView2 codec support. MP3 is the safest baseline; FLAC works through the app's local serving path on current Windows/WebView2 builds, and the experimental native path uses Rust audio crates for broader local decoding tests.
+WebView playback depends on WebView2 codec support. MP3 is the safest baseline; FLAC works through the app's local serving path on current Windows/WebView2 builds, and the experimental Rust path uses Rust audio crates for broader local decoding tests.
 
 If a track will not play:
 
 - Confirm the file still exists from Library or File Management.
 - Try the codec diagnostics in Settings.
-- Try both WebView playback and experimental native playback if native playback is enabled.
+- Try both WebView playback and experimental Rust playback if Rust playback is enabled.
 - Check whether the file has unusual containers, broken headers, or DRM.
 
 ## Optional ML Runtime

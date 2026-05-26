@@ -28,10 +28,10 @@ function diagnostics(entries: NativePlaybackDiagnosticsResponse["entries"], stre
   };
 }
 
-describe("native playback diagnostics", () => {
+describe("Rust playback diagnostics", () => {
   it("summarizes empty diagnostics", () => {
     expect(summarizeNativeDiagnostics(null)).toBe("Diagnostics not loaded");
-    expect(summarizeNativeDiagnostics(diagnostics([]))).toBe("No recent native playback failures");
+    expect(summarizeNativeDiagnostics(diagnostics([]))).toBe("No recent Rust playback failures");
   });
 
   it("summarizes recent failures by severity and category", () => {

@@ -1,6 +1,6 @@
 use rusqlite::{params, Connection};
 use serde::Serialize;
-use serde_json::{json, Value as JsonValue};
+use serde_json::Value as JsonValue;
 use std::collections::{hash_map::DefaultHasher, HashMap, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -34,7 +34,6 @@ pub(crate) struct AudioSnapshot {
     pub(crate) path_text: String,
     pub(crate) path_key: String,
     pub(crate) modified_at: Option<String>,
-    pub(crate) modified_ms: Option<i64>,
     pub(crate) size_bytes: Option<i64>,
 }
 
@@ -364,26 +363,7 @@ pub(crate) fn discover_audio_files(folder: &Path) -> Result<Vec<AudioSnapshot>, 
 }
 
 pub(crate) fn read_metadata_batch(files: &[AudioSnapshot]) -> Result<Vec<JsonValue>, String> {
-    let payload_files = files
-        .iter()
-        .map(|snapshot| {
-            json!({
-                "path": snapshot.path_text,
-                "modified_ms": snapshot.modified_ms,
-                "size_bytes": snapshot.size_bytes,
-            })
-        })
-        .collect::<Vec<_>>();
-    let response = crate::python_worker::call_python_action_json(
-        "read_scan_metadata_batch",
-        json!({}),
-        Some(json!({ "files": payload_files })),
-    )?;
-    Ok(response
-        .get("results")
-        .and_then(JsonValue::as_array)
-        .cloned()
-        .unwrap_or_default())
+    Ok(super::metadata::read_scan_metadata_results(files))
 }
 
 fn apply_metadata_results(
@@ -646,7 +626,7 @@ pub(crate) fn update_track_from_metadata(
     Ok(())
 }
 
-fn ensure_album(
+pub(crate) fn ensure_album(
     connection: &Connection,
     metadata: &serde_json::Map<String, JsonValue>,
 ) -> Result<Option<i64>, String> {
@@ -869,7 +849,6 @@ impl AudioSnapshot {
         let metadata = fs::metadata(&path)
             .map_err(|error| format!("Could not read {}: {error}", path.display()))?;
         let modified = metadata.modified().ok();
-        let modified_ms = modified.and_then(system_time_millis);
         let modified_at = modified.and_then(system_time_to_iso);
         let path_text = normalize_path_text(&path);
         Ok(Self {
@@ -877,7 +856,6 @@ impl AudioSnapshot {
             path_key: path_key_text(&path_text),
             path_text,
             modified_at,
-            modified_ms,
             size_bytes: Some(metadata.len() as i64),
         })
     }
@@ -900,7 +878,6 @@ impl AudioSnapshot {
             path_key: path_key_text(&path_text),
             path_text,
             modified_at,
-            modified_ms,
             size_bytes,
         })
     }
@@ -1119,13 +1096,6 @@ pub(crate) fn is_supported_audio_path(path: &Path) -> bool {
         .map(|extension| format!(".{}", extension.to_ascii_lowercase()))
         .map(|extension| SUPPORTED_EXTENSIONS.contains(&extension.as_str()))
         .unwrap_or(false)
-}
-
-fn system_time_millis(value: SystemTime) -> Option<i64> {
-    value
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .map(|duration| duration.as_millis() as i64)
 }
 
 fn system_time_to_iso(value: SystemTime) -> Option<String> {

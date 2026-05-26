@@ -29,7 +29,7 @@ pub fn native_history(
             LIMIT ?
             "#
         ))
-        .map_err(|error| format!("Could not prepare native history query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust history query: {error}"))?;
     let rows = statement
         .query_map(params![limit as i64], |row| {
             let track_id: Option<i64> = row.get("id")?;
@@ -54,9 +54,9 @@ pub fn native_history(
                 },
             })
         })
-        .map_err(|error| format!("Could not read native history: {error}"))?;
+        .map_err(|error| format!("Could not read Rust history: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native history: {error}"))
+        .map_err(|error| format!("Could not decode Rust history: {error}"))
 }
 
 fn history_track_stat_from_row(
@@ -104,11 +104,11 @@ pub fn native_history_stats(
                 ))
             },
         )
-        .map_err(|error| format!("Could not read native history totals: {error}"))?;
+        .map_err(|error| format!("Could not read Rust history totals: {error}"))?;
     let mut event_counts: HashMap<String, i64> = HashMap::new();
     let mut event_statement = connection
         .prepare("SELECT event_type, count(*) AS count FROM play_events GROUP BY event_type")
-        .map_err(|error| format!("Could not prepare native history event totals: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust history event totals: {error}"))?;
     let event_rows = event_statement
         .query_map([], |row| {
             Ok((
@@ -117,10 +117,10 @@ pub fn native_history_stats(
                 row.get::<_, Option<i64>>("count")?.unwrap_or(0),
             ))
         })
-        .map_err(|error| format!("Could not read native history event totals: {error}"))?;
+        .map_err(|error| format!("Could not read Rust history event totals: {error}"))?;
     for row in event_rows {
         let (event_type, count) =
-            row.map_err(|error| format!("Could not decode native history event totals: {error}"))?;
+            row.map_err(|error| format!("Could not decode Rust history event totals: {error}"))?;
         event_counts.insert(event_type, count);
     }
 
@@ -178,10 +178,10 @@ fn read_history_track_stats(
             {clause}
             "#
         ))
-        .map_err(|error| format!("Could not prepare native history stats query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust history stats query: {error}"))?;
     let rows = statement
         .query_map(params![limit as i64], history_track_stat_from_row)
-        .map_err(|error| format!("Could not read native history stats: {error}"))?;
+        .map_err(|error| format!("Could not read Rust history stats: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native history stats: {error}"))
+        .map_err(|error| format!("Could not decode Rust history stats: {error}"))
 }

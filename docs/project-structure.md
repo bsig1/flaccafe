@@ -1,6 +1,6 @@
 # Project Structure
 
-FLAC Cafe is split by runtime boundary first, then by responsibility. The important rule is still: React owns presentation, Rust owns the app-facing controller and native desktop work, and Python remains the expert worker for mature audio, metadata, network, and ML libraries.
+FLAC Cafe is split by runtime boundary first, then by responsibility. The important rule is still: React owns presentation, Rust owns the app-facing controller and desktop integration work, and Python remains the expert worker for mature audio, metadata, network, and ML libraries.
 
 ## Top-Level Tree
 
@@ -36,7 +36,7 @@ backend/
 │   ├── schemas.py           Pydantic request/response models
 │   ├── database.py          Python test/worker DB helpers sharing the Rust-owned schema
 â”‚   â”œâ”€â”€ duplicates.py        duplicate scoring and grouping helpers
-│   ├── scanner.py           recursive library scanning and mutagen metadata reads
+│   ├── scanner.py           legacy/test scanner helpers and worker batch compatibility
 │   ├── file_tags.py         opt-in metadata, rating, and lyric writes to audio files
 │   ├── volume_tags.py       ReplayGain-style volume tag preview/write helpers
 │   ├── extensions.py        skin/plugin manifest discovery and validation
@@ -47,7 +47,7 @@ backend/
 │   ├── library_watcher.py   background folder-watch detection and pending-change apply logic
 │   ├── musicbrainz_autotag.py MusicBrainz/Cover Art Archive auto-tag matching
 │   ├── recommender.py       AutoDJ scoring, cooldowns, drift, and similarity helpers
-│   ├── gapless.py           adjacent-track metadata checks for native gapless validation
+│   ├── gapless.py           adjacent-track metadata checks for Rust gapless validation
 │   ├── playlist.py          M3U export/import helpers
 │   ├── podcasts.py          optional RSS subscription and episode download helpers
 │   ├── radio.py             web radio bookmark storage and last-played tracking
@@ -76,7 +76,7 @@ backend/
 └── requirements-clap.txt    optional CLAP/Torch-side dependencies
 ```
 
-Add backend features by starting with the narrowest module that owns the behavior. Keep `main.py` as the Python worker action surface, but move reusable scanner, recommender, metadata, duplicate, and file-operation logic into focused modules. Rust maps frontend paths to native handlers first, then to named worker actions only when Python expertise is needed. Startup-sensitive optional systems should stay behind lazy imports, action-local helpers, or persistent workers that Rust starts explicitly for a batch; `backend/app/startup_profile.py` records lightweight timing breadcrumbs for backend launch checks. Tests belong in `backend/tests/`.
+Add backend features by starting with the narrowest module that owns the behavior. Keep `main.py` as the Python worker action surface, but move reusable scanner, recommender, metadata, duplicate, and file-operation logic into focused modules. Rust maps frontend paths to Rust handlers first, then to named worker actions only when Python expertise is needed. Startup-sensitive optional systems should stay behind lazy imports, action-local helpers, or persistent workers that Rust starts explicitly for a batch; `backend/app/startup_profile.py` records lightweight timing breadcrumbs for backend launch checks. Tests belong in `backend/tests/`.
 
 ## Frontend
 
@@ -101,8 +101,8 @@ frontend/
 │   │   ├── theme.ts         theme/font registry
 │   │   └── themes/          JSON palette files
 │   ├── lib/
-│   │   ├── api.ts           typed API boundary with native-first calls and Python-worker routing
-│   │   ├── nativeLibrary.ts  Tauri bridge for native SQLite fast paths and worker calls
+│   │   ├── api.ts           typed API boundary with Rust-first calls and Python-worker routing
+│   │   ├── nativeLibrary.ts  compatibility Tauri bridge for Rust SQLite fast paths and worker calls
 │   │   ├── nativePlayback.ts Tauri bridge for experimental Rust playback
 │   │   ├── tauriMedia.ts    Windows media-control bridge
 │   │   ├── externalLinks.ts Tauri/browser external-link opener
@@ -118,7 +118,7 @@ frontend/
 └── vitest.config.ts
 ```
 
-Add page-level UI in `frontend/src/app/pages/`. When a page grows into several independent panels, keep the page as the coordinator and move those panels into a same-named subfolder such as `pages/settings/` or `pages/file-management/`. File Management uses that pattern for self-contained tools plus its search/category navigator, so new maintenance tools should usually land there instead of expanding `FileManagementPage.tsx`. Add reusable controls in `frontend/src/app/components/`. Keep backend calls in `frontend/src/lib/api.ts` instead of calling `fetch` from page components. Keep native Tauri calls behind small bridge modules in `frontend/src/lib/`.
+Add page-level UI in `frontend/src/app/pages/`. When a page grows into several independent panels, keep the page as the coordinator and move those panels into a same-named subfolder such as `pages/settings/` or `pages/file-management/`. File Management uses that pattern for self-contained tools plus its search/category navigator, so new maintenance tools should usually land there instead of expanding `FileManagementPage.tsx`. Add reusable controls in `frontend/src/app/components/`. Keep backend calls in `frontend/src/lib/api.ts` instead of calling `fetch` from page components. Keep Tauri calls behind small bridge modules in `frontend/src/lib/`.
 
 ## Tauri Shell
 
@@ -126,8 +126,8 @@ Add page-level UI in `frontend/src/app/pages/`. When a page grows into several i
 src-tauri/
 ├── src/
 │   ├── main.rs              app setup, folder/file commands, desktop command registration
-│   ├── native_library.rs    native SQLite command glue and shared DB helpers
-│   ├── native_library/      native SQLite feature modules
+│   ├── native_library.rs    Rust app-controller command glue and shared DB helpers
+│   ├── native_library/      Rust app-controller feature modules
 │   │   ├── analysis/          CLAP job orchestration, persistent worker protocol, and genre-tag tools
 │   │   ├── audio_conversion.rs FFmpeg install/conversion preview and job orchestration
 │   │   ├── inbox.rs           Inbox notes/review state fast paths
@@ -135,7 +135,7 @@ src-tauri/
 │   │   ├── media_protocol.rs  WebView local audio/artwork protocol
 │   │   ├── recommendation_profiles.rs AutoDJ profiles, history, and feedback fast paths
 │   │   ├── recommendations.rs AutoDJ, avoid rules, and similarity scoring
-│   │   └── types.rs          serialized native API response types
+│   │   └── types.rs          serialized Rust API response types
 │   ├── native_playback.rs   rodio/cpal/Symphonia playback session commands
 │   ├── native_playback/     playback engine helper modules
 │   │   └── dsp.rs            EQ, normalization, limiter, and source wrapper
@@ -152,7 +152,7 @@ src-tauri/
 └── build.rs
 ```
 
-Tauri should stay thin outside native desktop concerns and selected SQLite fast paths. Put native windowing, dialogs, process management, file reveal/open, Windows media-control work, the optional Rust playback engine, local media serving, small native-first database routes, and Python worker dispatch here. Python remains the owner for mutagen file reads/writes, embedded artwork/lyrics writes, MusicBrainz/AcoustID matching, feed/download flows, and CLAP/Torch inference; Rust should call the Python worker bridge for those expert paths instead of reimplementing mature Python libraries.
+Tauri should stay thin outside desktop integration concerns and selected SQLite fast paths. Put windowing, dialogs, process management, file reveal/open, Windows media-control work, the optional Rust playback engine, local media serving, small Rust-first database routes, common Lofty tag reads/writes, and Python worker dispatch here. Python remains the owner for embedded artwork/lyrics writes, MusicBrainz/AcoustID matching, feed/download flows, and CLAP/Torch inference; Rust should call the Python worker bridge for expert paths that still depend on stronger Python libraries.
 
 ## Scripts
 
@@ -227,5 +227,5 @@ The `.gitkeep` files under `backend/data/`, `backend/exports/`, and `backend/mod
 - New AutoDJ behavior: `backend/app/recommender.py`, plus route wiring if it needs UI controls.
 - New page: `frontend/src/app/pages/`, wired through `frontend/src/app/App.tsx` and `frontend/src/app/components/Sidebar.tsx`.
 - New reusable UI: `frontend/src/app/components/`.
-- New native desktop command: `src-tauri/src/main.rs`, capability in `src-tauri/capabilities/default.json` if needed, feature module under `src-tauri/src/native_library/` for SQLite paths, bridge in `frontend/src/lib/`.
+- New desktop command: `src-tauri/src/main.rs`, capability in `src-tauri/capabilities/default.json` if needed, feature module under `src-tauri/src/native_library/` for SQLite paths, bridge in `frontend/src/lib/`.
 - New documentation: add or update the narrowest doc under `docs/`, then link it from `README.md` if it is user-facing.

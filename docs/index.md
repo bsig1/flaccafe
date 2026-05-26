@@ -8,7 +8,7 @@ Start here when you need the maintainer or user docs without hunting through the
 - [Troubleshooting](troubleshooting.md): Python runtime startup, codec support, installer, and optional ML runtime checks.
 - [Themes](themes.md): JSON theme files, fonts, and where local theme folders live.
 - [Extensions And Skins](extensions.md): manifest package shape for skins and future plugins.
-- [Playback](playback.md): WebView playback, experimental native playback, fades, queue behavior, and diagnostics.
+- [Playback](playback.md): WebView playback, experimental Rust playback, fades, queue behavior, and diagnostics.
 - [CLAP Analysis](clap-analysis.md): optional audio analysis runtime, CPU/CUDA choices, and validation.
 - [Library Tools](library-tools.md): duplicate review, filename-to-tag inference, file organization, and undo.
 - [CSV Metadata Cleanup](csv-metadata-cleanup.md): spreadsheet export/import workflow for metadata fixes.

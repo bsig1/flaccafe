@@ -19,7 +19,7 @@ Use this before publishing an MSI.
 - Mark beta builds as GitHub prereleases.
 - Attach the MSI built by CI for the same commit as the release tag.
 - Confirm the GitHub repository description is spelled correctly: "A local music app with good recommendations."
-- Link to `README.md`, `SECURITY.md`, and `THIRD_PARTY_NOTICES.md` from the release body when a release includes bundled native tools.
+- Link to `README.md`, `SECURITY.md`, and `THIRD_PARTY_NOTICES.md` from the release body when a release includes bundled command-line tools.
 - Avoid publishing generated release notes that contain local absolute paths.
 
 ## Clean Windows Smoke Test

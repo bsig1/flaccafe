@@ -163,24 +163,24 @@ fn select_tool_tracks(
             .prepare(&format!(
                 "SELECT {TRACK_COLUMNS} FROM tracks WHERE id IN ({placeholders}) ORDER BY lower(coalesce(artist, '')), lower(coalesce(album, '')), coalesce(disc_number, 0), coalesce(track_number, 0), lower(coalesce(title, '')) LIMIT ?"
             ))
-            .map_err(|error| format!("Could not prepare native tag-tool selected tracks: {error}"))?;
+            .map_err(|error| format!("Could not prepare Rust tag-tool selected tracks: {error}"))?;
         let rows = statement
             .query_map(params_from_iter(params), track_from_row)
-            .map_err(|error| format!("Could not read native tag-tool selected tracks: {error}"))?;
+            .map_err(|error| format!("Could not read Rust tag-tool selected tracks: {error}"))?;
         return rows
             .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|error| format!("Could not decode native tag-tool selected tracks: {error}"));
+            .map_err(|error| format!("Could not decode Rust tag-tool selected tracks: {error}"));
     }
     let mut statement = connection
         .prepare(&format!(
             "SELECT {TRACK_COLUMNS} FROM tracks ORDER BY datetime(date_added) DESC, id DESC LIMIT ?"
         ))
-        .map_err(|error| format!("Could not prepare native tag-tool tracks: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust tag-tool tracks: {error}"))?;
     let rows = statement
         .query_map(params![limit as i64], track_from_row)
-        .map_err(|error| format!("Could not read native tag-tool tracks: {error}"))?;
+        .map_err(|error| format!("Could not read Rust tag-tool tracks: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native tag-tool tracks: {error}"))
+        .map_err(|error| format!("Could not decode Rust tag-tool tracks: {error}"))
 }
 
 fn custom_tags_for_tracks(
@@ -205,7 +205,7 @@ fn custom_tags_for_tracks(
         .prepare(&format!(
             "SELECT track_id, tag_key, tag_value FROM track_custom_tags WHERE track_id IN ({placeholders}) ORDER BY lower(tag_key)"
         ))
-        .map_err(|error| format!("Could not prepare native custom tag query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust custom tag query: {error}"))?;
     let rows = statement
         .query_map(params_from_iter(track_ids.iter()), |row| {
             Ok((
@@ -214,10 +214,10 @@ fn custom_tags_for_tracks(
                 row.get::<_, Option<String>>("tag_value")?,
             ))
         })
-        .map_err(|error| format!("Could not read native custom tags: {error}"))?;
+        .map_err(|error| format!("Could not read Rust custom tags: {error}"))?;
     for row in rows {
         let (track_id, tag_key, tag_value) =
-            row.map_err(|error| format!("Could not decode native custom tags: {error}"))?;
+            row.map_err(|error| format!("Could not decode Rust custom tags: {error}"))?;
         result
             .entry(track_id)
             .or_default()
@@ -339,7 +339,7 @@ fn update_core_field(
             connection
                 .execute(sql, params![value, track_id])
                 .map_err(|error| {
-                    format!("Could not update native metadata field {field}: {error}")
+                    format!("Could not update Rust metadata field {field}: {error}")
                 })?;
         }
         "track_number" | "disc_number" | "year" => {
@@ -356,7 +356,7 @@ fn update_core_field(
             connection
                 .execute(sql, params![value, track_id])
                 .map_err(|error| {
-                    format!("Could not update native metadata field {field}: {error}")
+                    format!("Could not update Rust metadata field {field}: {error}")
                 })?;
         }
         "rating" => {
@@ -366,7 +366,7 @@ fn update_core_field(
                     "UPDATE tracks SET rating = ?, updated_at = datetime('now') WHERE id = ?",
                     params![value, track_id],
                 )
-                .map_err(|error| format!("Could not update native rating: {error}"))?;
+                .map_err(|error| format!("Could not update Rust rating: {error}"))?;
         }
         _ => return Err(format!("Unsupported core field {field}")),
     }
@@ -384,7 +384,7 @@ fn update_custom_tag(
             "DELETE FROM track_custom_tags WHERE track_id = ? AND lower(tag_key) = lower(?)",
             params![track_id, tag_key],
         )
-        .map_err(|error| format!("Could not clear native custom tag: {error}"))?;
+        .map_err(|error| format!("Could not clear Rust custom tag: {error}"))?;
     if let Some(value) = value
         .map(|text| text.trim().to_string())
         .filter(|text| !text.is_empty())
@@ -394,7 +394,7 @@ fn update_custom_tag(
                 "INSERT INTO track_custom_tags(track_id, tag_key, tag_value, updated_at) VALUES(?, ?, ?, datetime('now'))",
                 params![track_id, tag_key, value],
             )
-            .map_err(|error| format!("Could not save native custom tag: {error}"))?;
+            .map_err(|error| format!("Could not save Rust custom tag: {error}"))?;
     }
     connection
         .execute(
@@ -755,12 +755,12 @@ fn list_device_sync_profiles_for_connection(
             ORDER BY lower(name)
             "#,
         )
-        .map_err(|error| format!("Could not prepare native device sync profile query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust device sync profile query: {error}"))?;
     let rows = statement
         .query_map([], device_sync_profile_from_row)
-        .map_err(|error| format!("Could not read native device sync profiles: {error}"))?;
+        .map_err(|error| format!("Could not read Rust device sync profiles: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native device sync profiles: {error}"))
+        .map_err(|error| format!("Could not decode Rust device sync profiles: {error}"))
 }
 
 fn device_sync_profile_by_id(
@@ -816,12 +816,12 @@ pub fn native_regex_tag_presets(
             ORDER BY lower(name)
             "#,
         )
-        .map_err(|error| format!("Could not prepare native regex preset query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust regex preset query: {error}"))?;
     let rows = statement
         .query_map([], regex_tag_preset_from_row)
-        .map_err(|error| format!("Could not read native regex presets: {error}"))?;
+        .map_err(|error| format!("Could not read Rust regex presets: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native regex presets: {error}"))
+        .map_err(|error| format!("Could not decode Rust regex presets: {error}"))
 }
 
 #[tauri::command]
@@ -865,7 +865,7 @@ pub fn native_save_regex_tag_preset(
                 if case_sensitive.unwrap_or(false) { 1 } else { 0 }
             ],
         )
-        .map_err(|error| format!("Could not save native regex preset: {error}"))?;
+        .map_err(|error| format!("Could not save Rust regex preset: {error}"))?;
     connection
         .query_row(
             r#"
@@ -876,7 +876,7 @@ pub fn native_save_regex_tag_preset(
             params![name],
             regex_tag_preset_from_row,
         )
-        .map_err(|error| format!("Could not read saved native regex preset: {error}"))
+        .map_err(|error| format!("Could not read saved Rust regex preset: {error}"))
 }
 
 #[tauri::command]
@@ -890,7 +890,7 @@ pub fn native_delete_regex_tag_preset(
             "DELETE FROM regex_tag_presets WHERE id = ?",
             params![preset_id],
         )
-        .map_err(|error| format!("Could not delete native regex preset: {error}"))?;
+        .map_err(|error| format!("Could not delete Rust regex preset: {error}"))?;
     if deleted == 0 {
         return Err("Regex preset was not found".to_string());
     }
@@ -910,12 +910,12 @@ pub fn native_virtual_tags(
             ORDER BY lower(name)
             "#,
         )
-        .map_err(|error| format!("Could not prepare native virtual tag query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust virtual tag query: {error}"))?;
     let rows = statement
         .query_map([], virtual_tag_from_row)
-        .map_err(|error| format!("Could not read native virtual tags: {error}"))?;
+        .map_err(|error| format!("Could not read Rust virtual tags: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native virtual tags: {error}"))
+        .map_err(|error| format!("Could not decode Rust virtual tags: {error}"))
 }
 
 #[tauri::command]
@@ -938,7 +938,7 @@ pub fn native_save_virtual_tag(
             "#,
             params![name, expression],
         )
-        .map_err(|error| format!("Could not save native virtual tag: {error}"))?;
+        .map_err(|error| format!("Could not save Rust virtual tag: {error}"))?;
     connection
         .query_row(
             r#"
@@ -949,7 +949,7 @@ pub fn native_save_virtual_tag(
             params![name],
             virtual_tag_from_row,
         )
-        .map_err(|error| format!("Could not read saved native virtual tag: {error}"))
+        .map_err(|error| format!("Could not read saved Rust virtual tag: {error}"))
 }
 
 #[tauri::command]
@@ -963,7 +963,7 @@ pub fn native_delete_virtual_tag(
             "DELETE FROM virtual_tag_definitions WHERE id = ?",
             params![definition_id],
         )
-        .map_err(|error| format!("Could not delete native virtual tag: {error}"))?;
+        .map_err(|error| format!("Could not delete Rust virtual tag: {error}"))?;
     if deleted == 0 {
         return Err("Virtual tag was not found".to_string());
     }
@@ -1142,7 +1142,7 @@ pub fn native_save_device_sync_profile(
                         profile_id
                     ],
                 )
-                .map_err(|error| format!("Could not update native device sync profile: {error}"))?;
+                .map_err(|error| format!("Could not update Rust device sync profile: {error}"))?;
             if updated == 0 {
                 return Err("Device sync profile not found".to_string());
             }
@@ -1182,7 +1182,7 @@ pub fn native_save_device_sync_profile(
                         if preserve_structure.unwrap_or(true) { 1 } else { 0 }
                     ],
                 )
-                .map_err(|error| format!("Could not save native device sync profile: {error}"))?;
+                .map_err(|error| format!("Could not save Rust device sync profile: {error}"))?;
             device_sync_profile_by_name(&connection, &name)
         }
     }
@@ -1199,7 +1199,7 @@ pub fn native_delete_device_sync_profile(
             "DELETE FROM device_sync_profiles WHERE id = ?",
             params![profile_id],
         )
-        .map_err(|error| format!("Could not delete native device sync profile: {error}"))?;
+        .map_err(|error| format!("Could not delete Rust device sync profile: {error}"))?;
     if deleted == 0 {
         return Err("Device sync profile not found".to_string());
     }
@@ -1317,12 +1317,12 @@ fn playlist_tracks(
              ORDER BY playlist_tracks.position ASC, playlist_tracks.id ASC
              LIMIT ?"
         ))
-        .map_err(|error| format!("Could not prepare native device playlist tracks: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust device playlist tracks: {error}"))?;
     let rows = statement
         .query_map(params![playlist_id, limit as i64], track_from_row)
-        .map_err(|error| format!("Could not read native device playlist tracks: {error}"))?;
+        .map_err(|error| format!("Could not read Rust device playlist tracks: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native device playlist tracks: {error}"))
+        .map_err(|error| format!("Could not decode Rust device playlist tracks: {error}"))
 }
 
 fn device_sync_tracks(
@@ -1349,7 +1349,7 @@ fn device_sync_tracks(
 fn playlist_names(connection: &Connection) -> Result<BTreeMap<i64, String>, String> {
     let mut statement = connection
         .prepare("SELECT id, name FROM playlists ORDER BY lower(name)")
-        .map_err(|error| format!("Could not prepare native playlist name query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust playlist name query: {error}"))?;
     let rows = statement
         .query_map([], |row| {
             Ok((
@@ -1358,9 +1358,9 @@ fn playlist_names(connection: &Connection) -> Result<BTreeMap<i64, String>, Stri
                     .unwrap_or_else(|| "Untitled Playlist".to_string()),
             ))
         })
-        .map_err(|error| format!("Could not read native playlist names: {error}"))?;
+        .map_err(|error| format!("Could not read Rust playlist names: {error}"))?;
     rows.collect::<rusqlite::Result<BTreeMap<_, _>>>()
-        .map_err(|error| format!("Could not decode native playlist names: {error}"))
+        .map_err(|error| format!("Could not decode Rust playlist names: {error}"))
 }
 
 fn write_device_playlist(
@@ -2089,7 +2089,7 @@ fn path_keys_for_tracks(
         .prepare(&format!(
             "SELECT id, path_key FROM tracks WHERE id IN ({placeholders})"
         ))
-        .map_err(|error| format!("Could not prepare native tag-backup path-key query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust tag-backup path-key query: {error}"))?;
     let rows = statement
         .query_map(params_from_iter(track_ids.iter()), |row| {
             Ok((
@@ -2097,10 +2097,10 @@ fn path_keys_for_tracks(
                 row.get::<_, Option<String>>("path_key")?,
             ))
         })
-        .map_err(|error| format!("Could not read native tag-backup path keys: {error}"))?;
+        .map_err(|error| format!("Could not read Rust tag-backup path keys: {error}"))?;
     for row in rows {
         let (id, path_key) =
-            row.map_err(|error| format!("Could not decode native tag-backup path key: {error}"))?;
+            row.map_err(|error| format!("Could not decode Rust tag-backup path key: {error}"))?;
         result.insert(id, path_key);
     }
     Ok(result)

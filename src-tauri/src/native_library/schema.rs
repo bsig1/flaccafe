@@ -6,7 +6,7 @@ const SCHEMA_SQL: &str = include_str!("../../../backend/app/schema.sql");
 pub(crate) fn ensure_database_schema(connection: &Connection) -> Result<(), String> {
     connection
         .execute_batch(SCHEMA_SQL)
-        .map_err(|error| format!("Could not initialize native database schema: {error}"))?;
+        .map_err(|error| format!("Could not initialize Rust database schema: {error}"))?;
     migrate_half_star_ratings(connection)?;
     ensure_track_analysis_columns(connection)?;
     ensure_track_lyrics_columns(connection)?;
@@ -15,7 +15,7 @@ pub(crate) fn ensure_database_schema(connection: &Connection) -> Result<(), Stri
     ensure_settings_columns(connection)?;
     connection
         .execute_batch(SCHEMA_SQL)
-        .map_err(|error| format!("Could not finalize native database schema: {error}"))?;
+        .map_err(|error| format!("Could not finalize Rust database schema: {error}"))?;
     ensure_inbox_initialized(connection)?;
     Ok(())
 }
@@ -102,7 +102,7 @@ fn migrate_half_star_ratings(connection: &Connection) -> Result<(), String> {
             PRAGMA foreign_keys = ON;
             "#,
         )
-        .map_err(|error| format!("Could not migrate native half-star ratings: {error}"))
+        .map_err(|error| format!("Could not migrate Rust half-star ratings: {error}"))
 }
 
 fn add_missing_columns(
@@ -308,7 +308,7 @@ fn ensure_inbox_initialized(connection: &Connection) -> Result<(), String> {
             "#,
             [],
         )
-        .map_err(|error| format!("Could not initialize native inbox state: {error}"))?;
+        .map_err(|error| format!("Could not initialize Rust inbox state: {error}"))?;
     connection
         .execute(
             r#"

@@ -148,12 +148,12 @@ pub fn native_podcast_subscriptions(
             ORDER BY lower(podcast_subscriptions.title)
             "#,
         )
-        .map_err(|error| format!("Could not prepare native podcast subscription query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust podcast subscription query: {error}"))?;
     let rows = statement
         .query_map([], subscription_from_row)
-        .map_err(|error| format!("Could not read native podcast subscriptions: {error}"))?;
+        .map_err(|error| format!("Could not read Rust podcast subscriptions: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native podcast subscriptions: {error}"))
+        .map_err(|error| format!("Could not decode Rust podcast subscriptions: {error}"))
 }
 
 #[tauri::command]
@@ -195,7 +195,7 @@ pub fn native_save_podcast_subscription(
                     subscription_id
                 ],
             )
-            .map_err(|error| format!("Could not update native podcast subscription: {error}"))?;
+            .map_err(|error| format!("Could not update Rust podcast subscription: {error}"))?;
         if updated == 0 {
             return Err("Podcast subscription not found".to_string());
         }
@@ -223,14 +223,14 @@ pub fn native_save_podcast_subscription(
                     download_folder
                 ],
             )
-            .map_err(|error| format!("Could not save native podcast subscription: {error}"))?;
+            .map_err(|error| format!("Could not save Rust podcast subscription: {error}"))?;
         connection
             .query_row(
                 "SELECT id FROM podcast_subscriptions WHERE feed_url = ?",
                 params![feed_url],
                 |row| row.get::<_, i64>(0),
             )
-            .map_err(|error| format!("Could not read saved native podcast subscription: {error}"))?
+            .map_err(|error| format!("Could not read saved Rust podcast subscription: {error}"))?
     };
     subscription_by_id(&connection, row_id)
 }
@@ -244,12 +244,10 @@ pub fn native_delete_podcast_subscription(
     let mut connection = open_database()?;
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native podcast delete: {error}"))?;
+        .map_err(|error| format!("Could not start Rust podcast delete: {error}"))?;
     let mut statement = transaction
         .prepare("SELECT id, local_path, track_id FROM podcast_episodes WHERE subscription_id = ?")
-        .map_err(|error| {
-            format!("Could not prepare native podcast episode delete query: {error}")
-        })?;
+        .map_err(|error| format!("Could not prepare Rust podcast episode delete query: {error}"))?;
     let rows = statement
         .query_map(params![subscription_id], |row| {
             Ok((
@@ -258,9 +256,9 @@ pub fn native_delete_podcast_subscription(
                 row.get::<_, Option<i64>>("track_id")?,
             ))
         })
-        .map_err(|error| format!("Could not read native podcast episodes for delete: {error}"))?
+        .map_err(|error| format!("Could not read Rust podcast episodes for delete: {error}"))?
         .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native podcast episodes for delete: {error}"))?;
+        .map_err(|error| format!("Could not decode Rust podcast episodes for delete: {error}"))?;
     drop(statement);
     let exists = !rows.is_empty()
         || transaction
@@ -307,11 +305,11 @@ pub fn native_delete_podcast_subscription(
             "DELETE FROM podcast_subscriptions WHERE id = ?",
             params![subscription_id],
         )
-        .map_err(|error| format!("Could not delete native podcast subscription: {error}"))?
+        .map_err(|error| format!("Could not delete Rust podcast subscription: {error}"))?
         > 0;
     transaction
         .commit()
-        .map_err(|error| format!("Could not commit native podcast delete: {error}"))?;
+        .map_err(|error| format!("Could not commit Rust podcast delete: {error}"))?;
     Ok(NativePodcastSubscriptionDeleteResponse {
         deleted,
         deleted_files,
@@ -364,13 +362,13 @@ pub fn native_podcast_episodes(
     );
     let mut statement = connection
         .prepare(&sql)
-        .map_err(|error| format!("Could not prepare native podcast episode query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust podcast episode query: {error}"))?;
     let rows = if let Some(subscription_id) = subscription_id {
         statement.query_map(params![subscription_id, limit as i64], episode_from_row)
     } else {
         statement.query_map(params![limit as i64], episode_from_row)
     }
-    .map_err(|error| format!("Could not read native podcast episodes: {error}"))?;
+    .map_err(|error| format!("Could not read Rust podcast episodes: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native podcast episodes: {error}"))
+        .map_err(|error| format!("Could not decode Rust podcast episodes: {error}"))
 }

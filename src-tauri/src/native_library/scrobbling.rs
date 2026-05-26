@@ -72,7 +72,7 @@ fn account_by_service(
             account_from_row,
         )
         .optional()
-        .map_err(|error| format!("Could not read native scrobble account: {error}"))
+        .map_err(|error| format!("Could not read Rust scrobble account: {error}"))
         .map(|account| account.unwrap_or_else(|| fallback_account(service)))
 }
 
@@ -134,7 +134,7 @@ pub fn native_save_scrobble_account(
                 if session_key_set.unwrap_or(false) { session_key } else { existing.session_key },
             ],
         )
-        .map_err(|error| format!("Could not save native scrobble account: {error}"))?;
+        .map_err(|error| format!("Could not save Rust scrobble account: {error}"))?;
     account_by_service(&connection, &service)
 }
 
@@ -155,12 +155,12 @@ pub fn native_scrobble_outbox(
             LIMIT ?
             "#,
         )
-        .map_err(|error| format!("Could not prepare native scrobble outbox query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust scrobble outbox query: {error}"))?;
     let rows = statement
         .query_map(params![limit as i64], outbox_from_row)
-        .map_err(|error| format!("Could not read native scrobble outbox: {error}"))?;
+        .map_err(|error| format!("Could not read Rust scrobble outbox: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native scrobble outbox: {error}"))
+        .map_err(|error| format!("Could not decode Rust scrobble outbox: {error}"))
 }
 
 fn fallback_unix_timestamp() -> i64 {
@@ -184,7 +184,7 @@ pub fn native_queue_scrobble_history(
     let mut connection = open_database()?;
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native scrobble queue update: {error}"))?;
+        .map_err(|error| format!("Could not start Rust scrobble queue update: {error}"))?;
     let rows = {
         let mut statement = transaction
             .prepare(
@@ -205,7 +205,7 @@ pub fn native_queue_scrobble_history(
                 LIMIT ?
                 "#,
             )
-            .map_err(|error| format!("Could not prepare native scrobble history query: {error}"))?;
+            .map_err(|error| format!("Could not prepare Rust scrobble history query: {error}"))?;
         let rows = statement
             .query_map(params![limit as i64], |row| {
                 Ok((
@@ -217,9 +217,9 @@ pub fn native_queue_scrobble_history(
                     row.get::<_, Option<i64>>("listened_at")?,
                 ))
             })
-            .map_err(|error| format!("Could not read native scrobble history: {error}"))?;
+            .map_err(|error| format!("Could not read Rust scrobble history: {error}"))?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|error| format!("Could not decode native scrobble history: {error}"))?
+            .map_err(|error| format!("Could not decode Rust scrobble history: {error}"))?
     };
     let mut queued = 0i64;
     for (track_id, artist, title, album, album_artist, listened_at) in &rows {
@@ -249,12 +249,12 @@ pub fn native_queue_scrobble_history(
                     listened_at
                 ],
             )
-            .map_err(|error| format!("Could not queue native scrobble history: {error}"))?;
+            .map_err(|error| format!("Could not queue Rust scrobble history: {error}"))?;
         queued += inserted as i64;
     }
     transaction
         .commit()
-        .map_err(|error| format!("Could not save native scrobble history queue: {error}"))?;
+        .map_err(|error| format!("Could not save Rust scrobble history queue: {error}"))?;
     Ok(NativeScrobbleQueueHistoryResponse {
         queued,
         considered: rows.len() as i64,
@@ -340,12 +340,12 @@ fn pending_outbox_rows(
             LIMIT ?
             "#,
         )
-        .map_err(|error| format!("Could not prepare native scrobble submit query: {error}"))?;
+        .map_err(|error| format!("Could not prepare Rust scrobble submit query: {error}"))?;
     let rows = statement
         .query_map(params![service, limit as i64], outbox_from_row)
-        .map_err(|error| format!("Could not read native scrobble submit rows: {error}"))?;
+        .map_err(|error| format!("Could not read Rust scrobble submit rows: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Could not decode native scrobble submit rows: {error}"))
+        .map_err(|error| format!("Could not decode Rust scrobble submit rows: {error}"))
 }
 
 fn listenbrainz_payload(rows: &[NativeScrobbleOutboxEntry]) -> serde_json::Value {
@@ -498,7 +498,7 @@ fn mark_submitted(row_ids: &[i64]) -> Result<(), String> {
     let mut connection = open_database()?;
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native scrobble submitted update: {error}"))?;
+        .map_err(|error| format!("Could not start Rust scrobble submitted update: {error}"))?;
     for row_id in row_ids {
         transaction
             .execute(
@@ -516,7 +516,7 @@ fn mark_submitted(row_ids: &[i64]) -> Result<(), String> {
     }
     transaction
         .commit()
-        .map_err(|error| format!("Could not save native scrobble submitted update: {error}"))
+        .map_err(|error| format!("Could not save Rust scrobble submitted update: {error}"))
 }
 
 fn mark_failed(row_ids: &[i64], error: &str) -> Result<(), String> {
@@ -526,7 +526,7 @@ fn mark_failed(row_ids: &[i64], error: &str) -> Result<(), String> {
     let mut connection = open_database()?;
     let transaction = connection
         .transaction()
-        .map_err(|error| format!("Could not start native scrobble failure update: {error}"))?;
+        .map_err(|error| format!("Could not start Rust scrobble failure update: {error}"))?;
     let clipped_error = error.chars().take(500).collect::<String>();
     for row_id in row_ids {
         transaction
@@ -544,5 +544,5 @@ fn mark_failed(row_ids: &[i64], error: &str) -> Result<(), String> {
     }
     transaction
         .commit()
-        .map_err(|error| format!("Could not save native scrobble failure update: {error}"))
+        .map_err(|error| format!("Could not save Rust scrobble failure update: {error}"))
 }

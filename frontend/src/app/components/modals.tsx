@@ -153,7 +153,7 @@ export function MetadataEditorModal({
               {writeToFiles && tagWritable
                 ? "File tag writing is enabled. Saving will update SQLite and supported audio file tags."
                 : writeToFiles
-                  ? `${fileExtension(track.path).toUpperCase() || "This format"} may not support safe tag writing yet. Saving will try the file write and stop if mutagen rejects it.`
+                  ? `${fileExtension(track.path).toUpperCase() || "This format"} may not support safe tag writing yet. Saving will try the file write and stop if the tag writer rejects it.`
                   : "File tag writing is off. Saving will update SQLite only."}
             </span>
             <label className="flex shrink-0 items-center gap-2 text-[11px] uppercase">

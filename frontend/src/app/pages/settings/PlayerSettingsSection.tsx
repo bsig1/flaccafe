@@ -173,11 +173,11 @@ export function PlayerSettingsSection({
     }));
   }
 
-  const showNativeSettings = uiPreferences.playbackEngine === "native";
+  const showNativeSettings = uiPreferences.playbackEngine === "rust";
 
   return (
     <>
-    <DisclosureSection title="Playback Engine" description="Output engine, native devices, diagnostics, and codec checks">
+    <DisclosureSection title="Playback Engine" description="Output engine, Rust devices, diagnostics, and codec checks">
       <div className="grid gap-3 text-sm text-neutral-200">
         <label className="grid gap-2 rounded border border-line/70 bg-ink p-3">
           <span className="text-xs uppercase text-muted">Playback Engine</span>
@@ -192,18 +192,18 @@ export function PlayerSettingsSection({
             }
           >
             <option value="webview">WebView audio</option>
-            <option value="native">Native Rust audio</option>
+            <option value="rust">Rust audio</option>
           </select>
           <span className="text-xs text-muted">
-            Native playback uses Rust with rodio/cpal/Symphonia for broader local codec support. WebView remains the safest default while the native engine matures.
+            Rust audio uses rodio/cpal/Symphonia for broader local codec support. WebView remains the safest default while the Rust engine matures.
           </span>
         </label>
         {showNativeSettings && (
         <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="font-medium text-white">Native output</div>
-              <div className="text-xs text-muted">Used when Playback Engine is set to Native Rust audio.</div>
+              <div className="font-medium text-white">Rust output</div>
+              <div className="text-xs text-muted">Used when Playback Engine is set to Rust audio.</div>
             </div>
             <button className="secondary-button h-8" type="button" onClick={() => void onRefreshNativeDevices()}>
               <RefreshCw size={14} />
@@ -211,7 +211,7 @@ export function PlayerSettingsSection({
             </button>
           </div>
           <label className="grid gap-2">
-            <span className="text-xs uppercase text-muted">Native Backend</span>
+            <span className="text-xs uppercase text-muted">Output Backend</span>
             <select
               className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
               value={uiPreferences.nativeOutputBackend}
@@ -266,7 +266,7 @@ export function PlayerSettingsSection({
               ))}
             </select>
             <span className="text-xs text-muted">
-              If native playback skips, try Stable 2048 or Very stable 4096. Larger buffers add a little latency but are safer for decoding, fading, and DSP.
+              If Rust playback skips, try Stable 2048 or Very stable 4096. Larger buffers add a little latency but are safer for decoding, fading, and DSP.
             </span>
           </label>
           {nativeDeviceMessage && <div className="text-xs text-muted">{nativeDeviceMessage}</div>}
@@ -279,7 +279,7 @@ export function PlayerSettingsSection({
         <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="font-medium text-white">Native diagnostics</div>
+              <div className="font-medium text-white">Rust audio diagnostics</div>
               <div className="text-xs text-muted">{summarizeNativeDiagnostics(nativeDiagnostics)}</div>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -479,7 +479,7 @@ export function PlayerSettingsSection({
                 Equalizer / DSP
               </div>
               <div className="text-xs text-muted">
-                Applied in WebView and Native Rust playback; exact filter shape can differ slightly by engine.
+                Applied in WebView and Rust playback; exact filter shape can differ slightly by engine.
               </div>
             </div>
             <label className="flex items-center gap-2 text-sm text-neutral-200">
@@ -645,9 +645,9 @@ export function PlayerSettingsSection({
         ) : (
           <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
             <div>
-              <div className="font-medium text-white">Native Rust codec support</div>
+              <div className="font-medium text-white">Rust codec support</div>
               <div className="text-xs text-muted">
-                Reported from the bundled rodio + Symphonia decoder set. Playback failures are recorded in native diagnostics.
+                Reported from the bundled rodio + Symphonia decoder set. Playback failures are recorded in Rust audio diagnostics.
               </div>
             </div>
             <div className="grid gap-1 text-xs">

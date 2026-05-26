@@ -40,7 +40,7 @@ powershell -ExecutionPolicy Bypass -File scripts\ci_installer_roundtrip.ps1 -All
 - `npm run test:backend` runs the Python backend tests through the Windows helper script.
 - `scripts/hammer_backend_routes.py` starts a test-only localhost HTTP server, seeds disposable SQLite fixtures, and sends at least five valid-shaped and five invalid-shaped HTTP requests to every backend route. Network/install boundaries are stubbed so the run is deterministic and does not touch the real library.
 - `npm run build` verifies the production Vite bundle.
-- `cargo check` verifies the Tauri shell and native command bridge.
+- `cargo check` verifies the Tauri shell and desktop command bridge.
 - `scripts/installer_smoke.ps1` checks installer config, resources, and WiX cleanup wiring without installing.
 - `scripts/ci_installer_roundtrip.ps1` installs the MSI, checks packaged app health, uninstalls, and verifies app data cleanup. It is destructive to `%LOCALAPPDATA%\FLAC Cafe`, so keep it to CI or disposable profiles.
 - `frontend/e2e/packaged-tauri.playwright.ts` can launch a packaged Tauri executable when `FLAC_CAFE_TAURI_EXE` points at one; otherwise it skips.

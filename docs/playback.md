@@ -1,6 +1,6 @@
 # Playback
 
-Playback is intentionally local and lightweight. FLAC Cafe defaults to the Tauri WebView audio element, with an experimental native Rust engine available in Settings > Player.
+Playback is intentionally local and lightweight. FLAC Cafe defaults to the Tauri WebView audio element, with an experimental Rust audio engine available in Settings > Player.
 
 ## Codec Coverage
 
@@ -10,32 +10,32 @@ Unsupported files should remain in the library, recommendation engine, and playl
 
 Settings > Player includes a WebView codec diagnostic that calls the local audio element's `canPlayType` support check for MP3, FLAC, AAC, Ogg Vorbis, Opus, WAV, and AIFF. Treat "probably" as good, "maybe" as worth trying, and "not reported" as a warning that WebView2 may refuse direct playback for that format.
 
-The native Rust engine uses `rodio` for playback, `cpal` for output, and Symphonia-backed decoding through rodio's codec features. It is meant to prove the lower-level path without making it the only playback option yet. Native output stream errors are captured and surfaced through the player status toast when the desktop command reports them.
+The Rust audio engine uses `rodio` for playback, `cpal` for output, and Symphonia-backed decoding through rodio's codec features. It is meant to prove the lower-level path without making it the only playback option yet. Rust output stream errors are captured and surfaced through the player status toast when the desktop command reports them.
 
-Settings > Player can list native output devices in the desktop app. The selected device and buffer size are passed into the Rust engine when playback starts. The app now reports native backend capabilities separately: the current backend is CPAL/WASAPI shared mode, while WASAPI exclusive and ASIO are visible as unavailable future backends instead of being hidden or implied.
+Settings > Player can list Rust output devices in the desktop app. The selected device and buffer size are passed into the Rust engine when playback starts. The app reports backend capabilities separately: the current backend is CPAL/WASAPI shared mode, while WASAPI exclusive and ASIO are visible as unavailable future backends instead of being hidden or implied.
 
-Settings > Player also includes a compact Native diagnostics panel. It shows the current native output configuration plus the most recent rodio, cpal, Symphonia, file-open, stream-callback, and seek failures. The panel can refresh or clear the in-memory diagnostics without affecting normal playback.
+Settings > Player also includes a compact Rust audio diagnostics panel. It shows the current Rust output configuration plus the most recent rodio, cpal, Symphonia, file-open, stream-callback, and seek failures. The panel can refresh or clear the in-memory diagnostics without affecting normal playback.
 
-Native playback prepares the next queued file by opening and decoding it ahead of the transition. This does not yet make every codec sample-perfect, but it catches missing/undecodable files earlier and surfaces failures in Native diagnostics.
+Rust playback prepares the next queued file by opening and decoding it ahead of the transition. This does not yet make every codec sample-perfect, but it catches missing/undecodable files earlier and surfaces failures in Rust audio diagnostics.
 
 ## Player Behavior
 
 - The queue lives in React state and can be reordered from the queue handle.
 - The WebView engine preloads the next track for smoother transitions.
-- Fade and crossfade duration is controlled by the Player settings. WebView crossfade uses two audio elements; native crossfade uses overlapping rodio players on the same mixer, then stops the old player after the fade. The backend also exposes `/playback/gapless/validate` to inspect adjacent tracks for codec, sample-rate, channel, and sample-count compatibility before treating an album transition as gapless-safe.
+- Fade and crossfade duration is controlled by the Player settings. WebView crossfade uses two audio elements; Rust crossfade uses overlapping rodio players on the same mixer, then stops the old player after the fade. The backend also exposes `/playback/gapless/validate` to inspect adjacent tracks for codec, sample-rate, channel, and sample-count compatibility before treating an album transition as gapless-safe.
 - Volume and mute are stored locally in browser storage.
 - ReplayGain can be applied from embedded track or album gain tags with an optional preamp.
 - Now Playing supports Queue, Lyrics, and Party layouts, with optional lyrics/queue panels and bars/wave/radial visualizers.
 - The compact bottom player is a single setting; older saved `playerLayout: "compact"` preferences are still treated as compact mode.
 - The detached mini player communicates with the main app through `BroadcastChannel`, uses a narrow fixed layout, and can reopen the main app window.
 - If a file cannot be decoded by WebView2, reveal it in Explorer from Library or the track details panel and open it with another local player.
-- Native playback diagnostics are kept in memory for the current app session and capped to the most recent failures.
+- Rust playback diagnostics are kept in memory for the current app session and capped to the most recent failures.
 
 ## Now Playing And Visualizers
 
 Settings > Player controls the default Now Playing layout, visualizer style, lyric size, and whether the lyrics or queue panels are shown. The Now Playing header also exposes quick switches for layout, visualizer style, lyrics, queue, and fullscreen.
 
-The visualizer reads live Web Audio analyzer data when the WebView engine is active. Native playback exposes sampled PCM-level frames through the Tauri bridge, so the visualizer can respond to native output too. If no live frame is available, the component falls back to a gentle playback-reactive animation instead of going blank.
+The visualizer reads live Web Audio analyzer data when the WebView engine is active. Rust playback exposes sampled PCM-level frames through the Tauri bridge, so the visualizer can respond to Rust output too. If no live frame is available, the component falls back to a gentle playback-reactive animation instead of going blank.
 
 ## CD Playback
 
@@ -47,7 +47,7 @@ CD ripping still lives in File Management. Ripped files are not added to the nor
 
 Library scans read common `replaygain_track_gain`, `track_gain`, `replaygain_album_gain`, `album_gain`, `replaygain_track_peak`, `track_peak`, `replaygain_album_peak`, and `album_peak` tags into SQLite. Settings > Player exposes Off, Track, and Album modes plus a small preamp control.
 
-The player applies ReplayGain as a volume multiplier during WebView or native playback. When peak protection is enabled, FLAC Cafe caps the multiplier using embedded peak tags to avoid obvious digital clipping. Tracks without ReplayGain tags keep normal volume, and the app does not write ReplayGain tags back into audio files.
+The player applies ReplayGain as a volume multiplier during WebView or Rust playback. When peak protection is enabled, FLAC Cafe caps the multiplier using embedded peak tags to avoid obvious digital clipping. Tracks without ReplayGain tags keep normal volume, and the app does not write ReplayGain tags back into audio files.
 
 ## Skip Tracking
 
@@ -73,6 +73,6 @@ Keyboard shortcuts are editable in Settings > Keyboard Shortcuts. Media keys are
 
 ## Not In Scope Yet
 
-- A fully custom native decoder pipeline.
+- A fully custom Rust decoder pipeline.
 - Actually opening WASAPI exclusive or ASIO streams; the settings model reports those backends, but only CPAL/WASAPI shared mode is available today.
 - Guaranteed gapless playback for every codec.

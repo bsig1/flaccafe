@@ -171,7 +171,7 @@ def native_windows_cd_ripping_supported() -> bool:
 def native_windows_tool_entry() -> dict:
     return {
         "name": "windows_cdda",
-        "purpose": "native Windows CD audio extraction",
+        "purpose": "Windows CD audio extraction",
         "available": native_windows_cd_ripping_supported(),
         "path": "Windows DeviceIoControl",
         "version": "Windows CD-ROM raw read",
@@ -774,7 +774,7 @@ def windows_last_error(message: str) -> OSError:
 
 def open_windows_cd_handle(drive_id: str) -> tuple[object, int]:
     if os.name != "nt":
-        raise RuntimeError("Native Windows CDDA access is only available on Windows.")
+        raise RuntimeError("Windows CDDA access is only available on Windows.")
 
     import ctypes
     from ctypes import wintypes
@@ -920,7 +920,7 @@ def windows_raw_read_cdda(handle: int, start_lba: int, sector_count: int) -> byt
 
 def rip_wav_native_windows(drive_id: str, track_number: int, wav_path: Path) -> str:
     if os.name != "nt":
-        raise RuntimeError("Native Windows CDDA ripping is only available on Windows.")
+        raise RuntimeError("Windows CDDA ripping is only available on Windows.")
 
     with CDDA_ACCESS_LOCK:
         kernel32, handle = open_windows_cd_handle(drive_id)
@@ -941,7 +941,7 @@ def rip_wav_native_windows(drive_id: str, track_number: int, wav_path: Path) -> 
                     current_lba += sectors
                     remaining -= sectors
                 handle_wav.writeframes(b"")
-            return f"Read track {track_number:02d} with native Windows CDDA ({total_sectors} sectors)."
+            return f"Read track {track_number:02d} with Windows CDDA ({total_sectors} sectors)."
         finally:
             kernel32.CloseHandle(handle)
 

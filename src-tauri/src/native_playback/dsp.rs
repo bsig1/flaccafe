@@ -486,7 +486,7 @@ pub(super) fn soft_limit(sample: f32) -> f32 {
         return 0.0;
     }
     // A zero-lookahead soft limiter is enough for playback safety here: it catches
-    // EQ/preamp overs without adding latency or turning the native engine into a DAW.
+    // EQ/preamp overs without adding latency or turning the Rust audio engine into a DAW.
     let threshold = 0.96_f32;
     let magnitude = sample.abs();
     if magnitude <= threshold {

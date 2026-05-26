@@ -184,7 +184,7 @@ pub fn native_folder_watch_start(
     let mut inner = state
         .inner
         .lock()
-        .map_err(|_| "Native folder watch lock poisoned".to_string())?;
+        .map_err(|_| "Folder watch lock poisoned".to_string())?;
     if let Some(runtime) = inner.runtime.take() {
         stop_runtime(runtime);
     }
@@ -205,7 +205,7 @@ pub fn native_folder_watch_stop(
     let mut inner = state
         .inner
         .lock()
-        .map_err(|_| "Native folder watch lock poisoned".to_string())?;
+        .map_err(|_| "Folder watch lock poisoned".to_string())?;
     if let Some(runtime) = inner.runtime.take() {
         stop_runtime(runtime);
     }
@@ -220,7 +220,7 @@ pub fn native_folder_watch_status(
     let inner = state
         .inner
         .lock()
-        .map_err(|_| "Native folder watch lock poisoned".to_string())?;
+        .map_err(|_| "Folder watch lock poisoned".to_string())?;
     Ok(status_from_inner(&inner))
 }
 
@@ -233,7 +233,7 @@ pub fn native_folder_watch_mark_event(
     let mut inner = state
         .inner
         .lock()
-        .map_err(|_| "Native folder watch lock poisoned".to_string())?;
+        .map_err(|_| "Folder watch lock poisoned".to_string())?;
     inner.pending_events = inner.pending_events.saturating_add(event_count.max(1));
     inner.last_event_ms = Some(now_ms());
     inner.last_error = error.filter(|value| !value.trim().is_empty());
