@@ -1,10 +1,14 @@
 use super::open_database;
 use super::types::*;
 use rusqlite::{params, Connection, OptionalExtension};
+use serde_json::json;
+use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
 
 const SERVICES: &[&str] = &["listenbrainz", "lastfm"];
+const LISTENBRAINZ_SUBMIT_URL: &str = "https://api.listenbrainz.org/1/submit-listens";
+const LASTFM_API_URL: &str = "https://ws.audioscrobbler.com/2.0/";
 
 fn account_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NativeScrobbleAccount> {
     Ok(NativeScrobbleAccount {
@@ -255,4 +259,290 @@ pub fn native_queue_scrobble_history(
         queued,
         considered: rows.len() as i64,
     })
+}
+
+#[tauri::command]
+pub fn native_submit_scrobble_outbox(
+    _state: State<'_, NativeLibraryState>,
+    service: String,
+    limit: Option<usize>,
+) -> Result<NativeScrobbleSubmitResponse, String> {
+    let service = service.trim().to_ascii_lowercase();
+    if !SERVICES.contains(&service.as_str()) {
+        return Err("Scrobble service not found".to_string());
+    }
+    let limit = limit.unwrap_or(50).clamp(1, 1000);
+    let connection = open_database()?;
+    let account = account_by_service(&connection, &service)?;
+    if !account.enabled {
+        return Err(format!("{service} scrobbling is not enabled"));
+    }
+    let rows = pending_outbox_rows(&connection, &service, limit)?;
+    drop(connection);
+
+    let mut submitted = 0i64;
+    let mut failed = 0i64;
+    let mut errors = Vec::new();
+    if service == "listenbrainz" {
+        let playable = rows
+            .iter()
+            .filter(|row| row.event_type == "played")
+            .cloned()
+            .collect::<Vec<_>>();
+        if !playable.is_empty() {
+            let ids = playable.iter().map(|row| row.id).collect::<Vec<_>>();
+            match submit_listenbrainz(&playable, &account) {
+                Ok(()) => {
+                    mark_submitted(&ids)?;
+                    submitted += ids.len() as i64;
+                }
+                Err(error) => {
+                    mark_failed(&ids, &error)?;
+                    failed += ids.len() as i64;
+                    errors.push(error);
+                }
+            }
+        }
+    } else {
+        for row in rows {
+            match submit_lastfm(&row, &account) {
+                Ok(()) => {
+                    mark_submitted(&[row.id])?;
+                    submitted += 1;
+                }
+                Err(error) => {
+                    mark_failed(&[row.id], &error)?;
+                    failed += 1;
+                    errors.push(error);
+                }
+            }
+        }
+    }
+    Ok(NativeScrobbleSubmitResponse {
+        submitted,
+        failed,
+        errors: errors.into_iter().take(10).collect(),
+    })
+}
+
+fn pending_outbox_rows(
+    connection: &Connection,
+    service: &str,
+    limit: usize,
+) -> Result<Vec<NativeScrobbleOutboxEntry>, String> {
+    let mut statement = connection
+        .prepare(
+            r#"
+            SELECT *
+            FROM scrobble_outbox
+            WHERE service = ? AND status IN ('pending', 'failed')
+            ORDER BY created_at ASC
+            LIMIT ?
+            "#,
+        )
+        .map_err(|error| format!("Could not prepare native scrobble submit query: {error}"))?;
+    let rows = statement
+        .query_map(params![service, limit as i64], outbox_from_row)
+        .map_err(|error| format!("Could not read native scrobble submit rows: {error}"))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| format!("Could not decode native scrobble submit rows: {error}"))
+}
+
+fn listenbrainz_payload(rows: &[NativeScrobbleOutboxEntry]) -> serde_json::Value {
+    let payload = rows
+        .iter()
+        .map(|row| {
+            json!({
+                "listened_at": row.listened_at.unwrap_or_else(fallback_unix_timestamp),
+                "track_metadata": {
+                    "artist_name": row.artist,
+                    "track_name": row.title,
+                    "release_name": row.album,
+                    "additional_info": {
+                        "submission_client": "FLAC Cafe",
+                        "media_player": "FLAC Cafe",
+                        "music_service": "local files"
+                    }
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "listen_type": "import",
+        "payload": payload
+    })
+}
+
+fn submit_listenbrainz(
+    rows: &[NativeScrobbleOutboxEntry],
+    account: &NativeScrobbleAccount,
+) -> Result<(), String> {
+    let token = account
+        .token
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "ListenBrainz token is missing".to_string())?;
+    let response = ureq::post(LISTENBRAINZ_SUBMIT_URL)
+        .set("Content-Type", "application/json")
+        .set("Authorization", &format!("Token {token}"))
+        .send_json(listenbrainz_payload(rows));
+    response_to_unit(response, "ListenBrainz")
+}
+
+fn submit_lastfm(
+    row: &NativeScrobbleOutboxEntry,
+    account: &NativeScrobbleAccount,
+) -> Result<(), String> {
+    let api_key = required_account_secret(account.api_key.as_deref(), "Last.fm API key")?;
+    let api_secret =
+        required_account_secret(account.api_secret.as_deref(), "Last.fm shared secret")?;
+    let session_key =
+        required_account_secret(account.session_key.as_deref(), "Last.fm session key")?;
+    let mut params = BTreeMap::new();
+    params.insert(
+        "method".to_string(),
+        if row.event_type == "loved" {
+            "track.love".to_string()
+        } else {
+            "track.scrobble".to_string()
+        },
+    );
+    params.insert("api_key".to_string(), api_key.to_string());
+    params.insert("sk".to_string(), session_key.to_string());
+    params.insert("artist".to_string(), row.artist.clone());
+    params.insert("track".to_string(), row.title.clone());
+    params.insert("format".to_string(), "json".to_string());
+    if row.event_type == "played" {
+        params.insert(
+            "timestamp".to_string(),
+            row.listened_at
+                .unwrap_or_else(fallback_unix_timestamp)
+                .to_string(),
+        );
+        if let Some(album) = row
+            .album
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            params.insert("album".to_string(), album.to_string());
+        }
+        if let Some(album_artist) = row
+            .album_artist
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            params.insert("albumArtist".to_string(), album_artist.to_string());
+        }
+    }
+    let signature = lastfm_signature(&params, api_secret);
+    params.insert("api_sig".to_string(), signature);
+    let form_pairs = params
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
+    let response = ureq::post(LASTFM_API_URL)
+        .set("Content-Type", "application/x-www-form-urlencoded")
+        .send_form(&form_pairs);
+    response_to_unit(response, "Last.fm")
+}
+
+fn required_account_secret<'a>(value: Option<&'a str>, label: &str) -> Result<&'a str, String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("{label} is required"))
+}
+
+fn lastfm_signature(params: &BTreeMap<String, String>, secret: &str) -> String {
+    let mut text = String::new();
+    for (key, value) in params {
+        if key != "format" && key != "callback" {
+            text.push_str(key);
+            text.push_str(value);
+        }
+    }
+    text.push_str(secret);
+    format!("{:x}", md5::compute(text.as_bytes()))
+}
+
+fn response_to_unit(
+    response: Result<ureq::Response, ureq::Error>,
+    service_label: &str,
+) -> Result<(), String> {
+    match response {
+        Ok(response) if response.status() < 400 => Ok(()),
+        Ok(response) => Err(format!("{service_label} HTTP {}", response.status())),
+        Err(ureq::Error::Status(status, response)) => {
+            let message = response
+                .into_string()
+                .unwrap_or_default()
+                .trim()
+                .chars()
+                .take(500)
+                .collect::<String>();
+            if message.is_empty() {
+                Err(format!("{service_label} HTTP {status}"))
+            } else {
+                Err(format!("{service_label} HTTP {status}: {message}"))
+            }
+        }
+        Err(error) => Err(format!("{service_label}: {error}")),
+    }
+}
+
+fn mark_submitted(row_ids: &[i64]) -> Result<(), String> {
+    if row_ids.is_empty() {
+        return Ok(());
+    }
+    let mut connection = open_database()?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Could not start native scrobble submitted update: {error}"))?;
+    for row_id in row_ids {
+        transaction
+            .execute(
+                r#"
+                UPDATE scrobble_outbox
+                SET status = 'submitted',
+                    attempts = attempts + 1,
+                    last_error = NULL,
+                    submitted_at = datetime('now')
+                WHERE id = ?
+                "#,
+                params![row_id],
+            )
+            .map_err(|error| format!("Could not mark scrobble row submitted: {error}"))?;
+    }
+    transaction
+        .commit()
+        .map_err(|error| format!("Could not save native scrobble submitted update: {error}"))
+}
+
+fn mark_failed(row_ids: &[i64], error: &str) -> Result<(), String> {
+    if row_ids.is_empty() {
+        return Ok(());
+    }
+    let mut connection = open_database()?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Could not start native scrobble failure update: {error}"))?;
+    let clipped_error = error.chars().take(500).collect::<String>();
+    for row_id in row_ids {
+        transaction
+            .execute(
+                r#"
+                UPDATE scrobble_outbox
+                SET status = 'failed',
+                    attempts = attempts + 1,
+                    last_error = ?
+                WHERE id = ?
+                "#,
+                params![clipped_error, row_id],
+            )
+            .map_err(|error| format!("Could not mark scrobble row failed: {error}"))?;
+    }
+    transaction
+        .commit()
+        .map_err(|error| format!("Could not save native scrobble failure update: {error}"))
 }

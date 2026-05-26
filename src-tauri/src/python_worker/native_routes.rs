@@ -733,6 +733,13 @@ pub(super) fn try_handle_native_json(
                 body_usize(&body, "limit"),
             )?,
         )?),
+        "submit_scrobbling_outbox" => Some(to_json(
+            native_library::scrobbling::native_submit_scrobble_outbox(
+                state,
+                required_body_string(&body, "service")?,
+                body_usize(&body, "limit"),
+            )?,
+        )?),
         "generate_autodj" => Some(to_json(native_library::recommendations::native_generate_autodj(
             state,
             body.clone(),

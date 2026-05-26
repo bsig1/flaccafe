@@ -960,7 +960,7 @@ pub struct NativeScrobbleAccount {
     pub(crate) updated_at: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct NativeScrobbleOutboxEntry {
     pub(crate) id: i64,
     pub(crate) service: String,
@@ -982,6 +982,13 @@ pub struct NativeScrobbleOutboxEntry {
 pub struct NativeScrobbleQueueHistoryResponse {
     pub(crate) queued: i64,
     pub(crate) considered: i64,
+}
+
+#[derive(Serialize)]
+pub struct NativeScrobbleSubmitResponse {
+    pub(crate) submitted: i64,
+    pub(crate) failed: i64,
+    pub(crate) errors: Vec<String>,
 }
 
 #[derive(Serialize)]

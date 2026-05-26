@@ -32,7 +32,6 @@
 - Consider persistent worker pooling only if one-shot worker startup becomes visible on long-running operations. Prefer correctness and simple process isolation until profiling proves it is too slow.
 
 ## Rust Native Migration Backlog
-- Consider moving ListenBrainz and Last.fm HTTP submission to Rust because signing and JSON/form posts are not Python-specialist work.
 - Keep CLAP inference in Python, but move analysis job state, candidate selection, pause/resume/cancel, progress, DB writes, and genre-tag application into Rust.
 - Consider moving LRCLIB HTTP lookup to Rust; keep embedded lyrics reads/writes in Python until Rust tag-writing safety is proven.
 - Move album artwork sidecar discovery, cache lookup, cache storage, local image serving, and simple cover-art downloads into Rust; keep embedded artwork extraction/writes in Python until Rust tag-writing safety is proven.
@@ -79,6 +78,7 @@
 - Moved device sync drive probing, preview, file copy, target path generation, and playlist export into Rust.
 - Moved Chromaprint `fpcalc` process invocation and acoustic fingerprint pass state into Rust while keeping MusicBrainz/AcoustID matching heuristics in Python.
 - Moved audio conversion preview, target path generation, and estimated output sizing into Rust while keeping FFmpeg job execution and embedded artwork writes in Python.
+- Moved ListenBrainz and Last.fm outbox submission into Rust, including Last.fm request signing and submitted/failed row updates.
 - Added `flaccafe-media://localhost/python-bytes/...` for Python-owned byte responses such as album art and CD live audio.
 - Switched `npm run dev` to desktop dev so local development exercises the same Rust-to-Python worker path as packaged builds.
 
