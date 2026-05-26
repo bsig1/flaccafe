@@ -1,4 +1,5 @@
 use std::fs::File;
+use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
@@ -39,6 +40,7 @@ struct NativePlaybackInner {
     prepared_next_path: Option<String>,
     prepared_next_duration_seconds: Option<f64>,
     prepared_next_at_ms: Option<u64>,
+    prepared_next_audio: Option<NativePreparedAudio>,
     stream_errors: Arc<Mutex<Vec<String>>>,
     diagnostics: Arc<Mutex<Vec<NativePlaybackDiagnostic>>>,
     dsp_settings: Arc<Mutex<NativeDspSettings>>,
@@ -49,6 +51,14 @@ struct NativePlaybackInner {
 struct NativePlaybackHandle {
     player: Arc<Player>,
     gain: NativeGainControl,
+}
+
+#[derive(Clone)]
+struct NativePreparedAudio {
+    path: String,
+    bytes: Arc<[u8]>,
+    duration_seconds: Option<f64>,
+    prepared_at_ms: u64,
 }
 
 #[derive(Clone)]
@@ -149,6 +159,7 @@ impl Default for NativePlaybackInner {
             prepared_next_path: None,
             prepared_next_duration_seconds: None,
             prepared_next_at_ms: None,
+            prepared_next_audio: None,
             stream_errors: Arc::new(Mutex::new(Vec::new())),
             diagnostics: Arc::new(Mutex::new(Vec::new())),
             dsp_settings: Arc::new(Mutex::new(NativeDspSettings::default())),
@@ -582,6 +593,21 @@ impl NativePlaybackInner {
         }
     }
 
+    fn take_prepared_audio(&mut self, path: &str) -> Option<NativePreparedAudio> {
+        let prepared = self.prepared_next_audio.take()?;
+        if prepared.path == path
+            && now_millis().saturating_sub(prepared.prepared_at_ms) <= 5 * 60 * 1000
+        {
+            self.prepared_next_path = None;
+            self.prepared_next_duration_seconds = None;
+            self.prepared_next_at_ms = None;
+            Some(prepared)
+        } else {
+            self.prepared_next_audio = Some(prepared);
+            None
+        }
+    }
+
     fn stop(&mut self) {
         if let Some(handle) = self.player.take() {
             handle.player.stop();
@@ -992,6 +1018,36 @@ fn build_decoder(
         .total_duration()
         .map(|duration| duration.as_secs_f64());
     Ok((decoder, duration_seconds))
+}
+
+fn build_prepared_decoder(
+    prepared: &NativePreparedAudio,
+    diagnostics: &Arc<Mutex<Vec<NativePlaybackDiagnostic>>>,
+) -> Result<Decoder<Cursor<Arc<[u8]>>>, String> {
+    Decoder::try_from(Cursor::new(prepared.bytes.clone())).map_err(|error| {
+        diagnostic_error(
+            diagnostics,
+            "symphonia",
+            "decode_prepared_audio",
+            format!("Could not decode prepared native audio: {error}"),
+            NativeDiagnosticContext {
+                path: Some(prepared.path.clone()),
+                ..NativeDiagnosticContext::default()
+            },
+        )
+    })
+}
+
+fn append_dsp_source<S>(
+    player: &Player,
+    source: S,
+    dsp_settings: Arc<Mutex<NativeDspSettings>>,
+    gain: NativeGainControl,
+    visualizer: Arc<Mutex<NativeVisualizerState>>,
+) where
+    S: Source<Item = f32> + Send + 'static,
+{
+    player.append(NativeDspSource::new(source, dsp_settings, gain, visualizer));
 }
 
 #[derive(Clone, Copy)]
@@ -1449,9 +1505,10 @@ pub fn native_play_file(
         errors.clear();
     }
     inner.update_dsp_settings(dsp_settings);
+    let prepared_audio = inner.take_prepared_audio(&path);
     inner.stop();
 
-    let (decoder, duration_seconds) = build_decoder(&path_buf, &inner.diagnostics)?;
+    let duration_seconds;
     let mixer = inner
         .sink
         .as_ref()
@@ -1462,12 +1519,27 @@ pub fn native_play_file(
     let bounded_volume = clamp_volume(volume);
     player.set_volume(1.0);
     let gain = NativeGainControl::new(bounded_volume);
-    player.append(NativeDspSource::new(
-        decoder,
-        inner.dsp_settings.clone(),
-        gain.clone(),
-        inner.visualizer.clone(),
-    ));
+    if let Some(prepared) = prepared_audio {
+        let decoder = build_prepared_decoder(&prepared, &inner.diagnostics)?;
+        duration_seconds = prepared.duration_seconds;
+        append_dsp_source(
+            &player,
+            decoder,
+            inner.dsp_settings.clone(),
+            gain.clone(),
+            inner.visualizer.clone(),
+        );
+    } else {
+        let (decoder, decoded_duration) = build_decoder(&path_buf, &inner.diagnostics)?;
+        duration_seconds = decoded_duration;
+        append_dsp_source(
+            &player,
+            decoder,
+            inner.dsp_settings.clone(),
+            gain.clone(),
+            inner.visualizer.clone(),
+        );
+    }
     seek_player(
         &player,
         start_seconds,
@@ -1520,7 +1592,8 @@ pub fn native_crossfade_to_file(
     }
     inner.update_dsp_settings(dsp_settings);
 
-    let (decoder, duration_seconds) = build_decoder(&path_buf, &inner.diagnostics)?;
+    let prepared_audio = inner.take_prepared_audio(&path);
+    let duration_seconds;
     let mixer = inner
         .sink
         .as_ref()
@@ -1541,12 +1614,27 @@ pub fn native_crossfade_to_file(
     if let Ok(mut visualizer) = inner.visualizer.lock() {
         visualizer.reset();
     }
-    new_player.append(NativeDspSource::new(
-        decoder,
-        inner.dsp_settings.clone(),
-        new_gain.clone(),
-        inner.visualizer.clone(),
-    ));
+    if let Some(prepared) = prepared_audio {
+        let decoder = build_prepared_decoder(&prepared, &inner.diagnostics)?;
+        duration_seconds = prepared.duration_seconds;
+        append_dsp_source(
+            &new_player,
+            decoder,
+            inner.dsp_settings.clone(),
+            new_gain.clone(),
+            inner.visualizer.clone(),
+        );
+    } else {
+        let (decoder, decoded_duration) = build_decoder(&path_buf, &inner.diagnostics)?;
+        duration_seconds = decoded_duration;
+        append_dsp_source(
+            &new_player,
+            decoder,
+            inner.dsp_settings.clone(),
+            new_gain.clone(),
+            inner.visualizer.clone(),
+        );
+    }
     seek_player(
         &new_player,
         start_seconds,
@@ -1801,11 +1889,39 @@ pub fn native_prepare_next_file(
         );
         return Err(message);
     }
-    let (_decoder, duration_seconds) = build_decoder(&path_buf, &inner.diagnostics)?;
+    let bytes = std::fs::read(&path_buf).map_err(|error| {
+        diagnostic_error(
+            &inner.diagnostics,
+            "file",
+            "read_prepare_next_file",
+            format!("Could not preload next audio file: {error}"),
+            NativeDiagnosticContext {
+                path: Some(path.clone()),
+                ..NativeDiagnosticContext::default()
+            },
+        )
+    })?;
+    let prepared_bytes: Arc<[u8]> = Arc::from(bytes.into_boxed_slice());
+    let prepared_probe = NativePreparedAudio {
+        path: path.clone(),
+        bytes: prepared_bytes.clone(),
+        duration_seconds: None,
+        prepared_at_ms: now_millis(),
+    };
+    let decoder = build_prepared_decoder(&prepared_probe, &inner.diagnostics)?;
+    let duration_seconds = decoder
+        .total_duration()
+        .map(|duration| duration.as_secs_f64());
     let prepared_at_ms = now_millis();
     inner.prepared_next_path = Some(path.clone());
     inner.prepared_next_duration_seconds = duration_seconds;
     inner.prepared_next_at_ms = Some(prepared_at_ms);
+    inner.prepared_next_audio = Some(NativePreparedAudio {
+        path: path.clone(),
+        bytes: prepared_bytes,
+        duration_seconds,
+        prepared_at_ms,
+    });
     Ok(NativePreparedTrack {
         path,
         duration_seconds,

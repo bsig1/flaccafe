@@ -177,12 +177,6 @@ The Python backend is a local FastAPI service. The React UI calls these routes t
 - `PATCH /playlists/{playlist_id}/tracks/{track_id}/move` moves a track up or down.
 - `POST /playlists/{playlist_id}/export` writes an M3U playlist.
 - `POST /playlists/import` imports M3U/M3U8, PLS, XSPF, WPL, and iTunes XML playlists.
-- `GET /smart-playlists/presets` lists built-in rule presets retained for compatibility.
-- `GET /smart-playlists` lists saved smart-rule playlists.
-- `POST /smart-playlists` saves a smart-rule playlist.
-- `DELETE /smart-playlists/{smart_playlist_id}` deletes one.
-- `POST /smart-playlists/preview` previews a rule.
-- `GET /smart-playlists/{smart_playlist_id}/tracks` materializes a saved rule.
 
 ## Analysis And Recommendations
 

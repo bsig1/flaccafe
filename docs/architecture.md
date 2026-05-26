@@ -5,11 +5,11 @@ FLAC Cafe keeps UI concerns separate from library and recommendation logic.
 ```text
 React UI
   -> typed API helpers and Tauri commands
-  -> Python FastAPI backend
+  -> Rust native SQLite fast paths or Python FastAPI fallback
   -> SQLite, mutagen scanner, file tag writer, recommender, CLAP analysis
 ```
 
-The app started with a local FastAPI backend because the scanner, metadata handling, and recommender are Python-first. React talks to ordinary HTTP endpoints, which keeps the frontend easy to run in a browser preview and keeps backend behavior testable without the desktop shell. Tauri owns native concerns: windowing, folder dialogs, file reveal/open actions, process management, app icons, Windows media controls, and the optional Rust playback engine.
+The app started with a local FastAPI backend because the scanner, metadata handling, and recommender are Python-first. React still talks through typed helpers, but high-traffic SQLite-only paths can use Tauri Rust commands first and fall back to FastAPI when the desktop bridge is unavailable or a Python-only feature is needed. This keeps browser preview and backend tests useful while letting packaged desktop builds avoid HTTP for common reads and lightweight mutations.
 
 ## Runtime Shape
 
@@ -63,6 +63,7 @@ src-tauri/
   capabilities/           allowed Tauri commands
   src/main.rs             backend launcher, folder reveal, media-control commands
   src/native_playback.rs  rodio/cpal/Symphonia playback commands
+  src/native_library.rs   native SQLite fast paths for library, queues, and local state
 
 scripts/
   dev.ps1                 Windows-friendly dev server runner
@@ -87,12 +88,13 @@ React components can request work, display progress, and keep local UI state. Th
 
 ## Native Boundaries
 
-Tauri should stay thin. It can:
+Tauri owns desktop-native work and selected SQLite fast paths. It can:
 
 - Start, stop, and restart the backend process.
 - Open folders, reveal files, and show native dialogs.
 - Play local audio through the optional Rust playback engine.
 - Publish Windows System Media Transport Controls state.
+- Serve high-traffic SQLite reads and simple DB mutations when they mirror tested FastAPI behavior.
 - Package the app and declare capabilities.
 
-It should not duplicate the scanner, recommender, playlist engine, or database rules.
+Python remains the owner for scanner behavior, mutagen file writes, online services, optional ML, and complex library tools. Rust fast paths should stay small, deterministic, and backed by FastAPI fallbacks.

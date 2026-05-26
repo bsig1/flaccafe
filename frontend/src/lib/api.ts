@@ -145,8 +145,6 @@ import type {
   SettingsResponse,
   SettingsUpdateRequest,
   SimilarTrack,
-  SmartPlaylistRule,
-  SmartPlaylistSummary,
   StartupDiagnosticsResponse,
   SupportBundleResponse,
   TagRegexReplaceRequest,
@@ -175,9 +173,75 @@ import type {
   VolumeTagRequest,
   VolumeTagResponse,
 } from "../types/api";
+import {
+  nativeFetchAlbumTracks,
+  nativeFetchAlbums,
+  nativeFetchArtists,
+  nativeFetchAudiobookBookmarks,
+  nativeFetchAudiobookChapters,
+  nativeFetchAudiobooks,
+  nativeFetchBackendHealth,
+  nativeFetchHistory,
+  nativeFetchHistoryStats,
+  nativeFetchLibraryHealth,
+  nativeFetchLibraryStats,
+  nativeFetchLovedTracks,
+  nativeFetchPlaylistTracks,
+  nativeFetchPlaylists,
+  nativeFetchRadioStations,
+  nativeFetchSimilarTracks,
+  nativeFetchSettings,
+  nativeFetchTrack,
+  nativeFetchTracksBatch,
+  nativeFileOrganizationPreview,
+  nativeGaplessValidate,
+  nativeGenerateAutoDj,
+  nativeAddTracksToPlaylist,
+  nativeCreateAudiobookBookmark,
+  nativeCreatePlaylist,
+  nativeDeletePlaylist,
+  nativeCreateAutoDjAvoidRule,
+  nativeDeleteAutoDjAvoidRule,
+  nativeDeleteAudiobookBookmark,
+  nativeDeleteRadioStation,
+  nativeFetchAutoDjAvoidRules,
+  nativeClearLibraryCaches,
+  nativeFetchBulkUndoBatches,
+  nativeFetchBulkUndoLog,
+  nativeMarkTrackPlayed,
+  nativeMarkTrackSkipped,
+  nativeMarkRadioStationPlayed,
+  nativeMoveTrackInPlaylist,
+  nativeRemoveTrackFromPlaylist,
+  nativeRemoveLibrarySource,
+  nativeSaveAudiobookChapters,
+  nativeSaveRadioStation,
+  nativeUpdateAudiobookProgress,
+  nativeUpdateSettings,
+  nativeUpdateTrackLove,
+  nativeUpdateTrackRating,
+  nativeVolumeTagsPreview,
+} from "./nativeLibrary";
 
 export const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8765";
 const ARTWORK_URL_SESSION_VERSION = Date.now().toString(36);
+let fastApiCallCount = 0;
+
+function notifyFastApiCall(path: string, init?: RequestInit) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  fastApiCallCount += 1;
+  window.dispatchEvent(
+    new CustomEvent("flac-cafe:fast-api-call", {
+      detail: {
+        count: fastApiCallCount,
+        method: init?.method ?? "GET",
+        path,
+      },
+    }),
+  );
+}
 
 function formatApiErrorDetail(detail: unknown, fallback: string): string {
   if (typeof detail === "string") {
@@ -223,6 +287,7 @@ function formatApiErrorDetail(detail: unknown, fallback: string): string {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  notifyFastApiCall(path, init);
   const response = await fetch(`${API_BASE}${path}`, {
     headers: {
       "Content-Type": "application/json",
@@ -245,11 +310,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function fetchSettings(): Promise<SettingsResponse> {
-  return request<SettingsResponse>("/settings");
+  return nativeFetchSettings().catch(() => request<SettingsResponse>("/settings"));
 }
 
 export function fetchBackendHealth(): Promise<{ status: string }> {
-  return request<{ status: string }>("/health");
+  return nativeFetchBackendHealth().catch(() => request<{ status: string }>("/health"));
 }
 
 export function fetchStartupDiagnostics(): Promise<StartupDiagnosticsResponse> {
@@ -276,33 +341,37 @@ export function resetLocalData(confirmation: string): Promise<LocalDataResetResp
 }
 
 export function updateSettings(settings: SettingsUpdateRequest): Promise<SettingsResponse> {
-  return request<SettingsResponse>("/settings", {
-    method: "PATCH",
-    body: JSON.stringify(settings),
-  });
+  return nativeUpdateSettings(settings).catch(() =>
+    request<SettingsResponse>("/settings", {
+      method: "PATCH",
+      body: JSON.stringify(settings),
+    }),
+  );
 }
 
 export function removeLibrarySource(path: string): Promise<LibrarySourceRemoveResponse> {
-  return request<LibrarySourceRemoveResponse>("/settings/library-sources/remove", {
-    method: "POST",
-    body: JSON.stringify({ path }),
-  });
+  return nativeRemoveLibrarySource(path).catch(() =>
+    request<LibrarySourceRemoveResponse>("/settings/library-sources/remove", {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    }),
+  );
 }
 
 export function fetchHistory(limit = 200): Promise<PlayEventEntry[]> {
-  return request<PlayEventEntry[]>(`/history?limit=${limit}`);
+  return nativeFetchHistory(limit).catch(() => request<PlayEventEntry[]>(`/history?limit=${limit}`));
 }
 
 export function fetchHistoryStats(limit = 10): Promise<HistoryStatsResponse> {
-  return request<HistoryStatsResponse>(`/history/stats?limit=${limit}`);
+  return nativeFetchHistoryStats(limit).catch(() => request<HistoryStatsResponse>(`/history/stats?limit=${limit}`));
 }
 
 export function fetchLibraryStats(): Promise<LibraryStatsResponse> {
-  return request<LibraryStatsResponse>("/library/stats");
+  return nativeFetchLibraryStats().catch(() => request<LibraryStatsResponse>("/library/stats"));
 }
 
 export function fetchLibraryHealth(limit = 300): Promise<LibraryHealthResponse> {
-  return request<LibraryHealthResponse>(`/library/health?limit=${limit}`);
+  return nativeFetchLibraryHealth(limit).catch(() => request<LibraryHealthResponse>(`/library/health?limit=${limit}`));
 }
 
 export function fetchLibraryInbox(limit = 200, offset = 0): Promise<InboxResponse> {
@@ -352,10 +421,12 @@ export function deleteInboxAutoReviewRule(ruleId: number): Promise<InboxAutoRevi
 }
 
 export function clearLibraryCaches(targets: CacheClearTarget[]): Promise<CacheClearResponse> {
-  return request<CacheClearResponse>("/library/maintenance/clear", {
-    method: "POST",
-    body: JSON.stringify({ targets }),
-  });
+  return nativeClearLibraryCaches(targets).catch(() =>
+    request<CacheClearResponse>("/library/maintenance/clear", {
+      method: "POST",
+      body: JSON.stringify({ targets }),
+    }),
+  );
 }
 
 export function inferFilenameTags(requestBody: FilenameTagInferenceRequest): Promise<FilenameTagInferenceResponse> {
@@ -366,6 +437,14 @@ export function inferFilenameTags(requestBody: FilenameTagInferenceRequest): Pro
 }
 
 export function organizeFiles(requestBody: FileOrganizationRequest): Promise<FileOrganizationResponse> {
+  if (!requestBody.apply) {
+    return nativeFileOrganizationPreview(requestBody).catch(() =>
+      request<FileOrganizationResponse>("/library/tools/organize-files", {
+        method: "POST",
+        body: JSON.stringify(requestBody),
+      }),
+    );
+  }
   return request<FileOrganizationResponse>("/library/tools/organize-files", {
     method: "POST",
     body: JSON.stringify(requestBody),
@@ -515,6 +594,14 @@ export function clapGenreTags(requestBody: ClapGenreTagRequest): Promise<ClapGen
 }
 
 export function volumeTags(requestBody: VolumeTagRequest): Promise<VolumeTagResponse> {
+  if ((requestBody.mode ?? "analyze") === "manual" && !requestBody.apply && !requestBody.write_to_file) {
+    return nativeVolumeTagsPreview(requestBody).catch(() =>
+      request<VolumeTagResponse>("/library/tools/volume-tags", {
+        method: "POST",
+        body: JSON.stringify(requestBody),
+      }),
+    );
+  }
   return request<VolumeTagResponse>("/library/tools/volume-tags", {
     method: "POST",
     body: JSON.stringify(requestBody),
@@ -565,11 +652,13 @@ export function runAcousticFingerprintPass(
 }
 
 export function fetchBulkUndoLog(limit = 30): Promise<BulkUndoLogEntry[]> {
-  return request<BulkUndoLogEntry[]>(`/library/tools/undo-log?limit=${limit}`);
+  return nativeFetchBulkUndoLog(limit).catch(() => request<BulkUndoLogEntry[]>(`/library/tools/undo-log?limit=${limit}`));
 }
 
 export function fetchBulkUndoBatches(limit = 30): Promise<BulkUndoBatchEntry[]> {
-  return request<BulkUndoBatchEntry[]>(`/library/tools/undo-batches?limit=${limit}`);
+  return nativeFetchBulkUndoBatches(limit).catch(() =>
+    request<BulkUndoBatchEntry[]>(`/library/tools/undo-batches?limit=${limit}`),
+  );
 }
 
 export function restoreBulkUndoEntry(entryId: number): Promise<BulkUndoRestoreResponse> {
@@ -754,40 +843,54 @@ export function stopCdPlayback(): Promise<CdPlaybackResponse> {
 }
 
 export function fetchAudiobooks(limit = 200, offset = 0): Promise<AudiobookListResponse> {
-  return request<AudiobookListResponse>(`/audiobooks?limit=${limit}&offset=${offset}`);
+  return nativeFetchAudiobooks(limit, offset).catch(() =>
+    request<AudiobookListResponse>(`/audiobooks?limit=${limit}&offset=${offset}`),
+  );
 }
 
 export function updateAudiobookProgress(trackId: number, requestBody: AudiobookProgressRequest): Promise<AudiobookProgressResponse> {
-  return request<AudiobookProgressResponse>(`/audiobooks/${trackId}/progress`, {
-    method: "PATCH",
-    body: JSON.stringify(requestBody),
-  });
+  return nativeUpdateAudiobookProgress(trackId, requestBody).catch(() =>
+    request<AudiobookProgressResponse>(`/audiobooks/${trackId}/progress`, {
+      method: "PATCH",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function fetchAudiobookBookmarks(trackId: number): Promise<AudiobookBookmark[]> {
-  return request<AudiobookBookmark[]>(`/audiobooks/${trackId}/bookmarks`);
+  return nativeFetchAudiobookBookmarks(trackId).catch(() =>
+    request<AudiobookBookmark[]>(`/audiobooks/${trackId}/bookmarks`),
+  );
 }
 
 export function createAudiobookBookmark(trackId: number, requestBody: AudiobookBookmarkRequest): Promise<AudiobookBookmark> {
-  return request<AudiobookBookmark>(`/audiobooks/${trackId}/bookmarks`, {
-    method: "POST",
-    body: JSON.stringify(requestBody),
-  });
+  return nativeCreateAudiobookBookmark(trackId, requestBody).catch(() =>
+    request<AudiobookBookmark>(`/audiobooks/${trackId}/bookmarks`, {
+      method: "POST",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function deleteAudiobookBookmark(bookmarkId: number): Promise<{ deleted: boolean }> {
-  return request<{ deleted: boolean }>(`/audiobooks/bookmarks/${bookmarkId}`, { method: "DELETE" });
+  return nativeDeleteAudiobookBookmark(bookmarkId).catch(() =>
+    request<{ deleted: boolean }>(`/audiobooks/bookmarks/${bookmarkId}`, { method: "DELETE" }),
+  );
 }
 
 export function fetchAudiobookChapters(trackId: number): Promise<AudiobookChapter[]> {
-  return request<AudiobookChapter[]>(`/audiobooks/${trackId}/chapters`);
+  return nativeFetchAudiobookChapters(trackId).catch(() =>
+    request<AudiobookChapter[]>(`/audiobooks/${trackId}/chapters`),
+  );
 }
 
 export function saveAudiobookChapters(trackId: number, chapters: AudiobookChapter[]): Promise<AudiobookChapter[]> {
-  return request<AudiobookChapter[]>(`/audiobooks/${trackId}/chapters`, {
-    method: "PUT",
-    body: JSON.stringify({ chapters }),
-  });
+  return nativeSaveAudiobookChapters(trackId, chapters).catch(() =>
+    request<AudiobookChapter[]>(`/audiobooks/${trackId}/chapters`, {
+      method: "PUT",
+      body: JSON.stringify({ chapters }),
+    }),
+  );
 }
 
 export function exportAudiobookSyncMetadata(trackIds?: number[] | null): Promise<AudiobookSyncExportResponse> {
@@ -848,22 +951,28 @@ export function ensurePodcastEpisodeTrack(episodeId: number): Promise<Track> {
 }
 
 export function fetchRadioStations(): Promise<RadioStation[]> {
-  return request<RadioStation[]>("/radio/stations");
+  return nativeFetchRadioStations().catch(() => request<RadioStation[]>("/radio/stations"));
 }
 
 export function saveRadioStation(requestBody: RadioStationPayload, stationId?: number | null): Promise<RadioStation> {
-  return request<RadioStation>(stationId ? `/radio/stations/${stationId}` : "/radio/stations", {
-    method: stationId ? "PATCH" : "POST",
-    body: JSON.stringify(requestBody),
-  });
+  return nativeSaveRadioStation(requestBody, stationId).catch(() =>
+    request<RadioStation>(stationId ? `/radio/stations/${stationId}` : "/radio/stations", {
+      method: stationId ? "PATCH" : "POST",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function deleteRadioStation(stationId: number): Promise<{ deleted: boolean }> {
-  return request<{ deleted: boolean }>(`/radio/stations/${stationId}`, { method: "DELETE" });
+  return nativeDeleteRadioStation(stationId).catch(() =>
+    request<{ deleted: boolean }>(`/radio/stations/${stationId}`, { method: "DELETE" }),
+  );
 }
 
 export function markRadioStationPlayed(stationId: number): Promise<RadioStation> {
-  return request<RadioStation>(`/radio/stations/${stationId}/played`, { method: "POST" });
+  return nativeMarkRadioStationPlayed(stationId).catch(() =>
+    request<RadioStation>(`/radio/stations/${stationId}/played`, { method: "POST" }),
+  );
 }
 
 export function fetchScrobbleAccounts(): Promise<ScrobbleAccount[]> {
@@ -915,14 +1024,16 @@ export function submitScrobbleOutbox(service: ScrobbleService, limit = 50): Prom
 }
 
 export function fetchLovedTracks(limit = 100): Promise<LovedTrack[]> {
-  return request<LovedTrack[]>(`/scrobbling/loved?limit=${limit}`);
+  return nativeFetchLovedTracks(limit).catch(() => request<LovedTrack[]>(`/scrobbling/loved?limit=${limit}`));
 }
 
 export function updateTrackLove(trackId: number, loved: boolean, source = "local"): Promise<TrackLoveResponse> {
-  return request<TrackLoveResponse>(`/scrobbling/tracks/${trackId}/love`, {
-    method: "PATCH",
-    body: JSON.stringify({ loved, source }),
-  });
+  return nativeUpdateTrackLove(trackId, loved, source).catch(() =>
+    request<TrackLoveResponse>(`/scrobbling/tracks/${trackId}/love`, {
+      method: "PATCH",
+      body: JSON.stringify({ loved, source }),
+    }),
+  );
 }
 
 export function importScrobbleHistory(csvPath: string, apply = false, limit = 10000): Promise<ScrobbleHistoryImportResponse> {
@@ -933,6 +1044,15 @@ export function importScrobbleHistory(csvPath: string, apply = false, limit = 10
 }
 
 export function validateGaplessPlayback(requestBody: GaplessValidationRequest): Promise<GaplessValidationResponse> {
+  return nativeGaplessValidate(requestBody).catch(() =>
+    request<GaplessValidationResponse>("/playback/gapless/validate", {
+      method: "POST",
+      body: JSON.stringify(requestBody),
+    }),
+  );
+}
+
+export function validateGaplessPlaybackViaBackend(requestBody: GaplessValidationRequest): Promise<GaplessValidationResponse> {
   return request<GaplessValidationResponse>("/playback/gapless/validate", {
     method: "POST",
     body: JSON.stringify(requestBody),
@@ -1065,18 +1185,22 @@ function appendAdvancedTrackSearchFilters(params: URLSearchParams, filters?: Adv
 }
 
 export function fetchTrack(trackId: number): Promise<Track> {
-  return request<Track>(`/tracks/${trackId}`);
+  return nativeFetchTrack(trackId).catch(() => request<Track>(`/tracks/${trackId}`));
 }
 
 export function fetchTracksBatch(trackIds: number[]): Promise<TrackBatchResponse> {
-  return request<TrackBatchResponse>("/tracks/batch", {
-    method: "POST",
-    body: JSON.stringify({ track_ids: trackIds }),
-  });
+  return nativeFetchTracksBatch(trackIds).catch(() =>
+    request<TrackBatchResponse>("/tracks/batch", {
+      method: "POST",
+      body: JSON.stringify({ track_ids: trackIds }),
+    }),
+  );
 }
 
 export function fetchSimilarTracks(trackId: number, limit = 12): Promise<SimilarTrack[]> {
-  return request<SimilarTrack[]>(`/tracks/${trackId}/similar?limit=${limit}`);
+  return nativeFetchSimilarTracks(trackId, limit).catch(() =>
+    request<SimilarTrack[]>(`/tracks/${trackId}/similar?limit=${limit}`),
+  );
 }
 
 export function deleteTrack(trackId: number, deleteFile = false): Promise<TrackDeleteResponse> {
@@ -1152,7 +1276,7 @@ export function fetchAlbums(search = ""): Promise<AlbumSummary[]> {
     params.set("search", search.trim());
   }
   params.set("limit", "20000");
-  return request<AlbumSummary[]>(`/albums?${params.toString()}`);
+  return nativeFetchAlbums(search, 20000).catch(() => request<AlbumSummary[]>(`/albums?${params.toString()}`));
 }
 
 export function fetchArtists(search = ""): Promise<ArtistSummary[]> {
@@ -1161,11 +1285,11 @@ export function fetchArtists(search = ""): Promise<ArtistSummary[]> {
     params.set("search", search.trim());
   }
   params.set("limit", "20000");
-  return request<ArtistSummary[]>(`/artists?${params.toString()}`);
+  return nativeFetchArtists(search, 20000).catch(() => request<ArtistSummary[]>(`/artists?${params.toString()}`));
 }
 
 export function fetchAlbumTracks(albumId: number): Promise<Track[]> {
-  return request<Track[]>(`/albums/${albumId}/tracks`);
+  return nativeFetchAlbumTracks(albumId).catch(() => request<Track[]>(`/albums/${albumId}/tracks`));
 }
 
 export function lookupAlbumCompletion(albumId: number): Promise<AlbumCompletionLookupResponse> {
@@ -1256,70 +1380,46 @@ export function applyArtworkCollisionRepair(limit = 200): Promise<AlbumArtworkCo
   });
 }
 
-export function fetchSmartPlaylistPresets(): Promise<Record<string, SmartPlaylistRule>> {
-  return request<Record<string, SmartPlaylistRule>>("/smart-playlists/presets");
-}
-
-export function fetchSmartPlaylists(): Promise<SmartPlaylistSummary[]> {
-  return request<SmartPlaylistSummary[]>("/smart-playlists");
-}
-
-export function createSmartPlaylist(name: string, rule: SmartPlaylistRule): Promise<SmartPlaylistSummary> {
-  return request<SmartPlaylistSummary>("/smart-playlists", {
-    method: "POST",
-    body: JSON.stringify({ name, rule }),
-  });
-}
-
-export function deleteSmartPlaylist(smartPlaylistId: number): Promise<SmartPlaylistSummary[]> {
-  return request<SmartPlaylistSummary[]>(`/smart-playlists/${smartPlaylistId}`, {
-    method: "DELETE",
-  });
-}
-
-export function previewSmartPlaylist(rule: SmartPlaylistRule): Promise<Track[]> {
-  return request<Track[]>("/smart-playlists/preview", {
-    method: "POST",
-    body: JSON.stringify(rule),
-  });
-}
-
-export function fetchSmartPlaylistTracks(smartPlaylistId: number): Promise<Track[]> {
-  return request<Track[]>(`/smart-playlists/${smartPlaylistId}/tracks`);
-}
-
 export function fetchPlaylists(): Promise<PlaylistSummary[]> {
-  return request<PlaylistSummary[]>("/playlists");
+  return nativeFetchPlaylists().catch(() => request<PlaylistSummary[]>("/playlists"));
 }
 
 export function createPlaylist(name: string): Promise<PlaylistSummary> {
-  return request<PlaylistSummary>("/playlists", {
-    method: "POST",
-    body: JSON.stringify({ name }),
-  });
+  return nativeCreatePlaylist(name).catch(() =>
+    request<PlaylistSummary>("/playlists", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+  );
 }
 
 export function deletePlaylist(playlistId: number): Promise<PlaylistSummary[]> {
-  return request<PlaylistSummary[]>(`/playlists/${playlistId}`, {
-    method: "DELETE",
-  });
+  return nativeDeletePlaylist(playlistId).catch(() =>
+    request<PlaylistSummary[]>(`/playlists/${playlistId}`, {
+      method: "DELETE",
+    }),
+  );
 }
 
 export function fetchPlaylistTracks(playlistId: number): Promise<Track[]> {
-  return request<Track[]>(`/playlists/${playlistId}/tracks`);
+  return nativeFetchPlaylistTracks(playlistId).catch(() => request<Track[]>(`/playlists/${playlistId}/tracks`));
 }
 
 export function addTracksToPlaylist(playlistId: number, trackIds: number[]): Promise<Track[]> {
-  return request<Track[]>(`/playlists/${playlistId}/tracks`, {
-    method: "POST",
-    body: JSON.stringify({ track_ids: trackIds }),
-  });
+  return nativeAddTracksToPlaylist(playlistId, trackIds).catch(() =>
+    request<Track[]>(`/playlists/${playlistId}/tracks`, {
+      method: "POST",
+      body: JSON.stringify({ track_ids: trackIds }),
+    }),
+  );
 }
 
 export function removeTrackFromPlaylist(playlistId: number, trackId: number): Promise<Track[]> {
-  return request<Track[]>(`/playlists/${playlistId}/tracks/${trackId}`, {
-    method: "DELETE",
-  });
+  return nativeRemoveTrackFromPlaylist(playlistId, trackId).catch(() =>
+    request<Track[]>(`/playlists/${playlistId}/tracks/${trackId}`, {
+      method: "DELETE",
+    }),
+  );
 }
 
 export function moveTrackInPlaylist(
@@ -1327,10 +1427,12 @@ export function moveTrackInPlaylist(
   trackId: number,
   direction: "up" | "down",
 ): Promise<Track[]> {
-  return request<Track[]>(`/playlists/${playlistId}/tracks/${trackId}/move`, {
-    method: "PATCH",
-    body: JSON.stringify({ direction }),
-  });
+  return nativeMoveTrackInPlaylist(playlistId, trackId, direction).catch(() =>
+    request<Track[]>(`/playlists/${playlistId}/tracks/${trackId}/move`, {
+      method: "PATCH",
+      body: JSON.stringify({ direction }),
+    }),
+  );
 }
 
 export function exportPlaylist(playlistId: number): Promise<ExportResponse> {
@@ -1377,10 +1479,12 @@ export function fetchScanProgress(jobId: string): Promise<ScanProgress> {
 }
 
 export function updateTrackRating(trackId: number, rating: number | null): Promise<Track> {
-  return request<Track>(`/tracks/${trackId}/rating`, {
-    method: "PATCH",
-    body: JSON.stringify({ rating }),
-  });
+  return nativeUpdateTrackRating(trackId, rating).catch(() =>
+    request<Track>(`/tracks/${trackId}/rating`, {
+      method: "PATCH",
+      body: JSON.stringify({ rating }),
+    }),
+  );
 }
 
 export function audioUrl(trackId: number): string {
@@ -1422,15 +1526,19 @@ export function fetchArtistInfo(artistName: string, refresh = false): Promise<Ar
 }
 
 export function markTrackPlayed(trackId: number): Promise<Track> {
-  return request<Track>(`/tracks/${trackId}/played`, {
-    method: "POST",
-  });
+  return nativeMarkTrackPlayed(trackId).catch(() =>
+    request<Track>(`/tracks/${trackId}/played`, {
+      method: "POST",
+    }),
+  );
 }
 
 export function markTrackSkipped(trackId: number): Promise<Track> {
-  return request<Track>(`/tracks/${trackId}/skipped`, {
-    method: "POST",
-  });
+  return nativeMarkTrackSkipped(trackId).catch(() =>
+    request<Track>(`/tracks/${trackId}/skipped`, {
+      method: "POST",
+    }),
+  );
 }
 
 export function fetchArtistLocalTracks(artistName: string, limit = 100): Promise<Track[]> {
@@ -1445,7 +1553,7 @@ export function clearArtistCache(): Promise<{ deleted: number }> {
 }
 
 export function fetchAutoDjAvoidRules(): Promise<AutoDjAvoidRule[]> {
-  return request<AutoDjAvoidRule[]>("/autodj/avoid");
+  return nativeFetchAutoDjAvoidRules().catch(() => request<AutoDjAvoidRule[]>("/autodj/avoid"));
 }
 
 export function createAutoDjAvoidRule(requestBody: {
@@ -1453,14 +1561,18 @@ export function createAutoDjAvoidRule(requestBody: {
   track_id?: number | null;
   value?: string | null;
 }): Promise<AutoDjAvoidRule> {
-  return request<AutoDjAvoidRule>("/autodj/avoid", {
-    method: "POST",
-    body: JSON.stringify(requestBody),
-  });
+  return nativeCreateAutoDjAvoidRule(requestBody).catch(() =>
+    request<AutoDjAvoidRule>("/autodj/avoid", {
+      method: "POST",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function deleteAutoDjAvoidRule(ruleId: number): Promise<AutoDjAvoidRule[]> {
-  return request<AutoDjAvoidRule[]>(`/autodj/avoid/${ruleId}`, { method: "DELETE" });
+  return nativeDeleteAutoDjAvoidRule(ruleId).catch(() =>
+    request<AutoDjAvoidRule[]>(`/autodj/avoid/${ruleId}`, { method: "DELETE" }),
+  );
 }
 
 export function recordRecommendationFeedback(requestBody: {
@@ -1570,10 +1682,12 @@ export function deleteRecommendationProfile(profileId: number): Promise<Recommen
 }
 
 export function generateAutoDj(settings: AutoDjSettings): Promise<AutoDjResponse> {
-  return request<AutoDjResponse>("/autodj/generate", {
-    method: "POST",
-    body: JSON.stringify(settings),
-  });
+  return nativeGenerateAutoDj(settings).catch(() =>
+    request<AutoDjResponse>("/autodj/generate", {
+      method: "POST",
+      body: JSON.stringify(settings),
+    }),
+  );
 }
 
 export function exportQueue(trackIds: number[]): Promise<ExportResponse> {

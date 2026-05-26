@@ -132,7 +132,7 @@ src-tauri/
 └── build.rs
 ```
 
-Tauri should stay thin outside native desktop concerns. Put native windowing, dialogs, process management, file reveal/open, Windows media-control work, and the optional Rust playback engine here. Do not duplicate scanner, recommender, playlist, or database rules in Rust.
+Tauri should stay thin outside native desktop concerns and selected SQLite fast paths. Put native windowing, dialogs, process management, file reveal/open, Windows media-control work, the optional Rust playback engine, and small native-first database routes here. Python remains the owner for scanning, mutagen writes, online services, optional ML, and complex library tools; Rust database paths should mirror tested FastAPI behavior and keep the FastAPI fallback intact.
 
 ## Scripts
 

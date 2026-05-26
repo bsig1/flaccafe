@@ -4533,6 +4533,18 @@ export default function App() {
   }, [status]);
 
   useEffect(() => {
+    function handleFastApiCall(event: Event) {
+      const detail = (event as CustomEvent<{ count?: number; method?: string; path?: string }>).detail;
+      const count = detail?.count ?? 0;
+      const method = detail?.method ?? "GET";
+      const path = detail?.path ?? "unknown path";
+      setStatus(`FastAPI fallback #${count}: ${method} ${path}`);
+    }
+    window.addEventListener("flac-cafe:fast-api-call", handleFastApiCall);
+    return () => window.removeEventListener("flac-cafe:fast-api-call", handleFastApiCall);
+  }, []);
+
+  useEffect(() => {
     if (!hasLoadedInitialLibrary || currentLibraryTrackQueryKey() !== defaultLibraryTrackQueryKey()) {
       return;
     }

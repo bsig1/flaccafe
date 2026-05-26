@@ -44,6 +44,32 @@ export interface NativeFolderWatchStatus {
   last_error: string | null;
 }
 
+export interface NativeToolRunResponse {
+  executable: string;
+  args: string[];
+  exit_code: number | null;
+  stdout: string;
+  stderr: string;
+  elapsed_ms: number;
+  timed_out: boolean;
+}
+
+export interface NativeAudioConversionSupervisionResponse {
+  executable: string;
+  args: string[];
+  exit_code: number | null;
+  elapsed_ms: number;
+  timed_out: boolean;
+  succeeded: boolean;
+  input_path: string | null;
+  output_path: string | null;
+  input_size_bytes: number | null;
+  output_size_bytes: number | null;
+  output_to_input_ratio: number | null;
+  stdout: string;
+  stderr_tail: string;
+}
+
 async function invokeNative<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<T>(command, args);
@@ -91,6 +117,36 @@ export function nativeFolderWatchMarkEvent(eventCount: number, error?: string | 
   return invokeNative<NativeFolderWatchStatus>("native_folder_watch_mark_event", {
     eventCount,
     error: error ?? null,
+  });
+}
+
+export function nativeRunTool(executable: string, args: string[] = [], timeoutMs = 15000): Promise<NativeToolRunResponse> {
+  return invokeNative<NativeToolRunResponse>("native_run_tool", {
+    executable,
+    args,
+    timeoutMs,
+  });
+}
+
+export function nativeSuperviseAudioConversion({
+  executable,
+  args = [],
+  inputPath,
+  outputPath,
+  timeoutMs = 10 * 60 * 1000,
+}: {
+  executable: string;
+  args?: string[];
+  inputPath?: string | null;
+  outputPath?: string | null;
+  timeoutMs?: number;
+}): Promise<NativeAudioConversionSupervisionResponse> {
+  return invokeNative<NativeAudioConversionSupervisionResponse>("native_supervise_audio_conversion", {
+    executable,
+    args,
+    inputPath: inputPath ?? null,
+    outputPath: outputPath ?? null,
+    timeoutMs,
   });
 }
 

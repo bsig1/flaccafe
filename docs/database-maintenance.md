@@ -16,7 +16,6 @@ Core tables:
 - `albums` stores normalized album summaries connected from tracks.
 - `play_events` records played, skipped, and rated events.
 - `playlists` and `playlist_tracks` store manual playlists.
-- `smart_playlists` stores JSON rules.
 - `recommendation_profiles` and `recommendation_runs` store AutoDJ tuning and generated queue history.
 - `autodj_avoid_rules` and `recommendation_feedback` store recommendation preferences.
 - `lyrics`, `artist_info_cache`, `artwork_cache`, and `track_metadata_cache` store derived or optional enrichment data.

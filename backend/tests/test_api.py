@@ -93,6 +93,200 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(diagnostics.status_code, 200)
         self.assertIn("items", diagnostics.json())
 
+    def test_frontend_migrated_paths_accept_good_inputs_and_reject_bad_inputs(self) -> None:
+        music_dir = self.root / "Frontend Paths"
+        music_dir.mkdir()
+        first_file = music_dir / "01 - Good Path.flac"
+        second_file = music_dir / "02 - Edge Path.mp3"
+        first_file.write_bytes(b"audio")
+        second_file.write_bytes(b"audio")
+        first_id = insert_track(
+            first_file,
+            title="Good Path",
+            artist="Frontend Artist",
+            album="Frontend Album",
+            genre="Synth Pop",
+            rating=3.5,
+        )
+        second_id = insert_track(
+            second_file,
+            title="Edge Path",
+            artist="Frontend Artist feat. Guest",
+            album="Frontend Album",
+            genre="Rock",
+            rating=None,
+        )
+
+        settings = self.client.patch(
+            "/settings",
+            json={
+                "write_ratings_to_files": True,
+                "auto_write_fetched_lyrics_sidecars": True,
+                "cd_auto_lookup_metadata": False,
+                "acoustid_api_key": "frontend-test-key",
+                "lastfm_api_key": "frontend-lastfm-key",
+                "lastfm_api_secret": "frontend-lastfm-secret",
+            },
+        )
+        self.assertEqual(settings.status_code, 200)
+        settings_body = settings.json()
+        self.assertTrue(settings_body["write_ratings_to_files"])
+        self.assertTrue(settings_body["auto_write_fetched_lyrics_sidecars"])
+        self.assertFalse(settings_body["cd_auto_lookup_metadata"])
+        self.assertTrue(settings_body["acoustid_api_key_configured"])
+        self.assertNotIn("frontend-test-key", json.dumps(settings_body))
+
+        cleared_key = self.client.patch("/settings", json={"clear_acoustid_api_key": True})
+        self.assertEqual(cleared_key.status_code, 200)
+        self.assertFalse(cleared_key.json()["acoustid_api_key_configured"])
+        self.assertEqual(
+            self.client.patch("/settings", json={"write_ratings_to_files": "definitely"}).status_code,
+            422,
+        )
+        write_off = self.client.patch("/settings", json={"write_ratings_to_files": False})
+        self.assertEqual(write_off.status_code, 200)
+
+        page = self.client.get(
+            "/tracks/page",
+            params={"search": "frontend good", "limit": 25, "sort_by": "title", "sort_direction": "asc"},
+        )
+        self.assertEqual(page.status_code, 200)
+        self.assertEqual(page.json()["total"], 1)
+        self.assertEqual(page.json()["tracks"][0]["id"], first_id)
+        self.assertEqual(
+            self.client.get("/tracks/page", params={"limit": 0}).status_code,
+            422,
+        )
+
+        batch = self.client.post("/tracks/batch", json={"track_ids": [first_id, second_id, first_id, -4, 999999]})
+        self.assertEqual(batch.status_code, 200)
+        self.assertEqual([track["id"] for track in batch.json()["tracks"]], [first_id, second_id])
+        self.assertEqual(batch.json()["missing_ids"], [999999])
+        self.assertEqual(self.client.post("/tracks/batch", json={"track_ids": "not-a-list"}).status_code, 422)
+
+        track = self.client.get(f"/tracks/{first_id}")
+        self.assertEqual(track.status_code, 200)
+        self.assertEqual(track.json()["title"], "Good Path")
+        self.assertEqual(self.client.get("/tracks/999999").status_code, 404)
+
+        rated = self.client.patch(f"/tracks/{second_id}/rating", json={"rating": 4.5})
+        self.assertEqual(rated.status_code, 200)
+        self.assertEqual(rated.json()["rating"], 4.5)
+        unrated = self.client.patch(f"/tracks/{second_id}/rating", json={"rating": None})
+        self.assertEqual(unrated.status_code, 200)
+        self.assertIsNone(unrated.json()["rating"])
+        self.assertEqual(self.client.patch(f"/tracks/{second_id}/rating", json={"rating": 6}).status_code, 422)
+        self.assertEqual(self.client.patch(f"/tracks/{second_id}/rating", json={"rating": 0.25}).status_code, 422)
+        write_on = self.client.patch("/settings", json={"write_ratings_to_files": True})
+        self.assertEqual(write_on.status_code, 200)
+        self.assertEqual(self.client.patch(f"/tracks/{second_id}/rating", json={"rating": 4}).status_code, 400)
+        write_off_again = self.client.patch("/settings", json={"write_ratings_to_files": False})
+        self.assertEqual(write_off_again.status_code, 200)
+
+        played = self.client.post(f"/tracks/{first_id}/played")
+        skipped = self.client.post(f"/tracks/{first_id}/skipped")
+        self.assertEqual(played.status_code, 200)
+        self.assertEqual(skipped.status_code, 200)
+        with connect() as conn:
+            events = conn.execute(
+                "SELECT event_type, count(*) AS count FROM play_events WHERE track_id = ? GROUP BY event_type",
+                (first_id,),
+            ).fetchall()
+        self.assertEqual({row["event_type"]: row["count"] for row in events}, {"played": 1, "skipped": 1})
+        self.assertEqual(self.client.post("/tracks/999999/played").status_code, 404)
+
+        playlist = self.client.post("/playlists", json={"name": " Frontend Route Mix "})
+        self.assertEqual(playlist.status_code, 200)
+        playlist_id = playlist.json()["id"]
+        self.assertEqual(playlist.json()["name"], "Frontend Route Mix")
+        self.assertEqual(self.client.post("/playlists", json={"name": "   "}).status_code, 400)
+        self.assertEqual(self.client.post("/playlists", json={"name": "Frontend Route Mix"}).status_code, 409)
+
+        added = self.client.post(f"/playlists/{playlist_id}/tracks", json={"track_ids": [first_id, second_id, first_id]})
+        self.assertEqual(added.status_code, 200)
+        self.assertEqual([track["id"] for track in added.json()], [first_id, second_id])
+        self.assertEqual(self.client.post(f"/playlists/{playlist_id}/tracks", json={"track_ids": [999999]}).status_code, 404)
+        self.assertEqual(self.client.post(f"/playlists/{playlist_id}/tracks", json={"track_ids": []}).status_code, 422)
+
+        moved = self.client.patch(f"/playlists/{playlist_id}/tracks/{second_id}/move", json={"direction": "up"})
+        self.assertEqual(moved.status_code, 200)
+        self.assertEqual([track["id"] for track in moved.json()], [second_id, first_id])
+        self.assertEqual(
+            self.client.patch(f"/playlists/{playlist_id}/tracks/{second_id}/move", json={"direction": "sideways"}).status_code,
+            422,
+        )
+        removed = self.client.delete(f"/playlists/{playlist_id}/tracks/{second_id}")
+        self.assertEqual(removed.status_code, 200)
+        self.assertEqual([track["id"] for track in removed.json()], [first_id])
+        self.assertEqual(self.client.delete("/playlists/999999").status_code, 404)
+        deleted_playlists = self.client.delete(f"/playlists/{playlist_id}")
+        self.assertEqual(deleted_playlists.status_code, 200)
+        self.assertNotIn(playlist_id, [item["id"] for item in deleted_playlists.json()])
+
+        avoid_track = self.client.post("/autodj/avoid", json={"scope": "track", "track_id": first_id})
+        avoid_artist = self.client.post("/autodj/avoid", json={"scope": "artist", "track_id": first_id})
+        avoid_album = self.client.post("/autodj/avoid", json={"scope": "album", "track_id": first_id})
+        avoid_genre = self.client.post("/autodj/avoid", json={"scope": "genre", "value": "Synth Pop"})
+        for response in [avoid_track, avoid_artist, avoid_album, avoid_genre]:
+            self.assertEqual(response.status_code, 200)
+        avoid_rules = self.client.get("/autodj/avoid")
+        self.assertEqual(avoid_rules.status_code, 200)
+        self.assertEqual(len(avoid_rules.json()), 4)
+        remaining_rules = self.client.delete(f"/autodj/avoid/{avoid_track.json()['id']}")
+        self.assertEqual(remaining_rules.status_code, 200)
+        self.assertEqual(len(remaining_rules.json()), 3)
+        self.assertEqual(self.client.post("/autodj/avoid", json={"scope": "track"}).status_code, 400)
+        self.assertEqual(self.client.post("/autodj/avoid", json={"scope": "mood", "value": "bright"}).status_code, 422)
+
+        with connect() as conn:
+            conn.execute(
+                "INSERT INTO artist_info_cache(artist_key, artist_name, summary) VALUES('frontend', 'Frontend', 'Summary')"
+            )
+            conn.execute(
+                """
+                INSERT INTO track_metadata_cache(path_key, path, file_modified_at, file_size, metadata_json)
+                VALUES('frontend-meta', ?, 'now', 1, '{}')
+                """,
+                (str(first_file),),
+            )
+            conn.execute(
+                """
+                INSERT INTO artwork_cache(path_key, path, file_modified_at, file_size, media_type, data)
+                VALUES('frontend-art', ?, 'now', 1, 'image/jpeg', ?)
+                """,
+                (str(first_file), b"art"),
+            )
+            conn.execute(
+                "INSERT INTO recommendation_runs(settings_json, drift_json, track_ids_json) VALUES('{}', '{}', '[]')"
+            )
+            conn.execute(
+                """
+                INSERT INTO bulk_action_undo_log(batch_id, action_type, summary, payload_json)
+                VALUES('frontend-batch', 'track_remove', 'Removed test track', ?)
+                """,
+                (json.dumps({"track_id": first_id}),),
+            )
+            conn.commit()
+
+        cleared = self.client.post(
+            "/library/maintenance/clear",
+            json={"targets": ["artist", "artist", "artwork", "metadata", "recommendation_history"]},
+        )
+        self.assertEqual(cleared.status_code, 200)
+        self.assertEqual(
+            cleared.json()["cleared"],
+            {"artist": 1, "artwork": 1, "metadata": 1, "recommendation_history": 1},
+        )
+        self.assertEqual(self.client.post("/library/maintenance/clear", json={"targets": ["everything"]}).status_code, 422)
+
+        undo_log = self.client.get("/library/tools/undo-log", params={"limit": 5})
+        undo_batches = self.client.get("/library/tools/undo-batches", params={"limit": 5})
+        self.assertEqual(undo_log.status_code, 200)
+        self.assertEqual(undo_batches.status_code, 200)
+        self.assertEqual(undo_log.json()[0]["payload"]["track_id"], first_id)
+        self.assertEqual(undo_batches.json()[0]["batch_id"], "frontend-batch")
+        self.assertEqual(self.client.get("/library/tools/undo-log", params={"limit": 0}).status_code, 422)
+
     def test_reset_local_data_requires_confirmation_and_keeps_backup(self) -> None:
         track_id = insert_track(self.root / "song.flac", title="Reset Me")
         lyrics_dir = self.root / "lyrics"

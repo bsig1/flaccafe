@@ -194,33 +194,6 @@ export interface PlaylistSummary {
   updated_at: string;
 }
 
-export interface SmartPlaylistRule {
-  preset?: string | null;
-  search?: string | null;
-  artist?: string | null;
-  album?: string | null;
-  genre?: string | null;
-  min_rating?: number | null;
-  max_rating?: number | null;
-  unrated_only?: boolean;
-  not_played_days?: number | null;
-  recently_added_days?: number | null;
-  max_play_count?: number | null;
-  min_year?: number | null;
-  max_year?: number | null;
-  missing_metadata?: boolean;
-  duplicate_only?: boolean;
-  limit?: number;
-}
-
-export interface SmartPlaylistSummary {
-  id: number;
-  name: string;
-  rule: SmartPlaylistRule;
-  created_at: string;
-  updated_at: string;
-}
-
 export interface PlayEventEntry {
   id: number;
   track_id: number;

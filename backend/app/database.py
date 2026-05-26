@@ -92,14 +92,6 @@ CREATE TABLE IF NOT EXISTS playlist_tracks (
   UNIQUE(playlist_id, track_id)
 );
 
-CREATE TABLE IF NOT EXISTS smart_playlists (
-  id INTEGER PRIMARY KEY,
-  name TEXT NOT NULL UNIQUE,
-  rule_json TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
 CREATE TABLE IF NOT EXISTS artist_info_cache (
   artist_key TEXT PRIMARY KEY,
   artist_name TEXT NOT NULL,
@@ -387,7 +379,6 @@ CREATE INDEX IF NOT EXISTS idx_tracks_last_played ON tracks(last_played_at);
 CREATE INDEX IF NOT EXISTS idx_play_events_track_id ON play_events(track_id);
 CREATE INDEX IF NOT EXISTS idx_playlist_tracks_playlist_id ON playlist_tracks(playlist_id, position);
 CREATE INDEX IF NOT EXISTS idx_playlist_tracks_track_id ON playlist_tracks(track_id);
-CREATE INDEX IF NOT EXISTS idx_smart_playlists_name ON smart_playlists(name);
 CREATE INDEX IF NOT EXISTS idx_artist_info_updated_at ON artist_info_cache(updated_at);
 CREATE INDEX IF NOT EXISTS idx_autodj_avoid_rules_scope ON autodj_avoid_rules(scope, target_key);
 CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_track_id ON recommendation_feedback(track_id, created_at);

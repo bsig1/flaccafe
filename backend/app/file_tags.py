@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 from pathlib import Path
 
-from mutagen import File as MutagenFile
+from mutagen import File as MutagenFile, MutagenError
 from mutagen.flac import FLAC
 from mutagen.flac import Picture
 from mutagen.id3 import APIC, ID3NoHeaderError, POPM, TXXX, USLT
@@ -34,6 +34,25 @@ METADATA_KEY_MAP = {
     "genre": "genre",
     "year": "date",
 }
+
+
+def _load_audio(path: Path, *, easy: bool = False, quiet: bool = False) -> object | None:
+    try:
+        audio = MutagenFile(path, easy=easy)
+    except MutagenError as exc:
+        if quiet:
+            return None
+        raise ValueError(f"Could not read audio tags: {exc}") from exc
+    if audio is None and not quiet:
+        raise ValueError("Could not read audio tags")
+    return audio
+
+
+def _save_audio(audio: object) -> None:
+    try:
+        audio.save()  # type: ignore[attr-defined]
+    except MutagenError as exc:
+        raise ValueError(f"Could not save audio tags: {exc}") from exc
 
 
 def normalize_rating(value: float | None) -> float | None:
@@ -86,7 +105,7 @@ def _write_vorbis_rating(audio: FLAC | OggVorbis | OggOpus, rating: float | None
     if percent is not None and fmps is not None:
         audio.tags[PLAIN_RATING] = [percent]
         audio.tags[FMPS_RATING] = [fmps]
-    audio.save()
+    _save_audio(audio)
 
 
 def _write_mp3_rating(audio: MP3, rating: float | None) -> None:
@@ -115,7 +134,7 @@ def _write_mp3_rating(audio: MP3, rating: float | None) -> None:
         tags.add(TXXX(encoding=3, desc=PLAIN_RATING, text=[percent]))
         tags.add(TXXX(encoding=3, desc=FMPS_RATING, text=[fmps]))
         tags.add(TXXX(encoding=3, desc="FLAC Cafe Rating", text=[str(normalize_rating(rating))]))
-    audio.save()
+    _save_audio(audio)
 
 
 def _write_mp4_rating(audio: MP4, rating: float | None) -> None:
@@ -137,16 +156,14 @@ def _write_mp4_rating(audio: MP4, rating: float | None) -> None:
         audio.tags["----:com.apple.iTunes:RATING"] = [MP4FreeForm(percent.encode("utf-8"))]
         audio.tags["----:com.apple.iTunes:FMPS_Rating"] = [MP4FreeForm(fmps.encode("utf-8"))]
         audio.tags["----:com.apple.iTunes:FLAC Cafe Rating"] = [MP4FreeForm(str(normalized).encode("utf-8"))]
-    audio.save()
+    _save_audio(audio)
 
 
 def write_track_rating(path: Path, rating: float | None) -> None:
     if not path.exists() or not path.is_file():
         raise ValueError("Audio file is missing on disk")
 
-    audio = MutagenFile(path)
-    if audio is None:
-        raise ValueError("Could not read audio tags")
+    audio = _load_audio(path)
 
     if isinstance(audio, (FLAC, OggVorbis, OggOpus)):
         _write_vorbis_rating(audio, rating)
@@ -197,7 +214,7 @@ def _write_vorbis_replaygain_tags(
         _remove_text_keys(audio.tags, _matching_text_keys(audio.tags, keys))
         if value is not None:
             audio.tags[keys[0]] = [value]
-    audio.save()
+    _save_audio(audio)
 
 
 def _write_mp3_replaygain_tags(audio: MP3, values: dict[str, str | None]) -> None:
@@ -220,7 +237,7 @@ def _write_mp3_replaygain_tags(audio: MP3, values: dict[str, str | None]) -> Non
                 tags.delall(f"TXXX:{frame.desc}")
         if value is not None:
             tags.add(TXXX(encoding=3, desc=descriptions[1], text=[value]))
-    audio.save()
+    _save_audio(audio)
 
 
 def _write_mp4_replaygain_tags(audio: MP4, values: dict[str, str | None]) -> None:
@@ -234,7 +251,7 @@ def _write_mp4_replaygain_tags(audio: MP4, values: dict[str, str | None]) -> Non
         _remove_text_keys(audio.tags, _matching_text_keys(audio.tags, freeform_keys))
         if value is not None:
             audio.tags[freeform_keys[1]] = [MP4FreeForm(value.encode("utf-8"))]
-    audio.save()
+    _save_audio(audio)
 
 
 def write_replaygain_tags(
@@ -247,9 +264,7 @@ def write_replaygain_tags(
     if not path.exists() or not path.is_file():
         raise ValueError("Audio file is missing on disk")
 
-    audio = MutagenFile(path)
-    if audio is None:
-        raise ValueError("Could not read audio tags")
+    audio = _load_audio(path)
 
     values = _replaygain_tag_values(track_gain_db, track_peak, album_gain_db, album_peak)
     if isinstance(audio, (FLAC, OggVorbis, OggOpus)):
@@ -286,9 +301,7 @@ def write_track_metadata(path: Path, metadata: dict[str, object]) -> None:
     if not path.exists() or not path.is_file():
         raise ValueError("Audio file is missing on disk")
 
-    audio = MutagenFile(path, easy=True)
-    if audio is None:
-        raise ValueError("Could not read audio tags")
+    audio = _load_audio(path, easy=True)
 
     if audio.tags is None:
         try:
@@ -310,7 +323,7 @@ def write_track_metadata(path: Path, metadata: dict[str, object]) -> None:
         except Exception as exc:
             raise ValueError(f"Could not write {field} to {path.suffix or 'this file type'}") from exc
 
-    audio.save()
+    _save_audio(audio)
 
 
 def _custom_text(value: object) -> str | None:
@@ -336,7 +349,7 @@ def _write_vorbis_custom_tags(audio: FLAC | OggVorbis | OggOpus, tags: dict[str,
         _remove_text_keys(audio.tags, matching_keys or [key])
         if value is not None:
             audio.tags[key] = [value]
-    audio.save()
+    _save_audio(audio)
 
 
 def _write_mp3_custom_tags(audio: MP3, tags: dict[str, object | None]) -> None:
@@ -359,7 +372,7 @@ def _write_mp3_custom_tags(audio: MP3, tags: dict[str, object | None]) -> None:
                 id3_tags.delall(f"TXXX:{frame.desc}")
         if value is not None:
             id3_tags.add(TXXX(encoding=3, desc=key, text=[value]))
-    audio.save()
+    _save_audio(audio)
 
 
 def _write_mp4_custom_tags(audio: MP4, tags: dict[str, object | None]) -> None:
@@ -375,7 +388,7 @@ def _write_mp4_custom_tags(audio: MP4, tags: dict[str, object | None]) -> None:
         _remove_text_keys(audio.tags, matching_keys or [mp4_key])
         if value is not None:
             audio.tags[mp4_key] = [MP4FreeForm(value.encode("utf-8"))]
-    audio.save()
+    _save_audio(audio)
 
 
 def write_custom_tags(path: Path, tags: dict[str, object | None]) -> None:
@@ -384,9 +397,7 @@ def write_custom_tags(path: Path, tags: dict[str, object | None]) -> None:
     if not tags:
         return
 
-    audio = MutagenFile(path)
-    if audio is None:
-        raise ValueError("Could not read audio tags")
+    audio = _load_audio(path)
 
     if isinstance(audio, (FLAC, OggVorbis, OggOpus)):
         _write_vorbis_custom_tags(audio, tags)
@@ -420,7 +431,7 @@ def read_track_artwork(path: Path) -> tuple[bytes, str] | None:
     if not path.exists() or not path.is_file():
         return None
 
-    audio = MutagenFile(path)
+    audio = _load_audio(path, quiet=True)
     if audio is None:
         return None
 
@@ -481,7 +492,7 @@ def _write_flac_artwork(audio: FLAC, data: bytes, media_type: str) -> None:
     for picture in preserved:
         audio.add_picture(picture)
     audio.add_picture(_picture_block(data, media_type))
-    audio.save()
+    _save_audio(audio)
 
 
 def _write_mp3_artwork(audio: MP3, data: bytes, media_type: str) -> None:
@@ -499,7 +510,7 @@ def _write_mp3_artwork(audio: MP3, data: bytes, media_type: str) -> None:
 
     tags.delall("APIC")
     tags.add(APIC(encoding=3, mime=media_type, type=3, desc="Cover", data=data))
-    audio.save()
+    _save_audio(audio)
 
 
 def _write_mp4_artwork(audio: MP4, data: bytes, media_type: str) -> None:
@@ -510,7 +521,7 @@ def _write_mp4_artwork(audio: MP4, data: bytes, media_type: str) -> None:
 
     image_format = MP4Cover.FORMAT_PNG if media_type == "image/png" else MP4Cover.FORMAT_JPEG
     audio.tags["covr"] = [MP4Cover(data, imageformat=image_format)]
-    audio.save()
+    _save_audio(audio)
 
 
 def _write_vorbis_artwork(audio: OggVorbis | OggOpus, data: bytes, media_type: str) -> None:
@@ -522,7 +533,7 @@ def _write_vorbis_artwork(audio: OggVorbis | OggOpus, data: bytes, media_type: s
     _remove_text_keys(audio.tags, ["metadata_block_picture", "coverart", "coverartmime"])
     encoded = base64.b64encode(_picture_block(data, media_type).write()).decode("ascii")
     audio.tags["metadata_block_picture"] = [encoded]
-    audio.save()
+    _save_audio(audio)
 
 
 def write_track_artwork(path: Path, data: bytes, media_type: str) -> None:
@@ -531,9 +542,7 @@ def write_track_artwork(path: Path, data: bytes, media_type: str) -> None:
     if media_type not in {"image/jpeg", "image/png"}:
         raise ValueError("Embedded artwork writes support JPEG and PNG")
 
-    audio = MutagenFile(path)
-    if audio is None:
-        raise ValueError("Could not read audio tags")
+    audio = _load_audio(path)
 
     if isinstance(audio, FLAC):
         _write_flac_artwork(audio, data, media_type)
@@ -559,7 +568,7 @@ def _write_vorbis_lyrics(audio: FLAC | OggVorbis | OggOpus, lyrics: str, is_sync
 
     _remove_text_keys(audio.tags, ["LYRICS", "lyrics", "UNSYNCEDLYRICS", "unsyncedlyrics", "SYNCEDLYRICS", "syncedlyrics"])
     audio.tags["SYNCEDLYRICS" if is_synced else "LYRICS"] = [lyrics]
-    audio.save()
+    _save_audio(audio)
 
 
 def _write_mp3_lyrics(audio: MP3, lyrics: str, is_synced: bool) -> None:
@@ -584,7 +593,7 @@ def _write_mp3_lyrics(audio: MP3, lyrics: str, is_synced: bool) -> None:
         tags.add(TXXX(encoding=3, desc="SYNCEDLYRICS", text=[lyrics]))
     else:
         tags.add(USLT(encoding=3, lang="eng", desc="", text=lyrics))
-    audio.save()
+    _save_audio(audio)
 
 
 def _write_mp4_lyrics(audio: MP4, lyrics: str, is_synced: bool) -> None:
@@ -598,7 +607,7 @@ def _write_mp4_lyrics(audio: MP4, lyrics: str, is_synced: bool) -> None:
         audio.tags["----:com.apple.iTunes:SYNCEDLYRICS"] = [MP4FreeForm(lyrics.encode("utf-8"))]
     else:
         audio.tags["\xa9lyr"] = [lyrics]
-    audio.save()
+    _save_audio(audio)
 
 
 def write_track_lyrics(path: Path, lyrics: str, is_synced: bool = False) -> None:
@@ -609,9 +618,7 @@ def write_track_lyrics(path: Path, lyrics: str, is_synced: bool = False) -> None
     if not cleaned:
         raise ValueError("Lyrics are empty")
 
-    audio = MutagenFile(path)
-    if audio is None:
-        raise ValueError("Could not read audio tags")
+    audio = _load_audio(path)
 
     if isinstance(audio, (FLAC, OggVorbis, OggOpus)):
         _write_vorbis_lyrics(audio, cleaned, is_synced)

@@ -203,38 +203,6 @@ class PlaylistMoveRequest(BaseModel):
     direction: str = Field(pattern="^(up|down)$")
 
 
-class SmartPlaylistRule(BaseModel):
-    preset: str | None = None
-    search: str | None = None
-    artist: str | None = None
-    album: str | None = None
-    genre: str | None = None
-    min_rating: float | None = Field(default=None, ge=0.5, le=5)
-    max_rating: float | None = Field(default=None, ge=0.5, le=5)
-    unrated_only: bool = False
-    not_played_days: int | None = Field(default=None, ge=0, le=3650)
-    recently_added_days: int | None = Field(default=None, ge=0, le=3650)
-    max_play_count: int | None = Field(default=None, ge=0, le=100000)
-    min_year: int | None = Field(default=None, ge=1900, le=2100)
-    max_year: int | None = Field(default=None, ge=1900, le=2100)
-    missing_metadata: bool = False
-    duplicate_only: bool = False
-    limit: int = Field(default=200, ge=1, le=2000)
-
-
-class SmartPlaylistSummary(BaseModel):
-    id: int
-    name: str
-    rule: SmartPlaylistRule
-    created_at: str
-    updated_at: str
-
-
-class SmartPlaylistCreateRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=120)
-    rule: SmartPlaylistRule
-
-
 class LyricsResponse(BaseModel):
     track_id: int
     lyrics: str | None = None

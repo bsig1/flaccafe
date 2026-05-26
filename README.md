@@ -47,10 +47,10 @@ Windows beta installers are published on the [GitHub Releases page](https://gith
 
 - Desktop shell: Tauri v2
 - Frontend: React, TypeScript, Vite, Tailwind CSS
-- Backend: Python, FastAPI, mutagen, SQLite
+- Backend: Python, FastAPI, mutagen, SQLite, with Rust native SQLite fast paths for common desktop flows
 - Optional analysis: CLAP through Transformers and Torch
 
-The MVP uses FastAPI because it keeps the music logic in Python, keeps React focused on UI state, and allows the backend to be tested independently. Tauri launches the packaged backend for desktop builds.
+The MVP started with FastAPI because it keeps music logic in Python, keeps React focused on UI state, and allows the backend to be tested independently. The desktop build now also uses Rust native commands for common SQLite reads and lightweight mutations, with FastAPI kept as the fallback and Python owner for scanning, file tag writes, online services, and optional ML.
 
 ## Repo Layout
 
