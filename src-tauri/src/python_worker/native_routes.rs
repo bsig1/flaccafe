@@ -489,6 +489,10 @@ pub(super) fn try_handle_native_json(
         "parse_playlist" => Some(to_json(native_library::native_parse_playlist(
             required_body_string(&body, "playlist_path")?,
         )?)?),
+        "import_playlist" => Some(to_json(native_library::native_import_playlist(
+            required_body_string(&body, "playlist_path")?,
+            body_string(&body, "name"),
+        )?)?),
         "export_autodj" | "export_playlist" => Some(to_json(native_library::native_export_m3u(
             required_body_string(&body, "playlist_path")?,
             required_body_string_vec(&body, "track_paths")?,
