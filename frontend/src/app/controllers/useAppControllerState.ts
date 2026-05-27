@@ -2,13 +2,13 @@
 import { useRef, useState } from "react";
 
 import {
+  DEFAULT_LIBRARY_SORT,
   defaultLibraryTrackQueryKey,
   indexedStartupTracks,
   readStartupLibrarySnapshot,
   type StartupLibrarySnapshot,
 } from "../appHelpers";
 import {
-  DEFAULT_LIBRARY_SORT,
   defaultAutoDj,
   emptyRecommendationDrift,
   readQuickStartDismissed,

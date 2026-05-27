@@ -1,12 +1,14 @@
 // @ts-nocheck
 import { placeFloatingMenu } from "../../lib/uiInteractions";
 import {
+  themeAccentLabels,
+  themeOrder,
+} from "../../config/theme";
+import {
   APP_CONTEXT_MENU_HEIGHT,
   APP_CONTEXT_MENU_WIDTH,
   MENU_VIEWPORT_MARGIN,
   QUEUE_HISTORY_LIMIT,
-  themeAccentLabels,
-  themeOrder,
   writeQuickStartDismissed,
 } from "../shared";
 
