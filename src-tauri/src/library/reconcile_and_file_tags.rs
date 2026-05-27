@@ -183,7 +183,19 @@ pub fn library_reconcile_preview(
 pub(super) fn normalized_path_key(path: &str) -> String {
     let candidate = PathBuf::from(path.trim());
     let resolved = candidate.canonicalize().unwrap_or(candidate);
-    resolved.to_string_lossy().to_lowercase()
+    let text = resolved.to_string_lossy();
+    let clean = if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        text.to_string()
+    };
+    if cfg!(windows) {
+        clean.to_ascii_lowercase()
+    } else {
+        clean
+    }
 }
 
 fn path_under_source(path: &str, source: &Path) -> bool {

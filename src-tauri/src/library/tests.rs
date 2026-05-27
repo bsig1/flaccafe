@@ -7,7 +7,7 @@ mod tests {
         recommendations::generate_autodj,
         refresh_library_derived_data,
         search::search_terms,
-        sort_expression, tracks_page, DesktopLibraryState,
+        sort_expression, tracks_page, normalized_path_key, DesktopLibraryState,
     };
     use rusqlite::params;
     use serde_json::json;
@@ -31,6 +31,16 @@ mod tests {
             sort_expression("drop table tracks"),
             "lower(coalesce(artist, ''))"
         );
+    }
+
+    #[test]
+    fn normalized_path_key_strips_windows_verbatim_prefixes() {
+        let key = normalized_path_key(r"\\?\C:\Music\Song.flac");
+        if cfg!(windows) {
+            assert_eq!(key, r"c:\music\song.flac");
+        } else {
+            assert_eq!(key, r"C:\Music\Song.flac");
+        }
     }
 
     #[test]

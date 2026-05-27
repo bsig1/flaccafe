@@ -10,6 +10,7 @@ use time::OffsetDateTime;
 use super::{metadata, normalized_path_key, open_database};
 
 const AUDIO_RANGE_CHUNK_BYTES: u64 = 1024 * 1024;
+const ARTWORK_CACHE_KEY_VERSION: &str = "v2";
 
 fn response_with_status(status: StatusCode, message: &str) -> Response<Vec<u8>> {
     Response::builder()
@@ -76,6 +77,25 @@ fn image_media_type(path: &Path) -> Option<&'static str> {
         "webp" => Some("image/webp"),
         _ => None,
     }
+}
+
+fn artwork_cache_key(path: &Path) -> String {
+    format!(
+        "{}:{}",
+        ARTWORK_CACHE_KEY_VERSION,
+        normalized_path_key(&path.to_string_lossy())
+    )
+}
+
+fn escape_sql_like(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        if matches!(character, '%' | '_' | '\\') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
 }
 
 fn track_path(track_id: i64) -> Result<PathBuf, String> {
@@ -249,7 +269,36 @@ fn artwork_response(
         .unwrap_or_else(|_| Response::new(Vec::new()))
 }
 
-fn sidecar_artwork(path: &Path) -> Option<(Vec<u8>, &'static str)> {
+fn sidecar_artwork_is_album_scoped(connection: &rusqlite::Connection, path: &Path) -> bool {
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    let mut folder_prefix = normalized_path_key(&parent.to_string_lossy());
+    if !folder_prefix.ends_with(std::path::MAIN_SEPARATOR) {
+        folder_prefix.push(std::path::MAIN_SEPARATOR);
+    }
+    let pattern = format!("{}%", escape_sql_like(&folder_prefix));
+    let album_count = connection
+        .query_row(
+            "
+            SELECT count(DISTINCT coalesce(album_id, -id))
+            FROM tracks
+            WHERE path_key LIKE ? ESCAPE ?
+            ",
+            params![pattern, "\\"],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0);
+    album_count <= 1
+}
+
+fn sidecar_artwork(
+    connection: &rusqlite::Connection,
+    path: &Path,
+) -> Option<(Vec<u8>, &'static str)> {
+    if !sidecar_artwork_is_album_scoped(connection, path) {
+        return None;
+    }
     let preferred_names = [
         "cover",
         "folder",
@@ -332,7 +381,7 @@ fn store_artwork_cache(
 fn cached_artwork(track_id: i64) -> Option<(Vec<u8>, String)> {
     let path = track_path(track_id).ok()?;
     let connection = open_database().ok()?;
-    let path_key = normalized_path_key(&path.to_string_lossy());
+    let path_key = artwork_cache_key(&path);
     let (file_modified_at, file_size) = file_state(&path)?;
     let cached = connection
         .query_row(
@@ -345,20 +394,6 @@ fn cached_artwork(track_id: i64) -> Option<(Vec<u8>, String)> {
         )
         .ok();
     cached
-        .or_else(|| {
-            sidecar_artwork(&path).map(|(bytes, media_type)| {
-                store_artwork_cache(
-                    &connection,
-                    &path,
-                    &path_key,
-                    &file_modified_at,
-                    file_size,
-                    media_type,
-                    &bytes,
-                );
-                (bytes, media_type.to_string())
-            })
-        })
         .or_else(|| {
             metadata::read_embedded_artwork(&path)
                 .ok()
@@ -375,6 +410,20 @@ fn cached_artwork(track_id: i64) -> Option<(Vec<u8>, String)> {
                     );
                     (bytes, media_type)
                 })
+        })
+        .or_else(|| {
+            sidecar_artwork(&connection, &path).map(|(bytes, media_type)| {
+                store_artwork_cache(
+                    &connection,
+                    &path,
+                    &path_key,
+                    &file_modified_at,
+                    file_size,
+                    media_type,
+                    &bytes,
+                );
+                (bytes, media_type.to_string())
+            })
         })
 }
 
