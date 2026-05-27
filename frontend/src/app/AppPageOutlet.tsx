@@ -278,6 +278,7 @@ export function AppPageOutlet({ controller }: AppPageOutletProps) {
     setClapModelId,
     setContinuousAutoDjSettings,
     setDetailTrack,
+    setFileManagementFocusToolId,
     setFileManagementScopeIds,
     setFolderPath,
     setHideFilePaths,
@@ -598,6 +599,7 @@ export function AppPageOutlet({ controller }: AppPageOutletProps) {
       <FileManagementPage
         initialFocusToolId={fileManagementFocusToolId}
         initialTrackScopeIds={fileManagementScopeIds}
+        onFocusToolConsumed={() => setFileManagementFocusToolId(null)}
         folderPath={folderPath}
         playlists={playlists}
         onClearArtistCache={handleClearArtistCache}

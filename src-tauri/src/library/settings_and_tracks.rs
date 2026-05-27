@@ -47,7 +47,7 @@ pub fn settings(_state: State<'_, DesktopLibraryState>) -> Result<DesktopSetting
         auto_write_fetched_lyrics_sidecars: truthy_setting(
             &connection,
             "auto_write_fetched_lyrics_sidecars",
-            false,
+            true,
         ),
         cd_auto_lookup_metadata: truthy_setting(&connection, "cd_auto_lookup_metadata", true),
         acoustid_api_key_configured,
@@ -429,34 +429,21 @@ pub fn update_track_rating(
         }
     }
     let mut connection = open_database()?;
-    let write_to_file = truthy_setting(&connection, "write_ratings_to_files", false);
     let transaction = connection
         .transaction()
         .map_err(|error| format!("Could not start Rust rating update: {error}"))?;
-    let row: Option<(i64, String)> = transaction
-        .query_row(
-            "SELECT id, path FROM tracks WHERE id = ?",
-            params![track_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .ok();
-    let (_, path) = row.ok_or_else(|| "Track not found".to_string())?;
-    let mut file_modified_at = None;
-    if write_to_file {
-        let path = Path::new(&path);
-        metadata::write_common_rating(path, rating)?;
-        file_modified_at = metadata::modified_time_iso(path);
-    }
-    transaction
+    let changed = transaction
         .execute(
             "UPDATE tracks
              SET rating = ?,
-                 file_modified_at = coalesce(?, file_modified_at),
                  updated_at = datetime('now')
              WHERE id = ?",
-            params![rating, file_modified_at, track_id],
+            params![rating, track_id],
         )
         .map_err(|error| format!("Could not update Rust rating: {error}"))?;
+    if changed == 0 {
+        return Err("Track not found".to_string());
+    }
     transaction
         .execute(
             "INSERT INTO play_events(track_id, event_type, metadata_json) VALUES(?, 'rated', ?)",

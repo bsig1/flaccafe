@@ -10,7 +10,16 @@ import type { Track } from "../../types/api";
 import { clampNumber } from "../shared";
 
 const WEB_HANDOFF_FADE_MS = 90;
+const WEB_HANDOFF_FALLBACK_MS = 650;
+const WEB_HANDOFF_SUPPRESS_MS = 650;
+const WEB_CROSSFADE_MIN_MS = 80;
+const WEB_CROSSFADE_MAX_MS = 900;
 const CD_SKIP_SETTLE_SECONDS = 1.15;
+
+export function webCrossfadeDurationMs(fadeMs: number) {
+  const requested = Math.max(0, fadeMs);
+  return requested > 0 ? Math.max(WEB_CROSSFADE_MIN_MS, Math.min(requested, WEB_CROSSFADE_MAX_MS)) : 0;
+}
 
 export function createPlaybackTransitions(ctx: any) {
   const {
@@ -272,7 +281,7 @@ export function createPlaybackTransitions(ctx: any) {
 
     const finishCrossfade = () => {
       handoffRef.current = { trackId: nextTrack.id, currentTime: nextAudio.currentTime };
-      suppressWebPauseUntilRef.current = window.performance.now() + 1200;
+      suppressWebPauseUntilRef.current = window.performance.now() + WEB_HANDOFF_SUPPRESS_MS;
       currentAudio.pause();
       setIsPlaying(true);
       setWebSourceGain(currentAudio, currentSourceGainRef, outputVolume);
@@ -294,11 +303,11 @@ export function createPlaybackTransitions(ctx: any) {
           handoffSourceGainRef.current = null;
           handoffSourceRef.current = null;
         }
-      }, 1200);
+      }, WEB_HANDOFF_FALLBACK_MS);
       crossfadeSourceRef.current = null;
     };
 
-    const durationMs = Math.max(120, fadeMs);
+    const durationMs = webCrossfadeDurationMs(fadeMs);
     const currentGain = currentSourceGainRef.current;
     const nextGain = nextSourceGainRef.current;
     if (currentGain && nextGain && currentGain.context === nextGain.context) {

@@ -57,7 +57,10 @@ import type {
 import type { PlayerBarProps } from "./PlayerBarTypes";
 import { PlayerBarView } from "./PlayerBarView";
 import { createWebAudioRuntime } from "./webAudioRuntime";
-import { createPlaybackTransitions } from "./playbackTransitions";
+import {
+  createPlaybackTransitions,
+  webCrossfadeDurationMs,
+} from "./playbackTransitions";
 import { usePlayerBarAudioEffects } from "./usePlayerBarAudioEffects";
 import { usePlayerBarMediaEffects } from "./usePlayerBarMediaEffects";
 import {
@@ -91,7 +94,6 @@ import {
   writeStoredAudioControls,
 } from "../shared";
 
-const WEB_HANDOFF_FADE_MS = 90;
 const CD_SKIP_SETTLE_SECONDS = 1.15;
 
 export function PlayerBar({
@@ -208,6 +210,7 @@ export function PlayerBar({
   const progressFill = progressRatio > 0 ? `calc(${progressPercent}% + ${7 - progressRatio * 14}px)` : "0px";
   const smtcPositionSecond = Math.floor(currentTime);
   const trackSwitchFadeMs = Math.max(0, fadeMs);
+  const webTrackSwitchFadeMs = webCrossfadeDurationMs(fadeMs);
   function replayGainForTrack(track: Track | null) {
     return replayGainMultiplier(
       track,
@@ -761,7 +764,7 @@ export function PlayerBar({
     setCurrentTime(nextTime);
     onPlaybackTime(nextTime);
     const audioDuration = Number.isFinite(audio.duration) ? audio.duration : effectiveDuration;
-    const crossfadeLeadSeconds = Math.max(0.12, fadeMs / 1000);
+    const crossfadeLeadSeconds = Math.max(0.08, webTrackSwitchFadeMs / 1000);
     if (
       currentTrack &&
       preloadedNextTrack &&

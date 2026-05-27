@@ -4,9 +4,12 @@ import type {
   InboxAutoReviewRuleRequest,
   TrackMetadataUpdate,
 } from "../../types/api";
+import {
+  queuedFileTagWriteMessage,
+} from "./useDeferredFileTagWriter";
 
 export function createLibraryActionHandlers(model: any) {
-  const { tracks, trackIndexCacheRef, updateCachedTracks, updateTrackRating, setStatus, setTracks, commitTrackIndexCache, writeRatingsToFiles, findTracksByIds, supportsFileTagWriting, refreshTracks, setSelectedAlbumTracks, setSelectedArtistTracks, setSelectedPlaylistTracks, setInbox, setPlaybackQueue, setQueue, setCurrentTrack, setDetailTrack, setMetadataEditTrack, setLibraryTotal, setMetadataEditInitialField, metadataEditTrack, resolveTracksForAction, recycleFilesWithDesktop, deleteTrack, loadAlbums, loadArtists, loadPlaylists, loadLibraryStats, loadInbox, loadClapCoverage, showUndoAction, display, deleteTracks, readRememberedDeleteChoice, setDeletePrompt, deletePrompt, writeRememberedDeleteChoice, updateTrackMetadata, setSelectedAlbumId, fetchAlbumTracks, setSelectedArtistName, fetchArtistLocalTracks, fetchTracks, primaryArtistName, handlePlayTrack, replaceTrackEverywhere, removeTrackEverywhere, artistTracks, setSelectedPlaylistId, fetchPlaylistTracks, newPlaylistName, createPlaylist, setNewPlaylistName, setTargetPlaylistId, deletePlaylist, setPlaylists, targetPlaylistId, playlists, addTracksToPlaylist, selectedPlaylistId, removeTrackFromPlaylist, selectedPlaylistTracks, moveTrackInPlaylist, exportPlaylist, exportQueue, importPlaylistPath, importPlaylist, setImportPlaylistPath, setLibraryView, reviewAllInboxTracks, reviewInboxTracks, updateInboxNote, updateInboxAutoReviewRule, createInboxAutoReviewRule, deleteInboxAutoReviewRule } = model;
+  const { tracks, trackIndexCacheRef, updateCachedTracks, updateTrackRating, queueFileTagWrite, setStatus, setTracks, commitTrackIndexCache, writeRatingsToFiles, findTracksByIds, supportsFileTagWriting, refreshTracks, setSelectedAlbumTracks, setSelectedArtistTracks, setSelectedPlaylistTracks, setInbox, setPlaybackQueue, setQueue, setCurrentTrack, setDetailTrack, setMetadataEditTrack, setLibraryTotal, setMetadataEditInitialField, metadataEditTrack, resolveTracksForAction, recycleFilesWithDesktop, deleteTrack, loadAlbums, loadArtists, loadPlaylists, loadLibraryStats, loadInbox, loadClapCoverage, showUndoAction, display, deleteTracks, readRememberedDeleteChoice, setDeletePrompt, deletePrompt, writeRememberedDeleteChoice, updateTrackMetadata, setSelectedAlbumId, fetchAlbumTracks, setSelectedArtistName, fetchArtistLocalTracks, fetchTracks, primaryArtistName, handlePlayTrack, replaceTrackEverywhere, removeTrackEverywhere, artistTracks, setSelectedPlaylistId, fetchPlaylistTracks, newPlaylistName, createPlaylist, setNewPlaylistName, setTargetPlaylistId, deletePlaylist, setPlaylists, targetPlaylistId, playlists, addTracksToPlaylist, selectedPlaylistId, removeTrackFromPlaylist, selectedPlaylistTracks, moveTrackInPlaylist, exportPlaylist, exportQueue, importPlaylistPath, importPlaylist, setImportPlaylistPath, setLibraryView, reviewAllInboxTracks, reviewInboxTracks, updateInboxNote, updateInboxAutoReviewRule, createInboxAutoReviewRule, deleteInboxAutoReviewRule } = model;
   async function handleRating(trackId: number, rating: number | null) {
     const previous = tracks;
     const previousCache = new Map(trackIndexCacheRef.current);
@@ -14,7 +17,10 @@ export function createLibraryActionHandlers(model: any) {
     try {
       const updated = await updateTrackRating(trackId, rating);
       replaceTrackEverywhere(updated);
-      setStatus("Rating saved");
+      const queuedWrite = writeRatingsToFiles
+        ? queueFileTagWrite({ trackIds: [trackId], includeRating: true })
+        : null;
+      setStatus(queuedFileTagWriteMessage("Rating saved", queuedWrite));
     } catch (error) {
       setTracks(previous);
       commitTrackIndexCache(previousCache);
@@ -31,7 +37,7 @@ export function createLibraryActionHandlers(model: any) {
       const unsupported = findTracksByIds(uniqueIds).filter((track) => !supportsFileTagWriting(track.path));
       if (unsupported.length > 0) {
         const proceed = window.confirm(
-          `${unsupported.length} selected track${unsupported.length === 1 ? "" : "s"} use a format FLAC Cafe may not write safely yet. Continue? Unsupported file writes will fail before SQLite is changed for those tracks.`,
+          `${unsupported.length} selected track${unsupported.length === 1 ? "" : "s"} use a format FLAC Cafe may not write safely yet. Continue? Library ratings will still change now, but unsupported file tag writes may fail later.`,
         );
         if (!proceed) {
           return;
@@ -43,7 +49,10 @@ export function createLibraryActionHandlers(model: any) {
       for (const updated of updatedTracks) {
         replaceTrackEverywhere(updated);
       }
-      setStatus(`Updated ${updatedTracks.length} rating${updatedTracks.length === 1 ? "" : "s"}`);
+      const queuedWrite = writeRatingsToFiles
+        ? queueFileTagWrite({ trackIds: uniqueIds, includeRating: true })
+        : null;
+      setStatus(queuedFileTagWriteMessage(`Updated ${updatedTracks.length} rating${updatedTracks.length === 1 ? "" : "s"}`, queuedWrite));
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Bulk rating failed");
       await refreshTracks();
@@ -148,12 +157,17 @@ export function createLibraryActionHandlers(model: any) {
 
   async function handleSaveTrackMetadata(trackId: number, metadata: TrackMetadataUpdate) {
     try {
-      const updated = await updateTrackMetadata(trackId, metadata);
+      const shouldWriteToFile = metadata.write_to_file ?? writeRatingsToFiles;
+      const metadataForDatabase = shouldWriteToFile ? { ...metadata, write_to_file: false } : metadata;
+      const updated = await updateTrackMetadata(trackId, metadataForDatabase);
       replaceTrackEverywhere(updated);
       await Promise.all([loadAlbums(), loadArtists(), loadLibraryStats()]);
       setMetadataEditTrack(null);
       setMetadataEditInitialField(null);
-      setStatus((metadata.write_to_file ?? writeRatingsToFiles) ? "Metadata saved to library and file" : "Metadata saved to library");
+      const queuedWrite = shouldWriteToFile
+        ? queueFileTagWrite({ trackIds: [trackId], includeMetadata: true })
+        : null;
+      setStatus(queuedFileTagWriteMessage("Metadata saved to library", queuedWrite));
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not save metadata");
     }
@@ -165,12 +179,17 @@ export function createLibraryActionHandlers(model: any) {
       return;
     }
     try {
-      const updatedTracks = await Promise.all(uniqueIds.map((trackId) => updateTrackMetadata(trackId, metadata)));
+      const shouldWriteToFile = metadata.write_to_file ?? writeRatingsToFiles;
+      const metadataForDatabase = shouldWriteToFile ? { ...metadata, write_to_file: false } : metadata;
+      const updatedTracks = await Promise.all(uniqueIds.map((trackId) => updateTrackMetadata(trackId, metadataForDatabase)));
       for (const updated of updatedTracks) {
         replaceTrackEverywhere(updated);
       }
       await Promise.all([loadAlbums(), loadArtists(), loadLibraryStats()]);
-      setStatus(`Updated metadata for ${updatedTracks.length} track${updatedTracks.length === 1 ? "" : "s"}`);
+      const queuedWrite = shouldWriteToFile
+        ? queueFileTagWrite({ trackIds: uniqueIds, includeMetadata: true })
+        : null;
+      setStatus(queuedFileTagWriteMessage(`Updated metadata for ${updatedTracks.length} track${updatedTracks.length === 1 ? "" : "s"}`, queuedWrite));
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Bulk metadata update failed");
       await refreshTracks();

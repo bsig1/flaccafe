@@ -46,6 +46,7 @@ export type AutoTagRequestOptions = {
 export type FileManagementPageProps = {
   initialFocusToolId?: string | null;
   initialTrackScopeIds?: number[] | null;
+  onFocusToolConsumed?: () => void;
   folderPath: string;
   playlists: PlaylistSummary[];
   onClearArtistCache: () => void;

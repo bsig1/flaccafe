@@ -281,7 +281,7 @@ fn disc_id_info(entries: &[TocEntry]) -> Result<DiscIdInfo, String> {
         .map(|entry| offsets_by_number[&entry.track_number])
         .collect::<Vec<_>>();
     let toc = std::iter::once(first_track)
-        .chain(std::iter::once(audio.len() as i64))
+        .chain(std::iter::once(last_track))
         .chain(std::iter::once(leadout))
         .chain(ordered_offsets)
         .map(|part| part.to_string())
@@ -292,6 +292,43 @@ fn disc_id_info(entries: &[TocEntry]) -> Result<DiscIdInfo, String> {
         toc,
         audio_track_count: audio.len() as i64,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disc_id_toc_uses_last_audio_track_number() {
+        let entries = vec![
+            TocEntry {
+                track_number: 2,
+                start_lba: 0,
+                control: 0,
+            },
+            TocEntry {
+                track_number: 3,
+                start_lba: 15_000,
+                control: 0,
+            },
+            TocEntry {
+                track_number: 4,
+                start_lba: 30_000,
+                control: 0,
+            },
+            TocEntry {
+                track_number: 0xAA,
+                start_lba: 45_000,
+                control: 0,
+            },
+        ];
+
+        let info = disc_id_info(&entries).expect("disc id info");
+
+        assert!(info.toc.starts_with("2 4 45150 "));
+        assert!(!info.toc.starts_with("2 3 "));
+        assert_eq!(info.audio_track_count, 3);
+    }
 }
 
 fn disc_id_for_drive(drive_id: &str) -> Result<DiscIdInfo, String> {

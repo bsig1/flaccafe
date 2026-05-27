@@ -62,7 +62,7 @@ export function useAppControllerState() {
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
   const [settingsFocusSection, setSettingsFocusSection] = useState<string | null>(null);
   const [writeRatingsToFiles, setWriteRatingsToFiles] = useState(false);
-  const [autoWriteFetchedLyricsSidecars, setAutoWriteFetchedLyricsSidecars] = useState(false);
+  const [autoWriteFetchedLyricsSidecars, setAutoWriteFetchedLyricsSidecars] = useState(true);
   const [cdAutoLookupMetadata, setCdAutoLookupMetadata] = useState(true);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");

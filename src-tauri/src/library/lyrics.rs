@@ -426,10 +426,8 @@ pub fn fetch_track_lyrics(
 ) -> Result<DesktopLyricsResponse, String> {
     let track = track_by_id(track_id)?;
     let connection = open_database()?;
-    let auto_write_sidecar = truthy_setting_value(get_setting(
-        &connection,
-        "auto_write_fetched_lyrics_sidecars",
-    ));
+    let auto_write_sidecar = get_setting(&connection, "auto_write_fetched_lyrics_sidecars")
+        .map_or(true, |value| truthy_setting_value(Some(value)));
     let response = lrclib_fetch(
         track.id,
         &display_title(&track),

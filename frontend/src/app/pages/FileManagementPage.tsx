@@ -134,6 +134,7 @@ function defaultCdRipTarget(folderPath: string): string {
 export function FileManagementPage({
   initialFocusToolId,
   initialTrackScopeIds,
+  onFocusToolConsumed,
   folderPath,
   playlists,
   onClearArtistCache,
@@ -350,7 +351,8 @@ export function FileManagementPage({
       setAutoTagMode("track");
       setAutoTagMissingOnly(false);
     }
-  }, [initialFocusToolId, initialScopeKey]);
+    onFocusToolConsumed?.();
+  }, [initialFocusToolId, initialScopeKey, onFocusToolConsumed]);
 
   useEffect(() => {
     const next = new Set<number>();
