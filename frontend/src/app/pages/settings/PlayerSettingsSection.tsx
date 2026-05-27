@@ -191,11 +191,11 @@ export function PlayerSettingsSection({
               }))
             }
           >
-            <option value="webview">WebView audio</option>
             <option value="rust">Rust audio</option>
+            <option value="webview">WebView audio</option>
           </select>
           <span className="text-xs text-muted">
-            Rust audio uses rodio/cpal/Symphonia for broader local codec support. WebView remains the safest default while the Rust engine matures.
+            Rust audio is the default for local library playback. WebView remains available for radio, preview, CD, and URL-backed sources.
           </span>
         </label>
         {showDesktopSettings && (

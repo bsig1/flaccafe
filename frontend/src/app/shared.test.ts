@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   defaultKeyboardShortcuts,
@@ -19,6 +19,7 @@ import {
   shortcutConflictGroups,
   shortcutFromEvent,
   shortcutMatchesEvent,
+  storageKeys,
   stripLyricTimestamp,
 } from "./shared";
 import type { Track } from "../types/api";
@@ -66,9 +67,53 @@ describe("keyboard shortcuts", () => {
 });
 
 describe("UI preferences", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("defaults local library playback to Rust", () => {
+    expect(readUiPreferences()).toMatchObject({
+      playbackEngine: "rust",
+    });
+    expect(localStorage.getItem(storageKeys.rustPlaybackDefaultMigration)).toBe("done");
+  });
+
+  it("moves old stored WebView playback defaults to Rust once", () => {
+    localStorage.setItem(
+      storageKeys.uiPreferences,
+      JSON.stringify({
+        playbackEngine: "webview",
+        startupPage: "settings",
+      }),
+    );
+
+    expect(readUiPreferences()).toMatchObject({
+      playbackEngine: "rust",
+      startupPage: "settings",
+    });
+    expect(JSON.parse(localStorage.getItem(storageKeys.uiPreferences) ?? "{}")).toMatchObject({
+      playbackEngine: "rust",
+      startupPage: "settings",
+    });
+  });
+
+  it("respects WebView playback after the Rust-default migration has run", () => {
+    localStorage.setItem(storageKeys.rustPlaybackDefaultMigration, "done");
+    localStorage.setItem(
+      storageKeys.uiPreferences,
+      JSON.stringify({
+        playbackEngine: "webview",
+      }),
+    );
+
+    expect(readUiPreferences()).toMatchObject({
+      playbackEngine: "webview",
+    });
+  });
+
   it("keeps valid Now Playing customization and repairs invalid values", () => {
     localStorage.setItem(
-      "flac-cafe-ui-preferences",
+      storageKeys.uiPreferences,
       JSON.stringify({
         nowPlayingLayout: "party",
         nowPlayingVisualizerStyle: "radial",
@@ -93,7 +138,7 @@ describe("UI preferences", () => {
     });
 
     localStorage.setItem(
-      "flac-cafe-ui-preferences",
+      storageKeys.uiPreferences,
       JSON.stringify({
         nowPlayingLayout: "floaty",
         nowPlayingVisualizerStyle: "lasers",
@@ -109,7 +154,7 @@ describe("UI preferences", () => {
     });
 
     localStorage.setItem(
-      "flac-cafe-ui-preferences",
+      storageKeys.uiPreferences,
       JSON.stringify({
         nowPlayingLayout: "theater",
       }),

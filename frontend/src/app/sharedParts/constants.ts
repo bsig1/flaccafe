@@ -94,6 +94,7 @@ export const equalizerPresets: Record<string, { label: string; gains10: number[]
 
 export const storageKeys = {
   uiPreferences: "flac-cafe-ui-preferences",
+  rustPlaybackDefaultMigration: "flac-cafe-rust-playback-default-migration",
   hideFilePaths: "flac-cafe-hide-file-paths",
   lastSession: "flac-cafe-last-session",
   deleteChoice: "flac-cafe-delete-choice",

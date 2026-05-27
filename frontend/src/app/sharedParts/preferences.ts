@@ -51,6 +51,22 @@ import {
   limitRecentItems,
 } from "../../lib/uiInteractions";
 
+const RUST_PLAYBACK_DEFAULT_MIGRATION_VALUE = "done";
+
+function completeRustPlaybackDefaultMigration(parsedPreferences?: Record<string, unknown>) {
+  try {
+    if (window.localStorage.getItem(storageKeys.rustPlaybackDefaultMigration) === RUST_PLAYBACK_DEFAULT_MIGRATION_VALUE) {
+      return;
+    }
+    window.localStorage.setItem(storageKeys.rustPlaybackDefaultMigration, RUST_PLAYBACK_DEFAULT_MIGRATION_VALUE);
+    if (parsedPreferences) {
+      window.localStorage.setItem(storageKeys.uiPreferences, JSON.stringify(parsedPreferences));
+    }
+  } catch {
+    // Preference migration should never block the app from starting.
+  }
+}
+
 export function readUiPreferences(): UiPreferences {
   const defaults: UiPreferences = {
     hideFilePaths: true,
@@ -62,7 +78,7 @@ export function readUiPreferences(): UiPreferences {
     similarityWeight: 1.4,
     playerFadeMs: DEFAULT_FADE_MS,
     skipThresholdPercent: 35,
-    playbackEngine: "webview",
+    playbackEngine: "rust",
     desktopOutputBackend: "cpalShared",
     desktopOutputDeviceId: "",
     desktopBufferFrames: 0,
@@ -104,6 +120,12 @@ export function readUiPreferences(): UiPreferences {
       const parsed = JSON.parse(modern) as Partial<UiPreferences> & { playerLayout?: string };
       const rawPlaybackEngine = (parsed as { playbackEngine?: unknown }).playbackEngine;
       const parsedPlaybackEngine = rawPlaybackEngine === "desktop" ? "rust" : rawPlaybackEngine;
+      const migrateWebviewDefaultToRust =
+        parsedPlaybackEngine === "webview" &&
+        window.localStorage.getItem(storageKeys.rustPlaybackDefaultMigration) !== RUST_PLAYBACK_DEFAULT_MIGRATION_VALUE;
+      completeRustPlaybackDefaultMigration(
+        migrateWebviewDefaultToRust ? { ...parsed, playbackEngine: defaults.playbackEngine } : undefined,
+      );
       // Older builds stored a compact bottom-player mode; the main player now stays full-width.
       const validPages: Page[] = ["library", "analysis", "nowPlaying", "artist", "audiobooks", "podcasts", "radio", "scrobbling", "cd", "history", "autodj", "sources", "fileManagement", "settings"];
       return {
@@ -127,9 +149,11 @@ export function readUiPreferences(): UiPreferences {
             : typeof (parsed as { replayGainTargetLufs?: unknown }).replayGainTargetLufs === "number"
               ? replayGainTargetPercentFromLegacyLufs((parsed as { replayGainTargetLufs: number }).replayGainTargetLufs)
               : defaults.replayGainTargetVolumePercent,
-        playbackEngine: ["webview", "rust"].includes(parsedPlaybackEngine as PlaybackEngine)
-          ? (parsedPlaybackEngine as PlaybackEngine)
-          : defaults.playbackEngine,
+        playbackEngine: migrateWebviewDefaultToRust
+          ? defaults.playbackEngine
+          : ["webview", "rust"].includes(parsedPlaybackEngine as PlaybackEngine)
+            ? (parsedPlaybackEngine as PlaybackEngine)
+            : defaults.playbackEngine,
         desktopOutputBackend: ["cpalShared", "wasapiExclusive", "asio"].includes(parsed.desktopOutputBackend as desktopOutputBackendMode)
           ? (parsed.desktopOutputBackend as desktopOutputBackendMode)
           : defaults.desktopOutputBackend,
@@ -225,12 +249,14 @@ export function readUiPreferences(): UiPreferences {
         keyboardShortcuts: normalizeKeyboardShortcuts(parsed.keyboardShortcuts),
       };
     }
+    completeRustPlaybackDefaultMigration();
     return {
       ...defaults,
       hideFilePaths:
         (window.localStorage.getItem(storageKeys.hideFilePaths) ?? window.localStorage.getItem(legacyStorageKeys.hideFilePaths)) !== "false",
     };
   } catch {
+    completeRustPlaybackDefaultMigration();
     return defaults;
   }
 }
