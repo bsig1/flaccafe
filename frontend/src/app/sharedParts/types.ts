@@ -59,6 +59,7 @@ export type KeyboardShortcutAction =
   | "playback.repeatQueue"
   | "playback.repeatOne"
   | "playback.stopAfterCurrent";
+export type HttpShortcutMethod = "GET" | "POST" | "PATCH" | "DELETE" | "HEAD";
 export type SortKey =
   | "title"
   | "artist"
@@ -250,6 +251,7 @@ export interface UiPreferences {
   enableArtistLookup: boolean;
   libraryVisibleColumns: MetadataColumnKey[];
   keyboardShortcuts: Record<KeyboardShortcutAction, KeyboardShortcut>;
+  advancedHttpShortcuts: AdvancedHttpShortcutBinding[];
 }
 
 export interface KeyboardShortcut {
@@ -257,6 +259,16 @@ export interface KeyboardShortcut {
   ctrl: boolean;
   alt: boolean;
   shift: boolean;
+}
+
+export interface AdvancedHttpShortcutBinding {
+  id: string;
+  label: string;
+  method: HttpShortcutMethod;
+  path: string;
+  description: string;
+  bodyJson: string;
+  shortcut: KeyboardShortcut;
 }
 
 export interface AutoDjTemplate {

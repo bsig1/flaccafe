@@ -1,14 +1,6 @@
-import type { FontChoice, ThemeAccent } from "../../config/theme";
 import type {
-  AudioAnalysisCoverage,
-  AudioAnalysisProgress,
-  AutoDjSettings,
-  ClapInstallProgress,
-  QueueTrack,
-  RecommendationDrift,
-  Track,
-} from "../../types/api";
-import type {
+  AdvancedHttpShortcutBinding,
+  HttpShortcutMethod,
   KeyboardShortcut,
   KeyboardShortcutAction,
   MetadataColumnKey,
@@ -45,6 +37,43 @@ export function normalizeKeyboardShortcuts(value: unknown): Record<KeyboardShort
     };
   }
   return normalized;
+}
+
+const httpShortcutMethods = new Set<HttpShortcutMethod>(["GET", "POST", "PATCH", "DELETE", "HEAD"]);
+
+export function normalizeAdvancedHttpShortcuts(value: unknown): AdvancedHttpShortcutBinding[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item, index): AdvancedHttpShortcutBinding | null => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const parsed = item as Partial<AdvancedHttpShortcutBinding>;
+      const method = typeof parsed.method === "string" ? parsed.method.toUpperCase() : "";
+      const path = typeof parsed.path === "string" ? parsed.path.trim() : "";
+      const shortcut = parsed.shortcut;
+      if (!httpShortcutMethods.has(method as HttpShortcutMethod) || !path.startsWith("/") || !shortcut || typeof shortcut.key !== "string") {
+        return null;
+      }
+      return {
+        id: typeof parsed.id === "string" && parsed.id.trim() ? parsed.id.trim() : `http-${index}`,
+        label: typeof parsed.label === "string" && parsed.label.trim() ? parsed.label.trim().slice(0, 80) : `${method} ${path}`,
+        method: method as HttpShortcutMethod,
+        path,
+        description: typeof parsed.description === "string" ? parsed.description.trim().slice(0, 240) : "",
+        bodyJson: typeof parsed.bodyJson === "string" ? parsed.bodyJson : "",
+        shortcut: {
+          key: shortcut.key.trim(),
+          ctrl: Boolean(shortcut.ctrl),
+          alt: Boolean(shortcut.alt),
+          shift: Boolean(shortcut.shift),
+        },
+      };
+    })
+    .filter((shortcut): shortcut is AdvancedHttpShortcutBinding => Boolean(shortcut))
+    .slice(0, 24);
 }
 
 export function keyboardEventKey(event: Pick<KeyboardEvent, "key" | "code">): string {

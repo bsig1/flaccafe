@@ -49,11 +49,14 @@ export interface LyricsUpdateRequest {
   source?: string | null;
 }
 
+export type BulkLyricsSaveLocation = "database" | "sidecar";
+
 export interface BulkLyricsStartResponse {
   job_id: string;
   status: string;
   include_online: boolean;
   only_missing: boolean;
+  save_location: BulkLyricsSaveLocation;
 }
 
 export interface BulkLyricsProgress {
@@ -77,6 +80,7 @@ export interface BulkLyricsProgress {
   error: string | null;
   include_online: boolean;
   only_missing: boolean;
+  save_location: BulkLyricsSaveLocation;
 }
 
 export interface ArtistInfoResponse {
@@ -89,8 +93,10 @@ export interface ArtistInfoResponse {
   found: boolean;
   confidence?: number;
   from_cache: boolean;
+  stale?: boolean;
   updated_at: string | null;
   error: string | null;
+  local_tracks?: Track[];
   related_artists?: ArtistInfoResponse[];
 }
 

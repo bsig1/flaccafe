@@ -5,6 +5,8 @@ import { fetchTracks } from "../../../lib/api";
 import type { Track } from "../../../types/api";
 import { display } from "../../shared";
 
+const TRACK_DETAILS_SINGLE_CLICK_DELAY_MS = 240;
+
 export function useLibrarySelectionController(model: any) {
   const {
     advancedSelectionKey, advancedTrackSearch, detailTrack, inbox, libraryView, onEditTrack, onRequestDeleteTracks,
@@ -15,6 +17,7 @@ export function useLibrarySelectionController(model: any) {
   const [selectedTrackCache, setSelectedTrackCache] = useState<Map<number, Track>>(() => new Map());
   const [isSelectingAllTracks, setIsSelectingAllTracks] = useState(false);
   const selectionAnchorId = useRef<number | null>(null);
+  const pendingDetailTrackTimerRef = useRef<number | null>(null);
 
   const viewTrackLookup = useMemo(() => new Map(viewTracks.map((track: Track) => [track.id, track] as const)), [viewTracks]);
   const selectedIds = useMemo(() => Array.from(selectedTrackIds), [selectedTrackIds]);
@@ -59,18 +62,21 @@ export function useLibrarySelectionController(model: any) {
   useEffect(() => {
     function handleLibraryShortcut(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null;
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+      const key = event.key.toLowerCase();
+      const isCommandKey = event.ctrlKey || event.metaKey;
+      const isInteractiveTarget = Boolean(target?.closest("input, textarea, select, button, a, [contenteditable='true']"));
+      if (isCommandKey && key === "f") {
         event.preventDefault();
         searchInputRef.current?.focus();
         searchInputRef.current?.select();
         return;
       }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
-        event.preventDefault();
-        void selectAllCurrentScope();
+      if (isInteractiveTarget) {
         return;
       }
-      if (target?.closest("input, textarea, select, button, a, [contenteditable='true']")) {
+      if (isCommandKey && key === "a") {
+        event.preventDefault();
+        void selectAllCurrentScope();
         return;
       }
       if (event.key === "F2") {
@@ -106,6 +112,24 @@ export function useLibrarySelectionController(model: any) {
     return () => window.removeEventListener("keydown", handleLibraryShortcut);
   }, [selectedIds, selectedTracks, detailTrack, libraryView, search, sort, advancedTrackSearch, tracks.length, totalTracks, viewTracks, onEditTrack, onRequestDeleteTracks]);
 
+  useEffect(() => () => cancelPendingTrackDetailOpen(), []);
+
+  function cancelPendingTrackDetailOpen() {
+    if (pendingDetailTrackTimerRef.current === null) {
+      return;
+    }
+    window.clearTimeout(pendingDetailTrackTimerRef.current);
+    pendingDetailTrackTimerRef.current = null;
+  }
+
+  function scheduleTrackDetailOpen(track: Track) {
+    cancelPendingTrackDetailOpen();
+    pendingDetailTrackTimerRef.current = window.setTimeout(() => {
+      setDetailTrack(track);
+      pendingDetailTrackTimerRef.current = null;
+    }, TRACK_DETAILS_SINGLE_CLICK_DELAY_MS);
+  }
+
   function toggleTrackSelection(trackId: number) {
     setSelectedTrackIds((current) => {
       const next = new Set(current);
@@ -127,8 +151,10 @@ export function useLibrarySelectionController(model: any) {
     });
   }
 
-  function selectTrackLikeWindows(event: ReactMouseEvent, track: Track, list: Track[]) {
-    setDetailTrack(track);
+  function selectTrackLikeWindows(event: ReactMouseEvent, track: Track, list: Track[], options: { openDetails?: boolean } = {}) {
+    if (options.openDetails !== false) {
+      setDetailTrack(track);
+    }
     const extendRange = event.shiftKey && selectionAnchorId.current !== null;
     const keepExisting = event.ctrlKey || event.metaKey;
     if (extendRange) {
@@ -218,5 +244,6 @@ export function useLibrarySelectionController(model: any) {
     selectionAnchorId, viewTrackLookup, selectedIds, selectedTracks, selectableTrackCount, allViewSelected, inboxNotesByTrackId,
     selectedInboxTrack, selectedInboxNote, toggleTrackSelection, selectSingleTrack, selectTrackLikeWindows, setSelectionForList,
     selectAllCurrentScope, handleHeaderSelectionChange, suppressCheckboxContextMenu, clearSelection,
+    cancelPendingTrackDetailOpen, scheduleTrackDetailOpen,
   };
 }

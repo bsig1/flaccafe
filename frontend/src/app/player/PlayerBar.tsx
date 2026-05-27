@@ -1,5 +1,5 @@
 import { FileText, ListMusic, Pause, Play, Radio, Repeat, Repeat1, Repeat2, SkipBack, SkipForward, Volume2, VolumeX } from "lucide-react";
-import type { CSSProperties, ChangeEvent, KeyboardEvent as ReactKeyboardEvent, MutableRefObject, WheelEvent as ReactWheelEvent } from "react";
+import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent, WheelEvent as ReactWheelEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import { albumArtworkUrl, audioUrl } from "../../lib/api";
@@ -25,6 +25,7 @@ import type { PlayerBarProps } from "./PlayerBarTypes";
 import { PlayerBarView } from "./PlayerBarView";
 import { createWebAudioRuntime } from "./webAudioRuntime";
 import { createPlaybackTransitions, webCrossfadeDurationMs } from "./playbackTransitions";
+import { playbackEndedEarly } from "./playbackEarlyEnd";
 import { usePlayerBarAudioEffects } from "./usePlayerBarAudioEffects";
 import { usePlayerBarMediaEffects } from "./usePlayerBarMediaEffects";
 import { RatingStars } from "../components/common";
@@ -163,14 +164,16 @@ export function PlayerBar({
   const hasNext = currentIndex >= 0 && currentIndex < queue.length - 1;
   const canPreviousAction = hasPrevious || Boolean(currentTrack && !isRadioSource && !isCdPreviewTrack);
   const cdSkipIsSettling = isCdPreviewTrack && isPlaying && currentTime < CD_SKIP_SETTLE_SECONDS;
-  const usePlayback = playbackEngine === "rust" && !isRadioSource && !currentTrack?.audio_url;
+  const trackNeedsWebPlayback = (track: Track | null) =>
+    Boolean(track?.audio_url || track?.is_preview || track?.path?.startsWith("cdda://"));
+  const usePlayback = playbackEngine === "rust" && !isRadioSource && !trackNeedsWebPlayback(currentTrack);
   const preloadedNextTrack =
     !isRadioSource && hasNext
       ? queue[currentIndex + 1]
       : !isRadioSource && playbackMode === "repeatQueue" && queue.length > 0
         ? queue[0]
         : null;
-  const canPreloadNextTrack = Boolean(preloadedNextTrack && !preloadedNextTrack.is_preview && !preloadedNextTrack.audio_url);
+  const canPreloadNextTrack = Boolean(preloadedNextTrack && !trackNeedsWebPlayback(preloadedNextTrack));
   const effectiveDuration = isRadioSource ? 0 : duration || currentTrack?.duration_seconds || 0;
   const progressRatio = effectiveDuration > 0 ? clampNumber(currentTime / effectiveDuration, 0, 1) : 0;
   const progressPercent = progressRatio * 100;
@@ -192,8 +195,6 @@ export function PlayerBar({
   const outputVolume = muted ? 0 : clampNumber(volume, 0, 1);
   const radioSubtitle = currentRadioStation ? display(currentRadioStation.genre, "Live web radio") : null;
   const trackAudioSourceUrl = (track: Track) => track.audio_url ?? audioUrl(track.id);
-  const trackNeedsWebPlayback = (track: Track | null) =>
-    Boolean(track?.audio_url || track?.is_preview || track?.path?.startsWith("cdda://"));
   const webAudioSourceUrl = currentRadioStation?.stream_url ?? (currentTrack ? trackAudioSourceUrl(currentTrack) : null);
   const webAudioKey = currentRadioStation ? `radio-${currentRadioStation.id}` : currentTrack ? `track-${currentTrack.id}-${currentTrack.audio_url ?? ""}` : "empty";
   const visualizerTrackId = currentTrack?.id ?? (currentRadioStation ? -currentRadioStation.id : null);
@@ -777,6 +778,11 @@ export function PlayerBar({
       setStatus("CD playback stopped early. Use the play button in the player bar to retry, or refresh the CD page if the disc changed.");
       return;
     }
+    if (!isCdPreviewTrack && playbackEndedEarly(endedAt, effectiveDuration)) {
+      setIsPlaying(false);
+      setStatus("Track appears corrupted or truncated; playback stopped before the saved duration.");
+      return;
+    }
     void onTrackEnded(currentTrack.id);
     if (playbackMode === "stopAfterCurrent") {
       setIsPlaying(false);
@@ -856,6 +862,12 @@ export function PlayerBar({
           desktopLoadedTrackIdRef.current === currentTrack.id &&
           desktopEndedTrackIdRef.current !== currentTrack.id
         ) {
+          if (playbackEndedEarly(status.position_seconds, desktopDuration)) {
+            desktopEndedTrackIdRef.current = currentTrack.id;
+            setIsPlaying(false);
+            setStatus("Track appears corrupted or truncated; Rust playback stopped before the saved duration.");
+            return;
+          }
           desktopEndedTrackIdRef.current = currentTrack.id;
           await handleEnded();
         }

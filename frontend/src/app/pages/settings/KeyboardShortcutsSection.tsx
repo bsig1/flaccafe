@@ -17,6 +17,7 @@ import {
 import {
   DisclosureSection,
 } from "../../components/common";
+import { AdvancedHttpShortcutsSection } from "./AdvancedHttpShortcutsSection";
 import {
   KeyboardShortcutAction,
   UiPreferences,
@@ -206,6 +207,7 @@ export function KeyboardShortcutsSection({
             onChange={(event) => setShortcutPresetJson(event.target.value)}
           />
         </div>
+        <AdvancedHttpShortcutsSection uiPreferences={uiPreferences} setUiPreferences={setUiPreferences} />
         <div className="max-h-[34rem] overflow-auto rounded border border-line/70 bg-ink p-3 pr-2">
           <div className="grid gap-3">
             {visibleShortcutGroups.map((group) => (
@@ -244,7 +246,7 @@ export function KeyboardShortcutsSection({
             )}
           </div>
         </div>
-            </div>
+      </div>
     </DisclosureSection>
   );
 }

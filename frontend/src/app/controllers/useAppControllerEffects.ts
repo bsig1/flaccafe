@@ -12,6 +12,7 @@ import {
   fetchLyricsOnline,
 } from "../../lib/api";
 import { listenFolderWatchEvents } from "../../lib/desktopPath";
+import { desktopBackendJson } from "../../lib/desktopLibrary";
 import {
   defaultLibraryTrackQueryKey,
   lyricsHaveText,
@@ -34,6 +35,26 @@ import {
   lyricsTrackCacheKey,
   rememberLyricsResponse,
 } from "./lyricsResponseCache";
+
+const BODYLESS_SHORTCUT_METHODS = new Set(["GET", "HEAD"]);
+
+function advancedHttpShortcutBody(binding) {
+  if (BODYLESS_SHORTCUT_METHODS.has(binding.method)) {
+    return { body: null, error: null };
+  }
+  if (!binding.bodyJson.trim()) {
+    return { body: null, error: null };
+  }
+  try {
+    return { body: JSON.parse(binding.bodyJson), error: null };
+  } catch {
+    return { body: null, error: "Invalid JSON body" };
+  }
+}
+
+function advancedHttpShortcutLabel(binding) {
+  return binding.label?.trim() || `${binding.method} ${binding.path}`;
+}
 
 export function useAppControllerEffects(model: any) {
   const {
@@ -570,11 +591,39 @@ export function useAppControllerEffects(model: any) {
       if (appMatch) {
         event.preventDefault();
         void appMatch[1]();
+        return;
+      }
+      if (Object.values(uiPreferences.keyboardShortcuts).some((shortcut) => shortcutMatchesEvent(shortcut, event))) {
+        return;
+      }
+
+      const advancedMatch = (uiPreferences.advancedHttpShortcuts ?? []).find((binding) => shortcutMatchesEvent(binding.shortcut, event));
+      if (advancedMatch) {
+        event.preventDefault();
+        const label = advancedHttpShortcutLabel(advancedMatch);
+        const path = advancedMatch.path.trim();
+        if (!path.startsWith("/")) {
+          setStatus(`${label} needs a route path that starts with /`);
+          return;
+        }
+        if (/[{}]/.test(path)) {
+          setStatus(`${label} still has route placeholders`);
+          return;
+        }
+        const { body, error } = advancedHttpShortcutBody(advancedMatch);
+        if (error) {
+          setStatus(`${label}: ${error}`);
+          return;
+        }
+        void desktopBackendJson<unknown>(advancedMatch.method, path, body).then(
+          () => setStatus(`Ran ${label}`),
+          (routeError) => setStatus(routeError instanceof Error ? routeError.message : `Could not run ${label}`),
+        );
       }
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [uiPreferences.keyboardShortcuts, currentTrack, albums, undoAction]);
+  }, [uiPreferences.keyboardShortcuts, uiPreferences.advancedHttpShortcuts, currentTrack, albums, undoAction]);
 
   useEffect(() => {
     if (!selectedAlbumId && albums[0]) {

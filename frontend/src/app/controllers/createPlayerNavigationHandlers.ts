@@ -50,6 +50,7 @@ export function createPlayerNavigationHandlers(model: any) {
       source: "Wikipedia",
       found: false,
       from_cache: false,
+      stale: false,
       updated_at: null,
       error: error ?? "Could not load artist info",
       confidence: 0,
@@ -77,6 +78,10 @@ export function createPlayerNavigationHandlers(model: any) {
     return Boolean(info?.found && artistInfoConfidence(info) >= MIN_COMBINED_ARTIST_CONFIDENCE);
   }
 
+  function hasStaleArtistInfo(responses: any[]) {
+    return responses.some((response) => response?.found && response?.from_cache && response?.stale);
+  }
+
   async function fetchArtistInfoSafely(name: string, refresh: boolean) {
     try {
       return await fetchArtistInfo(name, refresh);
@@ -99,6 +104,58 @@ export function createPlayerNavigationHandlers(model: any) {
       responses.push(await fetchArtistInfoSafely(name, refresh));
     }
     return { artistNames: boundedNames, responses };
+  }
+
+  async function fetchArtistLocalTracksSafely(name: string) {
+    try {
+      return await fetchArtistLocalTracks(name);
+    } catch {
+      return [];
+    }
+  }
+
+  async function resolveArtistLocalTracks(artistNames: string[]) {
+    return Promise.all(artistNames.map((name) => fetchArtistLocalTracksSafely(name)));
+  }
+
+  function enrichArtistInfoResponses(artistNames: string[], responses: any[], tracksByArtist: Track[][] = []) {
+    if (artistNames.length === 0) {
+      return responses.map((response, index) => ({
+        ...response,
+        local_tracks: tracksByArtist[index] ?? response?.local_tracks ?? [],
+      }));
+    }
+    return artistNames.map((name, index) => {
+      const response = responses[index] ?? missingArtistInfo(name);
+      return {
+        ...response,
+        local_tracks: tracksByArtist[index] ?? response?.local_tracks ?? [],
+      };
+    });
+  }
+
+  function applyArtistInfoResponses(artistNames: string[], responses: any[], tracksByArtist: Track[][] = []) {
+    const enrichedResponses = enrichArtistInfoResponses(artistNames, responses, tracksByArtist);
+    const primaryName = artistNames[0] ?? responses[0]?.query ?? "";
+    const primary = enrichedResponses[0] ?? missingArtistInfo(primaryName);
+    setArtistInfo({ ...primary, related_artists: enrichedResponses });
+    setArtistTracks(primary.local_tracks ?? []);
+    const firstError = enrichedResponses.find((response) => response.error)?.error;
+    if (firstError) {
+      setStatus(firstError);
+    }
+  }
+
+  async function refreshStaleArtistInfo(rawArtistName: string, artistNames: string[]) {
+    try {
+      const resolved = await resolveArtistInfoResponses(rawArtistName, artistNames, true);
+      const tracksByArtist = await resolveArtistLocalTracks(resolved.artistNames);
+      applyArtistInfoResponses(resolved.artistNames, resolved.responses, tracksByArtist);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not refresh artist info");
+    } finally {
+      setIsArtistLoading(false);
+    }
   }
 
   function handleOpenCurrentTrackFromPlayer(track: Track) {
@@ -156,35 +213,32 @@ export function createPlayerNavigationHandlers(model: any) {
     }
     setIsArtistLoading(true);
     if (!uiPreferences.enableArtistLookup) {
-      try {
-        setArtistTracks(await fetchArtistLocalTracks(artistName));
-      } catch {
-        setArtistTracks([]);
-      }
-      setArtistInfo(null);
+      const boundedNames = artistNames.slice(0, MAX_ARTIST_LOOKUP_TABS);
+      const tracksByArtist = await resolveArtistLocalTracks(boundedNames);
+      const responses = boundedNames.map((name) => missingArtistInfo(name, "Artist background lookup is disabled"));
+      applyArtistInfoResponses(boundedNames, responses, tracksByArtist);
       setIsArtistLoading(false);
       return;
     }
+    let backgroundRefreshStarted = false;
     try {
       const resolved = await resolveArtistInfoResponses(rawArtistName, artistNames, refresh);
       artistNames = resolved.artistNames;
       artistName = artistNames[0] ?? artistName;
-      try {
-        setArtistTracks(await fetchArtistLocalTracks(artistName));
-      } catch {
-        setArtistTracks([]);
-      }
-      const responses = resolved.responses;
-      const primary = responses[0] ?? missingArtistInfo(artistName);
-      setArtistInfo({ ...primary, related_artists: responses });
-      const firstError = responses.find((response) => response.error)?.error;
-      if (firstError) {
-        setStatus(firstError);
+      const tracksByArtist = await resolveArtistLocalTracks(artistNames);
+      applyArtistInfoResponses(artistNames, resolved.responses, tracksByArtist);
+      if (!refresh && hasStaleArtistInfo(resolved.responses)) {
+        backgroundRefreshStarted = true;
+        void refreshStaleArtistInfo(rawArtistName, artistNames);
+        return;
       }
     } catch (error) {
+      setArtistTracks([]);
       setArtistInfo(missingArtistInfo(artistName, error instanceof Error ? error.message : "Could not load artist info"));
     } finally {
-      setIsArtistLoading(false);
+      if (!backgroundRefreshStarted) {
+        setIsArtistLoading(false);
+      }
     }
   }
 
@@ -196,10 +250,14 @@ export function createPlayerNavigationHandlers(model: any) {
       const existingIndex = currentRelated.findIndex((item: any) =>
         item?.query?.toLowerCase() === lowerName || item?.artist_name?.toLowerCase() === lowerName,
       );
+      const responseWithTracks = {
+        ...response,
+        local_tracks: existingIndex >= 0 ? currentRelated[existingIndex]?.local_tracks ?? [] : [],
+      };
       const related = existingIndex >= 0
-        ? currentRelated.map((item: any, index: number) => (index === existingIndex ? response : item))
-        : [response, ...currentRelated];
-      return { ...(related[0] ?? response), related_artists: related };
+        ? currentRelated.map((item: any, index: number) => (index === existingIndex ? responseWithTracks : item))
+        : [responseWithTracks, ...currentRelated];
+      return { ...(related[0] ?? responseWithTracks), related_artists: related };
     });
     setStatus(`Updated wiki lookup for ${artistName}`);
     return response;

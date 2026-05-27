@@ -44,6 +44,7 @@ import {
   replayGainTargetPercentFromLegacyLufs,
 } from "./audioControls";
 import {
+  normalizeAdvancedHttpShortcuts,
   normalizeKeyboardShortcuts,
   normalizeLibraryColumns,
 } from "./keyboard";
@@ -113,6 +114,7 @@ export function readUiPreferences(): UiPreferences {
     enableArtistLookup: true,
     libraryVisibleColumns: defaultLibraryVisibleColumns,
     keyboardShortcuts: defaultKeyboardShortcuts,
+    advancedHttpShortcuts: [],
   };
   try {
     const modern = window.localStorage.getItem(storageKeys.uiPreferences) ?? window.localStorage.getItem(legacyStorageKeys.uiPreferences);
@@ -247,6 +249,7 @@ export function readUiPreferences(): UiPreferences {
             : defaults.skipThresholdPercent,
         libraryVisibleColumns: normalizeLibraryColumns(parsed.libraryVisibleColumns),
         keyboardShortcuts: normalizeKeyboardShortcuts(parsed.keyboardShortcuts),
+        advancedHttpShortcuts: normalizeAdvancedHttpShortcuts(parsed.advancedHttpShortcuts),
       };
     }
     completeRustPlaybackDefaultMigration();

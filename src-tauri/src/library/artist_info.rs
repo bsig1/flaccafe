@@ -2,6 +2,7 @@ use super::*;
 
 const WIKIPEDIA_SHORT_SUMMARY_WORDS: usize = 70;
 const WIKIPEDIA_EXTENDED_SUMMARY_WORDS: usize = 260;
+const WIKIPEDIA_MIN_CONFIDENCE: f64 = 0.72;
 const WIKIPEDIA_HIGH_CONFIDENCE: f64 = 0.85;
 const WIKIPEDIA_SEARCH_LIMIT: usize = 5;
 const WIKIPEDIA_MAX_CANDIDATE_SUMMARIES: usize = 8;
@@ -118,6 +119,7 @@ fn wikipedia_page_summary(title: &str) -> Result<Option<DesktopArtistInfoRespons
         found: true,
         confidence: 0.0,
         from_cache: false,
+        stale: false,
         updated_at: Some(scan::utc_now()),
         error: None,
     }))
@@ -197,23 +199,67 @@ fn normalized_artist_lookup(value: &str) -> String {
         .join(" ")
 }
 
+fn text_contains_term(text: &str, needle: &str) -> bool {
+    let normalized_text = normalized_artist_lookup(text);
+    let normalized_needle = normalized_artist_lookup(needle);
+    if normalized_needle.is_empty() {
+        return false;
+    }
+    if normalized_needle.contains(' ') {
+        return format!(" {normalized_text} ").contains(&format!(" {normalized_needle} "));
+    }
+    normalized_text
+        .split_whitespace()
+        .any(|word| word == normalized_needle)
+}
+
 fn text_contains_any(text: &str, needles: &[&str]) -> bool {
-    needles.iter().any(|needle| text.contains(needle))
+    needles
+        .iter()
+        .any(|needle| text_contains_term(text, needle))
+}
+
+fn title_base_normalized(value: &str) -> String {
+    normalized_artist_lookup(value.split(" (").next().unwrap_or(value))
+}
+
+fn summary_mentions_artist_alias(query_normalized: &str, summary: &str) -> bool {
+    if query_normalized.is_empty() {
+        return false;
+    }
+    let summary_normalized = format!(" {} ", normalized_artist_lookup(summary));
+    [
+        format!("known mononymously as {query_normalized}"),
+        format!("known professionally as {query_normalized}"),
+        format!("known simply as {query_normalized}"),
+        format!("known by his stage name {query_normalized}"),
+        format!("known by her stage name {query_normalized}"),
+        format!("known by their stage name {query_normalized}"),
+        format!("known by the stage name {query_normalized}"),
+        format!("stage name {query_normalized}"),
+    ]
+    .iter()
+    .map(|phrase| normalized_artist_lookup(phrase))
+    .any(|phrase| summary_normalized.contains(&format!(" {phrase} ")))
 }
 
 fn artist_summary_score(query: &str, info: &DesktopArtistInfoResponse) -> i64 {
     let query_normalized = normalized_artist_lookup(query);
     let title_normalized = normalized_artist_lookup(&info.artist_name);
+    let title_base = title_base_normalized(&info.artist_name);
     let summary = info.summary.as_deref().unwrap_or_default().to_lowercase();
     let page_url = info.page_url.as_deref().unwrap_or_default().to_lowercase();
     let mut score = 0;
 
-    if title_normalized == query_normalized {
+    if title_normalized == query_normalized || title_base == query_normalized {
         score += 220;
     } else if title_normalized.contains(&query_normalized) {
         score += 90;
     } else if query_normalized.contains(&title_normalized) {
         score += 45;
+    }
+    if summary_mentions_artist_alias(&query_normalized, &summary) {
+        score += 130;
     }
     if page_url.contains("(musician)") || page_url.contains("(singer)") || page_url.contains("(band)") {
         score += 40;
@@ -228,6 +274,7 @@ fn artist_summary_score(query: &str, info: &DesktopArtistInfoResponse) -> i64 {
             "duo",
             "rapper",
             "record producer",
+            "hip hop",
             "pop",
             "rock",
             "album",
@@ -261,8 +308,35 @@ fn artist_summary_confidence(score: i64) -> f64 {
     ((score.max(0) as f64) / 330.0).clamp(0.0, 1.0)
 }
 
+fn is_usable_artist_score(score: i64) -> bool {
+    artist_summary_confidence(score) >= WIKIPEDIA_MIN_CONFIDENCE
+}
+
 fn is_high_confidence_artist_score(score: i64) -> bool {
     artist_summary_confidence(score) >= WIKIPEDIA_HIGH_CONFIDENCE
+}
+
+fn missing_artist_info_response(
+    query: &str,
+    error: &str,
+    confidence: f64,
+    from_cache: bool,
+    updated_at: Option<String>,
+) -> DesktopArtistInfoResponse {
+    DesktopArtistInfoResponse {
+        artist_name: query.to_string(),
+        query: query.to_string(),
+        summary: None,
+        image_url: None,
+        page_url: None,
+        source: Some("Wikipedia".to_string()),
+        found: false,
+        confidence: confidence.clamp(0.0, 1.0),
+        from_cache,
+        stale: false,
+        updated_at,
+        error: Some(error.to_string()),
+    }
 }
 
 fn finalize_artist_info_candidate(
@@ -270,6 +344,15 @@ fn finalize_artist_info_candidate(
     info: DesktopArtistInfoResponse,
     score: i64,
 ) -> Result<DesktopArtistInfoResponse, String> {
+    if !is_usable_artist_score(score) {
+        return Ok(missing_artist_info_response(
+            query,
+            "No confident Wikipedia page found",
+            artist_summary_confidence(score),
+            false,
+            Some(scan::utc_now()),
+        ));
+    }
     let mut response = DesktopArtistInfoResponse {
         query: query.to_string(),
         ..info
@@ -292,11 +375,30 @@ fn response_confidence(query: &str, info: &DesktopArtistInfoResponse) -> f64 {
     artist_summary_confidence(artist_summary_score(query, info))
 }
 
+fn is_manual_artist_info(info: &DesktopArtistInfoResponse) -> bool {
+    info.source
+        .as_deref()
+        .is_some_and(|source| source.contains(":manual"))
+}
+
+fn is_usable_cached_artist_info(query: &str, info: &DesktopArtistInfoResponse) -> bool {
+    is_manual_artist_info(info) || response_confidence(query, info) >= WIKIPEDIA_MIN_CONFIDENCE
+}
+
 fn with_artist_confidence(
     query: &str,
     mut info: DesktopArtistInfoResponse,
 ) -> DesktopArtistInfoResponse {
     info.confidence = response_confidence(query, &info);
+    if info.found && info.confidence < WIKIPEDIA_MIN_CONFIDENCE {
+        return missing_artist_info_response(
+            query,
+            "No confident Wikipedia page found",
+            info.confidence,
+            info.from_cache,
+            info.updated_at,
+        );
+    }
     info
 }
 
@@ -324,6 +426,18 @@ fn wikipedia_title_from_input(input: &str) -> Result<String, String> {
         return Err("Wikipedia title or URL is required".to_string());
     }
     Ok(title)
+}
+
+fn wikipedia_lookup_query(value: &str) -> String {
+    value
+        .replace(
+            [
+                '\u{2010}', '\u{2011}', '\u{2012}', '\u{2013}', '\u{2014}', '\u{2212}',
+            ],
+            "-",
+        )
+        .trim()
+        .to_string()
 }
 
 fn artist_lookup_components(value: &str) -> Vec<String> {
@@ -414,9 +528,25 @@ fn fetch_artist_info(query: &str) -> Result<DesktopArtistInfoResponse, String> {
         candidates.push((score, info));
     }
 
+    for suffix in ["singer", "musician", "band", "rapper", "record producer"] {
+        let title = format!("{query} ({suffix})");
+        if !seen_titles.insert(title.to_lowercase()) {
+            continue;
+        }
+        let Some(info) = wikipedia_page_summary(&title)? else {
+            continue;
+        };
+        seen_titles.insert(info.artist_name.to_lowercase());
+        let score = artist_summary_score(query, &info);
+        if is_high_confidence_artist_score(score) {
+            return finalize_artist_info_candidate(query, info, score);
+        }
+        candidates.push((score, info));
+    }
+
     let search_batches = [
-        vec![format!("\"{query}\" musician"), format!("\"{query}\" band")],
-        vec![format!("\"{query}\" singer")],
+        vec![format!("\"{query}\" singer"), format!("\"{query}\" musician")],
+        vec![format!("\"{query}\" band")],
         vec![format!("{query} musician OR band"), query.to_string()],
     ];
     let mut checked_summaries = 0usize;
@@ -452,23 +582,24 @@ fn fetch_artist_info(query: &str) -> Result<DesktopArtistInfoResponse, String> {
         }
     }
     if let Some((score, info)) = candidates.into_iter().max_by_key(|(score, _)| *score) {
-        if score > 0 {
+        if is_usable_artist_score(score) {
             return finalize_artist_info_candidate(query, info, score);
         }
+        return Ok(missing_artist_info_response(
+            query,
+            "No confident Wikipedia page found",
+            artist_summary_confidence(score),
+            false,
+            Some(scan::utc_now()),
+        ));
     }
-    Ok(DesktopArtistInfoResponse {
-        artist_name: query.to_string(),
-        query: query.to_string(),
-        summary: None,
-        image_url: None,
-        page_url: None,
-        source: Some("Wikipedia".to_string()),
-        found: false,
-        confidence: 0.0,
-        from_cache: false,
-        updated_at: Some(scan::utc_now()),
-        error: Some("No artist info found".to_string()),
-    })
+    Ok(missing_artist_info_response(
+        query,
+        "No artist info found",
+        0.0,
+        false,
+        Some(scan::utc_now()),
+    ))
 }
 
 fn save_artist_info_cache(
@@ -514,9 +645,57 @@ fn save_artist_info_cache(
         found: info.found,
         confidence: info.confidence,
         from_cache: false,
+        stale: false,
         updated_at: Some(updated_at),
         error: info.error.clone(),
     })
+}
+
+fn is_artist_cache_stale(source: Option<&str>, is_fresh: bool) -> bool {
+    !is_fresh && !source.is_some_and(|value| value.contains(":manual"))
+}
+
+fn cached_artist_info_response(
+    connection: &Connection,
+    key: &str,
+    query: &str,
+    require_fresh: bool,
+) -> Result<Option<DesktopArtistInfoResponse>, String> {
+    let mut sql = "SELECT artist_name, summary, image_url, page_url, source, updated_at,
+                          coalesce(updated_at >= datetime('now', '-30 days'), 0) AS is_fresh
+                   FROM artist_info_cache
+                   WHERE artist_key = ?"
+        .to_string();
+    if require_fresh {
+        sql.push_str(" AND updated_at >= datetime('now', '-30 days')");
+    }
+    match connection.query_row(&sql, params![key], |row| {
+        let summary: Option<String> = row.get("summary")?;
+        let source: Option<String> = row.get("source")?;
+        let is_fresh = row.get::<_, i64>("is_fresh")? != 0;
+        Ok(DesktopArtistInfoResponse {
+            artist_name: row
+                .get::<_, Option<String>>("artist_name")?
+                .unwrap_or_else(|| query.to_string()),
+            query: query.to_string(),
+            summary: summary.clone(),
+            image_url: row.get("image_url")?,
+            page_url: row.get("page_url")?,
+            source: source.clone(),
+            found: summary
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty()),
+            confidence: 0.0,
+            from_cache: true,
+            stale: is_artist_cache_stale(source.as_deref(), is_fresh),
+            updated_at: row.get("updated_at")?,
+            error: None,
+        })
+    }) {
+        Ok(response) => Ok(Some(response)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(error) => Err(format!("Could not read artist info cache: {error}")),
+    }
 }
 
 async fn run_artist_task<T: Send + 'static>(
@@ -536,71 +715,24 @@ fn artist_info_inner(
     if query.trim().is_empty() {
         return Err("Artist name is required".to_string());
     }
+    let lookup_query = wikipedia_lookup_query(&query);
     let connection = open_database()?;
     let refresh = refresh.unwrap_or(false);
-    let sql = if refresh {
-        "SELECT artist_name, summary, image_url, page_url, source, updated_at
-         FROM artist_info_cache
-         WHERE artist_key = ?"
-    } else {
-        "SELECT artist_name, summary, image_url, page_url, source, updated_at
-         FROM artist_info_cache
-         WHERE artist_key = ? AND updated_at >= datetime('now', '-30 days')"
-    };
-    let key = artist_cache_key(&query);
-    if let Ok(response) = connection.query_row(sql, params![&key], |row| {
-        let summary: Option<String> = row.get("summary")?;
-        let response = DesktopArtistInfoResponse {
-            artist_name: row
-                .get::<_, Option<String>>("artist_name")?
-                .unwrap_or_else(|| query.clone()),
-            query: query.clone(),
-            summary: summary.clone(),
-            image_url: row.get("image_url")?,
-            page_url: row.get("page_url")?,
-            source: row.get("source")?,
-            found: summary
-                .as_deref()
-                .is_some_and(|value| !value.trim().is_empty()),
-            confidence: 0.0,
-            from_cache: true,
-            updated_at: row.get("updated_at")?,
-            error: None,
-        };
-        Ok(with_artist_confidence(&query, response))
-    }) {
-        return Ok(response);
+    let key = artist_cache_key(&lookup_query);
+    if !refresh {
+        if let Some(response) = cached_artist_info_response(&connection, &key, &query, false)? {
+            if is_usable_cached_artist_info(&lookup_query, &response) {
+                return Ok(with_artist_confidence(&lookup_query, response));
+            }
+        }
     }
-    let fetched = match fetch_artist_info(&query) {
+    let fetched = match fetch_artist_info(&lookup_query) {
         Ok(info) => info,
         Err(error) => {
-            if let Ok(mut stale) = connection.query_row(
-                "SELECT artist_name, summary, image_url, page_url, source, updated_at
-                 FROM artist_info_cache
-                 WHERE artist_key = ?",
-                params![&key],
-                |row| {
-                    let summary: Option<String> = row.get("summary")?;
-                    let response = DesktopArtistInfoResponse {
-                        artist_name: row
-                            .get::<_, Option<String>>("artist_name")?
-                            .unwrap_or_else(|| query.clone()),
-                        query: query.clone(),
-                        summary: summary.clone(),
-                        image_url: row.get("image_url")?,
-                        page_url: row.get("page_url")?,
-                        source: row.get("source")?,
-                        found: summary
-                            .as_deref()
-                            .is_some_and(|value| !value.trim().is_empty()),
-                        confidence: 0.0,
-                        from_cache: true,
-                        updated_at: row.get("updated_at")?,
-                        error: None,
-                    };
-                    Ok(with_artist_confidence(&query, response))
-                },
-            ) {
+            if let Some(mut stale) =
+                cached_artist_info_response(&connection, &key, &query, false)?
+                    .map(|response| with_artist_confidence(&lookup_query, response))
+            {
                 stale.error = Some(error);
                 return Ok(stale);
             }
@@ -634,6 +766,7 @@ fn save_artist_info_override_inner(
     if query.trim().is_empty() {
         return Err("Artist name is required".to_string());
     }
+    let lookup_query = wikipedia_lookup_query(&query);
     let title = wikipedia_title_from_input(&wikipedia_title_or_url)?;
     let mut info = enrich_wikipedia_summary(
         wikipedia_page_summary(&title)?
@@ -643,7 +776,7 @@ fn save_artist_info_override_inner(
     info.source = Some("Wikipedia:manual".to_string());
     info.confidence = 1.0;
     let connection = open_database()?;
-    let key = artist_cache_key(&query);
+    let key = artist_cache_key(&lookup_query);
     save_artist_info_cache(&connection, &key, &query, &info)
 }
 
@@ -758,52 +891,18 @@ pub fn clear_artist_cache_blocking(
 }
 
 #[cfg(test)]
+#[path = "artist_info/tests.rs"]
+mod artist_info_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    fn sorted_artist_components(value: &str) -> Vec<String> {
-        let mut components = artist_lookup_components(value);
-        components.sort();
-        components
-    }
-
     #[test]
-    fn natural_ampersand_artist_names_stay_together() {
-        assert_eq!(
-            sorted_artist_components("King Gizzard & the Lizard Wizard"),
-            vec!["king gizzard the lizard wizard".to_string()]
-        );
-    }
-
-    #[test]
-    fn collaboration_artist_names_split_for_lookup() {
-        assert_eq!(
-            sorted_artist_components("AnnenMayKantereit & Giant Rooks"),
-            vec!["annenmaykantereit".to_string(), "giant rooks".to_string()]
-        );
-        assert_eq!(
-            sorted_artist_components("Clean Bandit feat. Sean Paul & Anne-Marie"),
-            vec![
-                "anne marie".to_string(),
-                "clean bandit".to_string(),
-                "sean paul".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn full_ambiguous_artist_names_can_still_match_local_tracks() {
-        assert!(artist_tag_matches_lookup(
-            "Simon & Garfunkel",
-            Some("Simon & Garfunkel")
-        ));
-        assert!(artist_tag_matches_lookup(
-            "Earth, Wind & Fire",
-            Some("Earth, Wind & Fire")
-        ));
-        assert!(artist_tag_matches_lookup(
-            "Anne-Marie",
-            Some("Clean Bandit feat. Sean Paul & Anne-Marie")
-        ));
+    fn wikipedia_lookup_query_normalizes_unicode_hyphen_variants() {
+        assert_eq!(wikipedia_lookup_query("Anne-Marie"), "Anne-Marie");
+        assert_eq!(wikipedia_lookup_query("Anne‐Marie"), "Anne-Marie");
+        assert_eq!(wikipedia_lookup_query("Anne‑Marie"), "Anne-Marie");
+        assert_eq!(wikipedia_lookup_query("Anne−Marie"), "Anne-Marie");
     }
 }

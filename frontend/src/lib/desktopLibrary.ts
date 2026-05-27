@@ -15,6 +15,7 @@ import type {
   AudioConversionSetupRequest,
   AudioConversionSetupResponse,
   BulkLyricsProgress,
+  BulkLyricsSaveLocation,
   BulkLyricsStartResponse,
   BulkUndoBatchEntry,
   BulkUndoLogEntry,
@@ -938,11 +939,13 @@ export function desktopStartBulkLyricsLookup(
   includeOnline = true,
   onlyMissing = true,
   limit?: number | null,
+  saveLocation: BulkLyricsSaveLocation = "sidecar",
 ): Promise<BulkLyricsStartResponse> {
   return invokeDesktop<BulkLyricsStartResponse>("start_bulk_lyrics_lookup_direct", {
     includeOnline,
     onlyMissing,
     limit: limit ?? null,
+    saveLocation,
   });
 }
 

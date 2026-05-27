@@ -26,6 +26,66 @@ function artistInfoMatchesName(info: ArtistInfoResponse | null | undefined, name
   return info?.query?.toLowerCase() === lowerName || info?.artist_name?.toLowerCase() === lowerName;
 }
 
+type ArtistSummaryBlock =
+  | { kind: "heading"; level: number; text: string }
+  | { kind: "paragraph"; text: string };
+
+const WIKIPEDIA_HEADING_PATTERN = /(={2,6})\s*([^=]+?)\s*\1/g;
+
+export function artistSummaryBlocks(summary: string | null | undefined): ArtistSummaryBlock[] {
+  const text = summary?.trim();
+  if (!text) {
+    return [];
+  }
+  const blocks: ArtistSummaryBlock[] = [];
+  let cursor = 0;
+
+  function pushParagraph(value: string) {
+    const normalized = value.replace(/\s+/g, " ").trim();
+    if (normalized) {
+      blocks.push({ kind: "paragraph", text: normalized });
+    }
+  }
+
+  for (const match of text.matchAll(WIKIPEDIA_HEADING_PATTERN)) {
+    const headingStart = match.index ?? 0;
+    pushParagraph(text.slice(cursor, headingStart));
+    blocks.push({
+      kind: "heading",
+      level: Math.min(match[1].length, 4),
+      text: match[2].replace(/\s+/g, " ").trim(),
+    });
+    cursor = headingStart + match[0].length;
+  }
+  pushParagraph(text.slice(cursor));
+  return blocks;
+}
+
+function ArtistSummaryText({ summary }: { summary: string | null | undefined }) {
+  const blocks = artistSummaryBlocks(summary);
+  if (blocks.length === 0) {
+    return null;
+  }
+  return (
+    <div className="grid gap-5 text-neutral-100">
+      {blocks.map((block, index) =>
+        block.kind === "heading" ? (
+          <h3
+            key={`${block.kind}-${index}`}
+            className={block.level <= 2 ? "pt-3 text-lg font-semibold text-white" : "pt-1 text-base font-semibold text-neutral-100"}
+          >
+            {block.text}
+          </h3>
+        ) : (
+          <p key={`${block.kind}-${index}`} className="text-lg leading-8 text-neutral-100">
+            {block.text}
+          </p>
+        ),
+      )}
+    </div>
+  );
+}
+
 export function ArtistPage({
   currentTrack,
   artistInfo,
@@ -86,7 +146,8 @@ export function ArtistPage({
   }, [artistInfo, artistNames]);
   const activeArtistName =
     artistNames[activeArtistIndex] ?? artistInfos[activeArtistIndex]?.query ?? artistInfo?.query ?? "";
-  const activeArtistInfo = artistInfos[activeArtistIndex] ?? artistInfos[0] ?? null;
+  const activeArtistInfo = artistInfos[activeArtistIndex] ?? (activeArtistIndex === 0 ? artistInfos[0] ?? null : null);
+  const activeArtistTracks = activeArtistInfo?.local_tracks ?? (activeArtistIndex === 0 ? artistTracks : []);
   const hasImage = Boolean(activeArtistInfo?.image_url);
   const canSaveOverride = Boolean(activeArtistName && overrideDraft.trim() && !isSavingOverride);
 
@@ -162,24 +223,24 @@ export function ArtistPage({
             </div>
           </div>
 
-          {activeArtistIndex === 0 && artistTracks.length > 0 && (
+          {activeArtistTracks.length > 0 && (
             <div className="mt-5 overflow-hidden rounded border border-line bg-panel">
               <div className="flex items-center justify-between gap-3 border-b border-line px-3 py-2 text-sm font-semibold text-white">
                 <span className="truncate">Top Local Tracks</span>
-                <span className="shrink-0 text-xs font-normal text-muted">{artistTracks.length}</span>
+                <span className="shrink-0 text-xs font-normal text-muted">{activeArtistTracks.length}</span>
               </div>
               <div>
-              {artistTracks.slice(0, 12).map((track) => (
-                <button
-                  key={track.id}
-                  className="flex w-full items-center justify-between gap-3 border-b border-line/60 px-3 py-2 text-left text-sm hover:bg-white/[0.035]"
-                  type="button"
-                  onClick={() => onPlayTrack(track, artistTracks)}
-                >
-                  <span className="min-w-0 flex-1 truncate text-white">{display(track.title, "Untitled")}</span>
-                  <span className="shrink-0 text-xs text-muted">{formatRating(track.rating)}</span>
-                </button>
-              ))}
+                {activeArtistTracks.slice(0, 12).map((track) => (
+                  <button
+                    key={track.id}
+                    className="flex w-full items-center justify-between gap-3 border-b border-line/60 px-3 py-2 text-left text-sm hover:bg-white/[0.035]"
+                    type="button"
+                    onClick={() => onPlayTrack(track, activeArtistTracks)}
+                  >
+                    <span className="min-w-0 flex-1 truncate text-white">{display(track.title, "Untitled")}</span>
+                    <span className="shrink-0 text-xs text-muted">{formatRating(track.rating)}</span>
+                  </button>
+                ))}
               </div>
             </div>
           )}
@@ -254,7 +315,12 @@ export function ArtistPage({
                 </button>
               </form>
             )}
-            {isArtistLoading && <div className="text-sm text-muted">Loading artist info...</div>}
+            {isArtistLoading && !activeArtistInfo?.found && <div className="text-sm text-muted">Loading artist info...</div>}
+            {isArtistLoading && activeArtistInfo?.found && (
+              <div className="mb-5 rounded border border-line bg-ink px-3 py-2 text-xs text-muted">
+                Refreshing artist info...
+              </div>
+            )}
             {!isArtistLoading && !activeArtistName && (
               <div className="grid h-full place-items-center text-sm text-muted">No artist selected.</div>
             )}
@@ -265,12 +331,11 @@ export function ArtistPage({
             )}
             {!isArtistLoading && activeArtistInfo?.found && (
               <div className="mx-auto max-w-3xl">
-                <p className="whitespace-pre-wrap text-xl leading-9 text-neutral-100">
-                  {activeArtistInfo.summary}
-                </p>
+                <ArtistSummaryText summary={activeArtistInfo.summary} />
                 {activeArtistInfo.from_cache && (
                   <div className="mt-5 text-xs text-muted">
-                    Cached locally{activeArtistInfo.updated_at ? ` on ${new Date(activeArtistInfo.updated_at).toLocaleString()}` : ""}.
+                    {activeArtistInfo.stale ? "Showing cached result while refreshing" : "Cached locally"}
+                    {activeArtistInfo.updated_at ? ` on ${new Date(activeArtistInfo.updated_at).toLocaleString()}` : ""}.
                   </div>
                 )}
               </div>

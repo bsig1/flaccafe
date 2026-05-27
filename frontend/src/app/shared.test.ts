@@ -9,6 +9,7 @@ import {
   formatDate,
   isTimestampOnlyLyricLine,
   normalizeAudioAnalysisCoverage,
+  normalizeAdvancedHttpShortcuts,
   normalizePlaybackResumePosition,
   normalizeEqualizerGains,
   normalizeKeyboardShortcuts,
@@ -23,6 +24,8 @@ import {
   storageKeys,
   stripLyricTimestamp,
 } from "./shared";
+import { backendRouteCatalog } from "../lib/backendRouteCatalog";
+import { playbackEndedEarly } from "./player/playbackEarlyEnd";
 import type { Track } from "../types/api";
 
 describe("keyboard shortcuts", () => {
@@ -64,6 +67,55 @@ describe("keyboard shortcuts", () => {
     });
 
     expect(shortcutConflictGroups(shortcuts)).toContainEqual(["page.library", "page.autodj"]);
+  });
+
+  it("normalizes advanced HTTP shortcuts across documented methods", () => {
+    const shortcuts = normalizeAdvancedHttpShortcuts([
+      {
+        id: "rating",
+        label: "Rate track",
+        method: "patch",
+        path: "/tracks/12/rating",
+        description: "Updates a rating.",
+        bodyJson: "{\"rating\":8}",
+        shortcut: { key: "r", ctrl: true },
+      },
+      {
+        method: "HEAD",
+        path: "/metadata/artwork/12",
+        shortcut: { key: "h", alt: true },
+      },
+      {
+        method: "TRACE",
+        path: "/health",
+        shortcut: { key: "t" },
+      },
+    ]);
+
+    expect(shortcuts).toHaveLength(2);
+    expect(shortcuts[0]).toMatchObject({ method: "PATCH", path: "/tracks/12/rating", shortcut: { ctrl: true, alt: false } });
+    expect(shortcuts[1]).toMatchObject({ method: "HEAD", path: "/metadata/artwork/12", shortcut: { ctrl: false, alt: true } });
+  });
+});
+
+describe("backend route catalog", () => {
+  it("parses methods and descriptions from the markdown route reference", () => {
+    expect(backendRouteCatalog).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ method: "GET", path: "/health" }),
+      ]),
+    );
+    expect(backendRouteCatalog.some((entry) => entry.method === "POST")).toBe(true);
+    expect(backendRouteCatalog.every((entry) => entry.description.length > 0)).toBe(true);
+  });
+});
+
+describe("playback early-end detection", () => {
+  it("flags decoder EOF far before the saved track duration", () => {
+    expect(playbackEndedEarly(115.879, 181.88)).toBe(true);
+    expect(playbackEndedEarly(179.5, 181.88)).toBe(false);
+    expect(playbackEndedEarly(4, 181.88)).toBe(true);
+    expect(playbackEndedEarly(10, 20)).toBe(false);
   });
 });
 

@@ -1,6 +1,6 @@
 {
   "name": "flac-cafe",
-  "version": "0.5.0-beta",
+  "version": "0.6.0-beta",
   "description": "A smart local music player and AutoDJ for downloaded collections.",
   "private": true,
   "license": "MIT",

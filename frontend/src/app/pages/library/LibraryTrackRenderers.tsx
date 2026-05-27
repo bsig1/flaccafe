@@ -152,13 +152,15 @@ export function createLibraryTrackRenderers(model: any) {
           if (isInteractiveTrackCellTarget(event.target)) {
             return;
           }
-          selectTrackLikeWindows(event, track, interactionList);
+          selectTrackLikeWindows(event, track, interactionList, { openDetails: false });
+          model.scheduleTrackDetailOpen?.(track);
         }}
         onDoubleClick={(event) => {
           if (isInteractiveTrackCellTarget(event.target)) {
             return;
           }
           event.preventDefault();
+          model.cancelPendingTrackDetailOpen?.();
           onPlayTrack(track, interactionList);
         }}
         onContextMenu={(event) => openTrackContextMenu(event, track, interactionList, removable)}
@@ -181,6 +183,7 @@ export function createLibraryTrackRenderers(model: any) {
               type="button"
               onClick={(event) => {
                 event.stopPropagation();
+                model.cancelPendingTrackDetailOpen?.();
                 onPlayTrack(track, interactionList);
               }}
             >

@@ -763,4 +763,32 @@ mod tests {
             format!("failure {}", DIAGNOSTIC_LIMIT + 4)
         );
     }
+
+    #[test]
+    #[ignore]
+    fn decode_audio_file_from_env() {
+        let path = std::env::var("FLAC_CAFE_DECODE_TEST_FILE")
+            .expect("Set FLAC_CAFE_DECODE_TEST_FILE to an audio file path");
+        let diagnostics = Arc::new(Mutex::new(Vec::new()));
+        let (mut decoder, duration_seconds) =
+            build_decoder(&PathBuf::from(&path), &diagnostics).expect("decode should start");
+        let channels = usize::from(decoder.channels().get());
+        let sample_rate = decoder.sample_rate().get() as f64;
+        let mut sample_count = 0_usize;
+        for sample in decoder.by_ref() {
+            assert!(sample.is_finite());
+            sample_count += 1;
+        }
+        assert!(sample_count > 0);
+        if let Some(duration_seconds) = duration_seconds {
+            let decoded_seconds = sample_count as f64 / channels as f64 / sample_rate;
+            let difference_seconds = duration_seconds - decoded_seconds;
+            println!(
+                "decoded_seconds={decoded_seconds:.3} duration_seconds={duration_seconds:.3} difference_seconds={difference_seconds:.3} samples={sample_count} channels={channels} sample_rate={sample_rate}"
+            );
+            if std::env::var("FLAC_CAFE_DECODE_EXPECT_COMPLETE").is_ok() {
+                assert!((decoded_seconds - duration_seconds).abs() < 1.0);
+            }
+        }
+    }
 }

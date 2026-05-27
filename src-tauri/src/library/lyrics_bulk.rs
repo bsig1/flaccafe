@@ -7,17 +7,16 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use super::{
-    get_setting, music_only_clause, open_database, track_from_row, DesktopTrack, TRACK_COLUMNS,
-};
 use super::lyrics::{
     database_lyrics, display_title, lrclib_fetch, save_cached_online_lyrics, save_database_lyrics,
-    truthy_setting_value,
 };
+use super::{music_only_clause, open_database, track_from_row, DesktopTrack, TRACK_COLUMNS};
 
 const BULK_LYRICS_ONLINE_DELAY_MS: u64 = 125;
 const BULK_LYRICS_ERROR_LIMIT: usize = 25;
 const BULK_LYRICS_DEFAULT_LIMIT: i64 = 50_000;
+const BULK_LYRICS_SAVE_DATABASE: &str = "database";
+const BULK_LYRICS_SAVE_SIDECAR: &str = "sidecar";
 
 static BULK_LYRICS_JOBS: OnceLock<Mutex<HashMap<String, BulkLyricsJob>>> = OnceLock::new();
 
@@ -42,6 +41,7 @@ struct BulkLyricsJob {
     cancel_requested: bool,
     include_online: bool,
     only_missing: bool,
+    save_location: String,
 }
 
 #[derive(Serialize)]
@@ -50,6 +50,7 @@ pub struct BulkLyricsStartResponse {
     status: String,
     include_online: bool,
     only_missing: bool,
+    save_location: String,
 }
 
 #[derive(Serialize)]
@@ -74,6 +75,7 @@ pub struct BulkLyricsProgress {
     error: Option<String>,
     include_online: bool,
     only_missing: bool,
+    save_location: String,
 }
 
 enum BulkLyricsOutcome {
@@ -84,7 +86,12 @@ enum BulkLyricsOutcome {
 }
 
 impl BulkLyricsJob {
-    fn new(job_id: String, include_online: bool, only_missing: bool) -> Self {
+    fn new(
+        job_id: String,
+        include_online: bool,
+        only_missing: bool,
+        save_location: String,
+    ) -> Self {
         Self {
             job_id,
             status: "pending".to_string(),
@@ -105,6 +112,7 @@ impl BulkLyricsJob {
             cancel_requested: false,
             include_online,
             only_missing,
+            save_location,
         }
     }
 
@@ -118,7 +126,8 @@ impl BulkLyricsJob {
         let eta_seconds = if self.status == "scanning" && self.processed_tracks > 0 {
             let seconds_per_track = elapsed_seconds / self.processed_tracks as f64;
             Some(
-                (self.total_tracks.saturating_sub(self.processed_tracks) as f64 * seconds_per_track)
+                (self.total_tracks.saturating_sub(self.processed_tracks) as f64
+                    * seconds_per_track)
                     .max(0.0),
             )
         } else if matches!(self.status.as_str(), "completed" | "cancelled") {
@@ -156,7 +165,20 @@ impl BulkLyricsJob {
             error: self.error.clone(),
             include_online: self.include_online,
             only_missing: self.only_missing,
+            save_location: self.save_location.clone(),
         }
+    }
+}
+
+fn normalize_bulk_lyrics_save_location(value: Option<String>) -> String {
+    let normalized = value
+        .unwrap_or_else(|| BULK_LYRICS_SAVE_SIDECAR.to_string())
+        .trim()
+        .to_ascii_lowercase();
+    if normalized == BULK_LYRICS_SAVE_DATABASE {
+        BULK_LYRICS_SAVE_DATABASE.to_string()
+    } else {
+        BULK_LYRICS_SAVE_SIDECAR.to_string()
     }
 }
 
@@ -254,12 +276,6 @@ fn bulk_lyrics_tracks(only_missing: bool, limit: Option<i64>) -> Result<Vec<Desk
         .map_err(|error| format!("Could not decode bulk lyrics tracks: {error}"))
 }
 
-fn should_write_lyrics_sidecars() -> Result<bool, String> {
-    let connection = open_database()?;
-    Ok(get_setting(&connection, "auto_write_fetched_lyrics_sidecars")
-        .map_or(true, |value| truthy_setting_value(Some(value))))
-}
-
 fn is_missing_lyrics_error(error: &str) -> bool {
     error.contains("No matching lyrics found")
         || error.contains("No lyrics text found")
@@ -275,7 +291,9 @@ fn bulk_lookup_track(
         return Ok(BulkLyricsOutcome::AlreadyCached);
     }
 
-    if let Some((lyrics, is_synced)) = super::metadata::read_embedded_lyrics(Path::new(&track.path))? {
+    if let Some((lyrics, is_synced)) =
+        super::metadata::read_embedded_lyrics(Path::new(&track.path))?
+    {
         save_database_lyrics(
             track.id,
             lyrics,
@@ -316,9 +334,10 @@ fn run_bulk_lyrics_lookup(
     include_online: bool,
     only_missing: bool,
     limit: Option<i64>,
+    save_location: String,
 ) -> Result<(), String> {
     let tracks = bulk_lyrics_tracks(only_missing, limit)?;
-    let write_sidecar = should_write_lyrics_sidecars()?;
+    let write_sidecar = save_location == BULK_LYRICS_SAVE_SIDECAR;
     update_bulk_lyrics_job(&job_id, |job| {
         job.status = "scanning".to_string();
         job.total_tracks = tracks.len();
@@ -378,8 +397,15 @@ fn run_bulk_lyrics_lookup_thread(
     include_online: bool,
     only_missing: bool,
     limit: Option<i64>,
+    save_location: String,
 ) {
-    let result = run_bulk_lyrics_lookup(job_id.clone(), include_online, only_missing, limit);
+    let result = run_bulk_lyrics_lookup(
+        job_id.clone(),
+        include_online,
+        only_missing,
+        limit,
+        save_location,
+    );
     if let Err(error) = result {
         let _ = update_bulk_lyrics_job(&job_id, |job| {
             if error == "cancelled" {
@@ -404,11 +430,18 @@ pub fn start_bulk_lyrics_lookup_direct(
     include_online: Option<bool>,
     only_missing: Option<bool>,
     limit: Option<i64>,
+    save_location: Option<String>,
 ) -> Result<BulkLyricsStartResponse, String> {
     let include_online = include_online.unwrap_or(true);
     let only_missing = only_missing.unwrap_or(true);
+    let save_location = normalize_bulk_lyrics_save_location(save_location);
     let job_id = new_bulk_lyrics_job_id();
-    let job = BulkLyricsJob::new(job_id.clone(), include_online, only_missing);
+    let job = BulkLyricsJob::new(
+        job_id.clone(),
+        include_online,
+        only_missing,
+        save_location.clone(),
+    );
     {
         let mut jobs = bulk_lyrics_jobs()
             .lock()
@@ -424,7 +457,16 @@ pub fn start_bulk_lyrics_lookup_direct(
 
     thread::spawn({
         let job_id = job_id.clone();
-        move || run_bulk_lyrics_lookup_thread(job_id, include_online, only_missing, limit)
+        let save_location = save_location.clone();
+        move || {
+            run_bulk_lyrics_lookup_thread(
+                job_id,
+                include_online,
+                only_missing,
+                limit,
+                save_location,
+            )
+        }
     });
 
     Ok(BulkLyricsStartResponse {
@@ -432,6 +474,7 @@ pub fn start_bulk_lyrics_lookup_direct(
         status: "pending".to_string(),
         include_online,
         only_missing,
+        save_location,
     })
 }
 

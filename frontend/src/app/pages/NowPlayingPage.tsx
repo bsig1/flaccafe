@@ -609,6 +609,7 @@ export function NowPlayingPage({
   lyricsEditMode,
   setLyricsEditMode,
   openLrcBuilder,
+  followLyrics: uiPreferences.nowPlayingAutoScrollLyrics,
   playbackTime,
   lyricsDraft,
   setLyricsDraft,
@@ -948,7 +949,7 @@ export function NowPlayingPage({
             <NowPlayingLyricsContent
               containerClass=""
               currentTrack={currentTrack}
-              editorClass="mx-auto max-w-3xl"
+              editorClass="h-full w-full"
               emptyClass="grid h-full place-items-center text-center text-sm text-muted"
               hasLyrics={hasLyrics}
               isEditingLyrics={isEditingLyrics}

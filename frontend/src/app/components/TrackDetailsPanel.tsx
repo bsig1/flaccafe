@@ -178,7 +178,7 @@ export function TrackDetailsPanel({
   return (
     <aside
       data-track-details-panel
-      className="flex w-96 max-w-96 shrink-0 flex-col overflow-hidden border-l border-line bg-[rgb(var(--color-strip))]"
+      className="absolute inset-y-0 right-0 z-40 flex w-[min(24rem,calc(100vw-2rem))] max-w-96 flex-col overflow-hidden border-l border-line bg-[rgb(var(--color-strip))] shadow-2xl"
     >
       <div className="flex h-14 items-center justify-between border-b border-line px-4">
         <div className="min-w-0">

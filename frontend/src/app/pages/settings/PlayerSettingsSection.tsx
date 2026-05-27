@@ -10,6 +10,10 @@ import type {
   PlaybackDiagnostic,
   PlaybackDiagnosticsResponse,
 } from "../../../lib/desktopPlayback";
+import type {
+  BulkLyricsProgress,
+  BulkLyricsSaveLocation,
+} from "../../../types/api";
 import {
   summarizePlaybackDiagnostics,
 } from "../../../lib/desktopPlayback";
@@ -32,6 +36,7 @@ import {
   normalizeEqualizerGains,
   replayGainTargetDescription,
 } from "../../shared";
+import { BulkLyricsLookupCard } from "./BulkLyricsLookupCard";
 
 export interface CodecSupportRow {
   label: string;
@@ -113,6 +118,16 @@ export function PlayerSettingsSection({
   onRefreshCodecSupport,
   autoWriteFetchedLyricsSidecars,
   onAutoWriteFetchedLyricsSidecarsChange,
+  bulkLyricsProgress,
+  bulkLyricsOnlyMissing,
+  bulkLyricsLimit,
+  bulkLyricsSaveLocation,
+  isStartingBulkLyrics,
+  onBulkLyricsOnlyMissingChange,
+  onBulkLyricsLimitChange,
+  onBulkLyricsSaveLocationChange,
+  onStartBulkLyrics,
+  onCancelBulkLyrics,
 }: {
   uiPreferences: UiPreferences;
   setUiPreferences: (updater: (current: UiPreferences) => UiPreferences) => void;
@@ -128,6 +143,16 @@ export function PlayerSettingsSection({
   onRefreshCodecSupport: () => void;
   autoWriteFetchedLyricsSidecars: boolean;
   onAutoWriteFetchedLyricsSidecarsChange: (value: boolean) => void;
+  bulkLyricsProgress: BulkLyricsProgress | null;
+  bulkLyricsOnlyMissing: boolean;
+  bulkLyricsLimit: string;
+  bulkLyricsSaveLocation: BulkLyricsSaveLocation;
+  isStartingBulkLyrics: boolean;
+  onBulkLyricsOnlyMissingChange: (value: boolean) => void;
+  onBulkLyricsLimitChange: (value: string) => void;
+  onBulkLyricsSaveLocationChange: (value: BulkLyricsSaveLocation) => void;
+  onStartBulkLyrics: () => void;
+  onCancelBulkLyrics: () => void;
 }) {
   const equalizerFrequencies = equalizerFrequenciesForMode(uiPreferences.equalizerBandMode);
   const equalizerGains = normalizeEqualizerGains(uiPreferences.equalizerGains, uiPreferences.equalizerBandMode);
@@ -393,6 +418,18 @@ export function PlayerSettingsSection({
             </label>
           </div>
         </div>
+        <BulkLyricsLookupCard
+          bulkLyricsProgress={bulkLyricsProgress}
+          bulkLyricsOnlyMissing={bulkLyricsOnlyMissing}
+          bulkLyricsLimit={bulkLyricsLimit}
+          bulkLyricsSaveLocation={bulkLyricsSaveLocation}
+          isStartingBulkLyrics={isStartingBulkLyrics}
+          onBulkLyricsOnlyMissingChange={onBulkLyricsOnlyMissingChange}
+          onBulkLyricsLimitChange={onBulkLyricsLimitChange}
+          onBulkLyricsSaveLocationChange={onBulkLyricsSaveLocationChange}
+          onStartBulkLyrics={onStartBulkLyrics}
+          onCancelBulkLyrics={onCancelBulkLyrics}
+        />
       </div>
     </DisclosureSection>
 

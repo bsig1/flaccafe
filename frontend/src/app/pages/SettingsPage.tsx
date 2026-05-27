@@ -38,6 +38,7 @@ import type {
 } from "../../lib/desktopPlayback";
 import type {
   BulkLyricsProgress,
+  BulkLyricsSaveLocation,
   LogTailResponse,
   SettingsResponse,
   StartupDiagnosticsResponse,
@@ -172,9 +173,9 @@ export function SettingsPage({
   const [lastFmApiKeyDraft, setLastFmApiKeyDraft] = useState("");
   const [lastFmApiSecretDraft, setLastFmApiSecretDraft] = useState("");
   const [isSavingLastFmCredentials, setIsSavingLastFmCredentials] = useState(false);
-  const [bulkLyricsIncludeOnline, setBulkLyricsIncludeOnline] = useState(true);
   const [bulkLyricsOnlyMissing, setBulkLyricsOnlyMissing] = useState(true);
   const [bulkLyricsLimit, setBulkLyricsLimit] = useState("5000");
+  const [bulkLyricsSaveLocation, setBulkLyricsSaveLocation] = useState<BulkLyricsSaveLocation>("sidecar");
   const [bulkLyricsProgress, setBulkLyricsProgress] = useState<BulkLyricsProgress | null>(null);
   const [isStartingBulkLyrics, setIsStartingBulkLyrics] = useState(false);
   const [rememberedDeleteChoice, setRememberedDeleteChoice] = useState<RememberedDeleteChoice | "ask">(
@@ -187,8 +188,8 @@ export function SettingsPage({
     showSettingsSection("library preferences display ratings metadata startup theme font density podcasts file paths delete recycle remember"),
     showSettingsSection("api keys online metadata lastfm last.fm scrobbling acoustid acoustic fingerprint musicbrainz lookup autotag"),
     showSettingsSection("keyboard shortcuts hotkeys local playback controls media keys"),
-    showSettingsSection("player playback audio output lyrics autofetch lrc sidecar cache follow equalizer replaygain fade skip codec rust webview"),
-    showSettingsSection("maintenance backend diagnostics database support bundle source folder logs cache reset local data lyrics bulk lookup preload"),
+    showSettingsSection("player playback audio output lyrics lyric bulk lookup preload autofetch lrc sidecar cache follow equalizer replaygain fade skip codec rust webview"),
+    showSettingsSection("maintenance backend diagnostics database support bundle source folder logs cache reset local data"),
     showSettingsSection("extensions skins plugins themes manifest customization"),
   ].filter(Boolean).length;
   const backendStatusClass =
@@ -307,9 +308,10 @@ export function SettingsPage({
     setIsStartingBulkLyrics(true);
     try {
       const response = await startBulkLyricsLookup(
-        bulkLyricsIncludeOnline,
+        true,
         bulkLyricsOnlyMissing,
         bulkLyricsLimitValue(),
+        bulkLyricsSaveLocation,
       );
       const progress = await fetchBulkLyricsLookupProgress(response.job_id);
       setBulkLyricsProgress(progress);
@@ -797,7 +799,7 @@ export function SettingsPage({
           />
           )}
 
-          {showSettingsSection("player playback audio output lyrics autofetch lrc sidecar cache follow equalizer replaygain fade skip codec rust webview") && (
+          {showSettingsSection("player playback audio output lyrics lyric bulk lookup preload autofetch lrc sidecar cache follow equalizer replaygain fade skip codec rust webview") && (
           <PlayerSettingsSection
             uiPreferences={uiPreferences}
             setUiPreferences={setUiPreferences}
@@ -813,10 +815,20 @@ export function SettingsPage({
             onRefreshCodecSupport={() => setCodecSupport(detectCodecSupport())}
             autoWriteFetchedLyricsSidecars={autoWriteFetchedLyricsSidecars}
             onAutoWriteFetchedLyricsSidecarsChange={onAutoWriteFetchedLyricsSidecarsChange}
+            bulkLyricsProgress={bulkLyricsProgress}
+            bulkLyricsOnlyMissing={bulkLyricsOnlyMissing}
+            bulkLyricsLimit={bulkLyricsLimit}
+            bulkLyricsSaveLocation={bulkLyricsSaveLocation}
+            isStartingBulkLyrics={isStartingBulkLyrics}
+            onBulkLyricsOnlyMissingChange={setBulkLyricsOnlyMissing}
+            onBulkLyricsLimitChange={setBulkLyricsLimit}
+            onBulkLyricsSaveLocationChange={setBulkLyricsSaveLocation}
+            onStartBulkLyrics={() => void startBulkLyrics()}
+            onCancelBulkLyrics={() => void cancelBulkLyrics()}
           />
           )}
 
-          {showSettingsSection("maintenance backend diagnostics database support bundle source folder logs cache reset local data lyrics bulk lookup preload") && (
+          {showSettingsSection("maintenance backend diagnostics database support bundle source folder logs cache reset local data") && (
           <MaintenanceSection
             backendStatus={backendStatus}
             backendStatusClass={backendStatusClass}
@@ -837,16 +849,6 @@ export function SettingsPage({
             supportBundlePath={supportBundlePath}
             onCopySupportBundlePath={onCopySupportBundlePath}
             onClearArtistCache={onClearArtistCache}
-            bulkLyricsProgress={bulkLyricsProgress}
-            bulkLyricsIncludeOnline={bulkLyricsIncludeOnline}
-            bulkLyricsOnlyMissing={bulkLyricsOnlyMissing}
-            bulkLyricsLimit={bulkLyricsLimit}
-            isStartingBulkLyrics={isStartingBulkLyrics}
-            onBulkLyricsIncludeOnlineChange={setBulkLyricsIncludeOnline}
-            onBulkLyricsOnlyMissingChange={setBulkLyricsOnlyMissing}
-            onBulkLyricsLimitChange={setBulkLyricsLimit}
-            onStartBulkLyrics={() => void startBulkLyrics()}
-            onCancelBulkLyrics={() => void cancelBulkLyrics()}
           />
           )}
 

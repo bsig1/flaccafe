@@ -37,6 +37,7 @@
   AdvancedTrackSearchFilters,
   BackupResponse,
   BulkLyricsProgress,
+  BulkLyricsSaveLocation,
   BulkLyricsStartResponse,
   BulkUndoBatchEntry,
   BulkUndoLogEntry,
@@ -791,8 +792,9 @@ export function startBulkLyricsLookup(
   includeOnline = true,
   onlyMissing = true,
   limit?: number | null,
+  saveLocation: BulkLyricsSaveLocation = "sidecar",
 ): Promise<BulkLyricsStartResponse> {
-  return desktopStartBulkLyricsLookup(includeOnline, onlyMissing, limit);
+  return desktopStartBulkLyricsLookup(includeOnline, onlyMissing, limit, saveLocation);
 }
 
 export function fetchBulkLyricsLookupProgress(jobId: string): Promise<BulkLyricsProgress> {
