@@ -214,7 +214,7 @@ export function usePlaybackAutoDjController(model: any) {
         shouldRecordTrackAsPlayed(listenedSeconds, durationSeconds, uiPreferences.skipThresholdPercent)
           ? await markTrackPlayed(track.id)
           : await markTrackSkipped(track.id);
-      replaceTrackEverywhere(updated);
+      replaceTrackEverywhere(updated, { lightweightLibraryCache: true });
       void loadHistory();
     } catch {
       // Playback should not be interrupted by history bookkeeping.
@@ -496,7 +496,7 @@ export function usePlaybackAutoDjController(model: any) {
     }
     try {
       const updated = await markTrackPlayed(trackId);
-      replaceTrackEverywhere(updated);
+      replaceTrackEverywhere(updated, { lightweightLibraryCache: true });
       void loadHistory();
     } catch {
       setStatus("Playback finished, but play history could not be saved.");
@@ -509,7 +509,7 @@ export function usePlaybackAutoDjController(model: any) {
     }
     try {
       const updated = await markTrackSkipped(trackId);
-      replaceTrackEverywhere(updated);
+      replaceTrackEverywhere(updated, { lightweightLibraryCache: true });
       void loadHistory();
     } catch {
       setStatus("Skip could not be saved.");

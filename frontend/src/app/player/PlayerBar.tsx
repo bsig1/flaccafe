@@ -707,7 +707,7 @@ export function PlayerBar({
     }
   }
 
-  async function recordCurrentTrackExit() {
+  function recordCurrentTrackExit() {
     if (!currentTrack) {
       return;
     }
@@ -715,9 +715,9 @@ export function PlayerBar({
       return;
     }
     if (shouldRecordTrackAsPlayed(currentTime, effectiveDuration, skipThresholdPercent)) {
-      await onTrackEnded(currentTrack.id);
+      void onTrackEnded(currentTrack.id);
     } else {
-      await onTrackSkipped(currentTrack.id);
+      void onTrackSkipped(currentTrack.id);
     }
   }
 
@@ -785,7 +785,7 @@ export function PlayerBar({
       setStatus("CD playback stopped early. Use the play button in the player bar to retry, or refresh the CD page if the disc changed.");
       return;
     }
-    await onTrackEnded(currentTrack.id);
+    void onTrackEnded(currentTrack.id);
     if (playbackMode === "stopAfterCurrent") {
       setIsPlaying(false);
       setStatus("Stopped after current track");

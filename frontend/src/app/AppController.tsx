@@ -520,9 +520,30 @@ export function useAppController() {
   const setLibraryVisibleColumns = (columns: MetadataColumnKey[]) =>
     setUiPreferences((current) => ({ ...current, libraryVisibleColumns: normalizeLibraryColumns(columns) }));
 
-  function replaceTrackEverywhere(updated: Track) {
+  function patchCachedTrack(updated: Track) {
+    let next: Map<number, Track> | null = null;
+    for (const [index, track] of trackIndexCacheRef.current.entries()) {
+      if (track.id !== updated.id) {
+        continue;
+      }
+      next ??= new Map(trackIndexCacheRef.current);
+      next.set(index, updated);
+    }
+    if (!next) {
+      return;
+    }
+    trackIndexCacheRef.current = next;
+    setTrackIndexCache(next);
+    setTracks((current) => current.map((track) => (track.id === updated.id ? updated : track)));
+  }
+
+  function replaceTrackEverywhere(updated: Track, options?: { lightweightLibraryCache?: boolean }) {
     const replace = (track: Track) => (track.id === updated.id ? updated : track);
-    updateCachedTracks(replace);
+    if (options?.lightweightLibraryCache) {
+      patchCachedTrack(updated);
+    } else {
+      updateCachedTracks(replace);
+    }
     setSelectedAlbumTracks((current) => current.map(replace));
     setSelectedArtistTracks((current) => current.map(replace));
     setSelectedPlaylistTracks((current) => current.map(replace));
