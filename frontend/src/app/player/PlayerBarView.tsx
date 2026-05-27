@@ -24,7 +24,7 @@ export function PlayerBarView({ model }: { model: any }) {
   const currentRadioStation = model.currentRadioStation as RadioStation | null;
   const preloadedNextTrack = model.preloadedNextTrack as Track | null;
   const {
-    miniPlayer, artworkSrc, playerTitle, hideArtworkPreview, scheduleArtworkPreview, setArtworkFailed, isRadioSource, isPreviewTrack, isLibraryTrack, radioSubtitle, hasCurrentArtist, currentArtistLabel, onOpenCurrentArtist, hasCurrentAlbum, currentAlbumLabel, onOpenCurrentAlbum, onOpenCurrentTrack, cdSkipIsSettling, hasPrevious, playRelative, isPlaying, hasPlayableSource, togglePlayback, hasNext, usePlayback, webAudioSourceUrl, webAudioKey, audioRef, isCdPreviewTrack, syncDuration, handleTimeUpdate, setIsPlaying, suppressWebPauseUntilRef, maybeClearPendingResume, handleEnded, activeSourceKeyRef, activeSourceKey, suppressWebPlaybackErrorsUntilRef, setStatus, canPreloadNextTrack, nextAudioRef, trackAudioSourceUrl, effectiveDuration, currentTime, progressPercent, progressFill, handleSeek, playbackMode, cycleRepeatMode, onOpenLyricsView, onOpenQueueView, muted, volume, handleVolumeWheel, toggleMuted, handleVolumeChange, volumePercentDraft, commitVolumePercent, setVolumePercentDraft, handleVolumePercentChange, handleVolumePercentKeyDown, onRating, showArtworkPreview,
+    miniPlayer, artworkSrc, playerTitle, hideArtworkPreview, scheduleArtworkPreview, setArtworkFailed, isRadioSource, isPreviewTrack, isLibraryTrack, radioSubtitle, hasCurrentArtist, currentArtistLabel, onOpenCurrentArtist, hasCurrentAlbum, currentAlbumLabel, onOpenCurrentAlbum, onOpenCurrentTrack, cdSkipIsSettling, hasPrevious, canPreviousAction, handlePreviousTrack, playRelative, isPlaying, hasPlayableSource, togglePlayback, hasNext, usePlayback, webAudioSourceUrl, webAudioKey, audioRef, isCdPreviewTrack, syncDuration, handleTimeUpdate, setIsPlaying, suppressWebPauseUntilRef, maybeClearPendingResume, handleEnded, activeSourceKeyRef, activeSourceKey, suppressWebPlaybackErrorsUntilRef, setStatus, canPreloadNextTrack, nextAudioRef, trackAudioSourceUrl, effectiveDuration, currentTime, progressPercent, progressFill, handleSeek, handleProgressKeyDown, playbackMode, cycleRepeatMode, onOpenLyricsView, onOpenQueueView, muted, volume, handleVolumeWheel, toggleMuted, handleVolumeChange, volumePercentDraft, commitVolumePercent, setVolumePercentDraft, handleVolumePercentChange, handleVolumePercentKeyDown, onRating, showArtworkPreview,
   } = model;
 
   return (
@@ -131,9 +131,9 @@ export function PlayerBarView({ model }: { model: any }) {
           <button
             className="icon-button"
             type="button"
-            title={cdSkipIsSettling ? "CD track is starting" : "Previous track"}
-            disabled={!hasPrevious || cdSkipIsSettling}
-            onClick={() => playRelative(-1)}
+            title={cdSkipIsSettling ? "CD track is starting" : hasPrevious ? "Previous track" : "Restart track"}
+            disabled={!canPreviousAction || cdSkipIsSettling}
+            onClick={handlePreviousTrack}
           >
             <SkipBack size={17} />
           </button>
@@ -247,6 +247,7 @@ export function PlayerBarView({ model }: { model: any }) {
               type="range"
               value={effectiveDuration > 0 ? Math.min(currentTime, effectiveDuration) : 0}
               onChange={handleSeek}
+              onKeyDown={handleProgressKeyDown}
             />
           )}
           {!isRadioSource && <span>{formatPlaybackTime(effectiveDuration)}</span>}

@@ -478,8 +478,6 @@ export function AppPageOutlet({ controller }: AppPageOutletProps) {
         queue={playbackQueue}
         uiPreferences={uiPreferences}
         setUiPreferences={setUiPreferences}
-        writeRatingsToFiles={writeRatingsToFiles}
-        onWriteRatingsToFilesChange={(value) => void handleWriteRatingsToFiles(value)}
         onFetchLyrics={handleFetchLyrics}
         onSaveLyrics={handleSaveLyrics}
         onPlayTrack={handlePlayTrack}

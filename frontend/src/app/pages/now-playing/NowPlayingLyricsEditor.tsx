@@ -1,15 +1,15 @@
 import {
   Clock,
+  GripVertical,
   ListMusic,
   Pencil,
   Plus,
-  Volume2,
   X,
 } from "lucide-react";
-
 import {
-  formatPlaybackTime,
-} from "../../shared";
+  useEffect,
+  useState,
+} from "react";
 import {
   type LrcBuilderLine,
   formatLrcTimestamp,
@@ -27,8 +27,6 @@ export function NowPlayingLyricsEditor({
     setLyricsSynced,
     lyricsTarget,
     setLyricsTarget,
-    writeRatingsToFiles,
-    onWriteRatingsToFilesChange,
     lyricsEditMode,
     setLyricsEditMode,
     openLrcBuilder,
@@ -39,13 +37,52 @@ export function NowPlayingLyricsEditor({
     activeBuilderLineIndex,
     setActiveBuilderLineIndex,
     syncBuilderLine,
-    insertNoLyricSection,
     addBuilderLine,
     updateBuilderLine,
     removeBuilderLine,
+    reorderBuilderLine,
     lyricsSaveDisabled,
     handleSaveLyrics,
   } = model;
+  const [draggedLineIndex, setDraggedLineIndex] = useState<number | null>(null);
+  const [dragOverLineIndex, setDragOverLineIndex] = useState<number | null>(null);
+  const activeTimedLineIndex = lrcBuilderLines.reduce((activeIndex: number, line: LrcBuilderLine, index: number) => {
+    return line.time !== null && line.time <= playbackTime + 0.05 ? index : activeIndex;
+  }, -1);
+
+  function handleLineEnter(index: number) {
+    syncBuilderLine(index);
+  }
+
+  function clearLineDrag() {
+    setDraggedLineIndex(null);
+    setDragOverLineIndex(null);
+  }
+
+  useEffect(() => {
+    if (lyricsEditMode !== "sync") {
+      return;
+    }
+    function handleBuilderKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      if (
+        target?.closest("input, textarea, select, button, [contenteditable='true']") ||
+        event.key !== "Enter" ||
+        event.repeat ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey
+      ) {
+        return;
+      }
+      event.preventDefault();
+      syncBuilderLine();
+    }
+
+    window.addEventListener("keydown", handleBuilderKeyDown);
+    return () => window.removeEventListener("keydown", handleBuilderKeyDown);
+  }, [lyricsEditMode, syncBuilderLine]);
 
   return (
       <div className={`${containerClass} grid h-full grid-rows-[auto_auto_minmax(0,1fr)_auto] gap-3`}>
@@ -72,15 +109,6 @@ export function NowPlayingLyricsEditor({
               </select>
             </label>
           </div>
-          <label className="flex items-center gap-2 text-muted">
-            File writes
-            <input
-              type="checkbox"
-              className="h-4 w-4 accent-ember"
-              checked={writeRatingsToFiles}
-              onChange={(event) => onWriteRatingsToFilesChange(event.target.checked)}
-            />
-          </label>
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
@@ -104,7 +132,7 @@ export function NowPlayingLyricsEditor({
           </div>
           {lyricsEditMode === "sync" && (
             <div className="rounded border border-line/70 bg-ink px-3 py-2 font-mono text-muted">
-              {formatPlaybackTime(playbackTime)} / [{formatLrcTimestamp(playbackTime)}]
+              [{formatLrcTimestamp(playbackTime)}]
             </div>
           )}
         </div>
@@ -120,16 +148,12 @@ export function NowPlayingLyricsEditor({
           <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 rounded border border-line bg-ink p-3">
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
               <div className="min-w-0 text-muted">
-                Select a lyric row, press Sync as the line starts, or add a timed no-lyric section.
+                {lrcBuilderLines.length.toLocaleString()} lines
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <button className="secondary-button h-8" type="button" onClick={() => syncBuilderLine()}>
                   <Clock size={14} />
                   Sync
-                </button>
-                <button className="secondary-button h-8" type="button" onClick={insertNoLyricSection}>
-                  <Volume2 size={14} />
-                  No Lyrics
                 </button>
                 <button className="secondary-button h-8" type="button" onClick={addBuilderLine}>
                   <Plus size={14} />
@@ -140,14 +164,64 @@ export function NowPlayingLyricsEditor({
             <div className="min-h-0 overflow-auto rounded border border-line/70">
               {lrcBuilderLines.map((line: LrcBuilderLine, index: number) => {
                 const selected = index === activeBuilderLineIndex;
+                const playbackActive = line.time !== null && index === activeTimedLineIndex;
+                const dragActive = draggedLineIndex === index;
+                const dragOver = dragOverLineIndex === index && draggedLineIndex !== index;
                 return (
                   <div
                     key={line.id}
-                    className={`grid grid-cols-[5.75rem_minmax(0,1fr)_2.25rem] items-center gap-2 border-b border-line/60 px-2 py-2 text-sm last:border-b-0 ${
-                      selected ? "bg-moss/10" : "bg-panel/40"
-                    }`}
+                    className={`grid grid-cols-[1.75rem_6.25rem_minmax(0,1fr)_2.25rem] items-center gap-2 border-b border-line/60 px-2 py-2 text-sm last:border-b-0 ${
+                      playbackActive
+                        ? "bg-moss/15"
+                        : selected
+                          ? "bg-moss/10"
+                          : dragOver
+                            ? "bg-ember/10"
+                            : "bg-panel/40"
+                    } ${dragActive ? "opacity-60" : ""} ${selected ? "ring-1 ring-inset ring-moss/35" : ""}`}
                     onClick={() => setActiveBuilderLineIndex(index)}
+                    onDragOver={(event) => {
+                      if (draggedLineIndex === null) {
+                        return;
+                      }
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = "move";
+                      setDragOverLineIndex(index);
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      const sourceIndex = draggedLineIndex ?? Number(event.dataTransfer.getData("text/plain"));
+                      clearLineDrag();
+                      if (Number.isFinite(sourceIndex)) {
+                        reorderBuilderLine(sourceIndex, index);
+                      }
+                    }}
                   >
+                    <div className="relative grid h-8 w-7 place-items-center">
+                      {playbackActive && (
+                        <span
+                          aria-label="Current timestamped line"
+                          className="absolute -left-1 h-2 w-2 rounded-full bg-moss shadow-[0_0_10px_rgb(var(--color-moss)/0.8)]"
+                          title="Current timestamped line"
+                        />
+                      )}
+                      <button
+                        className="grid h-7 w-7 cursor-grab place-items-center rounded text-muted hover:bg-white/10 hover:text-white active:cursor-grabbing"
+                        draggable
+                        type="button"
+                        title="Drag to reorder"
+                        onDragStart={(event) => {
+                          setDraggedLineIndex(index);
+                          setDragOverLineIndex(index);
+                          setActiveBuilderLineIndex(index);
+                          event.dataTransfer.effectAllowed = "move";
+                          event.dataTransfer.setData("text/plain", String(index));
+                        }}
+                        onDragEnd={clearLineDrag}
+                      >
+                        <GripVertical size={14} />
+                      </button>
+                    </div>
                     <button
                       className={`h-8 rounded border px-2 font-mono text-xs tabular-nums ${
                         line.time === null ? "border-line text-muted" : "border-moss/50 text-moss"
@@ -159,29 +233,21 @@ export function NowPlayingLyricsEditor({
                         syncBuilderLine(index);
                       }}
                     >
-                      {formatLrcTimestamp(line.time)}
+                      {line.time === null ? "--:--.--" : `[${formatLrcTimestamp(line.time)}]`}
                     </button>
-                    {line.gap ? (
-                      <button
-                        className="min-w-0 truncate rounded border border-dashed border-line bg-ink px-3 py-1.5 text-left text-xs text-muted hover:text-white"
-                        type="button"
-                        title="Click to turn this back into a lyric line"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          updateBuilderLine(index, { gap: false, text: "" });
-                        }}
-                      >
-                        No lyric section
-                      </button>
-                    ) : (
-                      <input
-                        className="min-w-0 rounded border border-line bg-ink px-3 py-1.5 text-neutral-100 outline-none ring-moss/40 focus:ring-2"
-                        value={line.text}
-                        placeholder="Lyric line"
-                        onFocus={() => setActiveBuilderLineIndex(index)}
-                        onChange={(event) => updateBuilderLine(index, { text: event.target.value, gap: false })}
-                      />
-                    )}
+                    <input
+                      className="min-w-0 rounded border border-line bg-ink px-3 py-1.5 text-neutral-100 outline-none ring-moss/40 focus:ring-2"
+                      value={line.gap ? "" : line.text}
+                      placeholder="Lyric line"
+                      onFocus={() => setActiveBuilderLineIndex(index)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && !event.repeat && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+                          event.preventDefault();
+                          handleLineEnter(index);
+                        }
+                      }}
+                      onChange={(event) => updateBuilderLine(index, { text: event.target.value, gap: false })}
+                    />
                     <button
                       className="icon-button h-8 w-8"
                       type="button"
@@ -202,11 +268,9 @@ export function NowPlayingLyricsEditor({
 
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="text-xs text-muted">
-            {lyricsTarget === "file" && !writeRatingsToFiles
-              ? "File writing is off; enable it here before saving to the audio file."
-              : lyricsTarget === "file"
-                ? "Saving will update the file tags and keep a database copy."
-                : "Saving will keep lyrics in the FLAC Cafe database only."}
+            {lyricsTarget === "file"
+              ? "Saving will update the file tags and keep a database copy."
+              : "Saving will keep lyrics in the FLAC Cafe database only."}
           </div>
           <button
             className="primary-button"

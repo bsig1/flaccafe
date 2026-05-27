@@ -192,6 +192,7 @@ export function PlayerBar({
   const currentIndex = currentTrack && !isRadioSource ? queue.findIndex((track) => track.id === currentTrack.id) : -1;
   const hasPrevious = currentIndex > 0;
   const hasNext = currentIndex >= 0 && currentIndex < queue.length - 1;
+  const canPreviousAction = hasPrevious || Boolean(currentTrack && !isRadioSource && !isCdPreviewTrack);
   const cdSkipIsSettling = isCdPreviewTrack && isPlaying && currentTime < CD_SKIP_SETTLE_SECONDS;
   const usePlayback = playbackEngine === "rust" && !isRadioSource && !currentTrack?.audio_url;
   const preloadedNextTrack =
@@ -521,6 +522,16 @@ export function PlayerBar({
     seekTo(nextTime);
   }
 
+  function handleProgressKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (event.key !== " " && event.code !== "Space") {
+      return;
+    }
+    event.preventDefault();
+    if (hasPlayableSource) {
+      void togglePlayback();
+    }
+  }
+
   function seekTo(nextTime: number) {
     if (isRadioSource || isCdPreviewTrack) {
       return;
@@ -563,6 +574,17 @@ export function PlayerBar({
     } else {
       pauseWithFade();
     }
+  }
+
+  function handlePreviousTrack() {
+    if (cdSkipIsSettling || !canPreviousAction) {
+      return;
+    }
+    if (currentTime > 4 || !hasPrevious) {
+      seekTo(0);
+      return;
+    }
+    playRelative(-1);
   }
 
   function changeVolume(nextVolume: number) {
@@ -897,11 +919,11 @@ export function PlayerBar({
   const playerTitle = currentRadioStation ? display(currentRadioStation.name, "Radio stream") : currentTrack ? display(currentTrack.title, "Untitled") : "Nothing playing";
 
   usePlayerBarMediaEffects({
-    hideArtworkPreview, artworkSrc, miniPlayerCommandRef, togglePlayback, playRelative, seekTo, smtcActionRef, hasPlayableSource, isPlaying, playWithFade, pauseWithFade, hasNext, currentTime, hasPrevious, isRadioSource, keyboardShortcuts, changeVolume, volume, muted, toggleMuted, cycleRepeatMode, toggleStopAfterCurrent, setPlaybackMode, playbackMode, currentTrack, currentRadioStation, queue, currentIndex, outputVolume, effectiveDuration, smtcPositionSecond, miniPlayerChannelRef,
+    hideArtworkPreview, artworkSrc, miniPlayerCommandRef, togglePlayback, playRelative, seekTo, smtcActionRef, hasPlayableSource, isPlaying, playWithFade, pauseWithFade, hasNext, currentTime, hasPrevious, canPreviousAction, handlePreviousTrack, isRadioSource, keyboardShortcuts, changeVolume, volume, muted, toggleMuted, cycleRepeatMode, toggleStopAfterCurrent, setPlaybackMode, playbackMode, currentTrack, currentRadioStation, queue, currentIndex, outputVolume, effectiveDuration, smtcPositionSecond, miniPlayerChannelRef,
   });
 
   const playerBarViewModel = {
-    miniPlayer, artworkSrc, playerTitle, hideArtworkPreview, scheduleArtworkPreview, setArtworkFailed, isRadioSource, isPreviewTrack, isLibraryTrack, currentTrack, currentRadioStation, radioSubtitle, hasCurrentArtist, currentArtistLabel, onOpenCurrentArtist, hasCurrentAlbum, currentAlbumLabel, onOpenCurrentAlbum, onOpenCurrentTrack, cdSkipIsSettling, hasPrevious, playRelative, isPlaying, hasPlayableSource, togglePlayback, hasNext, usePlayback, webAudioSourceUrl, webAudioKey, audioRef, isCdPreviewTrack, syncDuration, handleTimeUpdate, setIsPlaying, suppressWebPauseUntilRef, maybeClearPendingResume, handleEnded, activeSourceKeyRef, activeSourceKey, suppressWebPlaybackErrorsUntilRef, setStatus, preloadedNextTrack, canPreloadNextTrack, nextAudioRef, trackAudioSourceUrl, effectiveDuration, currentTime, progressPercent, progressFill, handleSeek, playbackMode, cycleRepeatMode, onOpenLyricsView, onOpenQueueView, muted, volume, handleVolumeWheel, toggleMuted, handleVolumeChange, volumePercentDraft, commitVolumePercent, setVolumePercentDraft, handleVolumePercentChange, handleVolumePercentKeyDown, onRating, showArtworkPreview,
+    miniPlayer, artworkSrc, playerTitle, hideArtworkPreview, scheduleArtworkPreview, setArtworkFailed, isRadioSource, isPreviewTrack, isLibraryTrack, currentTrack, currentRadioStation, radioSubtitle, hasCurrentArtist, currentArtistLabel, onOpenCurrentArtist, hasCurrentAlbum, currentAlbumLabel, onOpenCurrentAlbum, onOpenCurrentTrack, cdSkipIsSettling, hasPrevious, canPreviousAction, handlePreviousTrack, playRelative, isPlaying, hasPlayableSource, togglePlayback, hasNext, usePlayback, webAudioSourceUrl, webAudioKey, audioRef, isCdPreviewTrack, syncDuration, handleTimeUpdate, setIsPlaying, suppressWebPauseUntilRef, maybeClearPendingResume, handleEnded, activeSourceKeyRef, activeSourceKey, suppressWebPlaybackErrorsUntilRef, setStatus, preloadedNextTrack, canPreloadNextTrack, nextAudioRef, trackAudioSourceUrl, effectiveDuration, currentTime, progressPercent, progressFill, handleSeek, handleProgressKeyDown, playbackMode, cycleRepeatMode, onOpenLyricsView, onOpenQueueView, muted, volume, handleVolumeWheel, toggleMuted, handleVolumeChange, volumePercentDraft, commitVolumePercent, setVolumePercentDraft, handleVolumePercentChange, handleVolumePercentKeyDown, onRating, showArtworkPreview,
   };
 
   return <PlayerBarView model={playerBarViewModel} />;

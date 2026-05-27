@@ -87,8 +87,6 @@ export function NowPlayingPage({
   queue,
   uiPreferences,
   setUiPreferences,
-  writeRatingsToFiles,
-  onWriteRatingsToFilesChange,
   onFetchLyrics,
   onSaveLyrics,
   onPlayTrack,
@@ -110,8 +108,6 @@ export function NowPlayingPage({
   queue: Track[];
   uiPreferences: UiPreferences;
   setUiPreferences: (updater: (current: UiPreferences) => UiPreferences) => void;
-  writeRatingsToFiles: boolean;
-  onWriteRatingsToFilesChange: (value: boolean) => void;
   onFetchLyrics: (track: Track) => Promise<LyricsResponse>;
   onSaveLyrics: (trackId: number, requestBody: LyricsUpdateRequest) => Promise<LyricsResponse>;
   onPlayTrack: (track: Track, queue: Track[]) => void;
@@ -238,7 +234,7 @@ export function NowPlayingPage({
         : "text-lg leading-8";
   const titleSizeClass = layout === "party" ? "text-2xl md:text-3xl" : isQueueLayout ? "text-lg 2xl:text-2xl" : "text-xl";
   const metadataLinkClass = "max-w-full truncate rounded text-left transition hover:text-moss focus:outline-none focus:ring-2 focus:ring-moss/40";
-  const lyricsSaveDisabled = !currentTrack || lyricsBusy || (lyricsTarget === "file" && !writeRatingsToFiles);
+  const lyricsSaveDisabled = !currentTrack || lyricsBusy;
   const queueRowHeight = isQueueLayout ? 62 : 52;
   const shouldVirtualizeQueue = showQueue && queue.length > QUEUE_VIRTUALIZATION_THRESHOLD;
   const queueStartIndex = shouldVirtualizeQueue
@@ -302,28 +298,34 @@ export function NowPlayingPage({
     commitBuilderLines(nextLines, nextActive);
   }
 
-  function insertNoLyricSection() {
-    const boundedIndex = Math.max(0, Math.min(activeBuilderLineIndex, Math.max(0, lrcBuilderLines.length - 1)));
-    const selected = lrcBuilderLines[boundedIndex];
-    if (selected && selected.time === null && selected.text.trim().length === 0) {
-      const nextLines = lrcBuilderLines.map((line, index) =>
-        index === boundedIndex ? { ...line, time: playbackTime, text: "", gap: true } : line,
-      );
-      commitBuilderLines(nextLines, Math.min(nextLines.length - 1, boundedIndex + 1));
-      return;
-    }
-
-    const nextLines = [...lrcBuilderLines];
-    const insertAt = selected ? boundedIndex + 1 : nextLines.length;
-    nextLines.splice(insertAt, 0, createBuilderLine("", playbackTime, true));
-    commitBuilderLines(nextLines, Math.min(nextLines.length - 1, insertAt + 1));
-  }
-
   function addBuilderLine() {
     const insertAt = Math.max(0, Math.min(activeBuilderLineIndex + 1, lrcBuilderLines.length));
     const nextLines = [...lrcBuilderLines];
     nextLines.splice(insertAt, 0, createBuilderLine());
     commitBuilderLines(nextLines, insertAt);
+  }
+
+  function reorderBuilderLine(fromIndex: number, toIndex: number) {
+    if (lrcBuilderLines.length < 2) {
+      return;
+    }
+    const from = Math.max(0, Math.min(fromIndex, lrcBuilderLines.length - 1));
+    const to = Math.max(0, Math.min(toIndex, lrcBuilderLines.length - 1));
+    if (from === to) {
+      return;
+    }
+    const nextLines = [...lrcBuilderLines];
+    const [movedLine] = nextLines.splice(from, 1);
+    nextLines.splice(to, 0, movedLine);
+    let nextActive = activeBuilderLineIndex;
+    if (activeBuilderLineIndex === from) {
+      nextActive = to;
+    } else if (from < activeBuilderLineIndex && activeBuilderLineIndex <= to) {
+      nextActive = activeBuilderLineIndex - 1;
+    } else if (to <= activeBuilderLineIndex && activeBuilderLineIndex < from) {
+      nextActive = activeBuilderLineIndex + 1;
+    }
+    commitBuilderLines(nextLines, nextActive);
   }
 
   function removeBuilderLine(index: number) {
@@ -559,8 +561,6 @@ export function NowPlayingPage({
   setLyricsSynced,
   lyricsTarget,
   setLyricsTarget,
-  writeRatingsToFiles,
-  onWriteRatingsToFilesChange,
   lyricsEditMode,
   setLyricsEditMode,
   openLrcBuilder,
@@ -571,10 +571,10 @@ export function NowPlayingPage({
   activeBuilderLineIndex,
   setActiveBuilderLineIndex,
   syncBuilderLine,
-  insertNoLyricSection,
   addBuilderLine,
   updateBuilderLine,
   removeBuilderLine,
+  reorderBuilderLine,
   lyricsSaveDisabled,
   handleSaveLyrics,
   };

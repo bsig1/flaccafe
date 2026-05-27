@@ -182,6 +182,15 @@ export function MiniPlayerWindow() {
               type="range"
               value={duration > 0 ? Math.min(snapshot.currentTime, duration) : 0}
               onChange={(event) => sendMiniPlayerCommand({ type: "seek", seconds: Number(event.target.value) })}
+              onKeyDown={(event) => {
+                if (event.key !== " " && event.code !== "Space") {
+                  return;
+                }
+                event.preventDefault();
+                if (track) {
+                  sendMiniPlayerCommand({ type: "playPause" });
+                }
+              }}
             />
             <span>{formatPlaybackTime(duration)}</span>
           </div>
@@ -204,7 +213,7 @@ export function MiniPlayerWindow() {
             <button
               className="icon-button h-8 w-8"
               type="button"
-              title="Previous"
+              title="Previous or restart track"
               disabled={!snapshot.hasPrevious}
               onClick={() => sendMiniPlayerCommand({ type: "previous" })}
             >

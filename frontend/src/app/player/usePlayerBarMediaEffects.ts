@@ -15,7 +15,7 @@ import {
 
 export function usePlayerBarMediaEffects(ctx: any) {
   const {
-    hideArtworkPreview, artworkSrc, miniPlayerCommandRef, togglePlayback, playRelative, seekTo, smtcActionRef, hasPlayableSource, isPlaying, playWithFade, pauseWithFade, hasNext, currentTime, hasPrevious, isRadioSource, keyboardShortcuts, changeVolume, volume, muted, toggleMuted, cycleRepeatMode, toggleStopAfterCurrent, setPlaybackMode, playbackMode, currentTrack, currentRadioStation, queue, currentIndex, outputVolume, effectiveDuration, smtcPositionSecond, miniPlayerChannelRef, hasPrevious: canPrevious, hasNext: canNext,
+    hideArtworkPreview, artworkSrc, miniPlayerCommandRef, togglePlayback, playRelative, seekTo, smtcActionRef, hasPlayableSource, isPlaying, playWithFade, pauseWithFade, hasNext, currentTime, hasPrevious, canPreviousAction, handlePreviousTrack, isRadioSource, keyboardShortcuts, changeVolume, volume, muted, toggleMuted, cycleRepeatMode, toggleStopAfterCurrent, setPlaybackMode, playbackMode, currentTrack, currentRadioStation, queue, currentIndex, outputVolume, effectiveDuration, smtcPositionSecond, miniPlayerChannelRef,
   } = ctx;
 
   useEffect(() => {
@@ -26,7 +26,7 @@ export function usePlayerBarMediaEffects(ctx: any) {
     if (command.type === "playPause") {
       void togglePlayback();
     } else if (command.type === "previous") {
-      playRelative(-1);
+      handlePreviousTrack();
     } else if (command.type === "next") {
       playRelative(1);
     } else if (command.type === "seek") {
@@ -59,11 +59,7 @@ export function usePlayerBarMediaEffects(ctx: any) {
       return;
     }
     if (payload.command === "previous") {
-      if (currentTime > 4) {
-        seekTo(0);
-      } else if (hasPrevious) {
-        playRelative(-1);
-      }
+      handlePreviousTrack();
       return;
     }
     if (payload.command === "seek" && typeof payload.position_seconds === "number") {
@@ -110,11 +106,7 @@ export function usePlayerBarMediaEffects(ctx: any) {
 
       if (event.key === "MediaTrackPrevious") {
         event.preventDefault();
-        if (currentTime > 4) {
-          seekTo(0);
-        } else {
-          playRelative(-1);
-        }
+        handlePreviousTrack();
         return;
       }
 
@@ -123,11 +115,7 @@ export function usePlayerBarMediaEffects(ctx: any) {
         playRelative(1);
       } else if (shortcutMatchesEvent(keyboardShortcuts["playback.previous"], event)) {
         event.preventDefault();
-        if (currentTime > 4) {
-          seekTo(0);
-        } else {
-          playRelative(-1);
-        }
+        handlePreviousTrack();
       } else if (shortcutMatchesEvent(keyboardShortcuts["playback.seekForward"], event)) {
         event.preventDefault();
         seekTo(currentTime + 5);
@@ -160,7 +148,7 @@ export function usePlayerBarMediaEffects(ctx: any) {
 
     window.addEventListener("keydown", handleLocalAudioKeyDown);
     return () => window.removeEventListener("keydown", handleLocalAudioKeyDown);
-  }, [currentTrack, currentRadioStation, currentTime, volume, muted, hasPrevious, hasNext, queue, currentIndex, outputVolume, keyboardShortcuts, playbackMode]);
+  }, [currentTrack, currentRadioStation, currentTime, volume, muted, hasPlayableSource, isPlaying, hasPrevious, hasNext, canPreviousAction, queue, currentIndex, outputVolume, keyboardShortcuts, playbackMode]);
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
@@ -178,12 +166,12 @@ export function usePlayerBarMediaEffects(ctx: any) {
       isPlaying,
       positionSeconds: smtcPositionSecond,
       durationSeconds: effectiveDuration,
-      canPrevious: hasPrevious,
+      canPrevious: canPreviousAction,
       canNext: hasNext,
     }).catch(() => {
       // SMTC is best-effort; playback should never depend on Windows media UI.
     });
-  }, [currentTrack, isPlaying, smtcPositionSecond, effectiveDuration, hasPrevious, hasNext]);
+  }, [currentTrack, isPlaying, smtcPositionSecond, effectiveDuration, canPreviousAction, hasNext]);
 
   useEffect(() => {
     publishMiniPlayerSnapshot(miniPlayerChannelRef.current, {
@@ -191,11 +179,11 @@ export function usePlayerBarMediaEffects(ctx: any) {
       isPlaying,
       currentTime,
       duration: effectiveDuration,
-      hasPrevious,
+      hasPrevious: canPreviousAction,
       hasNext,
       updatedAt: new Date().toISOString(),
     });
-  }, [currentTrack, isPlaying, smtcPositionSecond, effectiveDuration, hasPrevious, hasNext]);
+  }, [currentTrack, isPlaying, smtcPositionSecond, effectiveDuration, canPreviousAction, hasNext]);
 
   useEffect(() => {
     return () => {
