@@ -275,6 +275,7 @@ import {
   desktopBackendJson,
   desktopSaveChromaprintSetup,
 } from "../desktopLibrary";
+import { desktopMediaUrl } from "../desktopMedia";
 
 const ARTWORK_URL_SESSION_VERSION = Date.now().toString(36);
 
@@ -302,14 +303,6 @@ function requestViaPythonWorker<T>(path: string, init?: RequestInit): Promise<T>
   }
   return desktopBackendJson<T>(init?.method ?? "GET", path, requestBodyJson(init));
 }
-
-function desktopMediaUrl(path: string): string | null {
-  if (!isTauriDesktop()) {
-    return null;
-  }
-  return `flaccafe-media://localhost${path}`;
-}
-
 
 export function fetchClapStatus(deep = false): Promise<ClapStatusResponse> {
   return request<ClapStatusResponse>(`/analysis/clap/status${deep ? "?deep=true" : ""}`);

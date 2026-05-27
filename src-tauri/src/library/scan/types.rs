@@ -1,4 +1,4 @@
-﻿use rusqlite::{params, Connection};
+﻿use rusqlite::{params, Connection, OptionalExtension, Statement};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::{hash_map::DefaultHasher, HashMap, HashSet};
@@ -7,7 +7,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 

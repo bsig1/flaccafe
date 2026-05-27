@@ -91,6 +91,7 @@ fn run_scan(
     })?;
 
     let mut processed = unchanged_files;
+    let mut connection = open_database()?;
     for plan in &plans {
         for chunk in plan.files_to_read.chunks(METADATA_BATCH_SIZE) {
             check_cancelled(registry_job_id)?;
@@ -101,6 +102,7 @@ fn run_scan(
             }
             let response = read_metadata_batch(chunk)?;
             apply_metadata_results(
+                &mut connection,
                 &mut stats,
                 &plan.folder,
                 &response,
@@ -116,15 +118,25 @@ fn run_scan(
         job.status = "cleaning".to_string();
         job.current_path = None;
     })?;
-    let connection = open_database()?;
-    for plan in &plans {
-        check_cancelled(registry_job_id)?;
-        stats.removed += remove_missing_tracks(&connection, &plan.folder, &plan.current_path_keys)?;
+    {
+        let transaction = connection
+            .transaction()
+            .map_err(|error| format!("Could not start scan cleanup transaction: {error}"))?;
+        for plan in &plans {
+            check_cancelled(registry_job_id)?;
+            stats.removed +=
+                remove_missing_tracks(&transaction, &plan.folder, &plan.current_path_keys)?;
+        }
+        cleanup_orphan_albums(&transaction)?;
+        save_library_paths(&transaction, &request.save_paths)?;
+        if stats.inserted > 0 || stats.updated > 0 || stats.removed > 0 {
+            clear_library_query_cache(&transaction);
+        }
+        transaction
+            .commit()
+            .map_err(|error| format!("Could not commit scan cleanup transaction: {error}"))?;
     }
-    cleanup_orphan_albums(&connection)?;
-    save_library_paths(&connection, &request.save_paths)?;
     if stats.inserted > 0 || stats.updated > 0 || stats.removed > 0 {
-        clear_library_query_cache(&connection);
         super::refresh_library_derived_data(&connection)?;
     }
     update_job(local_job.as_deref_mut(), registry_job_id, |job| {

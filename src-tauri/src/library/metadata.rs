@@ -9,6 +9,7 @@ use sha1::{Digest, Sha1};
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -25,23 +26,69 @@ const EDITABLE_METADATA_FIELDS: &[&str] = &[
     "genre",
     "year",
 ];
+const SCAN_METADATA_PARALLEL_THRESHOLD: usize = 16;
+const SCAN_METADATA_MAX_WORKERS: usize = 4;
 
 pub(crate) fn read_scan_metadata_results(files: &[AudioSnapshot]) -> Vec<JsonValue> {
-    files
-        .iter()
-        .map(|snapshot| {
-            match read_file_metadata(
-                &snapshot.path,
-                Some(snapshot.path_text.clone()),
-                Some(snapshot.path_key.clone()),
-                snapshot.modified_at.clone(),
-                snapshot.size_bytes,
-            ) {
-                Ok(metadata) => json!({ "path": snapshot.path_text, "metadata": metadata }),
-                Err(error) => json!({ "path": snapshot.path_text, "error": error }),
-            }
-        })
-        .collect()
+    let worker_count = scan_metadata_worker_count(files.len());
+    if worker_count <= 1 {
+        return files.iter().map(read_scan_snapshot_metadata).collect();
+    }
+
+    let chunk_size = files.len().div_ceil(worker_count);
+    thread::scope(|scope| {
+        let handles = files
+            .chunks(chunk_size)
+            .map(|chunk| {
+                let handle = scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(read_scan_snapshot_metadata)
+                        .collect::<Vec<_>>()
+                });
+                (chunk, handle)
+            })
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .flat_map(|(chunk, handle)| match handle.join() {
+                Ok(results) => results,
+                Err(_) => chunk
+                    .iter()
+                    .map(|snapshot| {
+                        json!({
+                            "path": snapshot.path_text,
+                            "error": "Metadata worker stopped unexpectedly",
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+            })
+            .collect()
+    })
+}
+
+fn scan_metadata_worker_count(file_count: usize) -> usize {
+    if file_count < SCAN_METADATA_PARALLEL_THRESHOLD {
+        return 1;
+    }
+    thread::available_parallelism()
+        .map(|value| value.get())
+        .unwrap_or(1)
+        .min(SCAN_METADATA_MAX_WORKERS)
+        .min(file_count)
+}
+
+fn read_scan_snapshot_metadata(snapshot: &AudioSnapshot) -> JsonValue {
+    match read_file_metadata(
+        &snapshot.path,
+        Some(snapshot.path_text.clone()),
+        Some(snapshot.path_key.clone()),
+        snapshot.modified_at.clone(),
+        snapshot.size_bytes,
+    ) {
+        Ok(metadata) => json!({ "path": snapshot.path_text, "metadata": metadata }),
+        Err(error) => json!({ "path": snapshot.path_text, "error": error }),
+    }
 }
 
 pub(crate) fn read_file_metadata_result(path: &Path) -> JsonValue {

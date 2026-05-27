@@ -303,14 +303,6 @@ function requestViaPythonWorker<T>(path: string, init?: RequestInit): Promise<T>
   return desktopBackendJson<T>(init?.method ?? "GET", path, requestBodyJson(init));
 }
 
-function desktopMediaUrl(path: string): string | null {
-  if (!isTauriDesktop()) {
-    return null;
-  }
-  return `flaccafe-media://localhost${path}`;
-}
-
-
 export function fetchAutoDjAvoidRules(): Promise<AutoDjAvoidRule[]> {
   return desktopFetchAutoDjAvoidRules().catch(() => request<AutoDjAvoidRule[]>("/autodj/avoid"));
 }

@@ -215,5 +215,45 @@ mod tests {
         assert!(is_supported_audio_path(Path::new("Song.mp3")));
         assert!(!is_supported_audio_path(Path::new("cover.jpg")));
     }
+
+    #[test]
+    fn remove_missing_tracks_escapes_folder_like_characters() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "
+                CREATE TABLE tracks(
+                    id INTEGER PRIMARY KEY,
+                    path TEXT NOT NULL,
+                    path_key TEXT NOT NULL UNIQUE
+                );
+                ",
+            )
+            .unwrap();
+        let root = std::env::temp_dir();
+        let folder = root.join("flac_scan_100%_folder");
+        let sibling = root.join("flac_scan_100x_folder");
+        let keep_path = folder.join("keep.flac");
+        let missing_path = folder.join("missing.flac");
+        let sibling_path = sibling.join("outside.flac");
+        let keep_key = path_key(&keep_path);
+        for path in [&keep_path, &missing_path, &sibling_path] {
+            connection
+                .execute(
+                    "INSERT INTO tracks(path, path_key) VALUES(?, ?)",
+                    params![normalize_path_text(path), path_key(path)],
+                )
+                .unwrap();
+        }
+        let current = HashSet::from([keep_key]);
+
+        let removed = remove_missing_tracks(&connection, &folder, &current).unwrap();
+
+        assert_eq!(removed, 1);
+        let remaining = connection
+            .query_row("SELECT count(*) FROM tracks", [], |row| row.get::<_, i64>(0))
+            .unwrap();
+        assert_eq!(remaining, 2);
+    }
 }
 

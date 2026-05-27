@@ -61,6 +61,8 @@
     }))
 }
 
+const CD_STREAM_RANGE_CHUNK_BYTES: u64 = 1024 * 1024;
+
 fn cd_track_duration(drive_id: &str, track_number: i64) -> Result<f64, String> {
     #[cfg(windows)]
     {
@@ -101,6 +103,20 @@ fn response_with_status(status: StatusCode, message: &str) -> Response<Vec<u8>> 
         .unwrap_or_else(|_| Response::new(Vec::new()))
 }
 
+fn range_not_satisfiable(total_len: u64) -> Response<Vec<u8>> {
+    Response::builder()
+        .status(StatusCode::RANGE_NOT_SATISFIABLE)
+        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+        .header(header::CONTENT_RANGE, format!("bytes */{total_len}"))
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .header(
+            header::ACCESS_CONTROL_EXPOSE_HEADERS,
+            "Accept-Ranges, Content-Length, Content-Range",
+        )
+        .body(b"Requested range is not satisfiable".to_vec())
+        .unwrap_or_else(|_| Response::new(Vec::new()))
+}
+
 fn parse_range_header(value: Option<&str>, total_len: u64) -> Option<(u64, u64)> {
     let raw = value?.trim().strip_prefix("bytes=")?;
     let (start, end) = raw.split_once('-')?;
@@ -119,6 +135,10 @@ fn parse_range_header(value: Option<&str>, total_len: u64) -> Option<(u64, u64)>
         end.parse::<u64>().ok()?.min(total_len.saturating_sub(1))
     };
     (end >= start).then_some((start, end))
+}
+
+fn capped_audio_range_end(start: u64, requested_end: u64) -> u64 {
+    requested_end.min(start.saturating_add(CD_STREAM_RANGE_CHUNK_BYTES - 1))
 }
 
 pub fn serve_cd_live_audio(
@@ -157,19 +177,28 @@ pub fn serve_cd_live_audio(
                 .header(header::ACCEPT_RANGES, "bytes")
                 .header(header::CACHE_CONTROL, "no-store")
                 .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .header(
+                    header::ACCESS_CONTROL_EXPOSE_HEADERS,
+                    "Accept-Ranges, Content-Length, Content-Range",
+                )
                 .header(header::CONTENT_LENGTH, total_len.to_string())
                 .body(Vec::new())
                 .unwrap_or_else(|_| Response::new(Vec::new()));
         }
-        let range = parse_range_header(
-            request
-                .headers()
-                .get(header::RANGE)
-                .and_then(|value| value.to_str().ok()),
-            total_len,
-        );
+        let range_header = request
+            .headers()
+            .get(header::RANGE)
+            .and_then(|value| value.to_str().ok());
+        let range = if range_header.is_some() {
+            match parse_range_header(range_header, total_len) {
+                Some(range) => Some(range),
+                None => return range_not_satisfiable(total_len),
+            }
+        } else {
+            None
+        };
         let (start, end, status) = match range {
-            Some((start, end)) => (start, end, StatusCode::PARTIAL_CONTENT),
+            Some((start, end)) => (start, capped_audio_range_end(start, end), StatusCode::PARTIAL_CONTENT),
             None => (0, total_len.saturating_sub(1), StatusCode::OK),
         };
         let body = cd_virtual_wav_range(
@@ -185,6 +214,10 @@ pub fn serve_cd_live_audio(
             .header(header::ACCEPT_RANGES, "bytes")
             .header(header::CACHE_CONTROL, "no-store")
             .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .header(
+                header::ACCESS_CONTROL_EXPOSE_HEADERS,
+                "Accept-Ranges, Content-Length, Content-Range",
+            )
             .header(header::CONTENT_LENGTH, body.len().to_string());
         if status == StatusCode::PARTIAL_CONTENT {
             builder = builder.header(
@@ -275,5 +308,26 @@ fn json_bool(value: &JsonValue, key: &str) -> Option<bool> {
             _ => None,
         },
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod cd_live_stream_tests {
+    use super::{capped_audio_range_end, parse_range_header, CD_STREAM_RANGE_CHUNK_BYTES};
+
+    #[test]
+    fn open_ended_ranges_parse_to_the_virtual_track_end() {
+        assert_eq!(
+            parse_range_header(Some("bytes=0-"), 12_000_000),
+            Some((0, 11_999_999))
+        );
+    }
+
+    #[test]
+    fn cd_live_audio_ranges_are_capped_for_webview_streaming() {
+        assert_eq!(
+            capped_audio_range_end(0, 12_000_000),
+            CD_STREAM_RANGE_CHUNK_BYTES - 1
+        );
     }
 }

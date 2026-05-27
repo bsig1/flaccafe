@@ -275,6 +275,7 @@ import {
   desktopBackendJson,
   desktopSaveChromaprintSetup,
 } from "../desktopLibrary";
+import { desktopMediaUrl } from "../desktopMedia";
 
 const ARTWORK_URL_SESSION_VERSION = Date.now().toString(36);
 
@@ -302,14 +303,6 @@ function requestViaPythonWorker<T>(path: string, init?: RequestInit): Promise<T>
   }
   return desktopBackendJson<T>(init?.method ?? "GET", path, requestBodyJson(init));
 }
-
-function desktopMediaUrl(path: string): string | null {
-  if (!isTauriDesktop()) {
-    return null;
-  }
-  return `flaccafe-media://localhost${path}`;
-}
-
 
 export function fetchFolderWatchStatus(limit = 300): Promise<FolderWatchStatus> {
   return requestViaPythonWorker<FolderWatchStatus>(`/library/watch?limit=${limit}`).catch(() =>
@@ -488,7 +481,11 @@ export async function playCdTrack(
       tracks: context?.tracks ?? [],
     }),
   });
-  if (response.track?.audio_url?.startsWith("/")) {
+  if (
+    response.track?.audio_url?.startsWith("/")
+    || response.track?.audio_url?.startsWith("flaccafe-media://localhost")
+    || response.track?.audio_url?.startsWith("http://flaccafe-media.localhost")
+  ) {
     response.track.audio_url = desktopMediaUrl(response.track.audio_url) ?? response.track.audio_url;
   }
   return response;

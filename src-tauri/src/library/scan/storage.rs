@@ -16,36 +16,49 @@ fn remove_missing_tracks(
     folder: &Path,
     current_path_keys: &HashSet<String>,
 ) -> Result<usize, String> {
-    let mut statement = connection
-        .prepare("SELECT id, path, path_key FROM tracks")
-        .map_err(|error| format!("Could not inspect existing tracks: {error}"))?;
-    let rows = statement
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        })
-        .map_err(|error| format!("Could not query existing tracks: {error}"))?;
-    let mut missing_ids = Vec::new();
-    for row in rows {
-        let (track_id, path, path_key) =
-            row.map_err(|error| format!("Could not read existing track row: {error}"))?;
-        if path_is_under_folder(Path::new(&path), folder) && !current_path_keys.contains(&path_key)
-        {
-            missing_ids.push(track_id);
+    connection
+        .execute(
+            "CREATE TEMP TABLE IF NOT EXISTS scan_current_path_keys(path_key TEXT PRIMARY KEY) WITHOUT ROWID",
+            [],
+        )
+        .map_err(|error| format!("Could not prepare scan cleanup table: {error}"))?;
+    connection
+        .execute("DELETE FROM scan_current_path_keys", [])
+        .map_err(|error| format!("Could not reset scan cleanup table: {error}"))?;
+    {
+        let mut insert = connection
+            .prepare("INSERT OR IGNORE INTO scan_current_path_keys(path_key) VALUES(?)")
+            .map_err(|error| format!("Could not prepare scan cleanup insert: {error}"))?;
+        for path_key in current_path_keys {
+            insert
+                .execute(params![path_key])
+                .map_err(|error| format!("Could not stage scan path key: {error}"))?;
         }
     }
-    for track_id in &missing_ids {
-        connection
-            .execute("DELETE FROM tracks WHERE id = ?", params![track_id])
-            .map_err(|error| format!("Could not remove missing track {track_id}: {error}"))?;
+    let folder_key = path_key(folder);
+    let mut folder_prefix = folder_key.clone();
+    if !folder_prefix.ends_with(std::path::MAIN_SEPARATOR) {
+        folder_prefix.push(std::path::MAIN_SEPARATOR);
     }
-    if !missing_ids.is_empty() {
-        clear_library_query_cache(connection);
-    }
-    Ok(missing_ids.len())
+    let pattern = format!("{}%", escape_sql_like(&folder_prefix));
+    let removed = connection
+        .execute(
+            "
+            DELETE FROM tracks
+            WHERE (path_key = ? OR path_key LIKE ? ESCAPE ?)
+              AND NOT EXISTS (
+                SELECT 1
+                FROM scan_current_path_keys current
+                WHERE current.path_key = tracks.path_key
+              )
+            ",
+            params![folder_key, pattern, "\\"],
+        )
+        .map_err(|error| format!("Could not remove missing tracks: {error}"))?;
+    connection
+        .execute("DELETE FROM scan_current_path_keys", [])
+        .ok();
+    Ok(removed)
 }
 
 pub(crate) fn cleanup_orphan_albums(connection: &Connection) -> Result<(), String> {
@@ -96,6 +109,17 @@ fn load_existing_track_states() -> Result<HashMap<String, Option<String>>, Strin
         states.insert(path_key, modified_at);
     }
     Ok(states)
+}
+
+fn escape_sql_like(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        if matches!(character, '%' | '_' | '\\') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
 }
 
 fn metadata_needs_read(
