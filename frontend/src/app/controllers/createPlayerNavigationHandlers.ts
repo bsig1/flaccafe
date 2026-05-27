@@ -5,10 +5,59 @@ const AMBIGUOUS_ARTIST_SEPARATOR = /\s+(?:&|\+|\u00d7|x)\s+|,/i;
 const EXPLICIT_ARTIST_SEPARATOR = /\s+(?:featuring|feat\.?|ft\.?|with)\s+|[;|]/i;
 const MIN_COMBINED_ARTIST_CONFIDENCE = 0.72;
 const MAX_ARTIST_LOOKUP_TABS = 6;
+const ARTIST_INFO_LOADING_DELAY_MS = 180;
+const ARTIST_INFO_MEMORY_CACHE_LIMIT = 80;
+
+const artistInfoMemoryCache = new Map<string, { artistInfo: any; artistTracks: Track[] }>();
+const artistInfoLookupPromises = new Map<string, Promise<any>>();
+let artistInfoRequestSerial = 0;
+
+function artistLookupIdentity(name: string | null | undefined) {
+  return (
+    name
+      ?.normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim()
+      .replace(/\s+/g, " ") ?? ""
+  );
+}
+
+function artistInfoMemoryCacheKey(rawArtistName: string, lookupEnabled: boolean) {
+  const normalized = artistLookupIdentity(rawArtistName);
+  return normalized ? `${lookupEnabled ? "lookup" : "local"}:${normalized}` : "";
+}
+
+function readArtistInfoMemoryCache(key: string) {
+  const entry = artistInfoMemoryCache.get(key);
+  if (!entry) {
+    return null;
+  }
+  artistInfoMemoryCache.delete(key);
+  artistInfoMemoryCache.set(key, entry);
+  return entry;
+}
+
+function rememberArtistInfoMemoryCache(key: string, artistInfo: any, artistTracks: Track[]) {
+  if (!key || !artistInfo) {
+    return;
+  }
+  artistInfoMemoryCache.delete(key);
+  artistInfoMemoryCache.set(key, { artistInfo, artistTracks });
+  while (artistInfoMemoryCache.size > ARTIST_INFO_MEMORY_CACHE_LIMIT) {
+    const oldestKey = artistInfoMemoryCache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    artistInfoMemoryCache.delete(oldestKey);
+  }
+}
 
 export function createPlayerNavigationHandlers(model: any) {
   const {
     albums,
+    artistInfo,
     currentTrack,
     fetchAlbums,
     fetchArtistInfo,
@@ -61,6 +110,62 @@ export function createPlayerNavigationHandlers(model: any) {
     return track?.artist?.trim() ?? "";
   }
 
+  function normalizeArtistName(name: string | null | undefined) {
+    return name?.trim().toLowerCase() ?? "";
+  }
+
+  function artistInfoMatchesName(info: any, name: string) {
+    const normalizedName = normalizeArtistName(name);
+    const comparableName = artistLookupIdentity(name);
+    const query = normalizeArtistName(info?.query);
+    const artist = normalizeArtistName(info?.artist_name);
+    const comparableQuery = artistLookupIdentity(info?.query);
+    const comparableArtist = artistLookupIdentity(info?.artist_name);
+    return Boolean(
+      normalizedName &&
+        (query === normalizedName ||
+          artist === normalizedName ||
+          (comparableName && (comparableQuery === comparableName || comparableArtist === comparableName))),
+    );
+  }
+
+  function artistInfoRootMatchesCurrentTrack(infoRoot: any, rawArtistName: string, artistNames: string[]) {
+    const related = infoRoot?.related_artists?.length ? infoRoot.related_artists : infoRoot ? [infoRoot] : [];
+    if (related.length === 0) {
+      return false;
+    }
+    if (rawArtistName && related.some((info: any) => artistInfoMatchesName(info, rawArtistName))) {
+      return true;
+    }
+    return artistNames.length > 0 && artistNames.every((name) => related.some((info: any) => artistInfoMatchesName(info, name)));
+  }
+
+  function loadedArtistInfoMatchesCurrentTrack(rawArtistName: string, artistNames: string[]) {
+    return artistInfoRootMatchesCurrentTrack(artistInfo, rawArtistName, artistNames);
+  }
+
+  function startArtistInfoLoading(refresh: boolean, isCurrentRequest: () => boolean) {
+    if (refresh) {
+      setIsArtistLoading(true);
+      return () => {
+        if (isCurrentRequest()) {
+          setIsArtistLoading(false);
+        }
+      };
+    }
+    const timer = window.setTimeout(() => {
+      if (isCurrentRequest()) {
+        setIsArtistLoading(true);
+      }
+    }, ARTIST_INFO_LOADING_DELAY_MS);
+    return () => {
+      window.clearTimeout(timer);
+      if (isCurrentRequest()) {
+        setIsArtistLoading(false);
+      }
+    };
+  }
+
   function shouldTryCombinedArtistLookup(rawArtistName: string, artistNames: string[]) {
     return (
       rawArtistName.length > 0 &&
@@ -91,18 +196,19 @@ export function createPlayerNavigationHandlers(model: any) {
   }
 
   async function resolveArtistInfoResponses(rawArtistName: string, artistNames: string[], refresh: boolean) {
+    const boundedNames = artistNames.slice(0, MAX_ARTIST_LOOKUP_TABS);
     if (shouldTryCombinedArtistLookup(rawArtistName, artistNames)) {
-      const combined = await fetchArtistInfoSafely(rawArtistName, refresh);
+      const [combined, ...splitResponses] = await Promise.all([
+        fetchArtistInfoSafely(rawArtistName, refresh),
+        ...boundedNames.map((name) => fetchArtistInfoSafely(name, refresh)),
+      ]);
       if (shouldUseCombinedArtistInfo(combined)) {
         return { artistNames: [rawArtistName], responses: [combined] };
       }
+      return { artistNames: boundedNames, responses: splitResponses };
     }
 
-    const boundedNames = artistNames.slice(0, MAX_ARTIST_LOOKUP_TABS);
-    const responses = [];
-    for (const name of boundedNames) {
-      responses.push(await fetchArtistInfoSafely(name, refresh));
-    }
+    const responses = await Promise.all(boundedNames.map((name) => fetchArtistInfoSafely(name, refresh)));
     return { artistNames: boundedNames, responses };
   }
 
@@ -134,27 +240,78 @@ export function createPlayerNavigationHandlers(model: any) {
     });
   }
 
-  function applyArtistInfoResponses(artistNames: string[], responses: any[], tracksByArtist: Track[][] = []) {
+  function buildArtistInfoResult(artistNames: string[], responses: any[], tracksByArtist: Track[][] = []) {
     const enrichedResponses = enrichArtistInfoResponses(artistNames, responses, tracksByArtist);
     const primaryName = artistNames[0] ?? responses[0]?.query ?? "";
     const primary = enrichedResponses[0] ?? missingArtistInfo(primaryName);
-    setArtistInfo({ ...primary, related_artists: enrichedResponses });
-    setArtistTracks(primary.local_tracks ?? []);
-    const firstError = enrichedResponses.find((response) => response.error)?.error;
+    return {
+      artistInfo: { ...primary, related_artists: enrichedResponses },
+      artistTracks: primary.local_tracks ?? [],
+      responses,
+      artistNames,
+    };
+  }
+
+  function applyArtistInfoResult(result: any) {
+    setArtistInfo(result.artistInfo);
+    setArtistTracks(result.artistTracks);
+    const resultResponses = result.artistInfo?.related_artists?.length ? result.artistInfo.related_artists : result.responses ?? [];
+    const firstError = resultResponses.find((response: any) => response.error)?.error;
     if (firstError) {
       setStatus(firstError);
     }
+    return result;
   }
 
-  async function refreshStaleArtistInfo(rawArtistName: string, artistNames: string[]) {
+  async function resolveArtistInfoResult(rawArtistName: string, artistNames: string[], refresh: boolean, cacheKey: string) {
+    if (!uiPreferences.enableArtistLookup) {
+      const boundedNames = artistNames.slice(0, MAX_ARTIST_LOOKUP_TABS);
+      const tracksByArtist = await resolveArtistLocalTracks(boundedNames);
+      const responses = boundedNames.map((name) => missingArtistInfo(name, "Artist background lookup is disabled"));
+      const result = buildArtistInfoResult(boundedNames, responses, tracksByArtist);
+      rememberArtistInfoMemoryCache(cacheKey, result.artistInfo, result.artistTracks);
+      return result;
+    }
+
+    const resolved = await resolveArtistInfoResponses(rawArtistName, artistNames, refresh);
+    const tracksByArtist = await resolveArtistLocalTracks(resolved.artistNames);
+    const result = buildArtistInfoResult(resolved.artistNames, resolved.responses, tracksByArtist);
+    rememberArtistInfoMemoryCache(cacheKey, result.artistInfo, result.artistTracks);
+    return result;
+  }
+
+  async function readOrStartArtistInfoLookup(rawArtistName: string, artistNames: string[], refresh: boolean, cacheKey: string) {
+    const promiseKey = cacheKey ? `${refresh ? "refresh" : "lookup"}:${cacheKey}` : "";
+    if (!promiseKey) {
+      return resolveArtistInfoResult(rawArtistName, artistNames, refresh, cacheKey);
+    }
+    const existing = artistInfoLookupPromises.get(promiseKey);
+    if (existing) {
+      return existing;
+    }
+    const promise = resolveArtistInfoResult(rawArtistName, artistNames, refresh, cacheKey)
+      .finally(() => {
+        artistInfoLookupPromises.delete(promiseKey);
+      });
+    artistInfoLookupPromises.set(promiseKey, promise);
+    return promise;
+  }
+
+  async function refreshStaleArtistInfo(rawArtistName: string, artistNames: string[], cacheKey: string, requestSerial: number) {
     try {
-      const resolved = await resolveArtistInfoResponses(rawArtistName, artistNames, true);
-      const tracksByArtist = await resolveArtistLocalTracks(resolved.artistNames);
-      applyArtistInfoResponses(resolved.artistNames, resolved.responses, tracksByArtist);
+      const result = await readOrStartArtistInfoLookup(rawArtistName, artistNames, true, cacheKey);
+      if (requestSerial !== artistInfoRequestSerial) {
+        return;
+      }
+      applyArtistInfoResult(result);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Could not refresh artist info");
+      if (requestSerial === artistInfoRequestSerial) {
+        setStatus(error instanceof Error ? error.message : "Could not refresh artist info");
+      }
     } finally {
-      setIsArtistLoading(false);
+      if (requestSerial === artistInfoRequestSerial) {
+        setIsArtistLoading(false);
+      }
     }
   }
 
@@ -207,38 +364,45 @@ export function createPlayerNavigationHandlers(model: any) {
     let artistNames = initialArtistNames;
     let artistName = artistNames[0];
     if (!artistName) {
+      artistInfoRequestSerial += 1;
       setArtistInfo(null);
       setArtistTracks([]);
       return;
     }
-    setIsArtistLoading(true);
-    if (!uiPreferences.enableArtistLookup) {
-      const boundedNames = artistNames.slice(0, MAX_ARTIST_LOOKUP_TABS);
-      const tracksByArtist = await resolveArtistLocalTracks(boundedNames);
-      const responses = boundedNames.map((name) => missingArtistInfo(name, "Artist background lookup is disabled"));
-      applyArtistInfoResponses(boundedNames, responses, tracksByArtist);
+    const requestSerial = ++artistInfoRequestSerial;
+    const isCurrentRequest = () => requestSerial === artistInfoRequestSerial;
+    if (!refresh && loadedArtistInfoMatchesCurrentTrack(rawArtistName, artistNames)) {
       setIsArtistLoading(false);
       return;
     }
-    let backgroundRefreshStarted = false;
+    const cacheKey = artistInfoMemoryCacheKey(rawArtistName || artistName, uiPreferences.enableArtistLookup);
+    const cached = !refresh ? readArtistInfoMemoryCache(cacheKey) : null;
+    if (cached && artistInfoRootMatchesCurrentTrack(cached.artistInfo, rawArtistName, artistNames)) {
+      setArtistInfo(cached.artistInfo);
+      setArtistTracks(cached.artistTracks);
+      setIsArtistLoading(false);
+      return;
+    }
+    const stopArtistInfoLoading = startArtistInfoLoading(refresh, isCurrentRequest);
     try {
-      const resolved = await resolveArtistInfoResponses(rawArtistName, artistNames, refresh);
-      artistNames = resolved.artistNames;
+      const result = await readOrStartArtistInfoLookup(rawArtistName, artistNames, refresh, cacheKey);
+      artistNames = result.artistNames;
       artistName = artistNames[0] ?? artistName;
-      const tracksByArtist = await resolveArtistLocalTracks(artistNames);
-      applyArtistInfoResponses(artistNames, resolved.responses, tracksByArtist);
-      if (!refresh && hasStaleArtistInfo(resolved.responses)) {
-        backgroundRefreshStarted = true;
-        void refreshStaleArtistInfo(rawArtistName, artistNames);
+      if (!isCurrentRequest()) {
+        return;
+      }
+      applyArtistInfoResult(result);
+      if (uiPreferences.enableArtistLookup && !refresh && hasStaleArtistInfo(result.responses)) {
+        void refreshStaleArtistInfo(rawArtistName, artistNames, cacheKey, requestSerial);
         return;
       }
     } catch (error) {
-      setArtistTracks([]);
-      setArtistInfo(missingArtistInfo(artistName, error instanceof Error ? error.message : "Could not load artist info"));
-    } finally {
-      if (!backgroundRefreshStarted) {
-        setIsArtistLoading(false);
+      if (isCurrentRequest()) {
+        setArtistTracks([]);
+        setArtistInfo(missingArtistInfo(artistName, error instanceof Error ? error.message : "Could not load artist info"));
       }
+    } finally {
+      stopArtistInfoLoading();
     }
   }
 
@@ -257,7 +421,13 @@ export function createPlayerNavigationHandlers(model: any) {
       const related = existingIndex >= 0
         ? currentRelated.map((item: any, index: number) => (index === existingIndex ? responseWithTracks : item))
         : [responseWithTracks, ...currentRelated];
-      return { ...(related[0] ?? responseWithTracks), related_artists: related };
+      const nextArtistInfo = { ...(related[0] ?? responseWithTracks), related_artists: related };
+      rememberArtistInfoMemoryCache(
+        artistInfoMemoryCacheKey(rawArtistNameForTrack(currentTrack) || artistName, uiPreferences.enableArtistLookup),
+        nextArtistInfo,
+        nextArtistInfo.local_tracks ?? [],
+      );
+      return nextArtistInfo;
     });
     setStatus(`Updated wiki lookup for ${artistName}`);
     return response;

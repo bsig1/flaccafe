@@ -145,6 +145,21 @@ fn low_confidence_cached_summaries_do_not_block_a_fresh_lookup() {
 }
 
 #[test]
+fn usable_cached_artist_pages_are_not_marked_stale() {
+    let mut cached = artist_info_fixture(
+        "Ariana Grande",
+        "Ariana Grande-Butera is an American singer, songwriter, and actress.",
+        "https://en.wikipedia.org/wiki/Ariana_Grande",
+        true,
+    );
+    cached.stale = true;
+    let response = with_artist_confidence("Ariana Grande", cached);
+    assert!(response.found);
+    assert!(response.confidence >= WIKIPEDIA_MIN_CONFIDENCE);
+    assert!(!response.stale);
+}
+
+#[test]
 fn missing_cached_artist_info_does_not_block_a_fresh_lookup() {
     assert!(!is_usable_cached_artist_info(
         "Gary Jules",

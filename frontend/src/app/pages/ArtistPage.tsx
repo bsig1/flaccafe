@@ -140,13 +140,11 @@ export function ArtistPage({
     if (artistNames.length === 0) {
       return related;
     }
-    return artistNames.map((name, index) =>
-      related.find((info) => artistInfoMatchesName(info, name)) ?? (index === 0 ? related[0] ?? null : null),
-    );
+    return artistNames.map((name) => related.find((info) => artistInfoMatchesName(info, name)) ?? null);
   }, [artistInfo, artistNames]);
   const activeArtistName =
     artistNames[activeArtistIndex] ?? artistInfos[activeArtistIndex]?.query ?? artistInfo?.query ?? "";
-  const activeArtistInfo = artistInfos[activeArtistIndex] ?? (activeArtistIndex === 0 ? artistInfos[0] ?? null : null);
+  const activeArtistInfo = artistInfos[activeArtistIndex] ?? null;
   const activeArtistTracks = activeArtistInfo?.local_tracks ?? (activeArtistIndex === 0 ? artistTracks : []);
   const hasImage = Boolean(activeArtistInfo?.image_url);
   const canSaveOverride = Boolean(activeArtistName && overrideDraft.trim() && !isSavingOverride);

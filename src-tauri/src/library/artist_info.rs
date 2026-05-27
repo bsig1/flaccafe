@@ -390,6 +390,9 @@ fn with_artist_confidence(
     mut info: DesktopArtistInfoResponse,
 ) -> DesktopArtistInfoResponse {
     info.confidence = response_confidence(query, &info);
+    if info.found && (is_manual_artist_info(&info) || info.confidence >= WIKIPEDIA_MIN_CONFIDENCE) {
+        info.stale = false;
+    }
     if info.found && info.confidence < WIKIPEDIA_MIN_CONFIDENCE {
         return missing_artist_info_response(
             query,
