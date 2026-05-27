@@ -1,4 +1,10 @@
 // @ts-nocheck
+import type {
+  InboxAutoReviewRule,
+  InboxAutoReviewRuleRequest,
+  TrackMetadataUpdate,
+} from "../../types/api";
+
 export function createLibraryActionHandlers(model: any) {
   const { tracks, trackIndexCacheRef, updateCachedTracks, updateTrackRating, setStatus, setTracks, commitTrackIndexCache, writeRatingsToFiles, findTracksByIds, supportsFileTagWriting, refreshTracks, setSelectedAlbumTracks, setSelectedArtistTracks, setSelectedPlaylistTracks, setInbox, setPlaybackQueue, setQueue, setCurrentTrack, setDetailTrack, setMetadataEditTrack, setLibraryTotal, setMetadataEditInitialField, metadataEditTrack, resolveTracksForAction, recycleFilesWithDesktop, deleteTrack, loadAlbums, loadArtists, loadPlaylists, loadLibraryStats, loadInbox, loadClapCoverage, showUndoAction, display, deleteTracks, readRememberedDeleteChoice, setDeletePrompt, deletePrompt, writeRememberedDeleteChoice, updateTrackMetadata, setSelectedAlbumId, fetchAlbumTracks, setSelectedArtistName, fetchArtistLocalTracks, fetchTracks, primaryArtistName, handlePlayTrack, replaceTrackEverywhere, removeTrackEverywhere, artistTracks, setSelectedPlaylistId, fetchPlaylistTracks, newPlaylistName, createPlaylist, setNewPlaylistName, setTargetPlaylistId, deletePlaylist, setPlaylists, targetPlaylistId, playlists, addTracksToPlaylist, selectedPlaylistId, removeTrackFromPlaylist, selectedPlaylistTracks, moveTrackInPlaylist, exportPlaylist, exportQueue, importPlaylistPath, importPlaylist, setImportPlaylistPath, setLibraryView, reviewAllInboxTracks, reviewInboxTracks, updateInboxNote, updateInboxAutoReviewRule, createInboxAutoReviewRule, deleteInboxAutoReviewRule } = model;
   async function handleRating(trackId: number, rating: number | null) {

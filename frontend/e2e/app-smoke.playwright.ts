@@ -1,5 +1,12 @@
-import { test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
-test.skip("browser shell smoke requires the Tauri/Rust API bridge", async () => {
-  // The desktop app no longer falls back to a browser-visible Python HTTP server.
+test("browser shell smoke renders the app chrome", async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+
+  await page.goto("/");
+
+  await expect(page.getByRole("heading", { name: "Library" })).toBeVisible();
+  await expect(page.getByText("FLAC Cafe")).toBeVisible();
+  expect(pageErrors).toEqual([]);
 });

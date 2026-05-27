@@ -1,8 +1,16 @@
 // @ts-nocheck
 import { useEffect } from "react";
+import { updateLyrics } from "../../lib/api";
+import type {
+  AutoDjSettings,
+  LyricsResponse,
+  LyricsUpdateRequest,
+  RadioStation,
+  Track,
+} from "../../types/api";
 
 export function usePlaybackAutoDjController(model: any) {
-  const { shuffleItems, setStatus, tracks, generateAutoDj, defaultAutoDj, recommendationProfiles, settings, uiPreferences, setQueue, setRecommendationDrift, loadRecommendationHistory, setContinuousAutoDjEnabled, queue, currentTrack, setPlaybackQueue, setAutoPlayOnTrackChange, setCurrentTrack, continuousAutoDjInFlightRef, setContinuousAutoDjBusy, continuousAutoDjSettings, playbackQueue, useEffect, continuousAutoDjEnabled, continuousAutoDjBusy, createAutoDjAvoidRule, trackGenre, loadAutoDjAvoidRules, setAutoDjAvoidRules, deleteAutoDjAvoidRule, saveRecommendationProfile, loadRecommendationProfiles, setRecommendationProfiles, setDefaultRecommendationProfile, deleteRecommendationProfile, recordRecommendationFeedback, shouldRecordTrackAsPlayed, markTrackPlayed, markTrackSkipped, replaceTrackEverywhere, loadHistory, type, cdPlaybackPrepareRequestIdRef, StaleCdPlaybackRequestError, cdDriveIdFromTrack, cdTrackNumberFromTrack, playCdTrack, cdTrackLooksActive, playbackTime, setCurrentRadioStation, cdPlaybackPrepareChainRef, waitFor, CD_PLAYBACK_PREPARE_DEBOUNCE_MS, isStaleCdPlaybackRequest, currentRadioStation, externalTrackRequestIdRef, setExternalTrackRequest, setRestoredPlaybackPosition, setRadioPlaybackRequestId, markRadioStationPlayed, display, rememberQueueSnapshot, queueHistory, setQueueHistory, createPlaylist, addTracksToPlaylist, loadPlaylists, setSelectedPlaylistId, setTargetPlaylistId, shouldLookupLyricsByMetadata, fetchLyricsByMetadata, lyricsLookupRequestForTrack, fetchLyricsOnline, setLyrics, lyrics } = model;
+  const { shuffleItems, setStatus, tracks, generateAutoDj, defaultAutoDj, recommendationProfiles, settings, uiPreferences, setQueue, setRecommendationDrift, loadRecommendationHistory, setContinuousAutoDjEnabled, queue, currentTrack, setPlaybackQueue, setAutoPlayOnTrackChange, setCurrentTrack, continuousAutoDjInFlightRef, setContinuousAutoDjBusy, continuousAutoDjSettings, playbackQueue, useEffect, continuousAutoDjEnabled, continuousAutoDjBusy, createAutoDjAvoidRule, trackGenre, loadAutoDjAvoidRules, setAutoDjAvoidRules, deleteAutoDjAvoidRule, saveRecommendationProfile, loadRecommendationProfiles, setRecommendationProfiles, setDefaultRecommendationProfile, deleteRecommendationProfile, recordRecommendationFeedback, shouldRecordTrackAsPlayed, markTrackPlayed, markTrackSkipped, replaceTrackEverywhere, loadHistory, cdPlaybackPrepareRequestIdRef, StaleCdPlaybackRequestError, cdDriveIdFromTrack, cdTrackNumberFromTrack, playCdTrack, cdTrackLooksActive, playbackTime, setCurrentRadioStation, cdPlaybackPrepareChainRef, waitFor, CD_PLAYBACK_PREPARE_DEBOUNCE_MS, isStaleCdPlaybackRequest, currentRadioStation, externalTrackRequestIdRef, setExternalTrackRequest, setRestoredPlaybackPosition, setRadioPlaybackRequestId, markRadioStationPlayed, display, rememberQueueSnapshot, queueHistory, setQueueHistory, createPlaylist, addTracksToPlaylist, loadPlaylists, setSelectedPlaylistId, setTargetPlaylistId, shouldLookupLyricsByMetadata, fetchLyricsByMetadata, lyricsLookupRequestForTrack, fetchLyricsOnline, setLyrics, lyrics } = model;
   function handleShuffleTracks(sourceTracks: Track[]) {
     const shuffled = shuffleItems(sourceTracks);
     if (!shuffled.length) {

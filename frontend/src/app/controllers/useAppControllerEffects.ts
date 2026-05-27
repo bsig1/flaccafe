@@ -2,6 +2,7 @@
 import { useEffect } from "react";
 
 import {
+  type ThemePalette,
   fontChoiceValues,
   themeAccentValues,
 } from "../../config/theme";
@@ -22,11 +23,15 @@ import {
   fontScaleValues,
   shortcutMatchesEvent,
   storageKeys,
+  type Page,
+  type UiPreferences,
 } from "../shared";
+import type { LyricsResponse } from "../../types/api";
 
 export function useAppControllerEffects(model: any) {
   const {
     activePage,
+    advancedTrackSearch,
     albums,
     artists,
     backendStatus,
@@ -34,6 +39,7 @@ export function useAppControllerEffects(model: any) {
     currentTrack,
     debouncedAdvancedTrackSearch,
     debouncedSearch,
+    detailTrack,
     FolderWatchRefreshTimerRef,
     folderPath,
     folderWatchStatus,
@@ -51,9 +57,11 @@ export function useAppControllerEffects(model: any) {
     hasLoadedInitialLibrary,
     lastSessionRestoreFinishedRef,
     lastSessionWriteKeyRef,
+    libraryCacheQueryKeyRef,
     libraryFolders,
     librarySort,
     libraryTotal,
+    libraryView,
     loadAlbums,
     loadArtistInfo,
     loadArtists,
@@ -68,6 +76,7 @@ export function useAppControllerEffects(model: any) {
     loadHistory,
     loadInbox,
     loadLibraryStats,
+    loadAnalysisClapReadiness,
     loadPlaylists,
     loadRecommendationHistory,
     loadRecommendationProfiles,
@@ -77,7 +86,9 @@ export function useAppControllerEffects(model: any) {
     playbackQueue,
     playbackTime,
     playlists,
+    priorityLibraryQueryKeyRef,
     refreshAnalyzedState,
+    refreshTracks,
     restoredPlaybackPosition,
     restoreLastPlaybackSession,
     scheduleFolderWatchRefresh,
@@ -94,11 +105,13 @@ export function useAppControllerEffects(model: any) {
     setLyrics,
     setSelectedArtistName,
     setSelectedArtistTracks,
+    setSearch,
     setStatus,
     settings,
     showCdPage,
     startupBackgroundHydratedRef,
     status,
+    trackIndexCacheRef,
     tracks,
     uiPreferences,
     undoAction,

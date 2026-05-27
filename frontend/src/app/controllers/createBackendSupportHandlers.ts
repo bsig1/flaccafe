@@ -18,7 +18,10 @@ import {
   legacyStorageKeys,
   normalizePlaybackResumePosition,
   storageKeys,
+  type StoredPlaybackSession,
 } from "../shared";
+import type { Track } from "../../types/api";
+import type { EditableMetadataKey } from "../components/modals";
 
 export function createBackendSupportHandlers(model: any) {
   const {

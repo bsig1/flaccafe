@@ -1,4 +1,5 @@
 // @ts-nocheck
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { placeFloatingMenu } from "../../lib/uiInteractions";
 import {
   themeAccentLabels,

@@ -1,4 +1,6 @@
 // @ts-nocheck
+import type { Track } from "../../types/api";
+
 export function createPlayerNavigationHandlers(model: any) {
   const {
     albums,
@@ -14,6 +16,7 @@ export function createPlayerNavigationHandlers(model: any) {
     setArtistInfo,
     setArtistTracks,
     setDebouncedSearch,
+    setDetailTrack,
     setIsArtistLoading,
     setLibraryView,
     setSearch,
