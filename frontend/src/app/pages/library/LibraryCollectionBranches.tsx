@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { InboxAutoReviewField, InboxAutoReviewMatchType } from "../../../types/api";
 import { LibraryCompletionView } from "./LibraryCompletionView";
 
 type ArtworkPane = "artists" | "albums";
 
 const ARTWORK_SCROLL_IDLE_MS = 180;
+const MAX_ACTIVE_COLLECTION_ARTWORK = 96;
 
 export function LibraryCollectionBranches({ model }: { model: any }) {
   const { Album, ArrowDown, ArrowUp, BarChart3, BookOpen, CheckCircle2, Download, Fingerprint, FolderOpen, LayoutGrid, List, MoreHorizontal, Pencil, Play, Podcast, Plus, RefreshCw, Save, Search, ShieldCheck, Shuffle, SkipForward, SlidersHorizontal, Star, Tag, Trash2, Upload, UserRound, Volume2, Wand2, X, RatingStars, ResizableHeader, BulkMetadataModal, QuickStartPanel, TrackDetailsPanel, LibraryViewTabs, albumArtworkUrl, albumCoverUrl, defaultLibraryVisibleColumns, libraryColumnDefinitions, librarySelectionColumnWidth, display, fileName, formatBitrate, formatDuration, formatFingerprint, formatPercent, formatRating, formatShortDate, formatTime, trackGenre, albumMetaLabel, artistMetaLabel, missingMetadataFields, missingMetadataFilters, ALBUM_GRID_ROW_HEIGHT, ALBUM_LIST_ROW_HEIGHT, ARTIST_ROW_HEIGHT, COMPLETION_COLLAPSED_ROW_HEIGHT, COMPLETION_EXPANDED_ROW_ESTIMATE, LIBRARY_ACTIONS_MENU_HEIGHT, LIBRARY_ACTIONS_MENU_WIDTH, MENU_VIEWPORT_MARGIN, PLAYLIST_ROW_HEIGHT, PLAYLIST_TOOLBAR_HEIGHT, TRACK_AVOID_SUBMENU_HEIGHT, TRACK_AVOID_SUBMENU_WIDTH, TRACK_CONTEXT_DIVIDER_HEIGHT, TRACK_CONTEXT_HEADER_HEIGHT, TRACK_CONTEXT_MENU_HEIGHT, TRACK_CONTEXT_MENU_WIDTH, TRACK_CONTEXT_ROW_HEIGHT, TRACK_CONTEXT_SUBMENU_WIDTH, TRACK_PLAYLIST_SUBMENU_WIDTH, TRACK_RATING_SUBMENU_HEIGHT, TRACK_RATING_SUBMENU_WIDTH, TRACK_SUBMENU_CLOSE_DELAY_MS, TRACK_TAGGING_SUBMENU_HEIGHT, TRACK_VIRTUALIZATION_OVERSCAN, TRACK_VIRTUALIZATION_THRESHOLD, tracks, trackIndexCache, totalTracks, albums, artists, playlists, selectedAlbumId, selectedAlbumTracks, selectedArtistName, selectedArtistTracks, selectedPlaylistId, selectedPlaylistTracks, libraryStats, libraryHealth, inbox, targetPlaylistId, newPlaylistName, importPlaylistPath, libraryView, setLibraryView, search, setSearch, advancedTrackSearch, setAdvancedTrackSearch, refreshTracks, refreshAlbums, loadMoreTracks, loadTrackWindow, isLoading, hasMoreTracks, sort, setSort, scrollTop, setScrollTop, artistScrollTop, setArtistScrollTop, albumScrollTop, setAlbumScrollTop, completionScrollTop, setCompletionScrollTop, playlistScrollTop, setPlaylistScrollTop, onRating, onBulkRating, onPlayTrack, onPlayNext, onAddToQueue, onSelectAlbum, onSelectArtist, onPlayAlbum, onPlayArtist, onSelectPlaylist, onCreatePlaylist, onDeletePlaylist, onAddTracksToPlaylist, onDeleteTrack, onEditTrack, onBulkMetadata, onAutoTagTracks, onSyncFileMetadata, onFingerprintTagTracks, onClapGenreTagTracks, onVolumeTagTracks, onOpenFileManagementTracks, onRequestDeleteTracks, onRemoveTrackFromPlaylist, onRemoveTracksFromPlaylist, onMovePlaylistTrack, onExportTracks, onExportPlaylist, onImportPlaylist, onReviewInboxTracks, onUpdateInboxNote, onSaveInboxAutoReviewRule, onDeleteInboxAutoReviewRule, onShuffleTracks, onQuickAutoDj, onAvoidAutoDj, onRevealTrack, detailTrack, setDetailTrack, onAnalyzeTracks, onIgnoreDuplicateGroup, onClearIgnoredDuplicateGroups, isAudioAnalyzing, currentTrackId, currentTrack, hideFilePaths, compactRows, albumGrid, writeRatingsToFiles, libraryVisibleColumns, setLibraryVisibleColumns, onAlbumGridChange, setTargetPlaylistId, setNewPlaylistName, setImportPlaylistPath, showQuickStart, isScanning, suggestedMusicPath, onChooseMusicFolder, onUseSuggestedFolder, onDismissQuickStart, onOpenSettings, columnWidths, setColumnWidths, contextMenu, setContextMenu, columnMenu, setColumnMenu, libraryActionsMenu, setLibraryActionsMenu, activeContextSubmenu, setActiveContextSubmenu, selectedTrackIds, setSelectedTrackIds, selectedTrackCache, setSelectedTrackCache, isSelectingAllTracks, setIsSelectingAllTracks, showAllDuplicateGroups, setShowAllDuplicateGroups, showAllMissingMetadata, setShowAllMissingMetadata, missingMetadataFilter, setMissingMetadataFilter, bulkMetadataOpen, setBulkMetadataOpen, draggedColumn, setDraggedColumn, dragOverColumn, setDragOverColumn, albumArtworkCandidates, setAlbumArtworkCandidates, isAlbumArtworkOpen, setIsAlbumArtworkOpen, isSearchingAlbumArtwork, setIsSearchingAlbumArtwork, albumArtworkStatus, setAlbumArtworkStatus, inboxNoteDraft, setInboxNoteDraft, editingInboxRuleId, setEditingInboxRuleId, inboxRuleName, setInboxRuleName, inboxRuleEnabled, setInboxRuleEnabled, inboxRuleField, setInboxRuleField, inboxRuleMatchType, setInboxRuleMatchType, inboxRuleValue, setInboxRuleValue, inboxRuleNote, setInboxRuleNote, inboxRuleApplyExisting, setInboxRuleApplyExisting, albumMode, setAlbumMode, artistPaneHeight, setArtistPaneHeight, albumPaneHeight, setAlbumPaneHeight, playlistPaneHeight, setPlaylistPaneHeight, completionFilter, setCompletionFilter, completionHeightVersion, setCompletionHeightVersion, completionOpenAlbumId, setCompletionOpenAlbumId, completionLoadingAlbumId, setCompletionLoadingAlbumId, completionLookupAlbumId, setCompletionLookupAlbumId, completionLookupMessages, setCompletionLookupMessages, completionLookupAllActive, setCompletionLookupAllActive, completionLookupAllProgress, setCompletionLookupAllProgress, showAdvancedSearch, setShowAdvancedSearch, virtualScrollTop, setVirtualScrollTop, trackViewportHeight, setTrackViewportHeight, scrollRef, artistListRef, albumListRef, completionListRef, playlistListRef, contextMenuRef, searchInputRef, selectionAnchorId, completionLookupCancelRef, visibleColumns, visibleColumnDefs, advancedSearchActiveCount, trackSearchActive, libraryHasAnyTracks, tableWidth, rowPadding, trackRowHeight, loadedTrackCount, shouldVirtualizeTrackRows, maxVirtualScrollTop, effectiveVirtualScrollTop, virtualTrackStartIndex, virtualTrackVisibleCount, virtualTrackEndIndex, renderedTrackList, virtualTopSpacerHeight, virtualBottomSpacerHeight, advancedSearchInputClass, activeAlbum, activeArtist, activePlaylist, missingMetadataRows, filteredMissingMetadataRows, visibleMissingMetadataRows, visibleDuplicateGroups, completionQuery, completionSearchTerms, completionMatchesSearch, albumCompletionExpected, albumCompletionMissing, completionAlbums, visibleCompletionAlbums, completionListScrollTop, completionWindow, renderedCompletionAlbums, artistWindow, renderedArtists, albumGridColumns, albumBrowseRowHeight, albumWindow, renderedBrowseAlbums, playlistWindow, renderedPlaylists, completeAlbumCount, missingTrackEstimate, advancedSelectionKey, completionLookupEta, librarySummaryText, viewTracks, viewTrackLookup, selectedIds, selectedTracks, selectableTrackCount, allViewSelected, inboxNotesByTrackId, selectedInboxTrack, selectedInboxNote, getReachableScrollTop, applyScrollRestore, cancelScrollRestoreForUserInput, scrollCollectionPaneToTop, saveTrackPaneScrollTop, renderPaneTopButton, renderActiveTopButton, updateCompletionRowHeight, setCompletionRowElement, scheduleVirtualScrollUpdate, flushScrollPositionSave, scheduleScrollPositionSave, resetInboxRuleForm, editInboxRule, saveInboxRule, handleSort, handleResize, toggleTrackSelection, selectSingleTrack, selectTrackLikeWindows, setSelectionForList, selectAllCurrentScope, handleHeaderSelectionChange, suppressCheckboxContextMenu, clearSelection, loadAlbumArtworkCandidates, openAlbumArtworkManager, albumArtworkActionStatus, chooseSidecarArtwork, embedSidecarArtwork, saveEmbeddedArtwork, embedEmbeddedArtwork, searchWebArtwork, saveWebArtwork, clearSelectedAlbumArtwork, handleScroll, openTrackContextMenu, openColumnContextMenu, toggleLibraryActionsMenu, toggleVisibleColumn, moveVisibleColumn, handleColumnDragStart, handleColumnDragOver, handleColumnDrop, handleColumnDragEnd, columnFromPoint, handleColumnPointerDragStart, columnTextClass, renderMetadataCell, renderTableHeader, isInteractiveTrackCellTarget, handleLibrarySurfaceClick, renderTrackRow, renderTrackPlaceholderRow, renderVirtualTrackRows, renderTrackRows, toggleCompletionAlbum, handleCompletionLengthLookup, handleCompletionLookupAll, cancelCompletionLookupAll, updateAdvancedTrackSearch, clearAdvancedTrackSearch, contextSelectionTracks, contextSelectionIds, contextBulk, contextLabel, contextPlaylistSubmenuHeight, contextSubmenuStyle, openContextSubmenu, scheduleContextSubmenuClose, contextSubmenuClass } = model;
@@ -17,7 +18,8 @@ export function LibraryCollectionBranches({ model }: { model: any }) {
     artists: null,
     albums: null,
   });
-  const loadedArtworkUrlsRef = useRef<Set<string>>(new Set());
+  const artworkQueueRef = useRef<string[]>([]);
+  const [activeArtworkUrls, setActiveArtworkUrls] = useState<Set<string>>(() => new Set());
 
   const setArtworkPanePaused = useCallback((pane: ArtworkPane, paused: boolean) => {
     artworkPausedRef.current = { ...artworkPausedRef.current, [pane]: paused };
@@ -52,14 +54,72 @@ export function LibraryCollectionBranches({ model }: { model: any }) {
     };
   }, []);
 
-  const rememberArtworkLoaded = useCallback((url: string) => {
-    loadedArtworkUrlsRef.current.add(url);
+  const activateArtworkUrls = useCallback((urls: Array<string | null>) => {
+    const requestedUrls = [...new Set(urls.filter((url): url is string => Boolean(url)))];
+    if (requestedUrls.length === 0) {
+      return;
+    }
+
+    const protectedUrls = new Set(requestedUrls);
+    const nextQueue = [
+      ...artworkQueueRef.current.filter((url) => !protectedUrls.has(url)),
+      ...requestedUrls,
+    ];
+
+    while (nextQueue.length > MAX_ACTIVE_COLLECTION_ARTWORK) {
+      const evictableIndex = nextQueue.findIndex((url) => !protectedUrls.has(url));
+      if (evictableIndex === -1) {
+        break;
+      }
+      nextQueue.splice(evictableIndex, 1);
+    }
+
+    const nextUrls = new Set(nextQueue);
+    artworkQueueRef.current = nextQueue;
+    setActiveArtworkUrls((current) => {
+      if (current.size === nextUrls.size && [...nextUrls].every((url) => current.has(url))) {
+        return current;
+      }
+      return nextUrls;
+    });
   }, []);
 
+  const visibleCollectionArtworkUrls = useMemo(() => {
+    if (libraryView === "artists") {
+      return renderedArtists.map((artist: any) =>
+        artist.artwork_track_id ? albumArtworkUrl(artist.artwork_track_id) : null,
+      );
+    }
+    if (libraryView === "albums" && albumMode !== "completion") {
+      return renderedBrowseAlbums.map((album: any) =>
+        album.artwork_path || album.artwork_track_id ? albumCoverUrl(album.id) : null,
+      );
+    }
+    return [];
+  }, [albumArtworkUrl, albumCoverUrl, albumMode, libraryView, renderedArtists, renderedBrowseAlbums]);
+
+  useEffect(() => {
+    if (libraryView === "artists") {
+      if (!artworkPaused.artists) {
+        activateArtworkUrls(visibleCollectionArtworkUrls);
+      }
+      return;
+    }
+    if (libraryView === "albums" && albumMode !== "completion" && !artworkPaused.albums) {
+      activateArtworkUrls(visibleCollectionArtworkUrls);
+    }
+  }, [
+    activateArtworkUrls,
+    albumMode,
+    artworkPaused.albums,
+    artworkPaused.artists,
+    libraryView,
+    visibleCollectionArtworkUrls,
+  ]);
+
   const shouldRenderArtwork = useCallback(
-    (url: string | null, pane: ArtworkPane) =>
-      Boolean(url && (!artworkPaused[pane] || loadedArtworkUrlsRef.current.has(url))),
-    [artworkPaused],
+    (url: string | null) => Boolean(url && activeArtworkUrls.has(url)),
+    [activeArtworkUrls],
   );
 
   return (
@@ -80,7 +140,7 @@ export function LibraryCollectionBranches({ model }: { model: any }) {
                         {renderedArtists.map((artist: any) => {
                           const active = artist.name === selectedArtistName;
                           const artwork = artist.artwork_track_id ? albumArtworkUrl(artist.artwork_track_id) : null;
-                          const showArtwork = shouldRenderArtwork(artwork, "artists");
+                          const showArtwork = shouldRenderArtwork(artwork);
                           return (
                             <button
                               key={artist.name}
@@ -101,7 +161,6 @@ export function LibraryCollectionBranches({ model }: { model: any }) {
                                     draggable={false}
                                     loading="lazy"
                                     src={artwork}
-                                    onLoad={() => rememberArtworkLoaded(artwork)}
                                   />
                                 ) : (
                                   <div className="grid h-full w-full place-items-center text-moss">
@@ -174,7 +233,7 @@ export function LibraryCollectionBranches({ model }: { model: any }) {
                         {renderedBrowseAlbums.map((album: any) => {
                           const active = album.id === selectedAlbumId;
                           const artwork = album.artwork_path || album.artwork_track_id ? albumCoverUrl(album.id) : null;
-                          const showArtwork = shouldRenderArtwork(artwork, "albums");
+                          const showArtwork = shouldRenderArtwork(artwork);
                           return (
                             <button
                               key={album.id}
@@ -202,7 +261,6 @@ export function LibraryCollectionBranches({ model }: { model: any }) {
                                       draggable={false}
                                       loading="lazy"
                                       src={artwork}
-                                      onLoad={() => rememberArtworkLoaded(artwork)}
                                     />
                                   ) : (
                                     <div className="grid h-full w-full place-items-center text-moss">
@@ -221,7 +279,6 @@ export function LibraryCollectionBranches({ model }: { model: any }) {
                                       draggable={false}
                                       loading="lazy"
                                       src={artwork}
-                                      onLoad={() => rememberArtworkLoaded(artwork)}
                                     />
                                   ) : (
                                     <div className="grid h-full w-full place-items-center text-moss">
