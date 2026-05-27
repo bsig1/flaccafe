@@ -1,34 +1,8 @@
-import {
-  FileText,
-  ListMusic,
-  Pause,
-  Play,
-  Radio,
-  Repeat,
-  Repeat1,
-  Repeat2,
-  SkipBack,
-  SkipForward,
-  Volume2,
-  VolumeX,
-} from "lucide-react";
-import type {
-  CSSProperties,
-  ChangeEvent,
-  KeyboardEvent as ReactKeyboardEvent,
-  MutableRefObject,
-  WheelEvent as ReactWheelEvent,
-} from "react";
-import {
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import { FileText, ListMusic, Pause, Play, Radio, Repeat, Repeat1, Repeat2, SkipBack, SkipForward, Volume2, VolumeX } from "lucide-react";
+import type { CSSProperties, ChangeEvent, KeyboardEvent as ReactKeyboardEvent, MutableRefObject, WheelEvent as ReactWheelEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import {
-  albumArtworkUrl,
-  audioUrl,
-} from "../../lib/api";
+import { albumArtworkUrl, audioUrl } from "../../lib/api";
 import {
   desktopCrossfadeToFile,
   desktopFadeVolume as desktopFadeVolumeCommand,
@@ -45,27 +19,15 @@ import {
 } from "../../lib/desktopPlayback";
 import type { desktopDspSettings } from "../../lib/desktopPlayback";
 import type { SmtcButtonPayload } from "../../lib/tauriMedia";
-import {
-  clearSmtcState,
-  listenForSmtcButtons,
-  updateSmtcState,
-} from "../../lib/tauriMedia";
-import type {
-  RadioStation,
-  Track,
-} from "../../types/api";
+import { clearSmtcState, listenForSmtcButtons, updateSmtcState } from "../../lib/tauriMedia";
+import type { RadioStation, Track } from "../../types/api";
 import type { PlayerBarProps } from "./PlayerBarTypes";
 import { PlayerBarView } from "./PlayerBarView";
 import { createWebAudioRuntime } from "./webAudioRuntime";
-import {
-  createPlaybackTransitions,
-  webCrossfadeDurationMs,
-} from "./playbackTransitions";
+import { createPlaybackTransitions, webCrossfadeDurationMs } from "./playbackTransitions";
 import { usePlayerBarAudioEffects } from "./usePlayerBarAudioEffects";
 import { usePlayerBarMediaEffects } from "./usePlayerBarMediaEffects";
-import {
-  RatingStars,
-} from "../components/common";
+import { RatingStars } from "../components/common";
 import {
   END_FADE_SECONDS,
   EqualizerBandMode,
@@ -170,6 +132,9 @@ export function PlayerBar({
   const desktopEndedTrackIdRef = useRef<number | null>(null);
   const lastPlaybackStreamErrorRef = useRef<string | null>(null);
   const handledExternalTrackRequestRef = useRef<number | null>(null);
+  const preparedNextPathRef = useRef<string | null>(null);
+  const prepareNextInFlightRef = useRef(false);
+  const prepareNextPendingPathRef = useRef<string | null>(null);
   const activeSourceKeyRef = useRef("empty");
   const suppressWebPlaybackErrorsUntilRef = useRef(0);
   const suppressWebPauseUntilRef = useRef(0);
@@ -177,6 +142,7 @@ export function PlayerBar({
   const miniPlayerChannelRef = useRef<BroadcastChannel | null>(null);
   const miniPlayerCommandRef = useRef<(command: MiniPlayerCommand) => void>(() => {});
   const artworkPreviewTimerRef = useRef<number | null>(null);
+  const artworkCacheRef = useRef<Set<string>>(new Set());
   const [isPlaying, setIsPlaying] = useState(false);
   const [volume, setVolume] = useState(readStoredVolume);
   const [volumePercentDraft, setVolumePercentDraft] = useState<string | null>(null);
@@ -184,6 +150,7 @@ export function PlayerBar({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [artworkFailed, setArtworkFailed] = useState(false);
+  const [displayedArtworkSrc, setDisplayedArtworkSrc] = useState<string | null>(null);
   const [showArtworkPreview, setShowArtworkPreview] = useState(false);
   const isRadioSource = Boolean(currentRadioStation);
   const isPreviewTrack = Boolean(currentTrack?.is_preview) || (currentTrack?.id ?? 0) < 0;
@@ -835,7 +802,12 @@ export function PlayerBar({
       return;
     }
     let canceled = false;
+    let pollInFlight = false;
     const pollPlaybackStatus = async () => {
+      if (pollInFlight) {
+        return;
+      }
+      pollInFlight = true;
       try {
         const status = await desktopStatus();
         if (canceled) {
@@ -889,6 +861,8 @@ export function PlayerBar({
         }
       } catch {
         // Rust playback status is unavailable in browser preview and before the desktop command is ready.
+      } finally {
+        pollInFlight = false;
       }
     };
     void pollPlaybackStatus();
@@ -905,15 +879,73 @@ export function PlayerBar({
     if (!usePlayback || !preloadedNextTrack || !canPreloadNextTrack || playbackMode === "stopAfterCurrent") {
       return;
     }
-    void desktopPrepareNextFile(preloadedNextTrack.path).catch(() => {
-      // Preparation failures are recorded by the Rust playback diagnostics panel.
-    });
+    const requestedPath = preloadedNextTrack.path;
+    if (preparedNextPathRef.current === requestedPath) {
+      return;
+    }
+    prepareNextPendingPathRef.current = requestedPath;
+    if (prepareNextInFlightRef.current) {
+      return;
+    }
+    const drainPrepareQueue = () => {
+      const nextPath = prepareNextPendingPathRef.current;
+      if (!nextPath || preparedNextPathRef.current === nextPath) {
+        prepareNextPendingPathRef.current = null;
+        return;
+      }
+      prepareNextPendingPathRef.current = null;
+      prepareNextInFlightRef.current = true;
+      void desktopPrepareNextFile(nextPath)
+        .then(() => {
+          preparedNextPathRef.current = nextPath;
+        })
+        .catch(() => {
+          // Preparation failures are recorded by the Rust playback diagnostics panel.
+        })
+        .finally(() => {
+          prepareNextInFlightRef.current = false;
+          if (prepareNextPendingPathRef.current) {
+            drainPrepareQueue();
+          }
+        });
+    };
+    drainPrepareQueue();
   }, [usePlayback, preloadedNextTrack?.id, preloadedNextTrack?.path, canPreloadNextTrack, playbackMode]);
 
   const artworkSrc =
     currentTrack && !isRadioSource && (!isPreviewTrack || isCdPreviewTrack) && !artworkFailed
       ? albumArtworkUrl(currentTrack.id, currentTrack.file_modified_at)
       : null;
+  useEffect(() => {
+    if (!artworkSrc) {
+      setDisplayedArtworkSrc(null);
+      return undefined;
+    }
+    if (artworkCacheRef.current.has(artworkSrc)) {
+      setDisplayedArtworkSrc(artworkSrc);
+      return undefined;
+    }
+    let cancelled = false;
+    const image = new Image();
+    image.onload = () => {
+      if (cancelled) {
+        return;
+      }
+      artworkCacheRef.current.add(artworkSrc);
+      setDisplayedArtworkSrc(artworkSrc);
+    };
+    image.onerror = () => {
+      if (cancelled) {
+        return;
+      }
+      setArtworkFailed(true);
+      setDisplayedArtworkSrc(null);
+    };
+    image.src = artworkSrc;
+    return () => {
+      cancelled = true;
+    };
+  }, [artworkSrc]);
   const hasCurrentArtist = Boolean(currentTrack?.artist?.trim());
   const currentAlbumLabel = displayAlbumForTrack(currentTrack);
   const hasCurrentAlbum = Boolean(currentAlbumLabel);
@@ -926,7 +958,7 @@ export function PlayerBar({
   });
 
   const playerBarViewModel = {
-    miniPlayer, artworkSrc, playerTitle, hideArtworkPreview, scheduleArtworkPreview, setArtworkFailed, isRadioSource, isPreviewTrack, isLibraryTrack, currentTrack, currentRadioStation, radioSubtitle, hasCurrentArtist, currentArtistLabel, onOpenCurrentArtist, hasCurrentAlbum, currentAlbumLabel, onOpenCurrentAlbum, onOpenCurrentTrack, cdSkipIsSettling, hasPrevious, canPreviousAction, handlePreviousTrack, playRelative, isPlaying, hasPlayableSource, togglePlayback, hasNext, usePlayback, webAudioSourceUrl, webAudioKey, audioRef, isCdPreviewTrack, syncDuration, handleTimeUpdate, setIsPlaying, suppressWebPauseUntilRef, maybeClearPendingResume, handleEnded, activeSourceKeyRef, activeSourceKey, suppressWebPlaybackErrorsUntilRef, setStatus, preloadedNextTrack, canPreloadNextTrack, nextAudioRef, trackAudioSourceUrl, effectiveDuration, currentTime, progressPercent, progressFill, handleSeek, handleProgressKeyDown, playbackMode, cycleRepeatMode, onOpenLyricsView, onOpenQueueView, muted, volume, handleVolumeWheel, toggleMuted, handleVolumeChange, volumePercentDraft, commitVolumePercent, setVolumePercentDraft, handleVolumePercentChange, handleVolumePercentKeyDown, onRating, showArtworkPreview,
+    miniPlayer, artworkSrc: displayedArtworkSrc, playerTitle, hideArtworkPreview, scheduleArtworkPreview, setArtworkFailed, isRadioSource, isPreviewTrack, isLibraryTrack, currentTrack, currentRadioStation, radioSubtitle, hasCurrentArtist, currentArtistLabel, onOpenCurrentArtist, hasCurrentAlbum, currentAlbumLabel, onOpenCurrentAlbum, onOpenCurrentTrack, cdSkipIsSettling, hasPrevious, canPreviousAction, handlePreviousTrack, playRelative, isPlaying, hasPlayableSource, togglePlayback, hasNext, usePlayback, webAudioSourceUrl, webAudioKey, audioRef, isCdPreviewTrack, syncDuration, handleTimeUpdate, setIsPlaying, suppressWebPauseUntilRef, maybeClearPendingResume, handleEnded, activeSourceKeyRef, activeSourceKey, suppressWebPlaybackErrorsUntilRef, setStatus, preloadedNextTrack, canPreloadNextTrack, nextAudioRef, trackAudioSourceUrl, effectiveDuration, currentTime, progressPercent, progressFill, handleSeek, handleProgressKeyDown, playbackMode, cycleRepeatMode, onOpenLyricsView, onOpenQueueView, muted, volume, handleVolumeWheel, toggleMuted, handleVolumeChange, volumePercentDraft, commitVolumePercent, setVolumePercentDraft, handleVolumePercentChange, handleVolumePercentKeyDown, onRating, showArtworkPreview,
   };
 
   return <PlayerBarView model={playerBarViewModel} />;

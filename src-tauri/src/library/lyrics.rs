@@ -13,6 +13,16 @@ const LRCLIB_API_URL: &str = "https://lrclib.net/api/get";
 const LRCLIB_SEARCH_URL: &str = "https://lrclib.net/api/search";
 const FLAC_CAFE_USER_AGENT: &str = "FLAC Cafe/0.5";
 
+async fn run_lyrics_blocking<T, F>(task: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(task)
+        .await
+        .map_err(|error| format!("Lyrics task failed: {error}"))?
+}
+
 fn normalize_lyrics(value: Option<String>) -> Option<String> {
     value
         .map(|text| text.replace("\r\n", "\n").replace('\r', "\n"))
@@ -20,7 +30,7 @@ fn normalize_lyrics(value: Option<String>) -> Option<String> {
         .filter(|text| !text.is_empty())
 }
 
-fn database_lyrics(track_id: i64) -> Result<Option<DesktopLyricsResponse>, String> {
+pub(super) fn database_lyrics(track_id: i64) -> Result<Option<DesktopLyricsResponse>, String> {
     let connection = open_database()?;
     let row = connection
         .query_row(
@@ -56,7 +66,7 @@ fn database_lyrics(track_id: i64) -> Result<Option<DesktopLyricsResponse>, Strin
     }))
 }
 
-fn save_database_lyrics(
+pub(super) fn save_database_lyrics(
     track_id: i64,
     lyrics: String,
     source: String,
@@ -94,7 +104,50 @@ fn save_database_lyrics(
     })
 }
 
-fn truthy_setting_value(value: Option<String>) -> bool {
+fn clear_database_lyrics(track_id: i64) -> Result<(), String> {
+    let connection = open_database()?;
+    connection
+        .execute(
+            "DELETE FROM track_lyrics WHERE track_id = ?",
+            params![track_id],
+        )
+        .map_err(|error| format!("Could not clear database lyrics: {error}"))?;
+    Ok(())
+}
+
+pub(super) fn save_cached_online_lyrics(
+    track: &DesktopTrack,
+    response: DesktopLyricsResponse,
+    write_sidecar: bool,
+) -> Result<DesktopLyricsResponse, String> {
+    let Some(lyrics) = normalize_lyrics(response.lyrics.clone()) else {
+        return Ok(response);
+    };
+    let mut sidecar_path = None;
+    if write_sidecar {
+        let sidecar = cached_lyrics_path(track, response.is_synced);
+        if let Some(parent) = sidecar.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("Could not create lyric sidecar folder: {error}"))?;
+        }
+        fs::write(&sidecar, format!("{lyrics}\n"))
+            .map_err(|error| format!("Could not write lyric sidecar: {error}"))?;
+        sidecar_path = Some(sidecar.to_string_lossy().to_string());
+    }
+    save_database_lyrics(
+        track.id,
+        lyrics,
+        format!(
+            "{}:{}",
+            if write_sidecar { "sidecar-cache" } else { "database-cache" },
+            response.source.as_deref().unwrap_or("lrclib")
+        ),
+        response.is_synced,
+        sidecar_path,
+    )
+}
+
+pub(super) fn truthy_setting_value(value: Option<String>) -> bool {
     matches!(
         value.as_deref().map(str::trim),
         Some("1" | "true" | "True" | "yes" | "on")
@@ -128,7 +181,7 @@ fn sanitize_path_component(value: &str) -> String {
         .to_string()
 }
 
-fn display_title(track: &DesktopTrack) -> String {
+pub(super) fn display_title(track: &DesktopTrack) -> String {
     track
         .title
         .as_deref()
@@ -249,7 +302,7 @@ fn lrclib_read_json(url: &str, params: &[(&str, String)]) -> Result<JsonValue, S
     }
 }
 
-fn lrclib_fetch(
+pub(super) fn lrclib_fetch(
     track_id: i64,
     title: &str,
     artist: &str,
@@ -305,10 +358,7 @@ fn lrclib_fetch(
     Err("No lyrics text found".to_string())
 }
 
-pub fn track_lyrics(
-    _state: State<'_, DesktopLibraryState>,
-    track_id: i64,
-) -> Result<DesktopLyricsResponse, String> {
+fn track_lyrics_core(track_id: i64) -> Result<DesktopLyricsResponse, String> {
     if let Some(response) = database_lyrics(track_id)? {
         return Ok(response);
     }
@@ -331,8 +381,19 @@ pub fn track_lyrics(
     }
 }
 
-pub fn update_database_lyrics(
+pub fn track_lyrics(
     _state: State<'_, DesktopLibraryState>,
+    track_id: i64,
+) -> Result<DesktopLyricsResponse, String> {
+    track_lyrics_core(track_id)
+}
+
+#[tauri::command]
+pub async fn track_lyrics_direct(track_id: i64) -> Result<DesktopLyricsResponse, String> {
+    run_lyrics_blocking(move || track_lyrics_core(track_id)).await
+}
+
+fn update_database_lyrics_core(
     track_id: i64,
     lyrics: Option<String>,
     is_synced: Option<bool>,
@@ -375,8 +436,17 @@ pub fn update_database_lyrics(
     save_database_lyrics(track_id, text, source, synced, None)
 }
 
-pub fn update_file_lyrics(
+pub fn update_database_lyrics(
     _state: State<'_, DesktopLibraryState>,
+    track_id: i64,
+    lyrics: Option<String>,
+    is_synced: Option<bool>,
+    source: Option<String>,
+) -> Result<DesktopLyricsResponse, String> {
+    update_database_lyrics_core(track_id, lyrics, is_synced, source)
+}
+
+fn update_file_lyrics_core(
     track_id: i64,
     lyrics: Option<String>,
     is_synced: Option<bool>,
@@ -388,6 +458,17 @@ pub fn update_file_lyrics(
         text.as_deref(),
         is_synced.unwrap_or(false),
     )?;
+    if let Some(lyrics) = text.clone() {
+        save_database_lyrics(
+            track_id,
+            lyrics,
+            "embedded".to_string(),
+            is_synced.unwrap_or(false),
+            None,
+        )?;
+    } else {
+        clear_database_lyrics(track_id)?;
+    }
     Ok(DesktopLyricsResponse {
         track_id,
         lyrics: text,
@@ -397,10 +478,37 @@ pub fn update_file_lyrics(
     })
 }
 
-pub fn lookup_lyrics_by_metadata(
+pub fn update_file_lyrics(
     _state: State<'_, DesktopLibraryState>,
-    body: JsonValue,
+    track_id: i64,
+    lyrics: Option<String>,
+    is_synced: Option<bool>,
 ) -> Result<DesktopLyricsResponse, String> {
+    update_file_lyrics_core(track_id, lyrics, is_synced)
+}
+
+#[tauri::command]
+pub async fn update_track_lyrics_direct(
+    track_id: i64,
+    lyrics: Option<String>,
+    is_synced: Option<bool>,
+    target: Option<String>,
+    source: Option<String>,
+) -> Result<DesktopLyricsResponse, String> {
+    run_lyrics_blocking(move || {
+        if target
+            .as_deref()
+            .is_some_and(|value| value.eq_ignore_ascii_case("file"))
+        {
+            update_file_lyrics_core(track_id, lyrics, is_synced)
+        } else {
+            update_database_lyrics_core(track_id, lyrics, is_synced, source)
+        }
+    })
+    .await
+}
+
+fn lookup_lyrics_by_metadata_core(body: JsonValue) -> Result<DesktopLyricsResponse, String> {
     let title = json_string(&body, "title")
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| "Track title and artist are required for lyric lookup".to_string())?;
@@ -420,10 +528,21 @@ pub fn lookup_lyrics_by_metadata(
     )
 }
 
-pub fn fetch_track_lyrics(
+pub fn lookup_lyrics_by_metadata(
     _state: State<'_, DesktopLibraryState>,
-    track_id: i64,
+    body: JsonValue,
 ) -> Result<DesktopLyricsResponse, String> {
+    lookup_lyrics_by_metadata_core(body)
+}
+
+#[tauri::command]
+pub async fn lookup_lyrics_by_metadata_direct(
+    body: JsonValue,
+) -> Result<DesktopLyricsResponse, String> {
+    run_lyrics_blocking(move || lookup_lyrics_by_metadata_core(body)).await
+}
+
+fn fetch_track_lyrics_core(track_id: i64) -> Result<DesktopLyricsResponse, String> {
     let track = track_by_id(track_id)?;
     let connection = open_database()?;
     let auto_write_sidecar = get_setting(&connection, "auto_write_fetched_lyrics_sidecars")
@@ -438,26 +557,19 @@ pub fn fetch_track_lyrics(
     if !auto_write_sidecar {
         return Ok(response);
     }
-    let Some(lyrics) = normalize_lyrics(response.lyrics.clone()) else {
-        return Ok(response);
-    };
-    let sidecar = cached_lyrics_path(&track, response.is_synced);
-    if let Some(parent) = sidecar.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("Could not create lyric sidecar folder: {error}"))?;
-    }
-    fs::write(&sidecar, format!("{lyrics}\n"))
-        .map_err(|error| format!("Could not write lyric sidecar: {error}"))?;
-    save_database_lyrics(
-        track_id,
-        lyrics,
-        format!(
-            "sidecar-cache:{}",
-            response.source.as_deref().unwrap_or("lrclib")
-        ),
-        response.is_synced,
-        Some(sidecar.to_string_lossy().to_string()),
-    )
+    save_cached_online_lyrics(&track, response, true)
+}
+
+pub fn fetch_track_lyrics(
+    _state: State<'_, DesktopLibraryState>,
+    track_id: i64,
+) -> Result<DesktopLyricsResponse, String> {
+    fetch_track_lyrics_core(track_id)
+}
+
+#[tauri::command]
+pub async fn fetch_track_lyrics_direct(track_id: i64) -> Result<DesktopLyricsResponse, String> {
+    run_lyrics_blocking(move || fetch_track_lyrics_core(track_id)).await
 }
 
 fn json_string(value: &JsonValue, key: &str) -> Option<String> {

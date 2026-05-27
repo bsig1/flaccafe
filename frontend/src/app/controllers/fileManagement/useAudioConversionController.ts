@@ -145,7 +145,7 @@ export function useAudioConversionController({ setStatus }: AudioConversionContr
     try {
       const response = await previewAudioConversion(audioConversionRequest(targetFolder, options, 200));
       setAudioConversionPreview(response);
-      setStatus(`${response.changed_count.toLocaleString()} of ${response.total.toLocaleString()} previewed tracks would convert`);
+      setStatus(`${response.changed_count.toLocaleString()} of ${response.total.toLocaleString()} matching tracks would convert`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not preview audio conversion");
     }

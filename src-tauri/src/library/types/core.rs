@@ -321,6 +321,7 @@ pub struct DesktopArtistInfoResponse {
     pub(crate) page_url: Option<String>,
     pub(crate) source: Option<String>,
     pub(crate) found: bool,
+    pub(crate) confidence: f64,
     pub(crate) from_cache: bool,
     pub(crate) updated_at: Option<String>,
     pub(crate) error: Option<String>,

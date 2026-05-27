@@ -36,6 +36,8 @@
   AcousticFingerprintResponse,
   AdvancedTrackSearchFilters,
   BackupResponse,
+  BulkLyricsProgress,
+  BulkLyricsStartResponse,
   BulkUndoBatchEntry,
   BulkUndoLogEntry,
   BulkUndoRestoreResponse,
@@ -187,6 +189,9 @@ import {
   desktopFetchLibraryInbox,
   desktopFetchLibraryHealth,
   desktopFetchLibraryStats,
+  desktopFetchLyrics,
+  desktopFetchLyricsByMetadata,
+  desktopFetchLyricsOnline,
   desktopFetchLovedTracks,
   desktopFetchPlaylistTracks,
   desktopFetchPlaylists,
@@ -238,6 +243,10 @@ import {
   desktopUpdateSettings,
   desktopUpdateTrackLove,
   desktopUpdateTrackRating,
+  desktopUpdateLyrics,
+  desktopStartBulkLyricsLookup,
+  desktopFetchBulkLyricsLookupProgress,
+  desktopCancelBulkLyricsLookup,
   desktopVolumeTagsPreview,
   desktopFetchRegexTagPresets,
   desktopFetchVirtualTags,
@@ -264,6 +273,7 @@ import {
   desktopCreateRecommendationAbTest,
   desktopExportRecommendationProfileComparison,
   desktopFetchArtistInfo,
+  desktopSaveArtistInfoOverride,
   desktopFetchAudioConversionSetup,
   desktopFetchChromaprintSetup,
   desktopImportRecommendationProfileComparison,
@@ -743,20 +753,26 @@ export function albumArtworkUrl(trackId: number, version?: string | number | nul
 }
 
 export function fetchLyrics(trackId: number): Promise<LyricsResponse> {
-  return requestViaPythonWorker<LyricsResponse>(`/tracks/${trackId}/lyrics`).catch(() =>
-    request<LyricsResponse>(`/tracks/${trackId}/lyrics`),
+  return desktopFetchLyrics(trackId).catch(() =>
+    requestViaPythonWorker<LyricsResponse>(`/tracks/${trackId}/lyrics`).catch(() =>
+      request<LyricsResponse>(`/tracks/${trackId}/lyrics`),
+    ),
   );
 }
 
 export function fetchLyricsOnline(trackId: number): Promise<LyricsResponse> {
-  return request<LyricsResponse>(`/tracks/${trackId}/lyrics/fetch`, { method: "POST" });
+  return desktopFetchLyricsOnline(trackId).catch(() =>
+    request<LyricsResponse>(`/tracks/${trackId}/lyrics/fetch`, { method: "POST" }),
+  );
 }
 
 export function fetchLyricsByMetadata(requestBody: LyricsLookupRequest): Promise<LyricsResponse> {
-  return request<LyricsResponse>("/lyrics/lookup", {
-    method: "POST",
-    body: JSON.stringify(requestBody),
-  });
+  return desktopFetchLyricsByMetadata(requestBody).catch(() =>
+    request<LyricsResponse>("/lyrics/lookup", {
+      method: "POST",
+      body: JSON.stringify(requestBody),
+    }),
+  );
 }
 
 export function updateLyrics(trackId: number, requestBody: LyricsUpdateRequest): Promise<LyricsResponse> {
@@ -764,9 +780,27 @@ export function updateLyrics(trackId: number, requestBody: LyricsUpdateRequest):
     method: "PATCH",
     body: JSON.stringify(requestBody),
   };
-  return requestViaPythonWorker<LyricsResponse>(`/tracks/${trackId}/lyrics`, init).catch(() =>
-    request<LyricsResponse>(`/tracks/${trackId}/lyrics`, init),
+  return desktopUpdateLyrics(trackId, requestBody).catch(() =>
+    requestViaPythonWorker<LyricsResponse>(`/tracks/${trackId}/lyrics`, init).catch(() =>
+      request<LyricsResponse>(`/tracks/${trackId}/lyrics`, init),
+    ),
   );
+}
+
+export function startBulkLyricsLookup(
+  includeOnline = true,
+  onlyMissing = true,
+  limit?: number | null,
+): Promise<BulkLyricsStartResponse> {
+  return desktopStartBulkLyricsLookup(includeOnline, onlyMissing, limit);
+}
+
+export function fetchBulkLyricsLookupProgress(jobId: string): Promise<BulkLyricsProgress> {
+  return desktopFetchBulkLyricsLookupProgress(jobId);
+}
+
+export function cancelBulkLyricsLookup(jobId: string): Promise<BulkLyricsProgress> {
+  return desktopCancelBulkLyricsLookup(jobId);
 }
 
 export function fetchArtistInfo(artistName: string, refresh = false): Promise<ArtistInfoResponse> {
@@ -777,6 +811,13 @@ export function fetchArtistInfo(artistName: string, refresh = false): Promise<Ar
   return desktopFetchArtistInfo(artistName, refresh).catch(() =>
     request<ArtistInfoResponse>(`/artists/info?${params.toString()}`),
   );
+}
+
+export function saveArtistInfoOverride(
+  artistName: string,
+  wikipediaTitleOrUrl: string,
+): Promise<ArtistInfoResponse> {
+  return desktopSaveArtistInfoOverride(artistName, wikipediaTitleOrUrl);
 }
 
 export function markTrackPlayed(trackId: number): Promise<Track> {

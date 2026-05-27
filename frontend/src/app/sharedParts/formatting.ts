@@ -398,11 +398,48 @@ export function supportsFileTagWriting(path: string | null): boolean {
 }
 
 export function primaryArtistName(value: string | null | undefined): string {
-  if (!value) {
-    return "";
+  return splitArtistNames(value)[0] ?? "";
+}
+
+const HARD_ARTIST_SEPARATOR = /\s+(?:featuring|feat\.?|ft\.?|with)\s+/gi;
+const AMBIGUOUS_ARTIST_CONNECTOR = /\s+(?:&|\+|\u00d7|x)\s+/i;
+const ARTIST_ARTICLE_PREFIX = /^(?:the|a|an)\s+/i;
+
+function splitAmbiguousArtistConnectors(value: string): string[] {
+  let remaining = value.trim();
+  const names: string[] = [];
+
+  while (remaining) {
+    const match = remaining.match(AMBIGUOUS_ARTIST_CONNECTOR);
+    if (!match || match.index === undefined) {
+      names.push(remaining);
+      break;
+    }
+
+    const left = remaining.slice(0, match.index).trim();
+    const right = remaining.slice(match.index + match[0].length).trim();
+    if (!left || !right || ARTIST_ARTICLE_PREFIX.test(right)) {
+      names.push(remaining);
+      break;
+    }
+
+    names.push(left);
+    remaining = right;
   }
-  return value
-    .split(/[;|]/)[0]
-    .replace(/\s+\b(feat\.?|featuring|with)\b\s+.*$/i, "")
-    .trim();
+
+  return names.filter(Boolean);
+}
+
+export function splitArtistNames(value: string | null | undefined): string[] {
+  if (!value) {
+    return [];
+  }
+  const cleaned = value
+    .replace(HARD_ARTIST_SEPARATOR, ";")
+    .replace(/,/g, ";");
+  const names = cleaned
+    .split(/[;|]/)
+    .flatMap(splitAmbiguousArtistConnectors)
+    .filter(Boolean);
+  return [...new Map(names.map((name) => [name.toLowerCase(), name])).values()];
 }

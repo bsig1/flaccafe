@@ -1,4 +1,6 @@
 import {
+  ArrowDown,
+  ArrowUp,
   Clock,
   GripVertical,
   ListMusic,
@@ -8,6 +10,7 @@ import {
 } from "lucide-react";
 import {
   useEffect,
+  useRef,
   useState,
 } from "react";
 import {
@@ -41,14 +44,30 @@ export function NowPlayingLyricsEditor({
     updateBuilderLine,
     removeBuilderLine,
     reorderBuilderLine,
+    lyricsBusy,
     lyricsSaveDisabled,
+    handleCancelLyrics,
     handleSaveLyrics,
   } = model;
   const [draggedLineIndex, setDraggedLineIndex] = useState<number | null>(null);
   const [dragOverLineIndex, setDragOverLineIndex] = useState<number | null>(null);
+  const activeTimedLineRef = useRef<HTMLDivElement | null>(null);
+  const builderListRef = useRef<HTMLDivElement | null>(null);
   const activeTimedLineIndex = lrcBuilderLines.reduce((activeIndex: number, line: LrcBuilderLine, index: number) => {
     return line.time !== null && line.time <= playbackTime + 0.05 ? index : activeIndex;
   }, -1);
+  const hasTimedLines = lrcBuilderLines.some((line: LrcBuilderLine) => line.time !== null);
+  const activeTimedLine = activeTimedLineIndex >= 0 ? lrcBuilderLines[activeTimedLineIndex] : null;
+  const currentLyricText =
+    activeTimedLine && !activeTimedLine.gap && activeTimedLine.text.trim()
+      ? activeTimedLine.text.trim()
+      : activeTimedLine
+        ? "Blank line"
+        : "Before first timestamp";
+  const editorRowsClass =
+    lyricsEditMode === "sync" && hasTimedLines
+      ? "grid-rows-[auto_auto_auto_minmax(0,1fr)_auto]"
+      : "grid-rows-[auto_auto_minmax(0,1fr)_auto]";
 
   function handleLineEnter(index: number) {
     syncBuilderLine(index);
@@ -57,6 +76,14 @@ export function NowPlayingLyricsEditor({
   function clearLineDrag() {
     setDraggedLineIndex(null);
     setDragOverLineIndex(null);
+  }
+
+  function selectRelativeBuilderLine(direction: -1 | 1) {
+    if (lrcBuilderLines.length === 0) {
+      return;
+    }
+    const nextIndex = Math.max(0, Math.min(activeBuilderLineIndex + direction, lrcBuilderLines.length - 1));
+    setActiveBuilderLineIndex(nextIndex);
   }
 
   useEffect(() => {
@@ -84,8 +111,24 @@ export function NowPlayingLyricsEditor({
     return () => window.removeEventListener("keydown", handleBuilderKeyDown);
   }, [lyricsEditMode, syncBuilderLine]);
 
+  useEffect(() => {
+    if (lyricsEditMode !== "sync" || !hasTimedLines || activeTimedLineIndex < 0 || draggedLineIndex !== null) {
+      return;
+    }
+    activeTimedLineRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [activeTimedLineIndex, draggedLineIndex, hasTimedLines, lyricsEditMode]);
+
+  useEffect(() => {
+    if (lyricsEditMode !== "sync" || draggedLineIndex !== null) {
+      return;
+    }
+    builderListRef.current
+      ?.querySelector(`[data-lrc-line-index="${activeBuilderLineIndex}"]`)
+      ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [activeBuilderLineIndex, draggedLineIndex, lyricsEditMode]);
+
   return (
-      <div className={`${containerClass} grid h-full grid-rows-[auto_auto_minmax(0,1fr)_auto] gap-3`}>
+      <div className={`${containerClass} grid h-full ${editorRowsClass} gap-3`}>
         <div className="flex flex-wrap items-center justify-between gap-3 rounded border border-line/70 bg-ink px-3 py-2 text-xs">
           <div className="flex flex-wrap items-center gap-3">
             <label className="flex items-center gap-2 text-muted">
@@ -137,6 +180,18 @@ export function NowPlayingLyricsEditor({
           )}
         </div>
 
+        {lyricsEditMode === "sync" && hasTimedLines && (
+          <div className="grid min-w-0 grid-cols-[auto_auto_minmax(0,1fr)] items-center gap-3 rounded border border-moss/40 bg-moss/10 px-3 py-2 text-sm">
+            <span className="text-xs uppercase text-muted">Current</span>
+            <span className="font-mono text-xs tabular-nums text-moss">
+              {activeTimedLine?.time !== null && activeTimedLine?.time !== undefined
+                ? `[${formatLrcTimestamp(activeTimedLine.time)}]`
+                : `[${formatLrcTimestamp(playbackTime)}]`}
+            </span>
+            <span className="min-w-0 truncate text-neutral-100">{currentLyricText}</span>
+          </div>
+        )}
+
         {lyricsEditMode === "text" ? (
           <textarea
             className="min-h-0 resize-none rounded border border-line bg-ink p-4 font-mono text-sm leading-6 text-neutral-100 outline-none ring-moss/40 focus:ring-2"
@@ -151,6 +206,26 @@ export function NowPlayingLyricsEditor({
                 {lrcBuilderLines.length.toLocaleString()} lines
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                <div className="flex rounded border border-line/70 bg-panel/60 p-0.5">
+                  <button
+                    className="icon-button h-7 w-7"
+                    type="button"
+                    title="Previous lyric line"
+                    disabled={activeBuilderLineIndex <= 0}
+                    onClick={() => selectRelativeBuilderLine(-1)}
+                  >
+                    <ArrowUp size={14} />
+                  </button>
+                  <button
+                    className="icon-button h-7 w-7"
+                    type="button"
+                    title="Next lyric line"
+                    disabled={activeBuilderLineIndex >= lrcBuilderLines.length - 1}
+                    onClick={() => selectRelativeBuilderLine(1)}
+                  >
+                    <ArrowDown size={14} />
+                  </button>
+                </div>
                 <button className="secondary-button h-8" type="button" onClick={() => syncBuilderLine()}>
                   <Clock size={14} />
                   Sync
@@ -161,7 +236,7 @@ export function NowPlayingLyricsEditor({
                 </button>
               </div>
             </div>
-            <div className="min-h-0 overflow-auto rounded border border-line/70">
+            <div ref={builderListRef} className="min-h-0 overflow-auto rounded border border-line/70">
               {lrcBuilderLines.map((line: LrcBuilderLine, index: number) => {
                 const selected = index === activeBuilderLineIndex;
                 const playbackActive = line.time !== null && index === activeTimedLineIndex;
@@ -170,6 +245,8 @@ export function NowPlayingLyricsEditor({
                 return (
                   <div
                     key={line.id}
+                    data-lrc-line-index={index}
+                    ref={playbackActive ? activeTimedLineRef : undefined}
                     className={`grid grid-cols-[1.75rem_6.25rem_minmax(0,1fr)_2.25rem] items-center gap-2 border-b border-line/60 px-2 py-2 text-sm last:border-b-0 ${
                       playbackActive
                         ? "bg-moss/15"
@@ -272,16 +349,27 @@ export function NowPlayingLyricsEditor({
               ? "Saving will update the file tags and keep a database copy."
               : "Saving will keep lyrics in the FLAC Cafe database only."}
           </div>
-          <button
-            className="primary-button"
-            type="button"
-            disabled={lyricsSaveDisabled}
-            title="Save lyrics (Ctrl+S)"
-            onClick={() => void handleSaveLyrics()}
-          >
-            <Pencil size={15} />
-            Save Lyrics
-          </button>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={lyricsBusy}
+              onClick={handleCancelLyrics}
+            >
+              <X size={15} />
+              Cancel
+            </button>
+            <button
+              className="primary-button"
+              type="button"
+              disabled={lyricsSaveDisabled}
+              title="Save lyrics (Ctrl+S)"
+              onClick={() => void handleSaveLyrics()}
+            >
+              <Pencil size={15} />
+              Save Lyrics
+            </button>
+          </div>
         </div>
       </div>
   );

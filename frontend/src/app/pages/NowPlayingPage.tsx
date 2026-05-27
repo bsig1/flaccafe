@@ -1,21 +1,4 @@
-import {
-  ArrowDown,
-  ArrowUp,
-  Clock,
-  Download,
-  GripVertical,
-  ListMusic,
-  Maximize2,
-  Minimize2,
-  Pencil,
-  Play,
-  Plus,
-  RefreshCw,
-  SlidersHorizontal,
-  Trash2,
-  Volume2,
-  X,
-} from "lucide-react";
+import { ArrowDown, ArrowUp, Clock, Download, GripVertical, ListMusic, Maximize2, Minimize2, Pencil, Play, Plus, RefreshCw, SlidersHorizontal, Trash2, Volume2, X } from "lucide-react";
 import type {
   MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
@@ -44,8 +27,8 @@ import {
   DragGhostPreview,
 } from "../components/common";
 import {
-  NowPlayingLyricsEditor,
-} from "./now-playing/NowPlayingLyricsEditor";
+  NowPlayingLyricsContent,
+} from "./now-playing/NowPlayingLyricsContent";
 import {
   NowPlayingQueuePanel,
 } from "./now-playing/NowPlayingQueuePanel";
@@ -132,6 +115,8 @@ export function NowPlayingPage({
   const [lyricsTarget, setLyricsTarget] = useState<"database" | "file">("database");
   const [lyricsSynced, setLyricsSynced] = useState(false);
   const [lyricsBusy, setLyricsBusy] = useState(false);
+  const [lyricsLookupBusy, setLyricsLookupBusy] = useState(false);
+  const [lyricsLookupProgress, setLyricsLookupProgress] = useState(0);
   const [lyricsEditMode, setLyricsEditMode] = useState<LyricsEditMode>("text");
   const [lrcBuilderLines, setLrcBuilderLines] = useState<LrcBuilderLine[]>([]);
   const [activeBuilderLineIndex, setActiveBuilderLineIndex] = useState(0);
@@ -146,20 +131,31 @@ export function NowPlayingPage({
   const pendingQueueScrollTopRef = useRef(0);
   const [queueScrollTop, setQueueScrollTop] = useState(0);
   const [queueViewportHeight, setQueueViewportHeight] = useState(420);
+  const showLyricsLookupProgress = isLyricsLoading || lyricsLookupBusy;
 
   useEffect(() => {
     setArtworkFailed(false);
   }, [currentTrack?.id]);
 
   useEffect(() => {
-    setLyricsDraft(lyrics?.lyrics ?? "");
-    setLyricsSynced(Boolean(lyrics?.is_synced));
+    resetLyricsEditorToSource(lyrics?.lyrics ?? "", Boolean(lyrics?.is_synced), "text");
     setIsEditingLyrics(false);
-    setLyricsEditMode("text");
-    setLrcBuilderLines(builderLinesFromText(lyrics?.lyrics ?? ""));
-    setActiveBuilderLineIndex(0);
-    setLyricsTarget("database");
   }, [currentTrack?.id, lyrics?.lyrics, lyrics?.is_synced]);
+
+  useEffect(() => {
+    if (!showLyricsLookupProgress) {
+      setLyricsLookupProgress(0);
+      return undefined;
+    }
+    setLyricsLookupProgress((current) => (current > 0 ? current : 12));
+    const timer = window.setInterval(() => {
+      setLyricsLookupProgress((current) => {
+        const step = current < 45 ? 7 : current < 75 ? 4 : 1.5;
+        return Math.min(94, current + step);
+      });
+    }, 180);
+    return () => window.clearInterval(timer);
+  }, [currentTrack?.id, showLyricsLookupProgress]);
 
   useEffect(() => {
     function handleVisualizerFrame(event: Event) {
@@ -252,6 +248,10 @@ export function NowPlayingPage({
     }
   }
 
+  function lyricsTextLooksSynced(text: string): boolean {
+    return text.split("\n").some((line) => parseLyricTimestamp(line) !== null);
+  }
+
   function createBuilderLine(text = "", time: number | null = null, gap = false): LrcBuilderLine {
     const id = `lrc-line-${builderLineIdRef.current}`;
     builderLineIdRef.current += 1;
@@ -260,6 +260,30 @@ export function NowPlayingPage({
 
   function builderLinesFromText(text: string): LrcBuilderLine[] {
     return builderLinesFromLyricsText(text, createBuilderLine);
+  }
+
+  function playbackBuilderLineIndex(lines: LrcBuilderLine[]): number {
+    return lines.reduce((activeIndex, line, index) => (line.time !== null && line.time <= playbackTime + 0.05 ? index : activeIndex), -1);
+  }
+
+  function preferredBuilderLineIndex(lines: LrcBuilderLine[]): number {
+    const playbackIndex = playbackBuilderLineIndex(lines);
+    if (playbackIndex >= 0) {
+      return playbackIndex;
+    }
+    const firstUnsynced = lines.findIndex((line) => line.time === null && !line.gap);
+    return firstUnsynced >= 0 ? firstUnsynced : 0;
+  }
+
+  function resetLyricsEditorToSource(text = lyrics?.lyrics ?? "", syncedInput = Boolean(lyrics?.is_synced), mode: LyricsEditMode = "text") {
+    const synced = syncedInput || lyricsTextLooksSynced(text);
+    const nextLines = builderLinesFromText(text);
+    setLyricsDraft(text);
+    setLyricsSynced(synced);
+    setLrcBuilderLines(nextLines);
+    setActiveBuilderLineIndex(mode === "sync" && synced ? preferredBuilderLineIndex(nextLines) : 0);
+    setLyricsEditMode(mode === "sync" && synced ? "sync" : "text");
+    setLyricsTarget("database");
   }
 
   function commitBuilderLines(lines: LrcBuilderLine[], activeIndex = activeBuilderLineIndex) {
@@ -273,9 +297,28 @@ export function NowPlayingPage({
 
   function openLrcBuilder() {
     const nextLines = builderLinesFromText(lyricsDraft);
-    const firstUnsynced = nextLines.findIndex((line) => line.time === null && !line.gap);
-    commitBuilderLines(nextLines, firstUnsynced >= 0 ? firstUnsynced : 0);
+    commitBuilderLines(nextLines, preferredBuilderLineIndex(nextLines));
     setLyricsEditMode("sync");
+  }
+
+  function openLyricsEditor() {
+    const sourceText = lyrics?.lyrics ?? lyricsDraft;
+    const synced = Boolean(lyrics?.is_synced) || lyricsTextLooksSynced(sourceText);
+    resetLyricsEditorToSource(sourceText, synced, synced ? "sync" : "text");
+    setIsEditingLyrics(true);
+  }
+
+  function handleToggleLyricsEditing() {
+    if (isEditingLyrics) {
+      setIsEditingLyrics(false);
+      return;
+    }
+    openLyricsEditor();
+  }
+
+  function handleCancelLyrics() {
+    resetLyricsEditorToSource(lyrics?.lyrics ?? "", Boolean(lyrics?.is_synced), "text");
+    setIsEditingLyrics(false);
   }
 
   function updateBuilderLine(index: number, update: Partial<LrcBuilderLine>) {
@@ -444,15 +487,17 @@ export function NowPlayingPage({
       return;
     }
     setLyricsBusy(true);
+    setLyricsLookupBusy(true);
     try {
       const fetched = await onFetchLyrics(currentTrack);
-      setLyricsDraft(fetched.lyrics ?? "");
-      setLyricsSynced(fetched.is_synced);
-      setLrcBuilderLines(builderLinesFromText(fetched.lyrics ?? ""));
-      setActiveBuilderLineIndex(0);
+      setLyricsLookupProgress(100);
+      const fetchedText = fetched.lyrics ?? "";
+      const fetchedSynced = fetched.is_synced || lyricsTextLooksSynced(fetchedText);
+      resetLyricsEditorToSource(fetchedText, fetchedSynced, fetchedSynced ? "sync" : "text");
       setIsEditingLyrics(true);
     } finally {
       setLyricsBusy(false);
+      setLyricsLookupBusy(false);
     }
   }
 
@@ -575,7 +620,9 @@ export function NowPlayingPage({
   updateBuilderLine,
   removeBuilderLine,
   reorderBuilderLine,
+  lyricsBusy,
   lyricsSaveDisabled,
+  handleCancelLyrics,
   handleSaveLyrics,
   };
 
@@ -684,36 +731,31 @@ export function NowPlayingPage({
                 <Download size={14} />
                 Fetch
               </button>
-              <button className="secondary-button h-8" type="button" disabled={!currentTrack} onClick={() => setIsEditingLyrics((current) => !current)}>
+              <button className="secondary-button h-8" type="button" disabled={!currentTrack} onClick={handleToggleLyricsEditing}>
                 <Pencil size={14} />
                 {isEditingLyrics ? "Preview" : "Edit"}
               </button>
             </div>
           </section>
           <section ref={lyricsScrollRef} className="scrollbar-hidden mx-auto min-h-0 w-full max-w-5xl overflow-auto px-2 py-4 lg:px-10">
-            {isLyricsLoading && <div className="text-sm text-muted">Loading lyrics...</div>}
-            {!isLyricsLoading && !currentTrack && (
-              <div className="grid h-full place-items-center text-sm text-muted">No track selected.</div>
-            )}
-            {!isLyricsLoading && currentTrack && isEditingLyrics && (
-              <NowPlayingLyricsEditor model={lyricsEditorModel} containerClass="" />
-            )}
-            {!isLyricsLoading && currentTrack && !isEditingLyrics && !hasLyrics && (
-              <div className="grid h-full place-items-center text-center text-sm text-muted">
-                <div>
-                  <div>No embedded, database, or sidecar lyrics found for this track.</div>
-                  <button className="primary-button mx-auto mt-4" type="button" disabled={lyricsBusy} onClick={() => void handleFetchLyrics()}>
-                    <Download size={15} />
-                    Fetch Lyrics
-                  </button>
-                </div>
-              </div>
-            )}
-            {!isLyricsLoading && !isEditingLyrics && hasLyrics && (
-              <div className="mx-auto max-w-4xl space-y-5 pb-[45vh] pt-[16vh] text-center text-2xl leading-10 text-neutral-100 md:text-3xl md:leading-[3.25rem]">
-                {lyricLines.map((line, index) => renderLyricLine(line, index, true))}
-              </div>
-            )}
+            <NowPlayingLyricsContent
+              containerClass=""
+              currentTrack={currentTrack}
+              editorClass=""
+              emptyClass="grid h-full place-items-center text-center text-sm text-muted"
+              hasLyrics={hasLyrics}
+              isEditingLyrics={isEditingLyrics}
+              lyricLines={lyricLines}
+              lyricsBusy={lyricsBusy}
+              lyricsClass="mx-auto max-w-4xl space-y-5 pb-[45vh] pt-[16vh] text-center text-2xl leading-10 text-neutral-100 md:text-3xl md:leading-[3.25rem]"
+              lyricsEditorModel={lyricsEditorModel}
+              lookupLabel={lyricsLookupBusy ? "Looking up lyrics..." : "Loading lyrics..."}
+              lookupProgress={lyricsLookupProgress}
+              onFetchLyrics={() => void handleFetchLyrics()}
+              renderLyricLine={renderLyricLine}
+              showLookupProgress={showLyricsLookupProgress}
+              spacious
+            />
           </section>
         </div>
       ) : layout === "party" ? (
@@ -903,29 +945,23 @@ export function NowPlayingPage({
           </div>
 
           <div ref={lyricsScrollRef} className="scrollbar-hidden min-h-0 overflow-auto px-4 py-4 lg:px-7 lg:py-6">
-            {isLyricsLoading && <div className="text-sm text-muted">Loading lyrics...</div>}
-            {!isLyricsLoading && !currentTrack && (
-              <div className="grid h-full place-items-center text-sm text-muted">No track selected.</div>
-            )}
-            {!isLyricsLoading && currentTrack && isEditingLyrics && (
-              <NowPlayingLyricsEditor model={lyricsEditorModel} containerClass="mx-auto max-w-3xl" />
-            )}
-            {!isLyricsLoading && currentTrack && !isEditingLyrics && !hasLyrics && (
-              <div className="grid h-full place-items-center text-center text-sm text-muted">
-                <div>
-                  <div>No embedded, database, or sidecar lyrics found for this track.</div>
-                  <button className="primary-button mx-auto mt-4" type="button" disabled={lyricsBusy} onClick={() => void handleFetchLyrics()}>
-                    <Download size={15} />
-                    Fetch Lyrics
-                  </button>
-                </div>
-              </div>
-            )}
-            {!isLyricsLoading && !isEditingLyrics && hasLyrics && (
-              <div className={`mx-auto max-w-3xl space-y-3 text-neutral-100 ${lyricSizeClass}`}>
-                {lyricLines.map((line, index) => renderLyricLine(line, index))}
-              </div>
-            )}
+            <NowPlayingLyricsContent
+              containerClass=""
+              currentTrack={currentTrack}
+              editorClass="mx-auto max-w-3xl"
+              emptyClass="grid h-full place-items-center text-center text-sm text-muted"
+              hasLyrics={hasLyrics}
+              isEditingLyrics={isEditingLyrics}
+              lyricLines={lyricLines}
+              lyricsBusy={lyricsBusy}
+              lyricsClass={`mx-auto max-w-3xl space-y-3 text-neutral-100 ${lyricSizeClass}`}
+              lyricsEditorModel={lyricsEditorModel}
+              lookupLabel={lyricsLookupBusy ? "Looking up lyrics..." : "Loading lyrics..."}
+              lookupProgress={lyricsLookupProgress}
+              onFetchLyrics={() => void handleFetchLyrics()}
+              renderLyricLine={renderLyricLine}
+              showLookupProgress={showLyricsLookupProgress}
+            />
           </div>
         </section>
         ) : isQueueLayout && showQueue ? null : (

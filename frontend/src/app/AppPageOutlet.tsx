@@ -181,6 +181,7 @@ export function AppPageOutlet({ controller }: AppPageOutletProps) {
     handleSaveAudioConversionSetup,
     handleSaveChromaprintSetup,
     handleSaveClapConfig,
+    handleSaveArtistInfoOverride,
     handleSaveInboxAutoReviewRule,
     handleSaveLyrics,
     handleSavePlaybackQueue,
@@ -500,6 +501,7 @@ export function AppPageOutlet({ controller }: AppPageOutletProps) {
         artistTracks={artistTracks}
         isArtistLoading={isArtistLoading}
         onRefresh={() => void loadArtistInfo(true)}
+        onSaveArtistInfoOverride={handleSaveArtistInfoOverride}
         onPlayTrack={handlePlayTrack}
         onOpenExternalUrl={(url) => void handleOpenExternalUrl(url)}
       />

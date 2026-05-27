@@ -228,9 +228,64 @@ fn open_output_sink(
     Ok((sink, resolved))
 }
 
+enum DesktopPlaybackDecoder {
+    File(Decoder<std::io::BufReader<File>>),
+    Prepared(Decoder<Cursor<Arc<[u8]>>>),
+}
+
+impl DesktopPlaybackDecoder {
+    fn append_to(
+        self,
+        player: &Player,
+        dsp_settings: Arc<Mutex<DesktopDspSettings>>,
+        gain: DesktopGainControl,
+        visualizer: Arc<Mutex<DesktopVisualizerState>>,
+    ) {
+        match self {
+            DesktopPlaybackDecoder::File(decoder) => {
+                append_dsp_source(player, decoder, dsp_settings, gain, visualizer);
+            }
+            DesktopPlaybackDecoder::Prepared(decoder) => {
+                append_dsp_source(player, decoder, dsp_settings, gain, visualizer);
+            }
+        }
+    }
+}
+
+fn build_playback_decoder(
+    path: &PathBuf,
+    prepared_audio: Option<DesktopPreparedAudio>,
+    diagnostics: &Arc<Mutex<Vec<PlaybackDiagnostic>>>,
+) -> Result<(DesktopPlaybackDecoder, Option<f64>), String> {
+    if let Some(prepared) = prepared_audio {
+        let decoder = build_prepared_decoder(&prepared, diagnostics)?;
+        return Ok((
+            DesktopPlaybackDecoder::Prepared(decoder),
+            prepared.duration_seconds,
+        ));
+    }
+    let (decoder, duration_seconds) = build_decoder(path, diagnostics)?;
+    Ok((DesktopPlaybackDecoder::File(decoder), duration_seconds))
+}
+
 fn build_decoder(
     path: &PathBuf,
     diagnostics: &Arc<Mutex<Vec<PlaybackDiagnostic>>>,
+) -> Result<(Decoder<std::io::BufReader<File>>, Option<f64>), String> {
+    build_decoder_with_seek_mode(path, diagnostics, false)
+}
+
+fn build_seek_fallback_decoder(
+    path: &PathBuf,
+    diagnostics: &Arc<Mutex<Vec<PlaybackDiagnostic>>>,
+) -> Result<(Decoder<std::io::BufReader<File>>, Option<f64>), String> {
+    build_decoder_with_seek_mode(path, diagnostics, true)
+}
+
+fn build_decoder_with_seek_mode(
+    path: &PathBuf,
+    diagnostics: &Arc<Mutex<Vec<PlaybackDiagnostic>>>,
+    coarse_seek: bool,
 ) -> Result<(Decoder<std::io::BufReader<File>>, Option<f64>), String> {
     let path_text = path.display().to_string();
     let file = File::open(path).map_err(|error| {
@@ -245,11 +300,35 @@ fn build_decoder(
             },
         )
     })?;
-    let decoder = Decoder::try_from(file).map_err(|error| {
+    let byte_len = file.metadata().map_err(|error| {
+        diagnostic_error(
+            diagnostics,
+            "file",
+            "read_audio_file_metadata",
+            format!("Could not read audio file metadata: {error}"),
+            DesktopDiagnosticContext {
+                path: Some(path_text.clone()),
+                ..DesktopDiagnosticContext::default()
+            },
+        )
+    })?;
+    let mut builder = Decoder::builder()
+        .with_data(std::io::BufReader::new(file))
+        .with_byte_len(byte_len.len())
+        .with_seekable(true)
+        .with_coarse_seek(coarse_seek);
+    if let Some(extension) = path.extension().and_then(|value| value.to_str()) {
+        builder = builder.with_hint(extension);
+    }
+    let decoder = builder.build().map_err(|error| {
         diagnostic_error(
             diagnostics,
             "symphonia",
-            "decode_audio_file",
+            if coarse_seek {
+                "decode_audio_file_seek_fallback"
+            } else {
+                "decode_audio_file"
+            },
             format!("Could not decode audio file with Rust audio engine: {error}"),
             DesktopDiagnosticContext {
                 path: Some(path_text),

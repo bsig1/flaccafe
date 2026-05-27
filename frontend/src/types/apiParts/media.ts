@@ -49,6 +49,36 @@ export interface LyricsUpdateRequest {
   source?: string | null;
 }
 
+export interface BulkLyricsStartResponse {
+  job_id: string;
+  status: string;
+  include_online: boolean;
+  only_missing: boolean;
+}
+
+export interface BulkLyricsProgress {
+  job_id: string;
+  status: "pending" | "scanning" | "cancelling" | "cancelled" | "completed" | "failed";
+  total_tracks: number;
+  processed_tracks: number;
+  already_cached: number;
+  embedded_found: number;
+  online_found: number;
+  missing: number;
+  failed: number;
+  errors: string[];
+  current_track_id: number | null;
+  current_title: string | null;
+  started_at: string;
+  finished_at: string | null;
+  elapsed_seconds: number;
+  eta_seconds: number | null;
+  percent: number;
+  error: string | null;
+  include_online: boolean;
+  only_missing: boolean;
+}
+
 export interface ArtistInfoResponse {
   artist_name: string;
   query: string;
@@ -57,9 +87,11 @@ export interface ArtistInfoResponse {
   page_url: string | null;
   source: string | null;
   found: boolean;
+  confidence?: number;
   from_cache: boolean;
   updated_at: string | null;
   error: string | null;
+  related_artists?: ArtistInfoResponse[];
 }
 
 export interface ScanResult {

@@ -38,9 +38,40 @@ function Invoke-Msi {
 }
 
 function Test-PythonExpertHealth {
-    $payload = '{"command":"status"}'
-    $output = $payload | & $BackendExe --clap-expert
-    $response = $output | ConvertFrom-Json
+    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("flaccafe-clap-expert-" + [System.Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
+    $stdinPath = Join-Path $tempDir "stdin.json"
+    $stdoutPath = Join-Path $tempDir "stdout.jsonl"
+    $stderrPath = Join-Path $tempDir "stderr.txt"
+    try {
+        Set-Content -LiteralPath $stdinPath -Value '{"command":"status"}' -NoNewline -Encoding ASCII
+        $process = Start-Process `
+            -FilePath $BackendExe `
+            -ArgumentList @("--clap-expert") `
+            -RedirectStandardInput $stdinPath `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath `
+            -Wait `
+            -PassThru `
+            -WindowStyle Hidden
+        $output = if (Test-Path -LiteralPath $stdoutPath) { Get-Content -LiteralPath $stdoutPath -Raw } else { "" }
+        $stderr = if (Test-Path -LiteralPath $stderrPath) { Get-Content -LiteralPath $stderrPath -Raw } else { "" }
+        if ($process.ExitCode -ne 0) {
+            throw "Packaged Python CLAP expert exited with $($process.ExitCode). stdout: $output stderr: $stderr"
+        }
+        if (-not $output.Trim()) {
+            throw "Packaged Python CLAP expert returned no stdout. stderr: $stderr"
+        }
+        try {
+            $response = $output | ConvertFrom-Json
+        }
+        catch {
+            throw "Packaged Python CLAP expert returned malformed JSON. stdout: $output stderr: $stderr error: $($_.Exception.Message)"
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
     if ($response.status -ne "ok" -or $null -eq $response.body.installed) {
         throw "Packaged Python CLAP expert did not answer status correctly: $output"
     }

@@ -190,7 +190,7 @@ export function OptionalDependenciesSection({
         </div>
 
         <div className="grid gap-4 xl:grid-cols-2">
-          <DependencyCard icon={<Bot size={18} />} title="ML Runtime (CLAP)" status={clapReady ? "Ready" : "Optional"} ready={clapReady}>
+          <DependencyCard icon={<Bot size={18} />} title="ML Runtime (CLAP)" status={clapReady ? "Ready" : "Not installed"} ready={clapReady}>
             <p className="text-xs leading-5 text-muted">
               Enables audio embeddings, similarity-aware AutoDJ, and CLAP genre previews. It is large, separate from the base app, and can be CPU or NVIDIA CUDA.
             </p>
@@ -226,7 +226,7 @@ export function OptionalDependenciesSection({
             </div>
           </DependencyCard>
 
-          <DependencyCard icon={<Wrench size={18} />} title="FFmpeg" status={ffmpegInstalling ? "Installing" : ffmpegReady ? "Ready" : "Needed"} ready={ffmpegReady}>
+          <DependencyCard icon={<Wrench size={18} />} title="FFmpeg" status={ffmpegInstalling ? "Installing" : ffmpegReady ? "Ready" : "Not installed"} ready={ffmpegReady}>
             <p className="text-xs leading-5 text-muted">
               Enables audio conversion, volume tag analysis, playback diagnostics, and FLAC/MP3 encoding for ripped CDs.
             </p>

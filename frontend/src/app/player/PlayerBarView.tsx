@@ -49,7 +49,6 @@ export function PlayerBarView({ model }: { model: any }) {
           >
             {artworkSrc ? (
               <img
-                key={artworkSrc}
                 alt=""
                 className="h-full w-full object-cover"
                 src={artworkSrc}

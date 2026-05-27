@@ -32,6 +32,7 @@ pub(crate) mod inbox;
 pub(crate) mod library_importers;
 pub(crate) mod library_tools;
 pub(crate) mod lyrics;
+pub(crate) mod lyrics_bulk;
 pub(crate) mod maintenance;
 pub(crate) mod media_protocol;
 pub(crate) mod metadata;
@@ -55,7 +56,10 @@ pub(crate) mod track_management;
 mod types;
 pub(crate) mod volume_tags;
 
-pub use self::artist_info::{artist_info, artist_local_tracks, clear_artist_cache};
+pub use self::artist_info::{
+    artist_info_blocking as artist_info, artist_local_tracks_blocking as artist_local_tracks,
+    clear_artist_cache_blocking as clear_artist_cache,
+};
 pub use self::file_organization::file_organization_preview;
 use self::file_organization::{album_tracks_by_id, clear_library_query_cache};
 use self::health::tracks_by_id_map;

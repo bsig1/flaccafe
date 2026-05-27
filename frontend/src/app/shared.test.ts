@@ -19,6 +19,7 @@ import {
   shortcutConflictGroups,
   shortcutFromEvent,
   shortcutMatchesEvent,
+  splitArtistNames,
   storageKeys,
   stripLyricTimestamp,
 } from "./shared";
@@ -163,6 +164,29 @@ describe("UI preferences", () => {
     expect(readUiPreferences()).toMatchObject({
       nowPlayingLayout: "queue",
     });
+  });
+});
+
+describe("artist name splitting", () => {
+  it("keeps natural ampersand band names together when the right side is an article phrase", () => {
+    expect(splitArtistNames("King Gizzard & the Lizard Wizard")).toEqual([
+      "King Gizzard & the Lizard Wizard",
+    ]);
+    expect(splitArtistNames("King Gizzard & The Lizard Wizard")).toEqual([
+      "King Gizzard & The Lizard Wizard",
+    ]);
+  });
+
+  it("splits likely collaboration connectors into separate artist tabs", () => {
+    expect(splitArtistNames("AnnenMayKantereit & Giant Rooks")).toEqual([
+      "AnnenMayKantereit",
+      "Giant Rooks",
+    ]);
+    expect(splitArtistNames("Clean Bandit feat. Sean Paul & Anne-Marie")).toEqual([
+      "Clean Bandit",
+      "Sean Paul",
+      "Anne-Marie",
+    ]);
   });
 });
 

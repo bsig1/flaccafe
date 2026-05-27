@@ -116,9 +116,17 @@ pub(crate) fn audio_conversion_preview(
     let request = ConversionRequest::from_body(&body)?;
     let connection = open_database()?;
     let library_root = get_setting(&connection, "library_path").map(PathBuf::from);
-    let tracks = selected_tracks(&connection, request.track_ids.as_deref(), request.limit)?;
+    let preview_limit = request.limit.unwrap_or(usize::MAX);
+    let tracks = selected_tracks(&connection, request.track_ids.as_deref(), None)?;
+    let total = tracks.len() as i64;
 
     let mut changes = Vec::new();
+    let mut source_total = 0i64;
+    let mut estimated_total = 0i64;
+    let mut estimated_tracks = 0i64;
+    let mut changed_count = 0i64;
+    let mut collisions = 0i64;
+
     for track in tracks {
         let source = PathBuf::from(&track.path);
         let target = conversion_target_path(
@@ -137,6 +145,23 @@ pub(crate) fn audio_conversion_preview(
             Some("Source file is missing".to_string())
         };
         let collision = target.exists() && !request.overwrite;
+        if let Some(input_size) = input_size {
+            source_total += input_size;
+        }
+        if let Some(estimated_output) = estimated_output {
+            estimated_total += estimated_output;
+            estimated_tracks += 1;
+        }
+        let changed = absolute_path(&source) != absolute_path(&target);
+        if changed && error.is_none() {
+            changed_count += 1;
+        }
+        if collision {
+            collisions += 1;
+        }
+        if changes.len() >= preview_limit {
+            continue;
+        }
         changes.push(DesktopAudioConversionChange {
             track_id: track.id,
             title: track.title,
@@ -151,33 +176,14 @@ pub(crate) fn audio_conversion_preview(
             },
             estimated_size_ratio: size_ratio(estimated_output, input_size),
             estimate_note: Some(estimate_note),
-            changed: absolute_path(&source) != absolute_path(&target),
+            changed,
             collision,
             error,
         });
     }
-
-    let source_total: i64 = changes
-        .iter()
-        .filter_map(|change| change.source_size_bytes)
-        .sum();
-    let estimated_total: i64 = changes
-        .iter()
-        .filter_map(|change| change.estimated_output_size_bytes)
-        .sum();
-    let estimated_tracks = changes
-        .iter()
-        .filter(|change| change.estimated_output_size_bytes.is_some())
-        .count() as i64;
-    let changed_count = changes
-        .iter()
-        .filter(|change| change.changed && change.error.is_none())
-        .count() as i64;
-    let collisions = changes.iter().filter(|change| change.collision).count() as i64;
-
     Ok(DesktopAudioConversionPreviewResponse {
         target_folder: request.target_folder.to_string_lossy().to_string(),
-        total: changes.len() as i64,
+        total,
         changed_count,
         collisions,
         source_size_bytes: (source_total > 0).then_some(source_total),

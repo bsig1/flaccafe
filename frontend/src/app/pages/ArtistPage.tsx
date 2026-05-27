@@ -1,8 +1,15 @@
 import {
   ExternalLink,
+  Pencil,
   RefreshCw,
+  Save,
   UserRound,
 } from "lucide-react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 
 import type {
   ArtistInfoResponse,
@@ -11,8 +18,13 @@ import type {
 import {
   display,
   formatRating,
-  primaryArtistName,
+  splitArtistNames,
 } from "../shared";
+
+function artistInfoMatchesName(info: ArtistInfoResponse | null | undefined, name: string) {
+  const lowerName = name.toLowerCase();
+  return info?.query?.toLowerCase() === lowerName || info?.artist_name?.toLowerCase() === lowerName;
+}
 
 export function ArtistPage({
   currentTrack,
@@ -22,6 +34,7 @@ export function ArtistPage({
   onRefresh,
   onPlayTrack,
   onOpenExternalUrl,
+  onSaveArtistInfoOverride,
 }: {
   currentTrack: Track | null;
   artistInfo: ArtistInfoResponse | null;
@@ -30,9 +43,79 @@ export function ArtistPage({
   onRefresh: () => void;
   onPlayTrack: (track: Track, queue: Track[]) => void;
   onOpenExternalUrl: (url: string) => void;
+  onSaveArtistInfoOverride: (artistName: string, wikipediaTitleOrUrl: string) => Promise<ArtistInfoResponse>;
 }) {
-  const artistName = primaryArtistName(currentTrack?.artist) || display(currentTrack?.artist, "");
-  const hasImage = Boolean(artistInfo?.image_url);
+  const [activeArtistIndex, setActiveArtistIndex] = useState(0);
+  const [overrideDraft, setOverrideDraft] = useState("");
+  const [isOverrideOpen, setIsOverrideOpen] = useState(false);
+  const [isSavingOverride, setIsSavingOverride] = useState(false);
+  const rawArtistName = display(currentTrack?.artist, "").trim();
+  const splitArtistNamesForTrack = useMemo(() => {
+    const names = splitArtistNames(currentTrack?.artist);
+    if (names.length > 0) {
+      return names;
+    }
+    return rawArtistName ? [rawArtistName] : [];
+  }, [currentTrack?.artist, rawArtistName]);
+  const relatedArtistNames = useMemo(() => {
+    const related = artistInfo?.related_artists?.length ? artistInfo.related_artists : [];
+    return related.map((info) => info.query || info.artist_name).filter(Boolean);
+  }, [artistInfo]);
+  const artistNames = useMemo(() => {
+    if (relatedArtistNames.length > 0) {
+      const splitNameSet = new Set(splitArtistNamesForTrack.map((name) => name.toLowerCase()));
+      const rawLower = rawArtistName.toLowerCase();
+      const relatedMatchesTrack = relatedArtistNames.some((name) => {
+        const lowerName = name.toLowerCase();
+        return lowerName === rawLower || splitNameSet.has(lowerName);
+      });
+      if (relatedMatchesTrack) {
+        return relatedArtistNames;
+      }
+    }
+    return splitArtistNamesForTrack;
+  }, [rawArtistName, relatedArtistNames, splitArtistNamesForTrack]);
+  const artistInfos = useMemo<(ArtistInfoResponse | null)[]>(() => {
+    const related = artistInfo?.related_artists?.length ? artistInfo.related_artists : artistInfo ? [artistInfo] : [];
+    if (artistNames.length === 0) {
+      return related;
+    }
+    return artistNames.map((name, index) =>
+      related.find((info) => artistInfoMatchesName(info, name)) ?? (index === 0 ? related[0] ?? null : null),
+    );
+  }, [artistInfo, artistNames]);
+  const activeArtistName =
+    artistNames[activeArtistIndex] ?? artistInfos[activeArtistIndex]?.query ?? artistInfo?.query ?? "";
+  const activeArtistInfo = artistInfos[activeArtistIndex] ?? artistInfos[0] ?? null;
+  const hasImage = Boolean(activeArtistInfo?.image_url);
+  const canSaveOverride = Boolean(activeArtistName && overrideDraft.trim() && !isSavingOverride);
+
+  useEffect(() => {
+    setActiveArtistIndex(0);
+    setOverrideDraft("");
+    setIsOverrideOpen(false);
+  }, [currentTrack?.artist]);
+
+  useEffect(() => {
+    if (activeArtistIndex >= Math.max(artistNames.length, artistInfos.length, 1)) {
+      setActiveArtistIndex(0);
+    }
+  }, [activeArtistIndex, artistInfos.length, artistNames.length]);
+
+  async function handleSaveOverride() {
+    const wikipediaTitleOrUrl = overrideDraft.trim();
+    if (!activeArtistName || !wikipediaTitleOrUrl) {
+      return;
+    }
+    setIsSavingOverride(true);
+    try {
+      await onSaveArtistInfoOverride(activeArtistName, wikipediaTitleOrUrl);
+      setOverrideDraft("");
+      setIsOverrideOpen(false);
+    } finally {
+      setIsSavingOverride(false);
+    }
+  }
 
   return (
     <main className="flex min-w-0 flex-1 flex-col">
@@ -40,13 +123,13 @@ export function ArtistPage({
         <div>
           <h1 className="text-lg font-semibold text-white">Artist</h1>
           <p className="text-xs text-muted">
-            {artistName ? `About ${artistName}` : "Select a track to see artist details"}
+            {activeArtistName ? `About ${activeArtistName}` : "Select a track to see artist details"}
           </p>
         </div>
         <button
           className="secondary-button"
           type="button"
-          disabled={!artistName || isArtistLoading}
+          disabled={!activeArtistName || isArtistLoading}
           onClick={onRefresh}
         >
           <RefreshCw size={15} />
@@ -61,7 +144,7 @@ export function ArtistPage({
               <img
                 alt=""
                 className="h-full w-full object-cover"
-                src={artistInfo?.image_url ?? ""}
+                src={activeArtistInfo?.image_url ?? ""}
               />
             ) : (
               <div className="grid h-full w-full place-items-center text-moss">
@@ -72,14 +155,14 @@ export function ArtistPage({
 
           <div className="mt-5 min-w-0">
             <h2 className="truncate text-2xl font-semibold text-white">
-              {artistInfo?.artist_name ?? (artistName || "No artist selected")}
+              {activeArtistInfo?.artist_name ?? (activeArtistName || "No artist selected")}
             </h2>
             <div className="mt-2 truncate text-sm text-muted">
               {currentTrack ? `${display(currentTrack.title, "Current track")} - ${display(currentTrack.album, "Unknown album")}` : ""}
             </div>
           </div>
 
-          {artistTracks.length > 0 && (
+          {activeArtistIndex === 0 && artistTracks.length > 0 && (
             <div className="mt-5 overflow-hidden rounded border border-line bg-panel">
               <div className="flex items-center justify-between gap-3 border-b border-line px-3 py-2 text-sm font-semibold text-white">
                 <span className="truncate">Top Local Tracks</span>
@@ -102,42 +185,92 @@ export function ArtistPage({
           )}
         </section>
 
-        <section className="min-h-[420px] min-w-0 rounded border border-line bg-panel xl:min-h-0">
-          <div className="flex h-12 items-center justify-between border-b border-line px-4">
-            <div className="text-sm font-semibold text-white">Background</div>
-            <div className="flex min-w-0 items-center gap-3">
-              {artistInfo?.source && <span className="truncate text-xs text-muted">{artistInfo.source}</span>}
-              {artistInfo?.page_url && (
+        <section className="grid min-h-[420px] min-w-0 grid-rows-[auto_minmax(0,1fr)] rounded border border-line bg-panel xl:min-h-0">
+          <div>
+            <div className="flex min-h-12 flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-2">
+              <div className="text-sm font-semibold text-white">Background</div>
+              <div className="flex min-w-0 flex-wrap items-center justify-end gap-3">
+                {activeArtistInfo?.source && <span className="truncate text-xs text-muted">{activeArtistInfo.source}</span>}
+                {activeArtistInfo?.page_url && (
+                  <button
+                    className="inline-flex items-center gap-1 text-xs text-moss hover:text-white"
+                    type="button"
+                    onClick={() => activeArtistInfo.page_url && onOpenExternalUrl(activeArtistInfo.page_url)}
+                  >
+                    Open
+                    <ExternalLink size={13} />
+                  </button>
+                )}
                 <button
-                  className="inline-flex items-center gap-1 text-xs text-moss hover:text-white"
+                  aria-label="Fix Wikipedia lookup"
+                  className={`grid h-8 w-8 place-items-center rounded text-muted transition hover:bg-white/[0.05] hover:text-white disabled:opacity-40 ${isOverrideOpen ? "bg-white/[0.06] text-moss" : ""}`}
+                  title="Fix Wikipedia lookup"
                   type="button"
-                  onClick={() => artistInfo.page_url && onOpenExternalUrl(artistInfo.page_url)}
+                  disabled={!activeArtistName}
+                  onClick={() => setIsOverrideOpen((value) => !value)}
                 >
-                  Open
-                  <ExternalLink size={13} />
+                  <Pencil size={14} />
                 </button>
-              )}
+              </div>
             </div>
-          </div>
-
-          <div className="h-[calc(100%-3rem)] overflow-auto px-7 py-6">
-            {isArtistLoading && <div className="text-sm text-muted">Loading artist info...</div>}
-            {!isArtistLoading && !artistName && (
-              <div className="grid h-full place-items-center text-sm text-muted">No artist selected.</div>
-            )}
-            {!isArtistLoading && artistName && !artistInfo?.found && (
-              <div className="grid h-full place-items-center text-center text-sm text-muted">
-                {artistInfo?.error ?? "No artist background found yet."}
+            {artistNames.length > 1 && (
+              <div className="flex gap-1 overflow-x-auto border-b border-line px-4 py-2">
+                {artistNames.map((name, index) => (
+                  <button
+                    key={`${name}-${index}`}
+                    className={`secondary-button h-8 shrink-0 ${index === activeArtistIndex ? "border-moss text-moss" : ""}`}
+                    type="button"
+                    onClick={() => {
+                      setActiveArtistIndex(index);
+                      setOverrideDraft("");
+                    }}
+                  >
+                    {name}
+                  </button>
+                ))}
               </div>
             )}
-            {!isArtistLoading && artistInfo?.found && (
+          </div>
+
+          <div className="min-h-0 overflow-auto px-7 py-6">
+            {isOverrideOpen && (
+              <form
+                className="mb-5 flex flex-wrap items-center gap-2"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void handleSaveOverride();
+                }}
+              >
+                <input
+                  aria-label="Wikipedia title or URL"
+                  className="min-w-[220px] flex-1 rounded border border-line bg-ink px-3 py-2 text-sm text-white outline-none focus:border-moss"
+                  placeholder="Wikipedia title or URL"
+                  value={overrideDraft}
+                  onChange={(event) => setOverrideDraft(event.target.value)}
+                />
+                <button className="secondary-button h-9" type="submit" disabled={!canSaveOverride}>
+                  <Save size={14} />
+                  Use Page
+                </button>
+              </form>
+            )}
+            {isArtistLoading && <div className="text-sm text-muted">Loading artist info...</div>}
+            {!isArtistLoading && !activeArtistName && (
+              <div className="grid h-full place-items-center text-sm text-muted">No artist selected.</div>
+            )}
+            {!isArtistLoading && activeArtistName && !activeArtistInfo?.found && (
+              <div className="grid h-full place-items-center text-center text-sm text-muted">
+                {activeArtistInfo?.error ?? "No artist background found yet."}
+              </div>
+            )}
+            {!isArtistLoading && activeArtistInfo?.found && (
               <div className="mx-auto max-w-3xl">
                 <p className="whitespace-pre-wrap text-xl leading-9 text-neutral-100">
-                  {artistInfo.summary}
+                  {activeArtistInfo.summary}
                 </p>
-                {artistInfo.from_cache && (
+                {activeArtistInfo.from_cache && (
                   <div className="mt-5 text-xs text-muted">
-                    Cached locally{artistInfo.updated_at ? ` on ${new Date(artistInfo.updated_at).toLocaleString()}` : ""}.
+                    Cached locally{activeArtistInfo.updated_at ? ` on ${new Date(activeArtistInfo.updated_at).toLocaleString()}` : ""}.
                   </div>
                 )}
               </div>

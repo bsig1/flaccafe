@@ -14,6 +14,8 @@ import type {
   AudioAnalysisCoverage,
   AudioConversionSetupRequest,
   AudioConversionSetupResponse,
+  BulkLyricsProgress,
+  BulkLyricsStartResponse,
   BulkUndoBatchEntry,
   BulkUndoLogEntry,
   BulkUndoRestoreResponse,
@@ -46,6 +48,9 @@ import type {
   LibraryHealthResponse,
   LibrarySourceRemoveResponse,
   LibraryStatsResponse,
+  LyricsLookupRequest,
+  LyricsResponse,
+  LyricsUpdateRequest,
   PlayEventEntry,
   PlaylistSummary,
   PodcastEpisode,
@@ -844,6 +849,16 @@ export function desktopFetchArtistInfo(artistName: string, refresh = false): Pro
   return invokeDesktop<ArtistInfoResponse>("artist_info", { name: artistName, refresh });
 }
 
+export function desktopSaveArtistInfoOverride(
+  artistName: string,
+  wikipediaTitleOrUrl: string,
+): Promise<ArtistInfoResponse> {
+  return invokeDesktop<ArtistInfoResponse>("save_artist_info_override", {
+    name: artistName,
+    wikipediaTitleOrUrl,
+  });
+}
+
 export function desktopFetchArtistLocalTracks(artistName: string, limit = 100): Promise<Track[]> {
   return invokeDesktop<Track[]>("artist_local_tracks", { name: artistName, limit });
 }
@@ -888,4 +903,53 @@ export function desktopBackendJson<T>(
     body: body ?? null,
     baseUrl: baseUrl ?? null,
   });
+}
+
+export function desktopFetchLyrics(trackId: number): Promise<LyricsResponse> {
+  return invokeDesktop<LyricsResponse>("track_lyrics_direct", { trackId });
+}
+
+export function desktopFetchLyricsOnline(trackId: number): Promise<LyricsResponse> {
+  return invokeDesktop<LyricsResponse>("fetch_track_lyrics_direct", { trackId });
+}
+
+export function desktopFetchLyricsByMetadata(
+  requestBody: LyricsLookupRequest,
+): Promise<LyricsResponse> {
+  return invokeDesktop<LyricsResponse>("lookup_lyrics_by_metadata_direct", {
+    body: requestBody,
+  });
+}
+
+export function desktopUpdateLyrics(
+  trackId: number,
+  requestBody: LyricsUpdateRequest,
+): Promise<LyricsResponse> {
+  return invokeDesktop<LyricsResponse>("update_track_lyrics_direct", {
+    trackId,
+    lyrics: requestBody.lyrics ?? null,
+    isSynced: requestBody.is_synced ?? null,
+    target: requestBody.target ?? null,
+    source: requestBody.source ?? null,
+  });
+}
+
+export function desktopStartBulkLyricsLookup(
+  includeOnline = true,
+  onlyMissing = true,
+  limit?: number | null,
+): Promise<BulkLyricsStartResponse> {
+  return invokeDesktop<BulkLyricsStartResponse>("start_bulk_lyrics_lookup_direct", {
+    includeOnline,
+    onlyMissing,
+    limit: limit ?? null,
+  });
+}
+
+export function desktopFetchBulkLyricsLookupProgress(jobId: string): Promise<BulkLyricsProgress> {
+  return invokeDesktop<BulkLyricsProgress>("bulk_lyrics_lookup_progress_direct", { jobId });
+}
+
+export function desktopCancelBulkLyricsLookup(jobId: string): Promise<BulkLyricsProgress> {
+  return invokeDesktop<BulkLyricsProgress>("cancel_bulk_lyrics_lookup_direct", { jobId });
 }

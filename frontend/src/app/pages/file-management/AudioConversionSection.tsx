@@ -302,7 +302,7 @@ export function AudioConversionSection({
         </div>
 
         <div className="rounded border border-ember/35 bg-ember/10 px-3 py-2 text-xs text-neutral-200">
-          Preview shows the first 200 matching tracks for a fast estimate. Start Conversion will process {startScopeLabel}; use selected tracks or a scoped tool view to narrow the job.
+          Preview lists the first 200 matching tracks, while totals and size estimates cover the full conversion set. Start Conversion will process {startScopeLabel}; use selected tracks or a scoped tool view to narrow the job.
         </div>
 
         {progress && (
@@ -341,7 +341,7 @@ export function AudioConversionSection({
           <div className="min-w-0 rounded border border-line bg-ink p-3 text-xs">
             <div className="mb-2 flex flex-wrap items-center gap-2 text-neutral-200">
               <CheckCircle2 size={15} />
-              Previewing {preview.total.toLocaleString()} track{preview.total === 1 ? "" : "s"}: {preview.changed_count.toLocaleString()} conversion target{preview.changed_count === 1 ? "" : "s"}, {preview.collisions.toLocaleString()} collision{preview.collisions === 1 ? "" : "s"}
+              Previewing {preview.total.toLocaleString()} matching track{preview.total === 1 ? "" : "s"}: {preview.changed_count.toLocaleString()} conversion target{preview.changed_count === 1 ? "" : "s"}, {preview.collisions.toLocaleString()} collision{preview.collisions === 1 ? "" : "s"}
             </div>
             <div className="mb-3 grid gap-2 sm:grid-cols-4">
               <div className="rounded border border-line/70 bg-panel px-2 py-1.5">
@@ -364,10 +364,10 @@ export function AudioConversionSection({
               </div>
             </div>
             <div className="mb-2 text-[11px] text-muted">
-              Estimates cover {preview.estimated_tracks.toLocaleString()} of {preview.total.toLocaleString()} previewed tracks. Lossy-to-lossless conversions can expand files without recovering quality.
+              Estimates cover {preview.estimated_tracks.toLocaleString()} of {preview.total.toLocaleString()} matching tracks. Showing {preview.changes.length.toLocaleString()} preview row{preview.changes.length === 1 ? "" : "s"}.
             </div>
             <div className="grid min-w-0 max-h-80 gap-1 overflow-auto pr-1">
-              {preview.changes.slice(0, 60).map((change) => (
+              {preview.changes.map((change) => (
                 <div key={change.track_id} className="grid min-w-0 gap-1 rounded bg-panel px-2 py-1.5">
                   <div className="flex min-w-0 items-center justify-between gap-3">
                     <div className="min-w-0 truncate text-neutral-200" title={change.title ?? change.source_path}>

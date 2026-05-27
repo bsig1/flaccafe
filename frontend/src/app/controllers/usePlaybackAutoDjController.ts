@@ -8,6 +8,30 @@ import type {
   RadioStation,
   Track,
 } from "../../types/api";
+import {
+  lyricsLookupCacheKey,
+  lyricsTrackCacheKey,
+  rememberLyricsResponse,
+} from "./lyricsResponseCache";
+
+const PLAYBACK_QUEUE_CONTEXT_LIMIT = 600;
+const PLAYBACK_QUEUE_PREVIOUS_CONTEXT = 50;
+
+function playbackQueueWindow(track: Track, queueItems: Track[]) {
+  const source = queueItems.length ? queueItems : [track];
+  if (source.length <= PLAYBACK_QUEUE_CONTEXT_LIMIT) {
+    return source;
+  }
+  const activeIndex = source.findIndex((item) => item.id === track.id);
+  if (activeIndex < 0) {
+    const tail = source.filter((item) => item.id !== track.id).slice(0, PLAYBACK_QUEUE_CONTEXT_LIMIT - 1);
+    return [track, ...tail];
+  }
+  const before = Math.min(PLAYBACK_QUEUE_PREVIOUS_CONTEXT, activeIndex);
+  const start = Math.max(0, Math.min(activeIndex - before, source.length - PLAYBACK_QUEUE_CONTEXT_LIMIT));
+  const windowed = source.slice(start, start + PLAYBACK_QUEUE_CONTEXT_LIMIT);
+  return windowed.some((item) => item.id === track.id) ? windowed : [track, ...windowed.slice(0, PLAYBACK_QUEUE_CONTEXT_LIMIT - 1)];
+}
 
 export function usePlaybackAutoDjController(model: any) {
   const { shuffleItems, setStatus, tracks, generateAutoDj, defaultAutoDj, recommendationProfiles, settings, uiPreferences, setQueue, setRecommendationDrift, loadRecommendationHistory, setContinuousAutoDjEnabled, queue, currentTrack, setPlaybackQueue, setAutoPlayOnTrackChange, setCurrentTrack, continuousAutoDjInFlightRef, setContinuousAutoDjBusy, continuousAutoDjSettings, playbackQueue, useEffect, continuousAutoDjEnabled, continuousAutoDjBusy, createAutoDjAvoidRule, trackGenre, loadAutoDjAvoidRules, setAutoDjAvoidRules, deleteAutoDjAvoidRule, saveRecommendationProfile, loadRecommendationProfiles, setRecommendationProfiles, setDefaultRecommendationProfile, deleteRecommendationProfile, recordRecommendationFeedback, shouldRecordTrackAsPlayed, markTrackPlayed, markTrackSkipped, replaceTrackEverywhere, loadHistory, cdPlaybackPrepareRequestIdRef, StaleCdPlaybackRequestError, cdDriveIdFromTrack, cdTrackNumberFromTrack, playCdTrack, cdTrackLooksActive, playbackTime, setCurrentRadioStation, cdPlaybackPrepareChainRef, waitFor, CD_PLAYBACK_PREPARE_DEBOUNCE_MS, isStaleCdPlaybackRequest, currentRadioStation, externalTrackRequestIdRef, setExternalTrackRequest, setRestoredPlaybackPosition, setRadioPlaybackRequestId, markRadioStationPlayed, display, rememberQueueSnapshot, queueHistory, setQueueHistory, createPlaylist, addTracksToPlaylist, loadPlaylists, setSelectedPlaylistId, setTargetPlaylistId, shouldLookupLyricsByMetadata, fetchLyricsByMetadata, lyricsLookupRequestForTrack, fetchLyricsOnline, setLyrics, lyrics } = model;
@@ -273,8 +297,9 @@ export function usePlaybackAutoDjController(model: any) {
     if (!options?.suppressExitRecord && currentTrack && currentTrack.id !== track.id) {
       void recordTrackExitQuiet(currentTrack, playbackTime);
     }
+    const playbackQueueItems = playbackQueueWindow(track, queueItems);
     setCurrentRadioStation(null);
-    setPlaybackQueue(queueItems);
+    setPlaybackQueue(playbackQueueItems);
     setAutoPlayOnTrackChange(true);
     setCurrentTrack(track);
     rememberRecommendationFeedback(track, "manual_play", 0.7);
@@ -318,6 +343,7 @@ export function usePlaybackAutoDjController(model: any) {
       cdPlaybackPrepareRequestIdRef.current += 1;
     }
 
+    const playbackQueueItems = playbackQueueWindow(track, queueItems);
     const shouldFadeExistingSource =
       !options?.suppressExitRecord &&
       uiPreferences.playerFadeMs > 0 &&
@@ -328,12 +354,12 @@ export function usePlaybackAutoDjController(model: any) {
       setExternalTrackRequest({
         id: externalTrackRequestIdRef.current,
         track,
-        queue: queueItems,
+        queue: playbackQueueItems,
       });
       return;
     }
 
-    commitPlayTrack(track, queueItems, options);
+    commitPlayTrack(track, playbackQueueItems, options);
   }
 
   function handleCommitExternalTrackRequest(
@@ -520,10 +546,16 @@ export function usePlaybackAutoDjController(model: any) {
     const trackId = typeof trackOrId === "number" ? trackOrId : trackOrId.id;
     const sourceTrack = typeof trackOrId === "number" ? (currentTrack?.id === trackOrId ? currentTrack : null) : trackOrId;
     const useMetadataLookup = Boolean(sourceTrack && shouldLookupLyricsByMetadata(sourceTrack));
+    const lookupRequest = sourceTrack ? lyricsLookupRequestForTrack(sourceTrack) : null;
+    const cacheKey =
+      useMetadataLookup && lookupRequest
+        ? lyricsLookupCacheKey(lookupRequest)
+        : lyricsTrackCacheKey(trackId, sourceTrack?.path);
     try {
       const response = useMetadataLookup && sourceTrack
-        ? await fetchLyricsByMetadata(lyricsLookupRequestForTrack(sourceTrack))
+        ? await fetchLyricsByMetadata(lookupRequest)
         : await fetchLyricsOnline(trackId);
+      rememberLyricsResponse(cacheKey, response, { onlineChecked: true });
       setLyrics(response);
       setStatus(response.is_synced ? "Fetched synced lyrics" : "Fetched lyrics");
       return response;
@@ -541,6 +573,7 @@ export function usePlaybackAutoDjController(model: any) {
   async function handleSaveLyrics(trackId: number, requestBody: LyricsUpdateRequest): Promise<LyricsResponse> {
     try {
       const response = await updateLyrics(trackId, requestBody);
+      rememberLyricsResponse(lyricsTrackCacheKey(trackId, currentTrack?.id === trackId ? currentTrack.path : null), response);
       setLyrics(response);
       setStatus(requestBody.target === "file" ? "Lyrics saved to file and database" : "Lyrics saved to database");
       return response;

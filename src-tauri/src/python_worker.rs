@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
-use tauri::State;
+use tauri::{AppHandle, Manager};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
@@ -126,21 +126,27 @@ pub(crate) fn python_module_command(module: &str, packaged_arg: &str) -> Result<
 }
 
 #[tauri::command]
-pub fn backend_json(
-    state: State<'_, crate::library::DesktopLibraryState>,
+pub async fn backend_json(
+    app: AppHandle,
     method: String,
     path: String,
     body: Option<Value>,
     base_url: Option<String>,
 ) -> Result<Value, String> {
     let _ = base_url;
-    if let Some(response) = controller_routes::try_handle_json(state, &method, &path, body.clone())?
-    {
-        return Ok(response);
-    }
-    Err(format!(
-        "No Rust route is registered for {} {}",
-        method.to_uppercase(),
-        path
-    ))
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<crate::library::DesktopLibraryState>();
+        if let Some(response) =
+            controller_routes::try_handle_json(state, &method, &path, body.clone())?
+        {
+            return Ok(response);
+        }
+        Err(format!(
+            "No Rust route is registered for {} {}",
+            method.to_uppercase(),
+            path
+        ))
+    })
+    .await
+    .map_err(|error| format!("Rust route task failed: {error}"))?
 }

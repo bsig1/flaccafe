@@ -27,6 +27,13 @@ import {
   type UiPreferences,
 } from "../shared";
 import type { LyricsResponse } from "../../types/api";
+import {
+  cachedLyricsResponse,
+  hasRecentLyricsOnlineCheck,
+  lyricsLookupCacheKey,
+  lyricsTrackCacheKey,
+  rememberLyricsResponse,
+} from "./lyricsResponseCache";
 
 export function useAppControllerEffects(model: any) {
   const {
@@ -603,12 +610,22 @@ export function useAppControllerEffects(model: any) {
     }
 
     if (shouldLookupLyricsByMetadata(currentTrack)) {
+      const lookupRequest = lyricsLookupRequestForTrack(currentTrack);
+      const lookupCacheKey = lyricsLookupCacheKey(lookupRequest);
       const emptyLyrics: LyricsResponse = {
         track_id: currentTrack.id,
         lyrics: null,
         source: null,
         is_synced: false,
       };
+      const cached = cachedLyricsResponse(lookupCacheKey);
+      if (cached) {
+        setLyrics(cached);
+        setIsLyricsLoading(false);
+        return () => {
+          cancelled = true;
+        };
+      }
       if (!uiPreferences.autoFetchLyrics) {
         setLyrics(emptyLyrics);
         setIsLyricsLoading(false);
@@ -618,13 +635,15 @@ export function useAppControllerEffects(model: any) {
       }
 
       setIsLyricsLoading(true);
-      void fetchLyricsByMetadata(lyricsLookupRequestForTrack(currentTrack))
+      void fetchLyricsByMetadata(lookupRequest)
         .then((response) => {
+          rememberLyricsResponse(lookupCacheKey, response, { onlineChecked: true });
           if (!cancelled) {
             setLyrics(response);
           }
         })
         .catch(() => {
+          rememberLyricsResponse(lookupCacheKey, emptyLyrics, { onlineChecked: true });
           if (!cancelled) {
             setLyrics(emptyLyrics);
           }
@@ -640,22 +659,66 @@ export function useAppControllerEffects(model: any) {
       };
     }
 
+    const trackLyricsCacheKey = lyricsTrackCacheKey(currentTrack.id, currentTrack.path);
+    const cached = cachedLyricsResponse(trackLyricsCacheKey);
+    if (cached) {
+      setLyrics(cached);
+      const shouldFetchOnlineLyrics =
+        uiPreferences.autoFetchLyrics &&
+        (!lyricsHaveText(cached) || (uiPreferences.autoFetchLrcWhenPlainPresent && !cached.is_synced)) &&
+        !hasRecentLyricsOnlineCheck(trackLyricsCacheKey);
+      if (!shouldFetchOnlineLyrics) {
+        setIsLyricsLoading(false);
+        return () => {
+          cancelled = true;
+        };
+      }
+
+      setIsLyricsLoading(!lyricsHaveText(cached));
+      void fetchLyricsOnline(currentTrack.id)
+        .then((fetched) => {
+          rememberLyricsResponse(trackLyricsCacheKey, fetched, { onlineChecked: true });
+          if (!cancelled) {
+            setLyrics(fetched);
+          }
+        })
+        .catch(() => {
+          rememberLyricsResponse(trackLyricsCacheKey, cached, { onlineChecked: true });
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setIsLyricsLoading(false);
+          }
+        });
+
+      return () => {
+        cancelled = true;
+      };
+    }
+
     setIsLyricsLoading(true);
     void fetchLyrics(currentTrack.id)
       .then(async (response) => {
+        rememberLyricsResponse(trackLyricsCacheKey, response);
         if (!cancelled) {
           setLyrics(response);
+          if (lyricsHaveText(response)) {
+            setIsLyricsLoading(false);
+          }
         }
         const shouldFetchOnlineLyrics =
           uiPreferences.autoFetchLyrics &&
-          (!lyricsHaveText(response) || (uiPreferences.autoFetchLrcWhenPlainPresent && !response.is_synced));
+          (!lyricsHaveText(response) || (uiPreferences.autoFetchLrcWhenPlainPresent && !response.is_synced)) &&
+          !hasRecentLyricsOnlineCheck(trackLyricsCacheKey);
         if (!cancelled && shouldFetchOnlineLyrics) {
           try {
             const fetched = await fetchLyricsOnline(currentTrack.id);
+            rememberLyricsResponse(trackLyricsCacheKey, fetched, { onlineChecked: true });
             if (!cancelled) {
               setLyrics(fetched);
             }
           } catch {
+            rememberLyricsResponse(trackLyricsCacheKey, response, { onlineChecked: true });
             // Missing online lyrics should not interrupt normal local playback or page loading.
           }
         }

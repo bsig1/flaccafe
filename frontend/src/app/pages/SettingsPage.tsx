@@ -37,10 +37,16 @@ import type {
   PlaybackDiagnosticsResponse,
 } from "../../lib/desktopPlayback";
 import type {
+  BulkLyricsProgress,
   LogTailResponse,
   SettingsResponse,
   StartupDiagnosticsResponse,
 } from "../../types/api";
+import {
+  cancelBulkLyricsLookup,
+  fetchBulkLyricsLookupProgress,
+  startBulkLyricsLookup,
+} from "../../lib/api";
 import {
   openExternalUrl,
 } from "../../lib/externalLinks";
@@ -69,6 +75,20 @@ import {
 
 const LASTFM_API_URL = "https://www.last.fm/api";
 const ACOUSTID_API_KEY_URL = "https://acoustid.org/api-key";
+
+function bulkLyricsStatusText(progress: BulkLyricsProgress) {
+  if (progress.status === "completed") {
+    const found = progress.embedded_found + progress.online_found + progress.already_cached;
+    return `Lyric lookup finished: ${found.toLocaleString()} ready, ${progress.missing.toLocaleString()} missing`;
+  }
+  if (progress.status === "cancelled") {
+    return "Bulk lyric lookup cancelled";
+  }
+  if (progress.status === "failed") {
+    return progress.error ?? "Bulk lyric lookup failed";
+  }
+  return `Bulk lyric lookup ${Math.round(progress.percent)}%`;
+}
 
 export function SettingsPage({
   settings,
@@ -152,6 +172,11 @@ export function SettingsPage({
   const [lastFmApiKeyDraft, setLastFmApiKeyDraft] = useState("");
   const [lastFmApiSecretDraft, setLastFmApiSecretDraft] = useState("");
   const [isSavingLastFmCredentials, setIsSavingLastFmCredentials] = useState(false);
+  const [bulkLyricsIncludeOnline, setBulkLyricsIncludeOnline] = useState(true);
+  const [bulkLyricsOnlyMissing, setBulkLyricsOnlyMissing] = useState(true);
+  const [bulkLyricsLimit, setBulkLyricsLimit] = useState("5000");
+  const [bulkLyricsProgress, setBulkLyricsProgress] = useState<BulkLyricsProgress | null>(null);
+  const [isStartingBulkLyrics, setIsStartingBulkLyrics] = useState(false);
   const [rememberedDeleteChoice, setRememberedDeleteChoice] = useState<RememberedDeleteChoice | "ask">(
     () => readRememberedDeleteChoice() ?? "ask",
   );
@@ -163,7 +188,7 @@ export function SettingsPage({
     showSettingsSection("api keys online metadata lastfm last.fm scrobbling acoustid acoustic fingerprint musicbrainz lookup autotag"),
     showSettingsSection("keyboard shortcuts hotkeys local playback controls media keys"),
     showSettingsSection("player playback audio output lyrics autofetch lrc sidecar cache follow equalizer replaygain fade skip codec rust webview"),
-    showSettingsSection("maintenance backend diagnostics database support bundle source folder logs cache reset local data"),
+    showSettingsSection("maintenance backend diagnostics database support bundle source folder logs cache reset local data lyrics bulk lookup preload"),
     showSettingsSection("extensions skins plugins themes manifest customization"),
   ].filter(Boolean).length;
   const backendStatusClass =
@@ -193,6 +218,16 @@ export function SettingsPage({
     void refreshDesktopBackends();
     void refreshPlaybackDiagnostics();
   }, []);
+
+  useEffect(() => {
+    if (!bulkLyricsProgress || !["pending", "scanning", "cancelling"].includes(bulkLyricsProgress.status)) {
+      return;
+    }
+    const handle = window.setTimeout(() => {
+      void refreshBulkLyricsProgress(bulkLyricsProgress.job_id, true);
+    }, 1000);
+    return () => window.clearTimeout(handle);
+  }, [bulkLyricsProgress]);
 
   useEffect(() => {
     if (!focusSectionId) {
@@ -248,6 +283,54 @@ export function SettingsPage({
       setDesktopDiagnosticsMessage("Rust playback diagnostics cleared.");
     } catch {
       setDesktopDiagnosticsMessage("Could not clear Rust playback diagnostics in this environment.");
+    }
+  }
+
+  function bulkLyricsLimitValue() {
+    const parsed = Number.parseInt(bulkLyricsLimit, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  async function refreshBulkLyricsProgress(jobId: string, announce = false) {
+    try {
+      const progress = await fetchBulkLyricsLookupProgress(jobId);
+      setBulkLyricsProgress(progress);
+      if (announce && ["completed", "cancelled", "failed"].includes(progress.status)) {
+        setStatus(bulkLyricsStatusText(progress));
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not refresh lyric lookup progress");
+    }
+  }
+
+  async function startBulkLyrics() {
+    setIsStartingBulkLyrics(true);
+    try {
+      const response = await startBulkLyricsLookup(
+        bulkLyricsIncludeOnline,
+        bulkLyricsOnlyMissing,
+        bulkLyricsLimitValue(),
+      );
+      const progress = await fetchBulkLyricsLookupProgress(response.job_id);
+      setBulkLyricsProgress(progress);
+      setStatus("Bulk lyric lookup started");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not start bulk lyric lookup");
+    } finally {
+      setIsStartingBulkLyrics(false);
+    }
+  }
+
+  async function cancelBulkLyrics() {
+    if (!bulkLyricsProgress) {
+      return;
+    }
+    try {
+      const progress = await cancelBulkLyricsLookup(bulkLyricsProgress.job_id);
+      setBulkLyricsProgress(progress);
+      setStatus("Canceling bulk lyric lookup");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not cancel bulk lyric lookup");
     }
   }
 
@@ -733,7 +816,7 @@ export function SettingsPage({
           />
           )}
 
-          {showSettingsSection("maintenance backend diagnostics database support bundle source folder logs cache reset local data") && (
+          {showSettingsSection("maintenance backend diagnostics database support bundle source folder logs cache reset local data lyrics bulk lookup preload") && (
           <MaintenanceSection
             backendStatus={backendStatus}
             backendStatusClass={backendStatusClass}
@@ -754,6 +837,16 @@ export function SettingsPage({
             supportBundlePath={supportBundlePath}
             onCopySupportBundlePath={onCopySupportBundlePath}
             onClearArtistCache={onClearArtistCache}
+            bulkLyricsProgress={bulkLyricsProgress}
+            bulkLyricsIncludeOnline={bulkLyricsIncludeOnline}
+            bulkLyricsOnlyMissing={bulkLyricsOnlyMissing}
+            bulkLyricsLimit={bulkLyricsLimit}
+            isStartingBulkLyrics={isStartingBulkLyrics}
+            onBulkLyricsIncludeOnlineChange={setBulkLyricsIncludeOnline}
+            onBulkLyricsOnlyMissingChange={setBulkLyricsOnlyMissing}
+            onBulkLyricsLimitChange={setBulkLyricsLimit}
+            onStartBulkLyrics={() => void startBulkLyrics()}
+            onCancelBulkLyrics={() => void cancelBulkLyrics()}
           />
           )}
 
