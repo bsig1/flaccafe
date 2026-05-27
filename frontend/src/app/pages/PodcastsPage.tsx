@@ -11,15 +11,8 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import type {
-  MouseEvent as ReactMouseEvent,
-} from "react";
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   deletePodcastSubscription,
@@ -44,51 +37,22 @@ import type {
 import {
   MENU_VIEWPORT_MARGIN,
 } from "../shared";
-
-type PodcastPanelMode = "new" | "feed" | "edit";
-type PodcastEpisodeView = "feed" | "library";
-
-interface PodcastSubscriptionContextMenu {
-  x: number;
-  y: number;
-  subscription: PodcastSubscription;
-}
-
-interface PodcastEpisodeContextMenu {
-  x: number;
-  y: number;
-  episode: PodcastEpisode;
-}
-
-function formatDate(value: string | null) {
-  if (!value) {
-    return "No date";
-  }
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString();
-}
-
-function formatDuration(seconds: number | null) {
-  if (!seconds) {
-    return "";
-  }
-  const total = Math.round(seconds);
-  const minutes = Math.floor(total / 60);
-  const remaining = total % 60;
-  return `${minutes}:${remaining.toString().padStart(2, "0")}`;
-}
+import {
+  formatDate,
+  formatDuration,
+  type PodcastEpisodeContextMenu,
+  type PodcastEpisodeView,
+  type PodcastPanelMode,
+  type PodcastSubscriptionContextMenu,
+  type PodcastsPageProps,
+} from "./podcasts/podcastPageUtils";
 
 export function PodcastsPage({
   setStatus,
   onPlayTrack,
   onAddToQueue,
   showFilePaths,
-}: {
-  setStatus: (message: string) => void;
-  onPlayTrack: (track: Track, queueItems: Track[]) => void;
-  onAddToQueue: (track: Track) => void;
-  showFilePaths: boolean;
-}) {
+}: PodcastsPageProps) {
   const [subscriptions, setSubscriptions] = useState<PodcastSubscription[]>([]);
   const [episodes, setEpisodes] = useState<PodcastEpisode[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);

@@ -44,6 +44,19 @@ import {
   DragGhostPreview,
 } from "../components/common";
 import {
+  NowPlayingLyricsEditor,
+} from "./now-playing/NowPlayingLyricsEditor";
+import {
+  NowPlayingQueuePanel,
+} from "./now-playing/NowPlayingQueuePanel";
+import {
+  LyricsEditMode,
+  LrcBuilderLine,
+  builderLinesFromLyricsText,
+  formatLrcTimestamp,
+  lrcDraftFromBuilderLines,
+} from "./now-playing/lyricsBuilder";
+import {
   DragGhost,
   MENU_VIEWPORT_MARGIN,
   type MiniPlayerSnapshot,
@@ -65,39 +78,6 @@ import {
 
 const QUEUE_VIRTUALIZATION_THRESHOLD = 160;
 const QUEUE_VIRTUALIZATION_OVERSCAN = 10;
-
-type LyricsEditMode = "text" | "sync";
-
-interface LrcBuilderLine {
-  id: string;
-  text: string;
-  time: number | null;
-  gap: boolean;
-}
-
-function formatLrcTimestamp(seconds: number | null): string {
-  if (seconds === null || !Number.isFinite(seconds)) {
-    return "--:--.--";
-  }
-  const safeSeconds = Math.max(0, seconds);
-  const minutes = Math.floor(safeSeconds / 60);
-  const wholeSeconds = Math.floor(safeSeconds % 60);
-  const centiseconds = Math.floor((safeSeconds - Math.floor(safeSeconds)) * 100);
-  return `${minutes.toString().padStart(2, "0")}:${wholeSeconds.toString().padStart(2, "0")}.${centiseconds.toString().padStart(2, "0")}`;
-}
-
-function lrcDraftFromBuilderLines(lines: LrcBuilderLine[]): string {
-  return lines
-    .map((line) => {
-      const text = line.gap ? "" : line.text.trimEnd();
-      if (line.time === null) {
-        return text;
-      }
-      const timestamp = `[${formatLrcTimestamp(line.time)}]`;
-      return text ? `${timestamp} ${text}` : timestamp;
-    })
-    .join("\n");
-}
 
 export function NowPlayingPage({
   currentTrack,
@@ -195,7 +175,7 @@ export function NowPlayingPage({
     }
 
     window.addEventListener(VISUALIZER_FRAME_EVENT, handleVisualizerFrame);
-    return () => window.removeEventListener(VISUALIZER_FRAME_EVENT, handleVisualizerFrame);
+  return () => window.removeEventListener(VISUALIZER_FRAME_EVENT, handleVisualizerFrame);
   }, [currentTrack?.id]);
 
   useEffect(() => {
@@ -283,12 +263,7 @@ export function NowPlayingPage({
   }
 
   function builderLinesFromText(text: string): LrcBuilderLine[] {
-    const rows = text.split(/\r?\n/).map((line) => {
-      const time = parseLyricTimestamp(line);
-      const lyricText = stripLyricTimestamp(line).trimEnd();
-      return createBuilderLine(lyricText, time, time !== null && lyricText.trim().length === 0);
-    });
-    return rows.length > 0 ? rows : [createBuilderLine()];
+    return builderLinesFromLyricsText(text, createBuilderLine);
   }
 
   function commitBuilderLines(lines: LrcBuilderLine[], activeIndex = activeBuilderLineIndex) {
@@ -552,182 +527,57 @@ export function NowPlayingPage({
     }
   }
 
-  function renderLyricsEditor(containerClass: string) {
-    return (
-      <div className={`${containerClass} grid h-full grid-rows-[auto_auto_minmax(0,1fr)_auto] gap-3`}>
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded border border-line/70 bg-ink px-3 py-2 text-xs">
-          <div className="flex flex-wrap items-center gap-3">
-            <label className="flex items-center gap-2 text-muted">
-              <input
-                type="checkbox"
-                className="h-4 w-4 accent-moss"
-                checked={lyricsSynced}
-                onChange={(event) => setLyricsSynced(event.target.checked)}
-              />
-              Synced LRC
-            </label>
-            <label className="flex items-center gap-2 text-muted">
-              Save to
-              <select
-                className="h-8 rounded border border-line bg-panel px-2 text-white outline-none"
-                value={lyricsTarget}
-                onChange={(event) => setLyricsTarget(event.target.value as "database" | "file")}
-              >
-                <option value="database">Database</option>
-                <option value="file">Audio file + database</option>
-              </select>
-            </label>
-          </div>
-          <label className="flex items-center gap-2 text-muted">
-            File writes
-            <input
-              type="checkbox"
-              className="h-4 w-4 accent-ember"
-              checked={writeRatingsToFiles}
-              onChange={(event) => onWriteRatingsToFilesChange(event.target.checked)}
-            />
-          </label>
-        </div>
+  const nowPlayingQueueModel = {
+  isQueueLayout,
+  showLyrics,
+  queue,
+  queueScrollRef,
+  handleQueueScroll,
+  queueTopSpacerHeight,
+  renderedQueue,
+  queueStartIndex,
+  currentTrack,
+  dragIndex,
+  dragOverIndex,
+  queueRowHeight,
+  beginNowPlayingQueueDrag,
+  onPlayTrack,
+  onMoveQueueTrack,
+  onRemoveQueueTrack,
+  queueBottomSpacerHeight,
+  queueContextMenu,
+  setQueueContextMenu,
+  onSaveQueue,
+  canRestoreQueue,
+  onRestoreQueue,
+  onClearQueue,
+  openQueueContextMenu,
+  };
 
-        <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-          <div className="flex rounded border border-line/70 bg-ink p-1">
-            <button
-              className={`secondary-button h-8 border-0 px-3 ${lyricsEditMode === "text" ? "bg-panel text-white" : "bg-transparent text-muted"}`}
-              type="button"
-              onClick={() => setLyricsEditMode("text")}
-            >
-              <Pencil size={14} />
-              Text
-            </button>
-            <button
-              className={`secondary-button h-8 border-0 px-3 ${lyricsEditMode === "sync" ? "bg-panel text-white" : "bg-transparent text-muted"}`}
-              type="button"
-              onClick={openLrcBuilder}
-            >
-              <ListMusic size={14} />
-              LRC Builder
-            </button>
-          </div>
-          {lyricsEditMode === "sync" && (
-            <div className="rounded border border-line/70 bg-ink px-3 py-2 font-mono text-muted">
-              {formatPlaybackTime(playbackTime)} / [{formatLrcTimestamp(playbackTime)}]
-            </div>
-          )}
-        </div>
-
-        {lyricsEditMode === "text" ? (
-          <textarea
-            className="min-h-0 resize-none rounded border border-line bg-ink p-4 font-mono text-sm leading-6 text-neutral-100 outline-none ring-moss/40 focus:ring-2"
-            value={lyricsDraft}
-            placeholder="Paste lyrics here, or fetch them first."
-            onChange={(event) => setLyricsDraft(event.target.value)}
-          />
-        ) : (
-          <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 rounded border border-line bg-ink p-3">
-            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-              <div className="min-w-0 text-muted">
-                Select a lyric row, press Sync as the line starts, or add a timed no-lyric section.
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button className="secondary-button h-8" type="button" onClick={() => syncBuilderLine()}>
-                  <Clock size={14} />
-                  Sync
-                </button>
-                <button className="secondary-button h-8" type="button" onClick={insertNoLyricSection}>
-                  <Volume2 size={14} />
-                  No Lyrics
-                </button>
-                <button className="secondary-button h-8" type="button" onClick={addBuilderLine}>
-                  <Plus size={14} />
-                  Line
-                </button>
-              </div>
-            </div>
-            <div className="min-h-0 overflow-auto rounded border border-line/70">
-              {lrcBuilderLines.map((line, index) => {
-                const selected = index === activeBuilderLineIndex;
-                return (
-                  <div
-                    key={line.id}
-                    className={`grid grid-cols-[5.75rem_minmax(0,1fr)_2.25rem] items-center gap-2 border-b border-line/60 px-2 py-2 text-sm last:border-b-0 ${
-                      selected ? "bg-moss/10" : "bg-panel/40"
-                    }`}
-                    onClick={() => setActiveBuilderLineIndex(index)}
-                  >
-                    <button
-                      className={`h-8 rounded border px-2 font-mono text-xs tabular-nums ${
-                        line.time === null ? "border-line text-muted" : "border-moss/50 text-moss"
-                      }`}
-                      type="button"
-                      title="Stamp this line with the current playback time"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        syncBuilderLine(index);
-                      }}
-                    >
-                      {formatLrcTimestamp(line.time)}
-                    </button>
-                    {line.gap ? (
-                      <button
-                        className="min-w-0 truncate rounded border border-dashed border-line bg-ink px-3 py-1.5 text-left text-xs text-muted hover:text-white"
-                        type="button"
-                        title="Click to turn this back into a lyric line"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          updateBuilderLine(index, { gap: false, text: "" });
-                        }}
-                      >
-                        No lyric section
-                      </button>
-                    ) : (
-                      <input
-                        className="min-w-0 rounded border border-line bg-ink px-3 py-1.5 text-neutral-100 outline-none ring-moss/40 focus:ring-2"
-                        value={line.text}
-                        placeholder="Lyric line"
-                        onFocus={() => setActiveBuilderLineIndex(index)}
-                        onChange={(event) => updateBuilderLine(index, { text: event.target.value, gap: false })}
-                      />
-                    )}
-                    <button
-                      className="icon-button h-8 w-8"
-                      type="button"
-                      title="Remove line"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        removeBuilderLine(index);
-                      }}
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="text-xs text-muted">
-            {lyricsTarget === "file" && !writeRatingsToFiles
-              ? "File writing is off; enable it here before saving to the audio file."
-              : lyricsTarget === "file"
-                ? "Saving will update the file tags and keep a database copy."
-                : "Saving will keep lyrics in the FLAC Cafe database only."}
-          </div>
-          <button
-            className="primary-button"
-            type="button"
-            disabled={lyricsSaveDisabled}
-            title="Save lyrics (Ctrl+S)"
-            onClick={() => void handleSaveLyrics()}
-          >
-            <Pencil size={15} />
-            Save Lyrics
-          </button>
-        </div>
-      </div>
-    );
-  }
+  const lyricsEditorModel = {
+  lyricsSynced,
+  setLyricsSynced,
+  lyricsTarget,
+  setLyricsTarget,
+  writeRatingsToFiles,
+  onWriteRatingsToFilesChange,
+  lyricsEditMode,
+  setLyricsEditMode,
+  openLrcBuilder,
+  playbackTime,
+  lyricsDraft,
+  setLyricsDraft,
+  lrcBuilderLines,
+  activeBuilderLineIndex,
+  setActiveBuilderLineIndex,
+  syncBuilderLine,
+  insertNoLyricSection,
+  addBuilderLine,
+  updateBuilderLine,
+  removeBuilderLine,
+  lyricsSaveDisabled,
+  handleSaveLyrics,
+  };
 
   return (
     <main className={`relative flex min-w-0 flex-1 flex-col overflow-hidden ${layout === "party" ? "bg-black" : ""}`}>
@@ -846,7 +696,7 @@ export function NowPlayingPage({
               <div className="grid h-full place-items-center text-sm text-muted">No track selected.</div>
             )}
             {!isLyricsLoading && currentTrack && isEditingLyrics && (
-              renderLyricsEditor("")
+              <NowPlayingLyricsEditor model={lyricsEditorModel} containerClass="" />
             )}
             {!isLyricsLoading && currentTrack && !isEditingLyrics && !hasLyrics && (
               <div className="grid h-full place-items-center text-center text-sm text-muted">
@@ -1058,7 +908,7 @@ export function NowPlayingPage({
               <div className="grid h-full place-items-center text-sm text-muted">No track selected.</div>
             )}
             {!isLyricsLoading && currentTrack && isEditingLyrics && (
-              renderLyricsEditor("mx-auto max-w-3xl")
+              <NowPlayingLyricsEditor model={lyricsEditorModel} containerClass="mx-auto max-w-3xl" />
             )}
             {!isLyricsLoading && currentTrack && !isEditingLyrics && !hasLyrics && (
               <div className="grid h-full place-items-center text-center text-sm text-muted">
@@ -1098,159 +948,7 @@ export function NowPlayingPage({
           </section>
         )}
 
-        {showQueue && (
-        <section className={`${isQueueLayout ? "min-h-[420px] md:min-h-[min(48vh,560px)]" : "min-h-[320px]"} min-w-0 rounded border border-line bg-panel xl:min-h-0 ${
-          isQueueLayout && showLyrics ? "md:col-start-2 xl:col-start-auto" : ""
-        }`}>
-          <div className="flex h-12 items-center justify-between border-b border-line px-4">
-            <div>
-              <div className="text-sm font-semibold text-white">Queue</div>
-              <div className="text-xs text-muted">{queue.length} tracks</div>
-            </div>
-            <div className="flex items-center gap-1">
-              <button className="icon-button h-8 w-8" type="button" title="Save queue as playlist" disabled={queue.length === 0} onClick={onSaveQueue}>
-                <Plus size={14} />
-              </button>
-              <button className="icon-button h-8 w-8" type="button" title="Restore previous queue" disabled={!canRestoreQueue} onClick={onRestoreQueue}>
-                <RefreshCw size={14} />
-              </button>
-              <button className="icon-button h-8 w-8" type="button" title="Clear queue" disabled={queue.length === 0} onClick={onClearQueue}>
-                <Trash2 size={14} />
-              </button>
-            </div>
-          </div>
-          <div ref={queueScrollRef} className="h-[calc(100%-3rem)] overflow-auto" onScroll={handleQueueScroll}>
-            {queueTopSpacerHeight > 0 && <div aria-hidden="true" style={{ height: queueTopSpacerHeight }} />}
-            {renderedQueue.map((track, renderedIndex) => {
-              const index = queueStartIndex + renderedIndex;
-              const active = currentTrack?.id === track.id;
-              return (
-                <div
-                  key={`${track.id}-${index}`}
-                  data-reorder-index={index}
-                  onContextMenu={(event) => openQueueContextMenu(event, index, track)}
-                  className={`box-border flex w-full items-center gap-3 border-b border-line/60 text-left transition ${
-                    isQueueLayout ? "px-4 py-3 text-sm" : "px-3 py-2 text-sm"
-                  } ${
-                    active
-                      ? "bg-white/10"
-                      : dragIndex === index
-                        ? "bg-moss/10"
-                        : dragOverIndex === index
-                          ? "bg-ember/10"
-                          : "hover:bg-white/[0.035]"
-                  }`}
-                  style={{ height: queueRowHeight }}
-                >
-                  <button
-                    className="grid h-7 w-7 shrink-0 cursor-grab place-items-center rounded text-muted hover:bg-white/10 hover:text-white active:cursor-grabbing"
-                    type="button"
-                    title="Drag to reorder"
-                    onPointerDown={(event) => beginNowPlayingQueueDrag(event, index, track)}
-                  >
-                    <GripVertical size={14} />
-                  </button>
-                  <span className="w-7 shrink-0 text-right text-xs tabular-nums text-muted">{index + 1}</span>
-                  <button className="min-w-0 flex-1 text-left" type="button" onClick={() => onPlayTrack(track, queue)}>
-                    <span className="block truncate text-white">{display(track.title, "Untitled")}</span>
-                    <span className="block truncate text-xs text-muted">{display(track.artist)}</span>
-                  </button>
-                  <div className="flex shrink-0 items-center gap-1 opacity-80">
-                    <button
-                      className="icon-button h-7 w-7"
-                      type="button"
-                      title="Move up"
-                      disabled={index === 0}
-                      onClick={() => onMoveQueueTrack(index, "up")}
-                    >
-                      <ArrowUp size={13} />
-                    </button>
-                    <button
-                      className="icon-button h-7 w-7"
-                      type="button"
-                      title="Move down"
-                      disabled={index === queue.length - 1}
-                      onClick={() => onMoveQueueTrack(index, "down")}
-                    >
-                      <ArrowDown size={13} />
-                    </button>
-                    <button
-                      className="icon-button h-7 w-7 text-ember"
-                      type="button"
-                      title="Remove from queue"
-                      onClick={() => onRemoveQueueTrack(index)}
-                    >
-                      <X size={13} />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-            {queueBottomSpacerHeight > 0 && <div aria-hidden="true" style={{ height: queueBottomSpacerHeight }} />}
-            {queue.length === 0 && (
-              <div className="grid h-full place-items-center px-4 text-center text-sm text-muted">
-                Queue is empty.
-              </div>
-            )}
-            {queueContextMenu && (
-              <div
-                className="fixed z-50 w-56 overflow-hidden rounded border border-line bg-[rgb(var(--color-popover))] py-1 text-sm text-neutral-100 shadow-2xl"
-                style={{ left: queueContextMenu.x, top: queueContextMenu.y }}
-                onClick={(event) => event.stopPropagation()}
-                onContextMenu={(event) => event.preventDefault()}
-              >
-                <button
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10"
-                  type="button"
-                  onClick={() => {
-                    onPlayTrack(queueContextMenu.track, queue);
-                    setQueueContextMenu(null);
-                  }}
-                >
-                  <Play size={15} />
-                  Play
-                </button>
-                <button
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10 disabled:text-muted"
-                  type="button"
-                  disabled={queueContextMenu.index === 0}
-                  onClick={() => {
-                    onMoveQueueTrack(queueContextMenu.index, "up");
-                    setQueueContextMenu(null);
-                  }}
-                >
-                  <ArrowUp size={15} />
-                  Move Up
-                </button>
-                <button
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/10 disabled:text-muted"
-                  type="button"
-                  disabled={queueContextMenu.index === queue.length - 1}
-                  onClick={() => {
-                    onMoveQueueTrack(queueContextMenu.index, "down");
-                    setQueueContextMenu(null);
-                  }}
-                >
-                  <ArrowDown size={15} />
-                  Move Down
-                </button>
-                <div className="my-1 border-t border-line" />
-                <button
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-ember hover:bg-white/10"
-                  type="button"
-                  onClick={() => {
-                    onRemoveQueueTrack(queueContextMenu.index);
-                    setQueueContextMenu(null);
-                  }}
-                >
-                  <Trash2 size={15} />
-                  Remove From Queue
-                </button>
-              </div>
-            )}
-          </div>
-        </section>
-        )}
+        {showQueue && <NowPlayingQueuePanel model={nowPlayingQueueModel} />}
       </div>
       )}
     </main>
