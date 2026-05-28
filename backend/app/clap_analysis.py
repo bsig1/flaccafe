@@ -4,6 +4,9 @@ import importlib
 from importlib.machinery import PathFinder
 import importlib.util
 import json
+import math
+import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,7 +19,10 @@ from .ml_runtime import activate_ml_runtime, ml_runtime_site_packages, runtime_s
 
 DEFAULT_MODEL_ID = "laion/clap-htsat-fused"
 DEFAULT_CACHE_DIR = MODEL_DIR / "clap"
-DEFAULT_MAX_DURATION_SECONDS = 45.0
+DEFAULT_SAMPLES_PER_TRACK = 3
+MAX_SAMPLES_PER_TRACK = 8
+CLAP_SAMPLE_WINDOW_SECONDS = 10.0
+MAX_REASONABLE_TRACK_DURATION_SECONDS = 6 * 60 * 60
 
 GENRE_LABELS = [
     "rock",
@@ -50,6 +56,26 @@ GENRE_LABELS = [
     "reggae",
     "latin",
 ]
+MOOD_LABELS = [
+    "energetic",
+    "calm",
+    "happy",
+    "sad",
+    "uplifting",
+    "melancholic",
+    "dark",
+    "bright",
+    "aggressive",
+    "mellow",
+    "romantic",
+    "angry",
+    "dreamy",
+    "tense",
+    "playful",
+    "dramatic",
+    "danceable",
+    "acoustic",
+]
 DEPENDENCY_NAMES = ("torch", "transformers", "librosa", "soundfile", "soxr")
 
 
@@ -57,7 +83,12 @@ DEPENDENCY_NAMES = ("torch", "transformers", "librosa", "soundfile", "soxr")
 class ClapConfig:
     model_id: str
     cache_dir: Path
-    max_duration_seconds: float
+    samples_per_track: int
+    sample_window_seconds: float = CLAP_SAMPLE_WINDOW_SECONDS
+
+    @property
+    def max_duration_seconds(self) -> float:
+        return float(self.samples_per_track) * self.sample_window_seconds
 
 
 @dataclass
@@ -65,6 +96,9 @@ class AudioAnalysis:
     genre: str | None
     confidence: float | None
     tags: dict[str, float]
+    mood: str | None
+    mood_confidence: float | None
+    mood_tags: dict[str, float]
     embedding: list[float]
     provider: str
     model: str
@@ -80,29 +114,50 @@ def _path_setting(conn, key: str, fallback: Path) -> Path:
     return Path(value).expanduser() if value else fallback
 
 
-def _float_setting(conn, key: str, fallback: float) -> float:
+def _int_setting(conn, key: str) -> int | None:
     value = get_setting(conn, key)
     if not value:
-        return fallback
+        return None
     try:
-        return float(value)
+        return int(float(value))
     except ValueError:
-        return fallback
+        return None
+
+
+def _bounded_samples_per_track(value: int | float | str | None) -> int:
+    if value is None:
+        return DEFAULT_SAMPLES_PER_TRACK
+    try:
+        numeric = int(round(float(value)))
+    except (TypeError, ValueError):
+        return DEFAULT_SAMPLES_PER_TRACK
+    return max(1, min(MAX_SAMPLES_PER_TRACK, numeric))
+
+
+def _samples_from_duration_seconds(value: int | float | str | None) -> int:
+    if value is None:
+        return DEFAULT_SAMPLES_PER_TRACK
+    try:
+        duration = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_SAMPLES_PER_TRACK
+    samples = math.ceil(max(CLAP_SAMPLE_WINDOW_SECONDS, duration) / CLAP_SAMPLE_WINDOW_SECONDS)
+    return _bounded_samples_per_track(samples)
 
 
 def load_config() -> ClapConfig:
     with connect() as conn:
         model_id = get_setting(conn, "clap_model_id") or DEFAULT_MODEL_ID
         cache_dir = _path_setting(conn, "clap_cache_dir", DEFAULT_CACHE_DIR)
-        max_duration = _float_setting(
-            conn,
-            "clap_max_duration_seconds",
-            DEFAULT_MAX_DURATION_SECONDS,
-        )
+        samples_per_track = _int_setting(conn, "clap_samples_per_track")
+        if samples_per_track is None:
+            samples_per_track = _samples_from_duration_seconds(
+                get_setting(conn, "clap_max_duration_seconds")
+            )
     return ClapConfig(
         model_id=model_id,
         cache_dir=cache_dir,
-        max_duration_seconds=max(5.0, min(180.0, max_duration)),
+        samples_per_track=_bounded_samples_per_track(samples_per_track),
     )
 
 
@@ -110,15 +165,21 @@ def save_config(
     model_id: str | None = None,
     cache_dir: str | None = None,
     max_duration_seconds: float | None = None,
+    samples_per_track: int | None = None,
 ) -> ClapConfig:
     with connect() as conn:
         if model_id is not None:
             set_setting(conn, "clap_model_id", model_id.strip() or None)
         if cache_dir is not None:
             set_setting(conn, "clap_cache_dir", str(Path(cache_dir).expanduser()) if cache_dir.strip() else None)
-        if max_duration_seconds is not None:
-            bounded = max(5.0, min(180.0, float(max_duration_seconds)))
-            set_setting(conn, "clap_max_duration_seconds", str(bounded))
+        if samples_per_track is not None or max_duration_seconds is not None:
+            bounded_samples = (
+                _bounded_samples_per_track(samples_per_track)
+                if samples_per_track is not None
+                else _samples_from_duration_seconds(max_duration_seconds)
+            )
+            set_setting(conn, "clap_samples_per_track", str(bounded_samples))
+            set_setting(conn, "clap_max_duration_seconds", str(bounded_samples * CLAP_SAMPLE_WINDOW_SECONDS))
         conn.commit()
     return load_config()
 
@@ -270,6 +331,9 @@ def status(deep: bool = False) -> dict[str, Any]:
         "model_id": config.model_id,
         "cache_dir": str(config.cache_dir),
         "max_duration_seconds": config.max_duration_seconds,
+        "samples_per_track": config.samples_per_track,
+        "max_samples_per_track": MAX_SAMPLES_PER_TRACK,
+        "sample_window_seconds": config.sample_window_seconds,
         "model_cached": cached,
         "torch_version": torch_version,
         "torch_device": torch_device,
@@ -296,11 +360,131 @@ def _processor_call(processor: Any, audio: Any | None = None, **kwargs: Any) -> 
         return processor(audios=audio, **kwargs)
 
 
+def _normalized_path_text(value: str) -> str:
+    return unicodedata.normalize("NFC", value)
+
+
+def _mojibake_repair_candidates(value: str) -> list[str]:
+    candidates = [value, _normalized_path_text(value)]
+    for source_encoding, errors in (("cp1252", "strict"), ("cp1252", "surrogateescape")):
+        try:
+            repaired = value.encode(source_encoding, errors=errors).decode("utf-8")
+            candidates.extend([repaired, _normalized_path_text(repaired)])
+        except UnicodeError:
+            pass
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate not in seen:
+            unique.append(candidate)
+            seen.add(candidate)
+    return unique
+
+
+def _path_lookup_key(path: Path) -> str:
+    return _normalized_path_text(path.name).casefold()
+
+
+def _lossy_name_pattern(name: str) -> re.Pattern[str] | None:
+    if "?" not in name and "\ufffd" not in name:
+        return None
+    parts = []
+    for character in _normalized_path_text(name):
+        if character in {"?", "\ufffd"}:
+            parts.append(".")
+        else:
+            parts.append(re.escape(character))
+    return re.compile("^" + "".join(parts) + "$", re.IGNORECASE)
+
+
+def resolve_audio_path(path: str | Path) -> Path:
+    """Resolve visually-equivalent or lossy Unicode filenames before audio load."""
+    original = Path(path)
+    for candidate_text in _mojibake_repair_candidates(str(original)):
+        candidate = Path(candidate_text)
+        if candidate.exists():
+            return candidate
+
+    parent = original.parent
+    if not parent.exists():
+        return original
+
+    target_keys = {
+        _normalized_path_text(Path(candidate_text).name).casefold()
+        for candidate_text in _mojibake_repair_candidates(str(original))
+    }
+    lossy_patterns = [
+        pattern
+        for candidate_text in _mojibake_repair_candidates(str(original))
+        if (pattern := _lossy_name_pattern(Path(candidate_text).name)) is not None
+    ]
+
+    matches = []
+    try:
+        siblings = list(parent.iterdir())
+    except OSError:
+        return original
+    for sibling in siblings:
+        if not sibling.is_file():
+            continue
+        sibling_name = _normalized_path_text(sibling.name)
+        if sibling_name.casefold() in target_keys or any(
+            pattern.match(sibling_name) for pattern in lossy_patterns
+        ):
+            matches.append(sibling)
+
+    return matches[0] if len(matches) == 1 else original
+
+
+def sample_offsets(
+    duration_seconds: float | None,
+    samples_per_track: int,
+    window_seconds: float = CLAP_SAMPLE_WINDOW_SECONDS,
+) -> list[float]:
+    count = _bounded_samples_per_track(samples_per_track)
+    if duration_seconds is None or duration_seconds <= 0:
+        return [0.0]
+    max_start = max(0.0, duration_seconds - window_seconds)
+    if max_start <= 0:
+        return [0.0]
+
+    offsets: list[float] = []
+    seen: set[float] = set()
+    for index in range(count):
+        center = duration_seconds * ((index + 0.5) / count)
+        offset = min(max(center - (window_seconds / 2.0), 0.0), max_start)
+        key = round(offset, 3)
+        if key not in seen:
+            offsets.append(offset)
+            seen.add(key)
+    return offsets or [0.0]
+
+
+def _average_rows(rows: list[list[float]]) -> list[float]:
+    if not rows:
+        return []
+    width = len(rows[0])
+    return [
+        sum(float(row[index]) for row in rows) / len(rows)
+        for index in range(width)
+    ]
+
+
+def _normalized_average_embedding(rows: list[list[float]]) -> list[float]:
+    averaged = _average_rows(rows)
+    norm = math.sqrt(sum(value * value for value in averaged))
+    if norm <= 1e-12:
+        return [round(float(value), 6) for value in averaged]
+    return [round(float(value / norm), 6) for value in averaged]
+
+
 def _exception_chain_message(exc: BaseException) -> str:
     messages: list[str] = []
     current: BaseException | None = exc
     while current is not None:
-        text = f"{type(current).__name__}: {current}"
+        detail = str(current).strip()
+        text = f"{type(current).__name__}: {detail}" if detail else type(current).__name__
         if text not in messages:
             messages.append(text)
         current = current.__cause__ or current.__context__
@@ -340,21 +524,142 @@ class ClapAnalyzer:
             getattr(getattr(self.processor, "feature_extractor", None), "sampling_rate", 48000)
             or 48000
         )
-        self.prompts = [f"a {label} song" for label in GENRE_LABELS]
+        self.genre_prompts = [f"This audio is a {label} song." for label in GENRE_LABELS]
+        self.mood_prompts = [f"This music sounds {label}." for label in MOOD_LABELS]
+        self.prompts = self.genre_prompts + self.mood_prompts
 
     def analyze_path(self, path: str | Path, top_n: int = 8) -> AudioAnalysis:
-        audio, _sample_rate = self.librosa.load(
-            str(path),
-            sr=self.sample_rate,
-            mono=True,
-            duration=self.config.max_duration_seconds,
-        )
-        if getattr(audio, "size", 0) <= 0:
-            raise RuntimeError("Audio decoder returned no samples.")
+        audio_samples = self._load_audio_samples(path)
+        return self._analyze_track_samples(audio_samples, top_n)
 
+    def analyze_many(self, tracks: list[dict[str, Any]], top_n: int = 8) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        loaded: list[tuple[int, int, list[Any]]] = []
+        for index, track in enumerate(tracks):
+            track_id = int(track["track_id"])
+            path = str(track["path"])
+            try:
+                loaded.append((index, track_id, self._load_audio_samples(path)))
+                results.append({"status": "pending", "track_id": track_id, "path": path})
+            except Exception as exc:  # noqa: BLE001 - return per-track analysis failures.
+                results.append(
+                    {
+                        "status": "error",
+                        "track_id": track_id,
+                        "path": path,
+                        "error": str(exc),
+                    }
+                )
+
+        if not loaded:
+            return results
+
+        audio_batch: list[Any] = []
+        sample_ranges: list[tuple[int, int, int, int]] = []
+        for index, track_id, audio_samples in loaded:
+            start = len(audio_batch)
+            audio_batch.extend(audio_samples)
+            sample_ranges.append((index, track_id, start, len(audio_batch)))
+
+        genre_probability_rows, mood_probability_rows, embeddings = self._analyze_audio_features(audio_batch)
+        updated_at = utc_now()
+        for index, track_id, start, end in sample_ranges:
+            analysis = self._analysis_from_features(
+                genre_probability_rows[start:end],
+                mood_probability_rows[start:end],
+                embeddings[start:end],
+                top_n,
+                updated_at,
+            )
+            results[index] = {
+                "status": "ok",
+                "track_id": track_id,
+                "analysis": analysis_to_payload(analysis),
+            }
+        return results
+
+    def _audio_duration_seconds(self, path: Path) -> float | None:
+        try:
+            soundfile = importlib.import_module("soundfile")
+            info = soundfile.info(str(path))
+            sample_rate = float(getattr(info, "samplerate", 0) or 0)
+            frames = float(getattr(info, "frames", 0) or 0)
+            if sample_rate > 0 and frames > 0:
+                duration = frames / sample_rate
+                if 0 < duration <= MAX_REASONABLE_TRACK_DURATION_SECONDS:
+                    return duration
+        except Exception:
+            pass
+
+        try:
+            duration = float(self.librosa.get_duration(path=str(path)))
+        except TypeError:
+            try:
+                duration = float(self.librosa.get_duration(filename=str(path)))
+            except Exception:
+                return None
+        except Exception:
+            return None
+        return duration if 0 < duration <= MAX_REASONABLE_TRACK_DURATION_SECONDS else None
+
+    def _load_audio_samples(self, path: str | Path) -> list[Any]:
+        resolved_path = resolve_audio_path(path)
+        if not resolved_path.is_file():
+            raise FileNotFoundError(f"Audio file does not exist: {path}")
+        offsets = sample_offsets(
+            self._audio_duration_seconds(resolved_path),
+            self.config.samples_per_track,
+            self.config.sample_window_seconds,
+        )
+        audio_samples = []
+        errors = []
+        for offset in offsets:
+            try:
+                audio, _sample_rate = self.librosa.load(
+                    str(resolved_path),
+                    sr=self.sample_rate,
+                    mono=True,
+                    offset=offset,
+                    duration=self.config.sample_window_seconds,
+                )
+                if getattr(audio, "size", 0) > 0:
+                    audio_samples.append(audio)
+            except Exception as exc:  # noqa: BLE001 - keep other readable windows.
+                errors.append(f"{offset:.2f}s: {_exception_chain_message(exc)}")
+        if not audio_samples:
+            detail = "; ".join(errors[-3:])
+            if detail:
+                raise RuntimeError(f"Audio decoder returned no samples. Decoder errors: {detail}")
+            raise RuntimeError("Audio decoder returned no samples.")
+        return audio_samples
+
+    def _analyze_audio_batch(self, audio_batch: list[Any], top_n: int) -> list[AudioAnalysis]:
+        genre_probability_rows, mood_probability_rows, embeddings = self._analyze_audio_features(audio_batch)
+        updated_at = utc_now()
+        return [
+            self._analysis_from_features(
+                [genre_probabilities],
+                [mood_probabilities],
+                [embedding],
+                top_n,
+                updated_at,
+            )
+            for genre_probabilities, mood_probabilities, embedding in zip(
+                genre_probability_rows,
+                mood_probability_rows,
+                embeddings,
+                strict=True,
+            )
+        ]
+
+    def _analyze_track_samples(self, audio_samples: list[Any], top_n: int) -> AudioAnalysis:
+        genre_probability_rows, mood_probability_rows, embeddings = self._analyze_audio_features(audio_samples)
+        return self._analysis_from_features(genre_probability_rows, mood_probability_rows, embeddings, top_n, utc_now())
+
+    def _analyze_audio_features(self, audio_batch: list[Any]) -> tuple[list[list[float]], list[list[float]], list[list[float]]]:
         inputs = _processor_call(
             self.processor,
-            audio=audio,
+            audio=audio_batch,
             text=self.prompts,
             sampling_rate=self.sample_rate,
             return_tensors="pt",
@@ -364,30 +669,67 @@ class ClapAnalyzer:
 
         with self.torch.inference_mode():
             outputs = self.model(**inputs)
-            probabilities = outputs.logits_per_audio.softmax(dim=-1)[0].detach().cpu().tolist()
+            logits = outputs.logits_per_audio
+            genre_logits = logits[:, :len(GENRE_LABELS)]
+            mood_logits = logits[:, len(GENRE_LABELS):]
+            genre_probability_rows = genre_logits.softmax(dim=-1).detach().cpu().tolist()
+            mood_probability_rows = mood_logits.softmax(dim=-1).detach().cpu().tolist()
             audio_embeds = outputs.audio_embeds
             audio_embeds = audio_embeds / audio_embeds.norm(dim=-1, keepdim=True).clamp(min=1e-12)
-            embedding = audio_embeds[0].detach().cpu().tolist()
+            embeddings = audio_embeds.detach().cpu().tolist()
 
-        tags = self._top_tags(probabilities, top_n)
+        return genre_probability_rows, mood_probability_rows, embeddings
+
+    def _analysis_from_features(
+        self,
+        genre_probability_rows: list[list[float]],
+        mood_probability_rows: list[list[float]],
+        embeddings: list[list[float]],
+        top_n: int,
+        updated_at: str,
+    ) -> AudioAnalysis:
+        genre_probabilities = _average_rows(genre_probability_rows)
+        mood_probabilities = _average_rows(mood_probability_rows)
+        embedding = _normalized_average_embedding(embeddings)
+        tags = self._top_tags(genre_probabilities, GENRE_LABELS, top_n)
         genre, confidence = next(iter(tags.items()), (None, None))
+        mood_tags = self._top_tags(mood_probabilities, MOOD_LABELS, len(MOOD_LABELS))
+        mood, mood_confidence = next(iter(mood_tags.items()), (None, None))
         return AudioAnalysis(
             genre=genre,
             confidence=confidence,
             tags=tags,
-            embedding=[round(float(value), 6) for value in embedding],
+            mood=mood,
+            mood_confidence=mood_confidence,
+            mood_tags=mood_tags,
+            embedding=embedding,
             provider="clap",
             model=self.config.model_id,
-            updated_at=utc_now(),
+            updated_at=updated_at,
         )
 
-    def _top_tags(self, probabilities: list[float], top_n: int) -> dict[str, float]:
+    def _top_tags(self, probabilities: list[float], labels: list[str], top_n: int) -> dict[str, float]:
         ranked = sorted(enumerate(probabilities), key=lambda item: item[1], reverse=True)[:top_n]
         return {
-            GENRE_LABELS[index]: round(float(score), 6)
+            labels[index]: round(float(score), 6)
             for index, score in ranked
-            if index < len(GENRE_LABELS)
+            if index < len(labels)
         }
+
+
+def analysis_to_payload(analysis: AudioAnalysis) -> dict[str, Any]:
+    return {
+        "genre": analysis.genre,
+        "confidence": analysis.confidence,
+        "tags": analysis.tags,
+        "mood": analysis.mood,
+        "mood_confidence": analysis.mood_confidence,
+        "mood_tags": analysis.mood_tags,
+        "embedding": analysis.embedding,
+        "provider": analysis.provider,
+        "model": analysis.model,
+        "updated_at": analysis.updated_at,
+    }
 
 
 def save_track_analysis(track_id: int, analysis: AudioAnalysis) -> None:
@@ -400,6 +742,9 @@ def save_track_analysis(track_id: int, analysis: AudioAnalysis) -> None:
                 analysis_genre = ?,
                 analysis_genre_confidence = ?,
                 analysis_genre_tags = ?,
+                analysis_mood = ?,
+                analysis_mood_confidence = ?,
+                analysis_mood_tags = ?,
                 analysis_embedding = ?,
                 analysis_updated_at = ?,
                 updated_at = datetime('now')
@@ -411,6 +756,9 @@ def save_track_analysis(track_id: int, analysis: AudioAnalysis) -> None:
                 analysis.genre,
                 analysis.confidence,
                 json.dumps(analysis.tags, ensure_ascii=True, sort_keys=True),
+                analysis.mood,
+                analysis.mood_confidence,
+                json.dumps(analysis.mood_tags, ensure_ascii=True, sort_keys=True),
                 json.dumps(analysis.embedding, ensure_ascii=True),
                 analysis.updated_at,
                 track_id,

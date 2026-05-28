@@ -9,6 +9,13 @@ use std::time::Instant;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
+use super::{
+    configured_clap_analysis_batch_size, configured_clap_analysis_samples_per_track,
+    CLAP_ANALYSIS_MAX_BATCH_SIZE, CLAP_ANALYSIS_MAX_SAMPLES_PER_TRACK,
+    CLAP_ANALYSIS_SAMPLE_WINDOW_SECONDS,
+};
+use crate::library::storage::{open_database, set_setting};
+
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
@@ -40,14 +47,16 @@ pub(crate) fn clap_status(deep: bool) -> Result<JsonValue, String> {
 }
 
 pub(crate) fn clap_status_value(deep: bool) -> Result<JsonValue, String> {
-    clap_expert_json(
+    let mut response = clap_expert_json(
         "clap_expert_status",
         json!({ "command": "status", "deep": deep }),
-    )
+    )?;
+    attach_clap_batch_config(&mut response);
+    Ok(response)
 }
 
 pub(crate) fn update_clap_config(body: JsonValue) -> Result<JsonValue, String> {
-    clap_expert_json(
+    let mut response = clap_expert_json(
         "clap_expert_config",
         json!({
             "command": "save_config",
@@ -55,8 +64,22 @@ pub(crate) fn update_clap_config(body: JsonValue) -> Result<JsonValue, String> {
             "cache_dir": body_string(&body, "cache_dir").or_else(|| body_string(&body, "cacheDir")),
             "max_duration_seconds": body_f64(&body, "max_duration_seconds")
                 .or_else(|| body_f64(&body, "maxDurationSeconds")),
+            "samples_per_track": body_i64(&body, "samples_per_track")
+                .or_else(|| body_i64(&body, "samplesPerTrack"))
+                .or_else(|| body_i64(&body, "song_samples"))
+                .or_else(|| body_i64(&body, "songSamples")),
         }),
-    )
+    )?;
+    if let Some(batch_size) =
+        body_i64(&body, "batch_size").or_else(|| body_i64(&body, "batchSize"))
+    {
+        let batch_size = batch_size.clamp(1, CLAP_ANALYSIS_MAX_BATCH_SIZE as i64);
+        let batch_size_text = batch_size.to_string();
+        let connection = open_database()?;
+        set_setting(&connection, "clap_batch_size", Some(&batch_size_text))?;
+    }
+    attach_clap_batch_config(&mut response);
+    Ok(response)
 }
 
 pub(crate) fn start_clap_install(body: JsonValue) -> Result<JsonValue, String> {
@@ -397,10 +420,40 @@ fn body_bool(body: &JsonValue, key: &str) -> Option<bool> {
     }
 }
 
+fn body_i64(body: &JsonValue, key: &str) -> Option<i64> {
+    match body.get(key) {
+        Some(JsonValue::Number(value)) => value.as_i64(),
+        Some(JsonValue::String(value)) => value.trim().parse().ok(),
+        _ => None,
+    }
+}
+
 fn body_f64(body: &JsonValue, key: &str) -> Option<f64> {
     match body.get(key) {
         Some(JsonValue::Number(value)) => value.as_f64(),
         Some(JsonValue::String(value)) => value.trim().parse().ok(),
         _ => None,
+    }
+}
+
+fn attach_clap_batch_config(response: &mut JsonValue) {
+    if let Some(object) = response.as_object_mut() {
+        object.insert(
+            "batch_size".to_string(),
+            json!(configured_clap_analysis_batch_size()),
+        );
+        object.insert("max_batch_size".to_string(), json!(CLAP_ANALYSIS_MAX_BATCH_SIZE));
+        object.insert(
+            "samples_per_track".to_string(),
+            json!(configured_clap_analysis_samples_per_track()),
+        );
+        object.insert(
+            "max_samples_per_track".to_string(),
+            json!(CLAP_ANALYSIS_MAX_SAMPLES_PER_TRACK),
+        );
+        object.insert(
+            "sample_window_seconds".to_string(),
+            json!(CLAP_ANALYSIS_SAMPLE_WINDOW_SECONDS),
+        );
     }
 }

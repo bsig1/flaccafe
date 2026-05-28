@@ -41,6 +41,11 @@
                     .analysis_embedding
                     .as_deref()
                     .is_some_and(|value| !value.is_empty())
+                && track
+                    .track
+                    .analysis_mood_tags
+                    .as_deref()
+                    .is_some_and(|value| !value.is_empty())
         })
         .count();
     let repeat_artist_percent = if unique_artists.is_empty() {
@@ -91,7 +96,7 @@
     if drift.clap_percent <= 10.0 && drift.total_tracks >= 10 {
         drift
             .warnings
-            .push("Few tracks use CLAP similarity. Analyze more music to improve sound-based recommendations.".to_string());
+            .push("Few tracks use CLAP similarity and mood vectors. Analyze more music to improve sound-based recommendations.".to_string());
     }
     drift
 }

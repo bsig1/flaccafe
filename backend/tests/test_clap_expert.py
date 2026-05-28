@@ -23,11 +23,13 @@ class ClapExpertTests(unittest.TestCase):
         import backend.app.database as database
         import backend.app.clap_analysis as clap_analysis
         import backend.app.clap_expert as clap_expert
+        import backend.app.clap_worker as clap_worker
 
         self.config = importlib.reload(config)
         self.database = importlib.reload(database)
         self.clap_analysis = importlib.reload(clap_analysis)
         self.clap_expert = importlib.reload(clap_expert)
+        self.clap_worker = importlib.reload(clap_worker)
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
@@ -55,13 +57,50 @@ class ClapExpertTests(unittest.TestCase):
             {
                 "command": "save_config",
                 "model_id": "example/clap",
-                "max_duration_seconds": 12,
+                "samples_per_track": 5,
             }
         )
 
         self.assertEqual(messages[-1]["status"], "ok")
         self.assertEqual(messages[-1]["body"]["model_id"], "example/clap")
-        self.assertEqual(messages[-1]["body"]["max_duration_seconds"], 12)
+        self.assertEqual(messages[-1]["body"]["samples_per_track"], 5)
+        self.assertEqual(messages[-1]["body"]["sample_window_seconds"], 10.0)
+
+    def test_legacy_max_duration_maps_to_ten_second_samples(self) -> None:
+        messages = self._run_expert(
+            {
+                "command": "save_config",
+                "max_duration_seconds": 45,
+            }
+        )
+
+        self.assertEqual(messages[-1]["status"], "ok")
+        self.assertEqual(messages[-1]["body"]["samples_per_track"], 5)
+        self.assertEqual(messages[-1]["body"]["max_duration_seconds"], 50.0)
+
+    def test_sample_offsets_use_centered_windows(self) -> None:
+        offsets = self.clap_analysis.sample_offsets(180, 3)
+
+        self.assertEqual([round(value) for value in offsets], [25, 85, 145])
+
+    def test_analysis_payload_includes_mood_vector(self) -> None:
+        analysis = self.clap_analysis.AudioAnalysis(
+            genre="pop",
+            confidence=0.5,
+            tags={"pop": 0.5},
+            mood="energetic",
+            mood_confidence=0.4,
+            mood_tags={"energetic": 0.4, "happy": 0.3},
+            embedding=[0.1, 0.2],
+            provider="clap",
+            model="test-model",
+            updated_at="2026-05-28T00:00:00+00:00",
+        )
+
+        payload = self.clap_analysis.analysis_to_payload(analysis)
+
+        self.assertEqual(payload["mood"], "energetic")
+        self.assertEqual(payload["mood_tags"]["happy"], 0.3)
 
     def test_unknown_command_reports_failure_without_crashing(self) -> None:
         messages = self._run_expert({"command": "missing"})
@@ -119,6 +158,39 @@ class ClapExpertTests(unittest.TestCase):
         self.assertIsNotNone(message)
         self.assertIn("torch, transformers", message)
         self.assertIn("missing fbgemm.dll", message)
+
+    def test_resolves_lossy_unicode_audio_filename(self) -> None:
+        folder = Path(self.temp_dir.name) / "music"
+        folder.mkdir()
+        real_path = folder / "Gemini Moon - Reneé Rapp - Snow Angel .flac"
+        real_path.write_bytes(b"placeholder")
+        lossy_path = folder / "Gemini Moon - Rene? Rapp - Snow Angel .flac"
+
+        resolved = self.clap_analysis.resolve_audio_path(lossy_path)
+
+        self.assertEqual(resolved, real_path)
+
+    def test_resolves_mojibake_audio_filename_with_surrogateescape(self) -> None:
+        folder = Path(self.temp_dir.name) / "music"
+        folder.mkdir()
+        real_name = "\uac15\ub0a8\uc2a4\ud0c0\uc77c.flac"
+        real_path = folder / real_name
+        real_path.write_bytes(b"placeholder")
+        mojibake_name = real_name.encode("utf-8").decode("cp1252", errors="surrogateescape")
+        mojibake_path = folder / mojibake_name
+
+        resolved = self.clap_analysis.resolve_audio_path(mojibake_path)
+
+        self.assertEqual(resolved, real_path)
+
+    def test_worker_json_line_replaces_lone_surrogates(self) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            self.clap_worker._json_line({"status": "error", "path": "bad\udc9d.flac"})
+
+        line = stdout.getvalue().strip()
+        self.assertNotIn("\\udc9d", line.lower())
+        self.assertEqual(json.loads(line)["path"], "bad\ufffd.flac")
 
 
 if __name__ == "__main__":

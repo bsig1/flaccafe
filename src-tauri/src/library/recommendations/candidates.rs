@@ -218,6 +218,82 @@ pub(super) fn cosine_similarity(left: Option<&str>, right: Option<&str>) -> Opti
     }
 }
 
+fn parse_score_vector(value: Option<&str>) -> Option<BTreeMap<String, f64>> {
+    let raw = value?;
+    let parsed = serde_json::from_str::<BTreeMap<String, f64>>(raw).ok()?;
+    let scores = parsed
+        .into_iter()
+        .filter_map(|(key, score)| {
+            let key = normalize_token(Some(&key));
+            (score > 0.0 && !key.is_empty()).then_some((key, score))
+        })
+        .collect::<BTreeMap<_, _>>();
+    (!scores.is_empty()).then_some(scores)
+}
+
+fn score_vector_similarity(left: Option<&str>, right: Option<&str>) -> Option<f64> {
+    let left = parse_score_vector(left)?;
+    let right = parse_score_vector(right)?;
+    let left_norm = left.values().map(|value| value * value).sum::<f64>().sqrt();
+    let right_norm = right.values().map(|value| value * value).sum::<f64>().sqrt();
+    if left_norm <= 0.0 || right_norm <= 0.0 {
+        return None;
+    }
+    let dot = left
+        .iter()
+        .filter_map(|(key, left_score)| right.get(key).map(|right_score| left_score * right_score))
+        .sum::<f64>();
+    Some(dot / (left_norm * right_norm))
+}
+
+fn score_vector_target_similarity(value: Option<&str>, targets: &[String]) -> Option<f64> {
+    if targets.is_empty() {
+        return None;
+    }
+    let scores = parse_score_vector(value)?;
+    let target_set = targets
+        .iter()
+        .filter(|target| AUTO_DJ_MOOD_SEED_LABELS.contains(&target.as_str()))
+        .collect::<HashSet<_>>();
+    let target_count = target_set.len();
+    if target_count == 0 {
+        return None;
+    }
+    let score_norm = scores.values().map(|value| value * value).sum::<f64>().sqrt();
+    if score_norm <= 0.0 {
+        return None;
+    }
+    let dot = target_set
+        .iter()
+        .filter_map(|target| scores.get(*target))
+        .sum::<f64>();
+    Some(dot / (score_norm * (target_count as f64).sqrt()))
+}
+
+pub(super) fn mood_seed_adjustment(
+    track: &DesktopTrack,
+    settings: &DesktopAutoDjSettings,
+) -> (f64, String) {
+    if settings.mood_seeds.is_empty() || settings.mood_seed_weight <= 0.0 {
+        return (0.0, String::new());
+    }
+    let Some(similarity) =
+        score_vector_target_similarity(track.analysis_mood_tags.as_deref(), &settings.mood_seeds)
+    else {
+        return (0.0, String::new());
+    };
+    if similarity <= 0.0 {
+        return (0.0, String::new());
+    }
+    (
+        similarity * settings.mood_seed_weight,
+        format!(
+            "mood seed {} {similarity:.2}",
+            settings.mood_seeds.join("/")
+        ),
+    )
+}
+
 pub(super) fn similarity_adjustment(
     track: &DesktopTrack,
     seed_track: Option<&DesktopTrack>,
@@ -238,6 +314,15 @@ pub(super) fn similarity_adjustment(
         if similarity > 0.0 {
             score += similarity * settings.audio_similarity_weight;
             reasons.push(format!("audio similarity {similarity:.2}"));
+        }
+    }
+    if let Some(similarity) = score_vector_similarity(
+        track.analysis_mood_tags.as_deref(),
+        seed_track.analysis_mood_tags.as_deref(),
+    ) {
+        if similarity > 0.0 {
+            score += similarity * settings.mood_similarity_weight;
+            reasons.push(format!("mood similarity {similarity:.2}"));
         }
     }
     if !split_artist_tokens(track.artist.as_deref())
@@ -277,6 +362,52 @@ pub(super) fn similarity_adjustment(
         (score, String::new())
     } else {
         (score, format!("seed {}", reasons.join("/")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn score_vector_similarity_matches_shared_mood_shapes() {
+        let left = r#"{"energetic":0.6,"dark":0.3,"calm":0.1}"#;
+        let right = r#"{"energetic":0.5,"dark":0.4,"happy":0.1}"#;
+
+        let similarity = score_vector_similarity(Some(left), Some(right)).unwrap();
+
+        assert!(similarity > 0.9);
+    }
+
+    #[test]
+    fn score_vector_similarity_handles_disjoint_moods() {
+        let left = r#"{"energetic":0.7,"happy":0.3}"#;
+        let right = r#"{"calm":0.8,"sad":0.2}"#;
+
+        let similarity = score_vector_similarity(Some(left), Some(right)).unwrap();
+
+        assert_eq!(similarity, 0.0);
+    }
+
+    #[test]
+    fn mood_seed_similarity_rewards_target_moods() {
+        let scores = r#"{"energetic":0.5,"happy":0.3,"calm":0.1,"sad":0.1}"#;
+        let seeds = vec!["energetic".to_string(), "happy".to_string()];
+
+        let similarity = score_vector_target_similarity(Some(scores), &seeds).unwrap();
+
+        assert!(similarity > 0.85);
+    }
+
+    #[test]
+    fn autodj_settings_normalizes_mood_seed_list() {
+        let settings = autodj_settings(serde_json::json!({
+            "mood_seeds": ["Energetic", "unknown", "energetic", "Dreamy"],
+            "mood_seed_weight": 9.0
+        }));
+
+        assert_eq!(settings.mood_seeds, vec!["energetic", "dreamy"]);
+        assert_eq!(settings.mood_seed_weight, 5.0);
     }
 }
 

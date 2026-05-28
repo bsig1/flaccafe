@@ -32,6 +32,7 @@ $Arguments = @(
     "--hidden-import", "cmd",
     "--hidden-import", "code",
     "--hidden-import", "codeop",
+    "--hidden-import", "colorsys",
     "--hidden-import", "ctypes.util",
     "--hidden-import", "ctypes.wintypes",
     "--hidden-import", "configparser",

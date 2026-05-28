@@ -29,6 +29,7 @@ import type {
 } from "./modals";
 import {
   analysisError,
+  analysisMoodTags,
   analysisTags,
   display,
   formatDate,
@@ -115,6 +116,7 @@ export function TrackDetailsPanel({
 
   const detailTrack = track;
   const tags = analysisTags(track);
+  const moodTags = analysisMoodTags(track);
   const error = analysisError(track);
   const artworkSrc = !artworkFailed ? albumArtworkUrl(track.id, track.file_modified_at) : null;
   const editableTitle = "Edit metadata";
@@ -388,6 +390,18 @@ export function TrackDetailsPanel({
                 </span>
               </div>
               <div className="flex min-w-0 items-center justify-between gap-3">
+                <span className="shrink-0 text-muted">Mood</span>
+                <span className="min-w-0 truncate text-white">{display(track.analysis_mood, "-")}</span>
+              </div>
+              <div className="flex min-w-0 items-center justify-between gap-3">
+                <span className="shrink-0 text-muted">Mood match</span>
+                <span className="text-white">
+                  {track.analysis_mood_confidence !== null && track.analysis_mood_confidence !== undefined
+                    ? formatPercent(track.analysis_mood_confidence * 100)
+                    : "-"}
+                </span>
+              </div>
+              <div className="flex min-w-0 items-center justify-between gap-3">
                 <span className="shrink-0 text-muted">Updated</span>
                 <span className="min-w-0 truncate text-white">{formatDate(track.analysis_updated_at)}</span>
               </div>
@@ -396,6 +410,15 @@ export function TrackDetailsPanel({
             {tags.length > 0 && (
               <div className="mt-3 flex flex-wrap gap-1.5">
                 {tags.slice(0, 10).map(([tag, score]) => (
+                  <span key={tag} className="rounded border border-line bg-ink px-2 py-1 text-xs text-neutral-200">
+                    {tag} {formatPercent(score * 100)}
+                  </span>
+                ))}
+              </div>
+            )}
+            {moodTags.length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {moodTags.slice(0, 8).map(([tag, score]) => (
                   <span key={tag} className="rounded border border-line bg-ink px-2 py-1 text-xs text-neutral-200">
                     {tag} {formatPercent(score * 100)}
                   </span>

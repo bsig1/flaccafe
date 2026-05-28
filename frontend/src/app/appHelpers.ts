@@ -158,6 +158,7 @@ export function defaultLibraryTrackQueryKey() {
 function compactStartupTrack(track: Track): Track {
   return {
     ...track,
+    analysis_mood_tags: null,
     analysis_embedding: null,
   };
 }
@@ -289,7 +290,7 @@ export function buildArtistSummariesFromTracks(trackList: Track[], searchTerm = 
       current.first_year = current.first_year === null ? track.year : Math.min(current.first_year, track.year);
       current.last_year = current.last_year === null ? track.year : Math.max(current.last_year, track.year);
     }
-    current.searchText += ` ${track.title ?? ""} ${track.artist ?? ""} ${track.album ?? ""} ${track.genre ?? ""} ${track.analysis_genre ?? ""}`;
+    current.searchText += ` ${track.title ?? ""} ${track.artist ?? ""} ${track.album ?? ""} ${track.genre ?? ""} ${track.analysis_genre ?? ""} ${track.analysis_mood ?? ""}`;
     artistsByName.set(key, current);
   }
 

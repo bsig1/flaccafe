@@ -78,6 +78,14 @@
         breakdown.insert("exploration".to_string(), round3(delta));
         reasons.push("exploration".to_string());
     }
+    let (mood_seed_delta, mood_seed_reason) = mood_seed_adjustment(track, settings);
+    if mood_seed_delta != 0.0 {
+        score += mood_seed_delta;
+        breakdown.insert("mood_seed".to_string(), round3(mood_seed_delta));
+        if !mood_seed_reason.is_empty() {
+            reasons.push(mood_seed_reason);
+        }
+    }
     let (similarity, similarity_reason) = similarity_adjustment(track, seed_track, settings);
     if similarity != 0.0 {
         let delta = similarity * settings.similarity_weight;

@@ -58,9 +58,10 @@ export function AppPageOutlet({ controller }: AppPageOutletProps) {
     cdAutoLookupMetadata,
     checkBackendStatus,
     chromaprintSetup,
+    clapBatchSize,
     clapCacheDir,
     clapInstallProgress,
-    clapMaxDuration,
+    clapSamplesPerTrack,
     clapModelId,
     clapStatus,
     clapStatusLoadMessage,
@@ -277,8 +278,9 @@ export function AppPageOutlet({ controller }: AppPageOutletProps) {
     setAudioAnalysisLimit,
     setAudioAnalysisOnlyMissing,
     setAudioAnalysisOverwrite,
+    setClapBatchSize,
     setClapCacheDir,
-    setClapMaxDuration,
+    setClapSamplesPerTrack,
     setClapModelId,
     setContinuousAutoDjSettings,
     setDetailTrack,
@@ -458,8 +460,10 @@ export function AppPageOutlet({ controller }: AppPageOutletProps) {
         setClapModelId={setClapModelId}
         clapCacheDir={clapCacheDir}
         setClapCacheDir={setClapCacheDir}
-        clapMaxDuration={clapMaxDuration}
-        setClapMaxDuration={setClapMaxDuration}
+        clapSamplesPerTrack={clapSamplesPerTrack}
+        setClapSamplesPerTrack={setClapSamplesPerTrack}
+        clapBatchSize={clapBatchSize}
+        setClapBatchSize={setClapBatchSize}
         installProgress={clapInstallProgress}
         isClapStatusLoading={isClapStatusLoading}
         clapStatusLoadPercent={clapStatusLoadPercent}

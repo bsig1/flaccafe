@@ -55,6 +55,23 @@ fn query_cache_key(scope: &str, payload: serde_json::Value) -> String {
     )
 }
 
+fn table_has_column(connection: &Connection, table: &str, column: &str) -> bool {
+    let Ok(mut statement) = connection.prepare(&format!("PRAGMA table_info({table})")) else {
+        return false;
+    };
+    let Ok(rows) = statement.query_map([], |row| row.get::<_, String>("name")) else {
+        return false;
+    };
+    let has_column = rows.filter_map(Result::ok).any(|name| name == column);
+    has_column
+}
+
+fn table_row_count(connection: &Connection, table: &str) -> Option<i64> {
+    connection
+        .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row.get(0))
+        .ok()
+}
+
 fn should_cache_page(limit: usize) -> bool {
     limit <= 500
 }
@@ -244,6 +261,19 @@ pub(crate) fn ensure_performance_schema(connection: &Connection) -> Result<(), S
 }
 
 fn ensure_tracks_fts(connection: &Connection) -> Result<(), String> {
+    if tracks_fts_available(connection) && !table_has_column(connection, "tracks_fts", "analysis_mood")
+    {
+        connection
+            .execute_batch(
+                r#"
+                DROP TRIGGER IF EXISTS tracks_fts_ai;
+                DROP TRIGGER IF EXISTS tracks_fts_ad;
+                DROP TRIGGER IF EXISTS tracks_fts_au;
+                DROP TABLE IF EXISTS tracks_fts;
+                "#,
+            )
+            .ok();
+    }
     let fts_created = connection
         .execute(
             r#"
@@ -255,6 +285,7 @@ fn ensure_tracks_fts(connection: &Connection) -> Result<(), String> {
               album_artist,
               genre,
               analysis_genre,
+              analysis_mood,
               path,
               content='tracks',
               content_rowid='id',
@@ -274,12 +305,12 @@ fn ensure_tracks_fts(connection: &Connection) -> Result<(), String> {
             r#"
             DROP TRIGGER IF EXISTS tracks_fts_au;
             CREATE TRIGGER IF NOT EXISTS tracks_fts_ai AFTER INSERT ON tracks BEGIN
-              INSERT INTO tracks_fts(rowid, title, artist, album, album_artist, genre, analysis_genre, path)
-              VALUES(new.id, new.title, new.artist, new.album, new.album_artist, new.genre, new.analysis_genre, new.path);
+              INSERT INTO tracks_fts(rowid, title, artist, album, album_artist, genre, analysis_genre, analysis_mood, path)
+              VALUES(new.id, new.title, new.artist, new.album, new.album_artist, new.genre, new.analysis_genre, new.analysis_mood, new.path);
             END;
             CREATE TRIGGER IF NOT EXISTS tracks_fts_ad AFTER DELETE ON tracks BEGIN
-              INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album, album_artist, genre, analysis_genre, path)
-              VALUES('delete', old.id, old.title, old.artist, old.album, old.album_artist, old.genre, old.analysis_genre, old.path);
+              INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album, album_artist, genre, analysis_genre, analysis_mood, path)
+              VALUES('delete', old.id, old.title, old.artist, old.album, old.album_artist, old.genre, old.analysis_genre, old.analysis_mood, old.path);
             END;
             CREATE TRIGGER IF NOT EXISTS tracks_fts_au AFTER UPDATE ON tracks
             WHEN old.path IS NOT new.path
@@ -289,32 +320,24 @@ fn ensure_tracks_fts(connection: &Connection) -> Result<(), String> {
               OR old.album_artist IS NOT new.album_artist
               OR old.genre IS NOT new.genre
               OR old.analysis_genre IS NOT new.analysis_genre
+              OR old.analysis_mood IS NOT new.analysis_mood
             BEGIN
-              INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album, album_artist, genre, analysis_genre, path)
-              VALUES('delete', old.id, old.title, old.artist, old.album, old.album_artist, old.genre, old.analysis_genre, old.path);
-              INSERT INTO tracks_fts(rowid, title, artist, album, album_artist, genre, analysis_genre, path)
-              VALUES(new.id, new.title, new.artist, new.album, new.album_artist, new.genre, new.analysis_genre, new.path);
+              INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album, album_artist, genre, analysis_genre, analysis_mood, path)
+              VALUES('delete', old.id, old.title, old.artist, old.album, old.album_artist, old.genre, old.analysis_genre, old.analysis_mood, old.path);
+              INSERT INTO tracks_fts(rowid, title, artist, album, album_artist, genre, analysis_genre, analysis_mood, path)
+              VALUES(new.id, new.title, new.artist, new.album, new.album_artist, new.genre, new.analysis_genre, new.analysis_mood, new.path);
             END;
             "#,
         )
         .map_err(|error| format!("Could not create track search triggers: {error}"))?;
 
+    rebuild_tracks_fts_if_stale(connection)?;
     Ok(())
 }
 
-fn rebuild_tracks_fts(connection: &Connection) -> Result<(), String> {
+pub(crate) fn rebuild_tracks_fts(connection: &Connection) -> Result<(), String> {
     connection
-        .execute("INSERT INTO tracks_fts(tracks_fts) VALUES('delete-all')", [])
-        .ok();
-    connection
-        .execute(
-            r#"
-            INSERT INTO tracks_fts(rowid, title, artist, album, album_artist, genre, analysis_genre, path)
-            SELECT id, title, artist, album, album_artist, genre, analysis_genre, path
-            FROM tracks
-            "#,
-            [],
-        )
+        .execute("INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild')", [])
         .map_err(|error| format!("Could not rebuild track search index: {error}"))?;
     Ok(())
 }
@@ -334,13 +357,17 @@ fn ensure_tracks_fts_current(connection: &Connection) -> Result<(), String> {
     if !tracks_fts_available(connection) {
         return Ok(());
     }
-    let track_count: i64 = connection
-        .query_row("SELECT count(*) FROM tracks", [], |row| row.get(0))
-        .unwrap_or(0);
-    let fts_count: i64 = connection
-        .query_row("SELECT count(*) FROM tracks_fts", [], |row| row.get(0))
-        .unwrap_or(0);
-    if track_count > 0 && fts_count == 0 {
+    rebuild_tracks_fts_if_stale(connection)?;
+    Ok(())
+}
+
+fn rebuild_tracks_fts_if_stale(connection: &Connection) -> Result<(), String> {
+    let track_count = table_row_count(connection, "tracks").unwrap_or(0);
+    if track_count <= 0 {
+        return Ok(());
+    }
+    let docsize_count = table_row_count(connection, "tracks_fts_docsize").unwrap_or(-1);
+    if docsize_count != track_count {
         rebuild_tracks_fts(connection)?;
     }
     Ok(())

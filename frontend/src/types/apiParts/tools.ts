@@ -474,6 +474,9 @@ export interface ClapGenreTagPreview {
   current_genre: string | null;
   proposed_genre: string | null;
   confidence: number | null;
+  runner_up_genre: string | null;
+  match_margin: number | null;
+  copy_blocked_reason: string | null;
   changed: boolean;
   applied: boolean;
   error: string | null;
@@ -483,6 +486,7 @@ export interface ClapGenreTagResponse {
   total: number;
   matched: number;
   changed: number;
+  blocked: number;
   applied: number;
   errors: string[];
   previews: ClapGenreTagPreview[];

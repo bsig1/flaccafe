@@ -186,6 +186,8 @@ pub fn clap_coverage(
                             WHEN analysis_provider = 'clap'
                              AND analysis_embedding IS NOT NULL
                              AND trim(analysis_embedding) <> ''
+                             AND analysis_mood_tags IS NOT NULL
+                             AND trim(analysis_mood_tags) <> ''
                             THEN 1 ELSE 0
                         END
                     ) AS analyzed_tracks,

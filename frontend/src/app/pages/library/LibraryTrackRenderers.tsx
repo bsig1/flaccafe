@@ -51,6 +51,12 @@ export function createLibraryTrackRenderers(model: any) {
         return track.analysis_genre_confidence !== null && track.analysis_genre_confidence !== undefined
           ? formatPercent(track.analysis_genre_confidence * 100)
           : "-";
+      case "analysis_mood":
+        return display(track.analysis_mood, "-");
+      case "analysis_mood_confidence":
+        return track.analysis_mood_confidence !== null && track.analysis_mood_confidence !== undefined
+          ? formatPercent(track.analysis_mood_confidence * 100)
+          : "-";
       case "analysis_provider":
         return display(track.analysis_provider, "-");
       case "analysis_updated_at":

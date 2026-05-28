@@ -44,7 +44,7 @@ if (-not $BuildText.Contains("build_backend_sidecar.ps1")) {
 }
 
 $SidecarBuildText = Get-Content $SidecarBuildScript -Raw
-foreach ($Needle in @('"--noconsole"', '"--hidden-import", "ctypes.wintypes"', '"--hidden-import", "configparser"', '"--hidden-import", "unittest.mock"', '"--exclude-module", "torch"', '"--exclude-module", "transformers"', '"--exclude-module", "librosa"')) {
+foreach ($Needle in @('"--noconsole"', '"--hidden-import", "colorsys"', '"--hidden-import", "ctypes.wintypes"', '"--hidden-import", "configparser"', '"--hidden-import", "unittest.mock"', '"--exclude-module", "torch"', '"--exclude-module", "transformers"', '"--exclude-module", "librosa"')) {
     if (-not $SidecarBuildText.Contains($Needle)) {
         throw "Backend sidecar build script is missing expected packaging guard: $Needle"
     }

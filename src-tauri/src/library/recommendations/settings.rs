@@ -42,6 +42,60 @@ fn optional_int_setting(settings: &serde_json::Value, key: &str) -> Option<i64> 
     settings.get(key).and_then(serde_json::Value::as_i64)
 }
 
+pub(super) const AUTO_DJ_MOOD_SEED_LABELS: &[&str] = &[
+    "energetic",
+    "calm",
+    "happy",
+    "sad",
+    "uplifting",
+    "melancholic",
+    "dark",
+    "bright",
+    "aggressive",
+    "mellow",
+    "romantic",
+    "angry",
+    "dreamy",
+    "tense",
+    "playful",
+    "dramatic",
+    "danceable",
+    "acoustic",
+];
+
+fn normalize_mood_seed_label(value: &str) -> Option<String> {
+    let normalized = value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    AUTO_DJ_MOOD_SEED_LABELS
+        .iter()
+        .any(|label| *label == normalized)
+        .then_some(normalized)
+}
+
+fn string_list_setting(
+    settings: &serde_json::Value,
+    key: &str,
+    max_items: usize,
+) -> Vec<String> {
+    let mut values = Vec::new();
+    if let Some(items) = settings.get(key).and_then(serde_json::Value::as_array) {
+        for item in items.iter().filter_map(serde_json::Value::as_str) {
+            if let Some(value) = normalize_mood_seed_label(item) {
+                if !values.contains(&value) {
+                    values.push(value);
+                }
+            }
+            if values.len() >= max_items {
+                break;
+            }
+        }
+    }
+    values
+}
+
 pub(crate) fn autodj_settings(settings: serde_json::Value) -> DesktopAutoDjSettings {
     DesktopAutoDjSettings {
         queue_length: int_setting(&settings, "queue_length", 25, 1, 200) as usize,
@@ -82,6 +136,8 @@ pub(crate) fn autodj_settings(settings: serde_json::Value) -> DesktopAutoDjSetti
             3650,
         ),
         seed_track_id: optional_int_setting(&settings, "seed_track_id"),
+        mood_seeds: string_list_setting(&settings, "mood_seeds", 8),
+        mood_seed_weight: number_setting(&settings, "mood_seed_weight", 1.4, 0.0, 5.0),
         similarity_weight: number_setting(&settings, "similarity_weight", 0.0, 0.0, 5.0),
         rating_weight: number_setting(&settings, "rating_weight", 1.0, 0.0, 5.0),
         recency_weight: number_setting(&settings, "recency_weight", 1.0, 0.0, 5.0),
@@ -93,6 +149,13 @@ pub(crate) fn autodj_settings(settings: serde_json::Value) -> DesktopAutoDjSetti
             &settings,
             "audio_similarity_weight",
             2.2,
+            0.0,
+            5.0,
+        ),
+        mood_similarity_weight: number_setting(
+            &settings,
+            "mood_similarity_weight",
+            0.9,
             0.0,
             5.0,
         ),

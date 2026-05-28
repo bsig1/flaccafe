@@ -29,7 +29,7 @@ from backend.app.ml_runtime import activate_ml_runtime, runtime_status
 activated = activate_ml_runtime(force=True)
 status = runtime_status(include_bootstrap=True)
 checks = {}
-for name in ("torch", "transformers", "librosa", "soundfile", "soxr"):
+for name in ("colorsys", "mpmath", "sympy", "torch", "transformers", "librosa", "soundfile", "soxr"):
     try:
         module = importlib.import_module(name)
         checks[name] = {"ok": True, "version": getattr(module, "__version__", None)}

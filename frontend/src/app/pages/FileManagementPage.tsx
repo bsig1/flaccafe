@@ -113,6 +113,7 @@ import type {
 import type { FileManagementPageProps } from "./file-management/FileManagementPageTypes";
 
 const ACOUSTID_API_KEY_URL = "https://acoustid.org/api-key";
+const FILE_WRITE_PREVIEW_LIMIT = 100_000;
 
 function defaultToolTarget(folderPath: string, folderName: string): string {
   const trimmed = folderPath.trim().replace(/[\\/]+$/, "");
@@ -233,7 +234,7 @@ export function FileManagementPage({
   const [fingerprintTagSaveArtwork, setFingerprintTagSaveArtwork] = useState(false);
   const [fingerprintTagWriteToFiles, setFingerprintTagWriteToFiles] = useState(false);
   const [clapGenreMissingOnly, setClapGenreMissingOnly] = useState(true);
-  const [clapGenreMinConfidence, setClapGenreMinConfidence] = useState(0.35);
+  const [clapGenreMinConfidence, setClapGenreMinConfidence] = useState(0.45);
   const [clapGenrePreview, setClapGenrePreview] = useState<ClapGenreTagResponse | null>(null);
   const [clapGenreBusy, setClapGenreBusy] = useState(false);
   const [organizeTemplate, setOrganizeTemplate] = useState("<Album Artist>/<Album> (<Year>)/<Track#> - <Title>");
@@ -490,7 +491,9 @@ export function FileManagementPage({
       setStatus(
         apply
           ? `Applied CLAP genres to ${response.applied.toLocaleString()} track${response.applied === 1 ? "" : "s"}`
-          : `CLAP preview found ${response.changed.toLocaleString()} genre change${response.changed === 1 ? "" : "s"}`,
+          : `CLAP preview found ${response.changed.toLocaleString()} genre change${response.changed === 1 ? "" : "s"}${
+              response.blocked ? ` (${response.blocked.toLocaleString()} blocked by strict copy rules)` : ""
+            }`,
       );
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not preview CLAP genre tags");
@@ -747,7 +750,7 @@ export function FileManagementPage({
         include_metadata: fileWriteIncludeMetadata,
         include_rating: fileWriteIncludeRatings,
         apply,
-        limit: apply ? 10000 : 500,
+        limit: apply ? Math.max(pendingIds.length, 1) : FILE_WRITE_PREVIEW_LIMIT,
       });
       setFileWritePreview(response);
       if (apply) {

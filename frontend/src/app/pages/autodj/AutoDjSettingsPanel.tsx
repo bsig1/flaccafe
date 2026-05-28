@@ -20,6 +20,7 @@ import { NumberField } from "../../components/common";
 import {
   AutoDjExperience,
   AutoDjTemplate,
+  autoDjMoodSeedOptions,
   defaultAutoDj,
   display,
   formatDuration,
@@ -72,6 +73,67 @@ export function AutoDjSettingsPanel({ model }: { model: any }) {
     setNeighborMinRating,
     onDeleteAvoidRule,
   } = model;
+  const selectedMoodSeeds = settings.mood_seeds ?? [];
+  const moodSeedWeight = Number(settings.mood_seed_weight ?? defaultAutoDj.mood_seed_weight ?? 1.4);
+  const toggleMoodSeed = (mood: string) => {
+    const next = selectedMoodSeeds.includes(mood)
+      ? selectedMoodSeeds.filter((seed) => seed !== mood)
+      : [...selectedMoodSeeds, mood];
+    setSettings({
+      ...settings,
+      mood_seeds: next,
+      mood_seed_weight: settings.mood_seed_weight ?? defaultAutoDj.mood_seed_weight,
+    });
+  };
+  const renderMoodSeedControls = () => (
+    <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-xs font-medium uppercase text-muted">Mood Seeds</div>
+        {selectedMoodSeeds.length > 0 && (
+          <button
+            className="text-xs text-muted hover:text-white"
+            type="button"
+            onClick={() => setSettings({ ...settings, mood_seeds: [] })}
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {autoDjMoodSeedOptions.map((mood) => {
+          const selected = selectedMoodSeeds.includes(mood);
+          return (
+            <button
+              key={mood}
+              className={`rounded border px-2 py-1 text-xs transition ${
+                selected
+                  ? "border-moss bg-moss/15 text-white"
+                  : "border-line/70 bg-panel text-muted hover:text-white"
+              }`}
+              type="button"
+              onClick={() => toggleMoodSeed(mood)}
+            >
+              {mood.slice(0, 1).toUpperCase() + mood.slice(1)}
+            </button>
+          );
+        })}
+      </div>
+      {selectedMoodSeeds.length > 0 && (
+        <label className="grid gap-1">
+          <span className="text-xs text-muted">Strength {moodSeedWeight.toFixed(1)}</span>
+          <input
+            type="range"
+            min={0}
+            max={5}
+            step={0.1}
+            value={moodSeedWeight}
+            onChange={(event) => setSettings({ ...settings, mood_seed_weight: Number(event.target.value) })}
+            className="accent-moss"
+          />
+        </label>
+      )}
+    </div>
+  );
 
   return (
     <>
@@ -205,6 +267,7 @@ export function AutoDjSettingsPanel({ model }: { model: any }) {
                   {settings.seed_track_id ? "Seeded from current track" : "Use current track"}
                 </button>
               </label>
+              {renderMoodSeedControls()}
             </div>
           ) : (
             <>
@@ -560,6 +623,7 @@ export function AutoDjSettingsPanel({ model }: { model: any }) {
                 </button>
               )}
             </label>
+            {renderMoodSeedControls()}
             {settings.seed_track_id && (
               <div className="min-w-0 max-w-full overflow-hidden rounded border border-line/70 bg-ink p-3">
                 <div className="mb-2 flex items-center justify-between gap-3">
@@ -666,6 +730,7 @@ export function AutoDjSettingsPanel({ model }: { model: any }) {
               {(
                 [
                   ["audio_similarity_weight", "Audio"],
+                  ["mood_similarity_weight", "Mood"],
                   ["artist_similarity_weight", "Artist"],
                   ["album_similarity_weight", "Album"],
                   ["genre_similarity_weight", "Genre"],

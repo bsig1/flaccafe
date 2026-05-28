@@ -72,7 +72,12 @@ export interface ClapStatusResponse {
   dependency_errors?: Record<string, string>;
   model_id: string;
   cache_dir: string;
-  max_duration_seconds: number;
+  max_duration_seconds?: number;
+  samples_per_track: number;
+  max_samples_per_track?: number;
+  sample_window_seconds?: number;
+  batch_size?: number;
+  max_batch_size?: number;
   model_cached: boolean;
   torch_version?: string | null;
   torch_device?: string | null;
@@ -123,6 +128,8 @@ export interface ClapConfigRequest {
   model_id?: string | null;
   cache_dir?: string | null;
   max_duration_seconds?: number | null;
+  samples_per_track?: number | null;
+  batch_size?: number | null;
 }
 
 export interface AudioAnalysisStartRequest {
@@ -153,6 +160,7 @@ export interface AudioAnalysisProgress {
     title: string | null;
     message: string;
   }>;
+  log: string[];
   current_track: string | null;
   model_cached_at_start: boolean | null;
   started_at: string;
@@ -292,6 +300,8 @@ export interface AutoDjSettings {
   minimum_rating?: number | null;
   recently_played_cooldown_days: number;
   seed_track_id?: number | null;
+  mood_seeds?: string[];
+  mood_seed_weight?: number;
   similarity_weight?: number;
   rating_weight?: number;
   recency_weight?: number;
@@ -300,6 +310,7 @@ export interface AutoDjSettings {
   play_history_weight?: number;
   feedback_weight?: number;
   audio_similarity_weight?: number;
+  mood_similarity_weight?: number;
   artist_similarity_weight?: number;
   album_similarity_weight?: number;
   genre_similarity_weight?: number;

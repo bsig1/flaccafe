@@ -232,6 +232,20 @@ export function analysisTags(track: Track | null | undefined): Array<[string, nu
   }
 }
 
+export function analysisMoodTags(track: Track | null | undefined): Array<[string, number]> {
+  if (!track?.analysis_mood_tags) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(track.analysis_mood_tags) as Record<string, unknown>;
+    return Object.entries(parsed)
+      .filter((entry): entry is [string, number] => typeof entry[1] === "number")
+      .sort((left, right) => right[1] - left[1]);
+  } catch {
+    return [];
+  }
+}
+
 export function analysisError(track: Track | null | undefined): string | null {
   if (!track?.analysis_genre_tags || track.analysis_provider !== "clap_failed") {
     return null;
@@ -245,7 +259,7 @@ export function analysisError(track: Track | null | undefined): string | null {
 }
 
 export function isClapAnalyzed(track: Track | null | undefined): boolean {
-  return track?.analysis_provider === "clap" && Boolean(track.analysis_updated_at);
+  return track?.analysis_provider === "clap" && Boolean(track.analysis_updated_at && track.analysis_embedding && track.analysis_mood_tags);
 }
 
 export function isAnalysisTerminal(status: AudioAnalysisProgress["status"] | null | undefined): boolean {

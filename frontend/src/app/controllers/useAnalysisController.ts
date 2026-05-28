@@ -24,11 +24,13 @@ import type {
   Track,
 } from "../../types/api";
 import {
-  formatTime,
   isAnalysisTerminal,
   isClapInstallTerminal,
 } from "../shared";
 import type { Page } from "../shared";
+
+const CLAP_QUICK_STATUS_TTL_MS = 60_000;
+const CLAP_DEEP_STATUS_TTL_MS = 15 * 60_000;
 
 type AnalysisControllerDeps = {
   activePage: Page;
@@ -54,10 +56,13 @@ export function useAnalysisController({
   setStatus,
 }: AnalysisControllerDeps) {
   const clapStatusRequestIdRef = useRef(0);
+  const clapQuickStatusLoadedAtRef = useRef(0);
+  const clapDeepStatusLoadedAtRef = useRef(0);
   const [clapStatus, setClapStatus] = useState<ClapStatusResponse | null>(null);
   const [clapModelId, setClapModelId] = useState("");
   const [clapCacheDir, setClapCacheDir] = useState("");
-  const [clapMaxDuration, setClapMaxDuration] = useState(45);
+  const [clapSamplesPerTrack, setClapSamplesPerTrack] = useState(3);
+  const [clapBatchSize, setClapBatchSize] = useState(4);
   const [audioAnalysisProgress, setAudioAnalysisProgress] = useState<AudioAnalysisProgress | null>(null);
   const [audioAnalysisCoverage, setAudioAnalysisCoverage] = useState<AudioAnalysisCoverage | null>(null);
   const [audioAnalysisEligibleTrackTotal, setAudioAnalysisEligibleTrackTotal] = useState<number | null>(null);
@@ -75,7 +80,8 @@ export function useAnalysisController({
     setClapStatus(response);
     setClapModelId(response.model_id);
     setClapCacheDir(response.cache_dir);
-    setClapMaxDuration(response.max_duration_seconds);
+    setClapSamplesPerTrack(response.samples_per_track ?? 3);
+    setClapBatchSize(response.batch_size ?? 4);
   }
 
   async function loadClapStatus(
@@ -99,6 +105,11 @@ export function useAnalysisController({
       const response = await fetchClapStatus(Boolean(options.deep));
       if (requestId === clapStatusRequestIdRef.current) {
         applyClapStatus(response);
+        const loadedAt = Date.now();
+        clapQuickStatusLoadedAtRef.current = loadedAt;
+        if (options.deep) {
+          clapDeepStatusLoadedAtRef.current = loadedAt;
+        }
         if (options.showProgress) {
           setClapStatusLoadPercent(100);
           setClapStatusLoadMessage(options.deep ? "CLAP verification complete" : "CLAP setup loaded");
@@ -123,25 +134,33 @@ export function useAnalysisController({
   }
 
   async function loadAnalysisClapReadiness(forceDeep = false) {
-    const quickStatus = await loadClapStatus({
-      deep: false,
-      showProgress: true,
-      message: "Reading CLAP setup",
-    });
     void loadClapCoverage();
+    const now = Date.now();
+    const hasCachedStatus = clapStatus !== null;
+    const quickStatusFresh = hasCachedStatus && now - clapQuickStatusLoadedAtRef.current < CLAP_QUICK_STATUS_TTL_MS;
+    const deepStatusFresh = hasCachedStatus && now - clapDeepStatusLoadedAtRef.current < CLAP_DEEP_STATUS_TTL_MS;
+    const quickStatus = !forceDeep && quickStatusFresh
+      ? clapStatus
+      : await loadClapStatus({
+          deep: false,
+          showProgress: forceDeep || !hasCachedStatus,
+          message: "Reading CLAP setup",
+        });
     const quickDeps = Object.values(quickStatus?.dependencies ?? {});
-    const shouldVerifyDeep = Boolean(
+    const runtimeLooksPresent = Boolean(
       quickStatus &&
-        (forceDeep ||
-          quickStatus.installed ||
+        (quickStatus.installed ||
           quickStatus.runtime_exists ||
           !quickStatus.runtime_managed ||
           quickDeps.some(Boolean)),
     );
+    const shouldVerifyDeep = Boolean(
+      runtimeLooksPresent && (forceDeep || !deepStatusFresh),
+    );
     if (shouldVerifyDeep) {
       void loadClapStatus({
         deep: true,
-        showProgress: true,
+        showProgress: forceDeep || !deepStatusFresh,
         message: "Verifying CLAP runtime",
       });
     }
@@ -194,9 +213,12 @@ export function useAnalysisController({
       const response = await updateClapConfig({
         model_id: clapModelId.trim() || null,
         cache_dir: clapCacheDir.trim() || null,
-        max_duration_seconds: clapMaxDuration,
+        samples_per_track: clapSamplesPerTrack,
+        batch_size: clapBatchSize,
       });
       applyClapStatus(response);
+      clapQuickStatusLoadedAtRef.current = Date.now();
+      clapDeepStatusLoadedAtRef.current = 0;
       setStatus(response.message ?? "CLAP configuration saved");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not save CLAP configuration");
@@ -255,6 +277,7 @@ export function useAnalysisController({
     setIsAudioAnalyzing(true);
     setAudioAnalysisProgress(null);
     setAudioAnalysisJobId(null);
+    setStatus(targetedTrackIds ? "CLAP analysis started for selected tracks" : "CLAP library analysis started");
     try {
       const started = await startClapAudioAnalysis({
         limit: targetedTrackIds ? targetedTrackIds.length : audioAnalysisLimit > 0 ? audioAnalysisLimit : null,
@@ -268,23 +291,12 @@ export function useAnalysisController({
         await new Promise((resolve) => window.setTimeout(resolve, 1000));
         latest = await fetchClapAudioAnalysis(started.job_id);
         setAudioAnalysisProgress(latest);
-        if (latest.message) {
-          setStatus(latest.message);
-        } else if (latest.total_tracks > 0) {
-          setStatus(
-            `Analyzing ${latest.processed_tracks}/${latest.total_tracks} tracks - ETA ${formatTime(
-              latest.eta_seconds,
-            )}`,
-          );
-        } else {
-          setStatus("Preparing CLAP audio analysis");
-        }
         if (isAnalysisTerminal(latest.status)) {
           break;
         }
       }
       if (latest.status === "failed") {
-        setStatus(latest.error ?? "CLAP audio analysis failed");
+        setStatus(latest.message ?? "CLAP audio analysis failed");
         return;
       }
       if (latest.status === "canceled") {
@@ -355,8 +367,10 @@ export function useAnalysisController({
     setClapModelId,
     clapCacheDir,
     setClapCacheDir,
-    clapMaxDuration,
-    setClapMaxDuration,
+    clapSamplesPerTrack,
+    setClapSamplesPerTrack,
+    clapBatchSize,
+    setClapBatchSize,
     audioAnalysisProgress,
     setAudioAnalysisProgress,
     audioAnalysisCoverage,

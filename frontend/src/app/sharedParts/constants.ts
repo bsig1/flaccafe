@@ -282,6 +282,15 @@ export const libraryColumnDefinitions: LibraryColumnDefinition[] = [
     sortKey: "analysis_genre_confidence",
     align: "right",
   },
+  { key: "analysis_mood", label: "CLAP Mood", category: "Analysis", defaultWidth: 150, sortKey: "analysis_mood" },
+  {
+    key: "analysis_mood_confidence",
+    label: "Mood %",
+    category: "Analysis",
+    defaultWidth: 100,
+    sortKey: "analysis_mood_confidence",
+    align: "right",
+  },
   { key: "analysis_provider", label: "Analysis", category: "Analysis", defaultWidth: 120, sortKey: "analysis_provider" },
   { key: "analysis_updated_at", label: "Analyzed", category: "Analysis", defaultWidth: 145, sortKey: "analysis_updated_at" },
   { key: "file_name", label: "File Name", category: "File", defaultWidth: 240, sortKey: "path" },
@@ -294,6 +303,26 @@ export const libraryColumnKeys = libraryColumnDefinitions.map((column) => column
 export const libraryColumnKeySet = new Set<MetadataColumnKey>(libraryColumnKeys);
 export const librarySelectionColumnWidth = 44;
 export const miniPlayerChannelName = "flac-cafe-mini-player";
+export const autoDjMoodSeedOptions = [
+  "energetic",
+  "calm",
+  "happy",
+  "sad",
+  "uplifting",
+  "melancholic",
+  "dark",
+  "bright",
+  "aggressive",
+  "mellow",
+  "romantic",
+  "angry",
+  "dreamy",
+  "tense",
+  "playful",
+  "dramatic",
+  "danceable",
+  "acoustic",
+] as const;
 
 export const defaultLibraryColumnWidths: Record<LibraryColumnKey, number> = {
   play: 64,
@@ -311,6 +340,8 @@ export const defaultLibraryColumnWidths: Record<LibraryColumnKey, number> = {
   replaygain_album_peak: 110,
   analysis_genre: 160,
   analysis_genre_confidence: 110,
+  analysis_mood: 150,
+  analysis_mood_confidence: 100,
   analysis_provider: 120,
   analysis_updated_at: 145,
   year: 90,
@@ -346,6 +377,8 @@ export const defaultAutoDj: AutoDjSettings = {
   minimum_rating: null,
   recently_played_cooldown_days: 14,
   seed_track_id: null,
+  mood_seeds: [],
+  mood_seed_weight: 1.4,
   similarity_weight: 0,
   rating_weight: 1,
   recency_weight: 1,
@@ -354,6 +387,7 @@ export const defaultAutoDj: AutoDjSettings = {
   play_history_weight: 0.7,
   feedback_weight: 0.8,
   audio_similarity_weight: 2.2,
+  mood_similarity_weight: 0.9,
   artist_similarity_weight: 1.6,
   album_similarity_weight: 0.9,
   genre_similarity_weight: 0.85,

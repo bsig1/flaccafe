@@ -13,6 +13,9 @@
   analysis_genre: string | null;
   analysis_genre_confidence: number | null;
   analysis_genre_tags: string | null;
+  analysis_mood?: string | null;
+  analysis_mood_confidence?: number | null;
+  analysis_mood_tags?: string | null;
   analysis_embedding?: string | null;
   analysis_updated_at: string | null;
   year: number | null;

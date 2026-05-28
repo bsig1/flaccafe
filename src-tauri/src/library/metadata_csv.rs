@@ -28,6 +28,8 @@ const METADATA_CSV_COLUMNS: &[&str] = &[
     "bitrate",
     "analysis_genre",
     "analysis_genre_confidence",
+    "analysis_mood",
+    "analysis_mood_confidence",
     "rating",
     "play_count",
     "skip_count",

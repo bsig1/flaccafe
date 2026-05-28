@@ -198,6 +198,7 @@ def _handle(payload: dict[str, Any]) -> None:
             model_id=payload.get("model_id"),
             cache_dir=payload.get("cache_dir"),
             max_duration_seconds=payload.get("max_duration_seconds"),
+            samples_per_track=payload.get("samples_per_track"),
         )
         _emit({"status": "ok", "body": clap_status(deep=bool(payload.get("deep")))})
     elif command == "install":

@@ -347,6 +347,7 @@ export function AutoDjQueuePanel({ model }: { model: any }) {
                             {isClapAnalyzed(track) && (
                               <span className="rounded border border-moss/40 bg-moss/10 px-2 py-1 text-xs text-moss">
                                 CLAP {display(track.analysis_genre, "audio")}
+                                {track.analysis_mood ? ` / ${track.analysis_mood}` : ""}
                               </span>
                             )}
                           </div>
@@ -367,6 +368,18 @@ export function AutoDjQueuePanel({ model }: { model: any }) {
                               <span className="text-neutral-200">
                                 {track.analysis_genre_confidence !== null && track.analysis_genre_confidence !== undefined
                                   ? formatPercent(track.analysis_genre_confidence * 100)
+                                  : "--"}
+                              </span>
+                            </div>
+                            <div className="flex justify-between gap-3">
+                              <span className="text-muted">Mood</span>
+                              <span className="truncate text-neutral-200">{display(track.analysis_mood, "-")}</span>
+                            </div>
+                            <div className="flex justify-between gap-3">
+                              <span className="text-muted">Mood match</span>
+                              <span className="text-neutral-200">
+                                {track.analysis_mood_confidence !== null && track.analysis_mood_confidence !== undefined
+                                  ? formatPercent(track.analysis_mood_confidence * 100)
                                   : "--"}
                               </span>
                             </div>

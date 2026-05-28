@@ -148,6 +148,18 @@ fn ensure_track_analysis_columns(connection: &Connection) -> Result<(), String> 
                 "ALTER TABLE tracks ADD COLUMN analysis_genre_tags TEXT",
             ),
             (
+                "analysis_mood",
+                "ALTER TABLE tracks ADD COLUMN analysis_mood TEXT",
+            ),
+            (
+                "analysis_mood_confidence",
+                "ALTER TABLE tracks ADD COLUMN analysis_mood_confidence REAL",
+            ),
+            (
+                "analysis_mood_tags",
+                "ALTER TABLE tracks ADD COLUMN analysis_mood_tags TEXT",
+            ),
+            (
                 "analysis_embedding",
                 "ALTER TABLE tracks ADD COLUMN analysis_embedding TEXT",
             ),

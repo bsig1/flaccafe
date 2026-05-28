@@ -68,6 +68,63 @@ def ml_runtime_site_packages() -> Path | None:
     return candidates[0] if candidates else windows_path
 
 
+def _runtime_python_version_fragment() -> str:
+    return f"python{sys.version_info.major}.{sys.version_info.minor}"
+
+
+def _read_pyvenv_cfg(root: Path) -> dict[str, str]:
+    config_path = root / "pyvenv.cfg"
+    values: dict[str, str] = {}
+    try:
+        for line in config_path.read_text(encoding="utf-8").splitlines():
+            key, separator, value = line.partition("=")
+            if separator:
+                values[key.strip().lower()] = value.strip()
+    except OSError:
+        pass
+    return values
+
+
+def _runtime_python_roots(root: Path) -> list[Path]:
+    metadata = read_runtime_metadata()
+    pyvenv = _read_pyvenv_cfg(root)
+    paths: list[Path] = []
+    for value in (
+        metadata.get("bootstrap_prefix"),
+        metadata.get("bootstrap_base_prefix"),
+        metadata.get("bootstrap_executable"),
+        pyvenv.get("home"),
+        pyvenv.get("executable"),
+    ):
+        if not value:
+            continue
+        path = Path(str(value))
+        paths.append(path.parent if path.is_file() else path)
+    return paths
+
+
+def _runtime_stdlib_directories(root: Path) -> list[Path]:
+    candidates: list[Path] = [root / "Lib", root / "DLLs"]
+    for base in _runtime_python_roots(root):
+        candidates.extend(
+            [
+                base / "Lib",
+                base / "DLLs",
+                base / "lib" / _runtime_python_version_fragment(),
+                base / "lib-dynload",
+            ]
+        )
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate).lower()
+        if key not in seen and candidate.exists():
+            unique.append(candidate)
+            seen.add(key)
+    return unique
+
+
 def use_managed_ml_runtime() -> bool:
     return (
         getattr(sys, "frozen", False)
@@ -306,6 +363,10 @@ def activate_ml_runtime(force: bool = False) -> bool:
     site.addsitedir(site_text)
     sys.path[:] = [path for path in sys.path if path != site_text]
     sys.path.insert(0, site_text)
+    for stdlib_dir in _runtime_stdlib_directories(root):
+        stdlib_text = str(stdlib_dir)
+        if stdlib_text not in sys.path:
+            sys.path.append(stdlib_text)
     importlib.invalidate_caches()
 
     _add_dll_directory(root / "Scripts")

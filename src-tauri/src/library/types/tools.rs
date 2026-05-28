@@ -110,6 +110,10 @@ pub struct DesktopAutoDjAvoidRule {
     pub(crate) updated_at: String,
 }
 
+fn default_auto_dj_mood_seed_weight() -> f64 {
+    1.4
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DesktopAutoDjSettings {
     pub(crate) queue_length: usize,
@@ -123,6 +127,10 @@ pub struct DesktopAutoDjSettings {
     pub(crate) minimum_rating: Option<f64>,
     pub(crate) recently_played_cooldown_days: i64,
     pub(crate) seed_track_id: Option<i64>,
+    #[serde(default)]
+    pub(crate) mood_seeds: Vec<String>,
+    #[serde(default = "default_auto_dj_mood_seed_weight")]
+    pub(crate) mood_seed_weight: f64,
     pub(crate) similarity_weight: f64,
     pub(crate) rating_weight: f64,
     pub(crate) recency_weight: f64,
@@ -131,6 +139,7 @@ pub struct DesktopAutoDjSettings {
     pub(crate) play_history_weight: f64,
     pub(crate) feedback_weight: f64,
     pub(crate) audio_similarity_weight: f64,
+    pub(crate) mood_similarity_weight: f64,
     pub(crate) artist_similarity_weight: f64,
     pub(crate) album_similarity_weight: f64,
     pub(crate) genre_similarity_weight: f64,

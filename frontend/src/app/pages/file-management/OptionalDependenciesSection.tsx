@@ -192,7 +192,7 @@ export function OptionalDependenciesSection({
         <div className="grid gap-4 xl:grid-cols-2">
           <DependencyCard icon={<Bot size={18} />} title="ML Runtime (CLAP)" status={clapReady ? "Ready" : "Not installed"} ready={clapReady}>
             <p className="text-xs leading-5 text-muted">
-              Enables audio embeddings, similarity-aware AutoDJ, and CLAP genre previews. It is large, separate from the base app, and can be CPU or NVIDIA CUDA.
+              Enables audio embeddings, similarity-aware AutoDJ, mood vectors, and CLAP genre previews. It is large, separate from the base app, and can be CPU or NVIDIA CUDA.
             </p>
             <div className="mt-3 rounded border border-line/70 bg-panel px-3 py-2 text-xs">
               <div className="truncate text-neutral-200">{clapStatus?.message ?? "CLAP status not loaded"}</div>

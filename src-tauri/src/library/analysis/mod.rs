@@ -17,10 +17,18 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use super::search::music_only_clause;
-use super::storage::open_database;
+use super::storage::{get_setting, open_database};
 use super::types::*;
 
 pub(crate) use genre_tags::clap_genre_tags;
+
+pub(crate) const CLAP_ANALYSIS_DEFAULT_BATCH_SIZE: usize = 4;
+pub(crate) const CLAP_ANALYSIS_MAX_BATCH_SIZE: usize = 16;
+pub(crate) const CLAP_ANALYSIS_DEFAULT_SAMPLES_PER_TRACK: usize = 3;
+pub(crate) const CLAP_ANALYSIS_MAX_SAMPLES_PER_TRACK: usize = 8;
+pub(crate) const CLAP_ANALYSIS_SAMPLE_WINDOW_SECONDS: usize = 10;
+const CLAP_ANALYSIS_LOG_LIMIT: usize = 200;
+const CLAP_ANALYSIS_MAX_BATCH_WINDOWS: usize = 32;
 
 #[derive(Clone)]
 struct AnalysisRequest {
@@ -50,6 +58,7 @@ struct AnalysisJob {
     skipped: i64,
     errors: Vec<String>,
     failed_tracks: Vec<DesktopAudioAnalysisError>,
+    log: Vec<String>,
     current_track: Option<String>,
     model_cached_at_start: Option<bool>,
     started_at: String,
@@ -91,6 +100,7 @@ pub(crate) fn start_clap_analysis(body: JsonValue) -> Result<DesktopAudioAnalysi
         skipped: 0,
         errors: Vec::new(),
         failed_tracks: Vec::new(),
+        log: vec!["Queued CLAP analysis job.".to_string()],
         current_track: None,
         model_cached_at_start: model_cached,
         started_at: utc_now(),
@@ -172,12 +182,19 @@ fn run_analysis_thread(job_id: String) {
             }
             Ok(()) => {}
             Err(error) => {
+                let message = compact_clap_error(&error);
                 job.status = "failed".to_string();
                 job.phase = Some("failed".to_string());
-                job.message = Some(error.clone());
+                job.message = Some(format!("{message}. See Advanced CLAP log for details."));
                 job.error = Some(error);
                 job.current_track = None;
                 job.finished_at = Some(utc_now());
+                job.log.push(format!(
+                    "{} Job failed: {}",
+                    utc_now(),
+                    job.error.clone().unwrap_or_default()
+                ));
+                trim_tail(&mut job.log, CLAP_ANALYSIS_LOG_LIMIT);
             }
         }
     }
@@ -195,6 +212,12 @@ fn run_analysis(job_id: &str) -> Result<(), String> {
         } else {
             Some("Downloading and loading CLAP model. First run can take a while.".to_string())
         };
+        job.log.push(format!(
+            "{} Found {} track(s) needing CLAP analysis.",
+            utc_now(),
+            candidates.len()
+        ));
+        trim_tail(&mut job.log, CLAP_ANALYSIS_LOG_LIMIT);
     })?;
 
     if candidates.is_empty() {
@@ -213,49 +236,178 @@ fn run_analysis(job_id: &str) -> Result<(), String> {
     }
 
     let mut worker = ClapWorker::start()?;
-    for (index, track) in candidates.iter().enumerate() {
+    let configured_batch_size = clap_analysis_batch_size();
+    let samples_per_track = configured_clap_analysis_samples_per_track();
+    let max_track_batch_for_windows =
+        (CLAP_ANALYSIS_MAX_BATCH_WINDOWS / samples_per_track.max(1)).max(1);
+    let batch_size = configured_batch_size.min(max_track_batch_for_windows);
+    append_analysis_log(
+        job_id,
+        format!(
+            "CLAP worker started with batch size {configured_batch_size}, {samples_per_track} sample(s) per track, genre and mood vectors enabled."
+        ),
+    )?;
+    if batch_size != configured_batch_size {
+        append_analysis_log(
+            job_id,
+            format!(
+                "Effective batch size capped to {batch_size} tracks to keep CLAP windows under {CLAP_ANALYSIS_MAX_BATCH_WINDOWS}."
+            ),
+        )?;
+    }
+    let mut index = 0usize;
+    while index < candidates.len() {
         if !wait_if_not_paused(job_id)? {
             let _ = worker.shutdown();
             mark_canceled(job_id, "Analysis canceled.")?;
             return Ok(());
         }
+        let end = (index + batch_size).min(candidates.len());
+        let batch = &candidates[index..end];
+        let current_track = if batch.len() == 1 {
+            batch[0].title.clone().unwrap_or_else(|| batch[0].path.clone())
+        } else {
+            format!("{} tracks", batch.len())
+        };
         update_analysis_job(job_id, |job| {
             job.status = "running".to_string();
             job.phase = Some("analyzing".to_string());
-            job.current_track = Some(track.title.clone().unwrap_or_else(|| track.path.clone()));
+            job.current_track = Some(current_track);
             job.processed_tracks = index as i64;
-            job.message = Some(format!("Analyzing {} of {}", index + 1, candidates.len()));
+            job.message = if batch.len() == 1 {
+                Some(format!("Analyzing {} of {}", index + 1, candidates.len()))
+            } else {
+                Some(format!("Analyzing {}-{} of {}", index + 1, end, candidates.len()))
+            };
         })?;
+        append_analysis_log(
+            job_id,
+            format!("Analyzing batch {}-{} of {}.", index + 1, end, candidates.len()),
+        )?;
 
-        let outcome = worker.analyze(track);
-        match outcome {
-            Ok(analysis) => {
-                save_analysis(track.id, &analysis)?;
-                update_analysis_job(job_id, |job| {
-                    job.analyzed += 1;
-                    job.processed_tracks = (index + 1) as i64;
-                })?;
-            }
+        let outcomes = match worker.analyze_batch(batch) {
+            Ok(outcomes) => outcomes,
             Err(error) => {
-                save_analysis_failure(track.id, &error)?;
-                update_analysis_job(job_id, |job| {
-                    job.skipped += 1;
-                    job.processed_tracks = (index + 1) as i64;
-                    job.errors.push(format!("{}: {error}", track.path));
-                    job.failed_tracks.push(DesktopAudioAnalysisError {
-                        track_id: Some(track.id),
-                        path: Some(track.path.clone()),
-                        title: track.title.clone(),
-                        message: error,
-                    });
-                    trim_tail(&mut job.errors, 25);
-                    trim_tail(&mut job.failed_tracks, 50);
-                })?;
+                append_analysis_log(
+                    job_id,
+                    format!(
+                        "Batch {}-{} failed: {}",
+                        index + 1,
+                        end,
+                        compact_clap_error(&error)
+                    ),
+                )?;
+                return Err(error);
+            }
+        };
+        let mut batch_analyzed = 0i64;
+        let mut batch_failed = 0i64;
+        for (offset, track) in batch.iter().enumerate() {
+            let outcome = outcomes
+                .get(&track.id)
+                .ok_or_else(|| format!("CLAP worker omitted result for track {}", track.id))?;
+            match outcome {
+                Ok(analysis) => {
+                    save_analysis(track.id, analysis)?;
+                    batch_analyzed += 1;
+                    update_analysis_job(job_id, |job| {
+                        job.analyzed += 1;
+                        job.processed_tracks = (index + offset + 1) as i64;
+                    })?;
+                }
+                Err(error) => {
+                    save_analysis_failure(track.id, error)?;
+                    batch_failed += 1;
+                    update_analysis_job(job_id, |job| {
+                        job.skipped += 1;
+                        job.processed_tracks = (index + offset + 1) as i64;
+                        job.errors.push(format!("{}: {error}", track.path));
+                        job.log.push(format!("{} {}: {error}", utc_now(), track.path));
+                        job.failed_tracks.push(DesktopAudioAnalysisError {
+                            track_id: Some(track.id),
+                            path: Some(track.path.clone()),
+                            title: track.title.clone(),
+                            message: error.clone(),
+                        });
+                        trim_tail(&mut job.errors, 25);
+                        trim_tail(&mut job.failed_tracks, 50);
+                        trim_tail(&mut job.log, CLAP_ANALYSIS_LOG_LIMIT);
+                    })?;
+                }
             }
         }
+        append_analysis_log(
+            job_id,
+            format!(
+                "Finished batch {}-{}: {batch_analyzed} analyzed, {batch_failed} skipped.",
+                index + 1,
+                end
+            ),
+        )?;
+        index = end;
     }
     let _ = worker.shutdown();
     Ok(())
+}
+
+fn clap_analysis_batch_size() -> usize {
+    std::env::var("FLAC_CAFE_CLAP_BATCH_SIZE")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or_else(configured_clap_analysis_batch_size)
+        .clamp(1, CLAP_ANALYSIS_MAX_BATCH_SIZE)
+}
+
+pub(crate) fn configured_clap_analysis_batch_size() -> usize {
+    open_database()
+        .ok()
+        .and_then(|connection| get_setting(&connection, "clap_batch_size"))
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(CLAP_ANALYSIS_DEFAULT_BATCH_SIZE)
+        .clamp(1, CLAP_ANALYSIS_MAX_BATCH_SIZE)
+}
+
+pub(crate) fn configured_clap_analysis_samples_per_track() -> usize {
+    let connection = match open_database() {
+        Ok(connection) => connection,
+        Err(_) => return CLAP_ANALYSIS_DEFAULT_SAMPLES_PER_TRACK,
+    };
+    if let Some(samples) = get_setting(&connection, "clap_samples_per_track")
+        .and_then(|value| value.trim().parse::<usize>().ok())
+    {
+        return samples.clamp(1, CLAP_ANALYSIS_MAX_SAMPLES_PER_TRACK);
+    }
+    get_setting(&connection, "clap_max_duration_seconds")
+        .and_then(|value| legacy_clap_samples_from_duration(&value))
+        .unwrap_or(CLAP_ANALYSIS_DEFAULT_SAMPLES_PER_TRACK)
+        .clamp(1, CLAP_ANALYSIS_MAX_SAMPLES_PER_TRACK)
+}
+
+fn legacy_clap_samples_from_duration(value: &str) -> Option<usize> {
+    let duration = value.trim().parse::<f64>().ok()?;
+    let samples = (duration / CLAP_ANALYSIS_SAMPLE_WINDOW_SECONDS as f64).ceil() as usize;
+    Some(samples.max(1))
+}
+
+fn compact_clap_error(error: &str) -> String {
+    let first_line = error
+        .lines()
+        .next()
+        .unwrap_or(error)
+        .split("; raw response:")
+        .next()
+        .unwrap_or(error)
+        .split("; response preview:")
+        .next()
+        .unwrap_or(error)
+        .trim();
+    if first_line.chars().count() <= 220 {
+        first_line.to_string()
+    } else {
+        let mut message = first_line.chars().take(220).collect::<String>();
+        message.push_str("...");
+        message
+    }
 }
 
 fn candidate_tracks(request: &AnalysisRequest) -> Result<Vec<AnalysisCandidate>, String> {
@@ -283,13 +435,18 @@ fn candidate_tracks(request: &AnalysisRequest) -> Result<Vec<AnalysisCandidate>,
     if request.only_missing {
         clauses.push(
             "(analysis_genre IS NULL OR trim(analysis_genre) = ''
+              OR analysis_mood_tags IS NULL OR trim(analysis_mood_tags) = ''
               OR analysis_embedding IS NULL OR trim(analysis_embedding) = '')"
                 .to_string(),
         );
     }
     if !request.overwrite {
         clauses.push(
-            "(analysis_updated_at IS NULL OR analysis_provider IS NULL OR analysis_provider <> 'clap')"
+            "(analysis_updated_at IS NULL
+              OR analysis_provider IS NULL
+              OR analysis_provider <> 'clap'
+              OR analysis_mood_tags IS NULL
+              OR trim(analysis_mood_tags) = '')"
                 .to_string(),
         );
     }
@@ -339,6 +496,10 @@ fn save_analysis(track_id: i64, analysis: &JsonValue) -> Result<(), String> {
     let confidence = analysis.get("confidence").and_then(JsonValue::as_f64);
     let tags = serde_json::to_string(analysis.get("tags").unwrap_or(&json!({})))
         .map_err(|error| format!("Could not encode CLAP tags: {error}"))?;
+    let mood = analysis.get("mood").and_then(JsonValue::as_str);
+    let mood_confidence = analysis.get("mood_confidence").and_then(JsonValue::as_f64);
+    let mood_tags = serde_json::to_string(analysis.get("mood_tags").unwrap_or(&json!({})))
+        .map_err(|error| format!("Could not encode CLAP mood tags: {error}"))?;
     let embedding = serde_json::to_string(analysis.get("embedding").unwrap_or(&json!([])))
         .map_err(|error| format!("Could not encode CLAP embedding: {error}"))?;
     let updated_at = analysis
@@ -347,21 +508,70 @@ fn save_analysis(track_id: i64, analysis: &JsonValue) -> Result<(), String> {
         .map(str::to_string)
         .unwrap_or_else(utc_now);
     let connection = open_database()?;
-    connection
-        .execute(
+    let save_result = connection.execute(
+        "UPDATE tracks
+         SET analysis_provider = ?,
+             analysis_model = ?,
+             analysis_genre = ?,
+             analysis_genre_confidence = ?,
+             analysis_genre_tags = ?,
+             analysis_mood = ?,
+             analysis_mood_confidence = ?,
+             analysis_mood_tags = ?,
+             analysis_embedding = ?,
+             analysis_updated_at = ?,
+             updated_at = datetime('now')
+         WHERE id = ?",
+        params![
+            provider,
+            model,
+            genre,
+            confidence,
+            tags.as_str(),
+            mood,
+            mood_confidence,
+            mood_tags.as_str(),
+            embedding.as_str(),
+            updated_at.as_str(),
+            track_id
+        ],
+    );
+    if let Err(error) = save_result {
+        if !error_is_database_malformed(&error) {
+            return Err(format!("Could not save CLAP analysis: {error}"));
+        }
+        super::rebuild_tracks_fts(&connection)?;
+        connection
+            .execute(
             "UPDATE tracks
              SET analysis_provider = ?,
                  analysis_model = ?,
                  analysis_genre = ?,
                  analysis_genre_confidence = ?,
                  analysis_genre_tags = ?,
+                 analysis_mood = ?,
+                 analysis_mood_confidence = ?,
+                 analysis_mood_tags = ?,
                  analysis_embedding = ?,
                  analysis_updated_at = ?,
                  updated_at = datetime('now')
              WHERE id = ?",
-            params![provider, model, genre, confidence, tags, embedding, updated_at, track_id],
+            params![
+                provider,
+                model,
+                genre,
+                confidence,
+                tags.as_str(),
+                mood,
+                mood_confidence,
+                mood_tags.as_str(),
+                embedding.as_str(),
+                updated_at.as_str(),
+                track_id
+            ],
         )
-        .map_err(|error| format!("Could not save CLAP analysis: {error}"))?;
+            .map_err(|error| format!("Could not save CLAP analysis after rebuilding search index: {error}"))?;
+    }
     let _ = connection.execute("DELETE FROM library_query_cache", []);
     Ok(())
 }
@@ -369,23 +579,52 @@ fn save_analysis(track_id: i64, analysis: &JsonValue) -> Result<(), String> {
 fn save_analysis_failure(track_id: i64, message: &str) -> Result<(), String> {
     let connection = open_database()?;
     let payload = json!({ "error": message }).to_string();
-    connection
-        .execute(
+    let save_result = connection.execute(
+        "UPDATE tracks
+         SET analysis_provider = 'clap_failed',
+             analysis_model = NULL,
+             analysis_genre = NULL,
+             analysis_genre_confidence = NULL,
+             analysis_genre_tags = ?,
+             analysis_mood = NULL,
+             analysis_mood_confidence = NULL,
+             analysis_mood_tags = NULL,
+             analysis_embedding = NULL,
+             analysis_updated_at = datetime('now'),
+             updated_at = datetime('now')
+         WHERE id = ?",
+        params![payload.as_str(), track_id],
+    );
+    if let Err(error) = save_result {
+        if !error_is_database_malformed(&error) {
+            return Err(format!("Could not save CLAP failure: {error}"));
+        }
+        super::rebuild_tracks_fts(&connection)?;
+        connection
+            .execute(
             "UPDATE tracks
              SET analysis_provider = 'clap_failed',
                  analysis_model = NULL,
                  analysis_genre = NULL,
                  analysis_genre_confidence = NULL,
                  analysis_genre_tags = ?,
+                 analysis_mood = NULL,
+                 analysis_mood_confidence = NULL,
+                 analysis_mood_tags = NULL,
                  analysis_embedding = NULL,
                  analysis_updated_at = datetime('now'),
                  updated_at = datetime('now')
              WHERE id = ?",
-            params![payload, track_id],
+            params![payload.as_str(), track_id],
         )
-        .map_err(|error| format!("Could not save CLAP failure: {error}"))?;
+            .map_err(|error| format!("Could not save CLAP failure after rebuilding search index: {error}"))?;
+    }
     let _ = connection.execute("DELETE FROM library_query_cache", []);
     Ok(())
+}
+
+fn error_is_database_malformed(error: &rusqlite::Error) -> bool {
+    error.to_string().contains("database disk image is malformed")
 }
 
 impl AnalysisRequest {
@@ -433,6 +672,7 @@ impl AnalysisJob {
             skipped: self.skipped,
             errors: self.errors.clone(),
             failed_tracks: self.failed_tracks.clone(),
+            log: self.log.clone(),
             current_track: self.current_track.clone(),
             model_cached_at_start: self.model_cached_at_start,
             started_at: self.started_at.clone(),
@@ -460,6 +700,13 @@ fn update_analysis_job<T>(
         .get_mut(job_id)
         .ok_or_else(|| "Analysis job not found".to_string())?;
     Ok(update(job))
+}
+
+fn append_analysis_log(job_id: &str, message: String) -> Result<(), String> {
+    update_analysis_job(job_id, |job| {
+        job.log.push(format!("{} {message}", utc_now()));
+        trim_tail(&mut job.log, CLAP_ANALYSIS_LOG_LIMIT);
+    })
 }
 
 fn is_cancel_requested(job_id: &str) -> Result<bool, String> {

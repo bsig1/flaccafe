@@ -1,4 +1,5 @@
 import {
+  Copy,
   Download,
   Music2,
   Pause,
@@ -54,8 +55,10 @@ export function AnalysisPage({
   setClapModelId,
   clapCacheDir,
   setClapCacheDir,
-  clapMaxDuration,
-  setClapMaxDuration,
+  clapSamplesPerTrack,
+  setClapSamplesPerTrack,
+  clapBatchSize,
+  setClapBatchSize,
   installProgress,
   isClapStatusLoading,
   clapStatusLoadPercent,
@@ -86,8 +89,10 @@ export function AnalysisPage({
   setClapModelId: (value: string) => void;
   clapCacheDir: string;
   setClapCacheDir: (value: string) => void;
-  clapMaxDuration: number;
-  setClapMaxDuration: (value: number) => void;
+  clapSamplesPerTrack: number;
+  setClapSamplesPerTrack: (value: number) => void;
+  clapBatchSize: number;
+  setClapBatchSize: (value: number) => void;
   installProgress: ClapInstallProgress | null;
   isClapStatusLoading: boolean;
   clapStatusLoadPercent: number;
@@ -103,6 +108,7 @@ export function AnalysisPage({
   onCancel: () => void;
 }) {
   const [installPromptOpen, setInstallPromptOpen] = useState(false);
+  const [clapLogCopied, setClapLogCopied] = useState(false);
   const clapReady = Boolean(clapStatus?.installed);
   const clapStatusLoaded = Boolean(clapStatus);
   const clapDependencyErrorCount = Object.keys(clapStatus?.dependency_errors ?? {}).length;
@@ -144,6 +150,8 @@ export function AnalysisPage({
   const progressPercent = Math.max(0, Math.min(100, activeProgress?.percent ?? displayCoverage?.coverage_percent ?? 0));
   const installPercent = Math.max(0, Math.min(100, installProgress?.percent ?? 0));
   const failures = progress?.failed_tracks ?? [];
+  const clapLog = progress?.log ?? [];
+  const clapLogText = clapLog.join("\n");
   const statusText = isClapStatusLoading
     ? clapStatusLoadMessage
     : installProgress?.message ?? activeProgress?.message ?? clapStatus?.message ?? "CLAP status loading";
@@ -153,6 +161,19 @@ export function AnalysisPage({
     ? `${clapStatus.torch_device.toUpperCase()}${clapStatus.cuda_device_name ? ` - ${clapStatus.cuda_device_name}` : ""}`
     : "Not installed";
   const runtimeActionLabel = clapReady ? "Change Runtime" : "Install CLAP";
+
+  async function copyClapLog() {
+    if (!clapLogText) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(clapLogText);
+      setClapLogCopied(true);
+      window.setTimeout(() => setClapLogCopied(false), 1500);
+    } catch {
+      setClapLogCopied(false);
+    }
+  }
 
   return (
     <main className="flex min-w-0 flex-1 flex-col">
@@ -288,7 +309,7 @@ export function AnalysisPage({
                     {clapReady ? "Audio similarity is ready" : "Install CLAP to enable audio similarity"}
                   </div>
                   <div className="mt-1 text-xs text-muted">
-                    Analyze missing tracks in the background, then AutoDJ can blend metadata, ratings, and song similarity.
+                    Analyze missing tracks in the background, then AutoDJ can blend metadata, ratings, song similarity, and mood.
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button className="primary-button" type="button" disabled={!clapReady || isAudioAnalyzing || isClapInstalling} onClick={onAnalyzeLibrary}>
@@ -322,7 +343,7 @@ export function AnalysisPage({
                     )}
                   </div>
                 </div>
-                <DisclosureSection title="Advanced CLAP Settings" description="Model, cache, per-track duration, and overwrite behavior">
+                <DisclosureSection title="Advanced CLAP Settings" description="Model, cache, sampling, and overwrite behavior">
                   <div className="grid gap-4">
                     <label className="grid gap-2 text-sm text-neutral-200">
                       <span className="text-xs uppercase text-muted">Model ID</span>
@@ -341,15 +362,29 @@ export function AnalysisPage({
                       />
                     </label>
                     <label className="grid gap-2 text-sm text-neutral-200">
-                      <span className="text-xs uppercase text-muted">Seconds Per Track {clapMaxDuration.toFixed(0)}</span>
+                      <span className="text-xs uppercase text-muted">
+                        Song Samples {clapSamplesPerTrack} x {clapStatus?.sample_window_seconds ?? 10}s
+                      </span>
                       <input
                         type="range"
-                        min={10}
-                        max={90}
-                        step={5}
-                        value={clapMaxDuration}
-                        onChange={(event) => setClapMaxDuration(Number(event.target.value))}
+                        min={1}
+                        max={clapStatus?.max_samples_per_track ?? 8}
+                        step={1}
+                        value={clapSamplesPerTrack}
+                        onChange={(event) => setClapSamplesPerTrack(Number(event.target.value))}
                         className="accent-ember"
+                      />
+                    </label>
+                    <label className="grid gap-2 text-sm text-neutral-200">
+                      <span className="text-xs uppercase text-muted">Batch Size {clapBatchSize}</span>
+                      <input
+                        type="range"
+                        min={1}
+                        max={clapStatus?.max_batch_size ?? 16}
+                        step={1}
+                        value={clapBatchSize}
+                        onChange={(event) => setClapBatchSize(Number(event.target.value))}
+                        className="accent-moss"
                       />
                     </label>
                     <div className="grid gap-3 sm:grid-cols-3">
@@ -384,6 +419,23 @@ export function AnalysisPage({
                         <ShieldCheck size={15} />
                         Save CLAP
                       </button>
+                    </div>
+                    <div className="rounded border border-line/70 bg-ink p-3">
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <div className="text-xs uppercase text-muted">CLAP Log</div>
+                        <button
+                          className="secondary-button h-8"
+                          type="button"
+                          disabled={!clapLogText}
+                          onClick={() => void copyClapLog()}
+                        >
+                          <Copy size={14} />
+                          {clapLogCopied ? "Copied" : "Copy Log"}
+                        </button>
+                      </div>
+                      <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words rounded border border-line/60 bg-panel p-3 font-mono text-[11px] leading-5 text-muted">
+                        {clapLogText || "No CLAP log entries yet."}
+                      </pre>
                     </div>
                   </div>
                 </DisclosureSection>

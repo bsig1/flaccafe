@@ -439,7 +439,7 @@ pub fn track_file_metadata_write_preview(
     if !include_metadata && !include_rating {
         return Err("Choose metadata, ratings, or both to write".to_string());
     }
-    let limit = limit.unwrap_or(500).clamp(1, 10_000);
+    let limit = limit.unwrap_or(100_000).clamp(1, 100_000);
     let connection = open_database()?;
     let (tracks, missing_track_ids) = if let Some(mut ids) = track_ids {
         ids.retain(|id| *id > 0);
@@ -477,9 +477,11 @@ pub fn track_file_metadata_write_preview(
         })
         .collect::<HashMap<_, _>>();
 
+    let total_checked = tracks.len() as i64;
     let mut previews = Vec::new();
     let mut errors = Vec::new();
     let mut applied = 0;
+    let mut changed = 0;
     for track in tracks {
         let database = track_database_file_tag_values(&track, &fields);
         let mut preview = DesktopTrackFileMetadataWritePreview {
@@ -526,6 +528,9 @@ pub fn track_file_metadata_write_preview(
         let file = metadata_file_tag_values(metadata, &fields);
         preview.changed_fields = changed_metadata_write_fields(&preview.database, &file, &fields);
         preview.file = file;
+        if !preview.changed_fields.is_empty() {
+            changed += 1;
+        }
         if apply && !preview.changed_fields.is_empty() {
             let changed_metadata = include_metadata
                 && preview
@@ -585,17 +590,16 @@ pub fn track_file_metadata_write_preview(
                 }
             }
         }
-        previews.push(preview);
+        if preview.error.is_some() || !preview.changed_fields.is_empty() {
+            previews.push(preview);
+        }
     }
     if applied > 0 {
         clear_library_query_cache(&connection);
     }
     Ok(DesktopTrackFileMetadataWriteResponse {
-        total: previews.len() as i64,
-        changed: previews
-            .iter()
-            .filter(|preview| !preview.changed_fields.is_empty())
-            .count() as i64,
+        total: total_checked,
+        changed,
         applied,
         missing_track_ids,
         errors: errors.into_iter().take(100).collect(),

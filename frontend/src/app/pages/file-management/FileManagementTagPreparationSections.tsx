@@ -75,6 +75,23 @@ export function FileManagementTagPreparationSections({ model }: { model: any }) 
   } = model;
   const fileWriteChangeDetails = model.fileWriteChangeDetails as (preview: TrackFileMetadataWriteResponse["previews"][number]) => string[];
   const autoTagChangeDetails = model.autoTagChangeDetails as (preview: AutoTagResponse["previews"][number]) => string[];
+  const clapGenreChangeDetails = (preview: ClapGenreTagResponse["previews"][number]) => {
+    const confidence = preview.confidence !== null && preview.confidence !== undefined
+      ? ` (${(preview.confidence * 100).toFixed(0)}%)`
+      : "";
+    const runnerUp = preview.runner_up_genre ? `, next ${preview.runner_up_genre}` : "";
+    const margin = preview.match_margin !== null && preview.match_margin !== undefined
+      ? `, lead ${(preview.match_margin * 100).toFixed(0)} pts`
+      : "";
+    const status = preview.applied
+      ? " - applied"
+      : preview.copy_blocked_reason
+        ? ` - ${preview.copy_blocked_reason}`
+        : preview.changed
+          ? ""
+          : " - no change";
+    return `${preview.current_genre || "(empty)"} -> ${preview.proposed_genre || "(none)"}${confidence}${runnerUp}${margin}${status}`;
+  };
 
   return (
     <>
@@ -415,7 +432,7 @@ export function FileManagementTagPreparationSections({ model }: { model: any }) 
                 <div className="text-xs text-muted">
                   {scopedTrackIds.length
                     ? `${scopedTrackIds.length.toLocaleString()} scoped track${scopedTrackIds.length === 1 ? "" : "s"}`
-                    : "Blank scope previews the 500 most recently edited music tracks"}
+                    : "Blank scope previews all music tracks"}
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <button
@@ -468,6 +485,11 @@ export function FileManagementTagPreparationSections({ model }: { model: any }) 
                   {fileWritePreview.changed === 0 && fileWritePreview.errors.length === 0 && (
                     <div className="mb-3 rounded border border-moss/30 bg-moss/10 px-3 py-2 text-moss">
                       These files already match the SQLite metadata for the selected options.
+                    </div>
+                  )}
+                  {fileWritePreview.previews.length > 80 && (
+                    <div className="mb-3 rounded border border-line/70 bg-panel px-3 py-2 text-muted">
+                      Showing the first 80 changed or errored tracks.
                     </div>
                   )}
                   <div className="grid max-h-80 gap-1 overflow-auto pr-1">
@@ -762,7 +784,7 @@ export function FileManagementTagPreparationSections({ model }: { model: any }) 
               </div>
               {clapGenrePreview && (
                 <div className="rounded border border-line bg-ink p-3 text-xs">
-                  <div className="mb-3 grid gap-2 sm:grid-cols-4">
+                  <div className="mb-3 grid gap-2 sm:grid-cols-5">
                     <div>
                       <div className="font-semibold text-white">{clapGenrePreview.total.toLocaleString()}</div>
                       <div className="text-muted">Analyzed</div>
@@ -774,6 +796,10 @@ export function FileManagementTagPreparationSections({ model }: { model: any }) 
                     <div>
                       <div className="font-semibold text-moss">{clapGenrePreview.changed.toLocaleString()}</div>
                       <div className="text-muted">Would change</div>
+                    </div>
+                    <div>
+                      <div className="font-semibold text-ember">{clapGenrePreview.blocked.toLocaleString()}</div>
+                      <div className="text-muted">Blocked</div>
                     </div>
                     <div>
                       <div className="font-semibold text-ember">{clapGenrePreview.applied.toLocaleString()}</div>
@@ -790,13 +816,8 @@ export function FileManagementTagPreparationSections({ model }: { model: any }) 
                         <div className="truncate text-muted">
                           {preview.album || "Unknown album"}
                         </div>
-                        <div className={preview.error ? "text-ember" : preview.changed ? "text-moss" : "text-muted"}>
-                          {preview.error ??
-                            `${preview.current_genre || "(empty)"} -> ${preview.proposed_genre || "(none)"}${
-                              preview.confidence !== null && preview.confidence !== undefined
-                                ? ` (${(preview.confidence * 100).toFixed(0)}%)`
-                                : ""
-                            }${preview.applied ? " - applied" : preview.changed ? "" : " - no change"}`}
+                        <div className={preview.error ? "text-ember" : preview.changed ? "text-moss" : preview.copy_blocked_reason ? "text-ember" : "text-muted"}>
+                          {preview.error ?? clapGenreChangeDetails(preview)}
                         </div>
                       </div>
                     ))}

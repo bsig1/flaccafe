@@ -135,6 +135,7 @@ pub(super) fn track_where_clause(
     let expression = "coalesce(title, '') || ' ' || coalesce(artist, '') || ' ' ||
                     coalesce(album, '') || ' ' || coalesce(album_artist, '') || ' ' ||
                     coalesce(genre, '') || ' ' || coalesce(analysis_genre, '') || ' ' ||
+                    coalesce(analysis_mood, '') || ' ' ||
                     coalesce(path, '')";
     let compact_expression = compact_sql_expression(expression);
     let mut clauses = vec![music_only_clause().to_string()];
@@ -167,7 +168,7 @@ pub(super) fn track_where_clause(
     add_fuzzy_filter(
         &mut clauses,
         &mut params,
-        "coalesce(genre, '') || ' ' || coalesce(analysis_genre, '')",
+        "coalesce(genre, '') || ' ' || coalesce(analysis_genre, '') || ' ' || coalesce(analysis_mood, '')",
         genre,
     );
     add_fuzzy_filter(&mut clauses, &mut params, "coalesce(path, '')", path);
@@ -243,6 +244,9 @@ pub(super) fn sort_expression(sort_by: &str) -> &'static str {
         "album_artist" => "coalesce(album_artist, '')",
         "genre" => "coalesce(genre, '')",
         "analysis_genre" => "coalesce(analysis_genre, '')",
+        "analysis_genre_confidence" => "coalesce(analysis_genre_confidence, -1)",
+        "analysis_mood" => "coalesce(analysis_mood, '')",
+        "analysis_mood_confidence" => "coalesce(analysis_mood_confidence, -1)",
         "year" => "coalesce(year, -1)",
         "duration" => "coalesce(duration_seconds, 0)",
         "rating" => "coalesce(rating, -1)",
