@@ -329,14 +329,31 @@ export function useAppControllerEffects(model: any) {
     for (const [key, variable] of Object.entries(cssVariables) as [keyof ThemePalette, string][]) {
       document.documentElement.style.setProperty(variable, accent[key]);
     }
+    const selectedCheckboxAccent =
+      uiPreferences.checkboxAccent === "theme" ? accent.checkboxAccent : uiPreferences.checkboxAccent;
+    const checkboxAccent = {
+      ember: accent.ember,
+      moss: accent.moss,
+      paper: accent.paper,
+      softAccent: accent.softAccent,
+    }[selectedCheckboxAccent] ?? accent.ember;
+    document.documentElement.style.setProperty("--checkbox-accent", checkboxAccent);
     const selectedFont =
       uiPreferences.fontChoice === "theme"
         ? accent.fontFamily
         : fontChoiceValues[uiPreferences.fontChoice] ?? accent.fontFamily;
+    const selectedFontScale = uiPreferences.fontScale === "theme" ? accent.fontScale : uiPreferences.fontScale;
+    const selectedDensity = uiPreferences.density === "theme" ? accent.density : uiPreferences.density;
     document.documentElement.style.setProperty("--font-sans", selectedFont);
-    document.documentElement.style.fontSize = fontScaleValues[uiPreferences.fontScale] ?? fontScaleValues.default;
-    document.documentElement.dataset.density = uiPreferences.density;
-  }, [uiPreferences.themeAccent, uiPreferences.fontChoice, uiPreferences.fontScale, uiPreferences.density]);
+    document.documentElement.style.fontSize = fontScaleValues[selectedFontScale] ?? fontScaleValues.default;
+    document.documentElement.dataset.density = selectedDensity;
+  }, [
+    uiPreferences.themeAccent,
+    uiPreferences.checkboxAccent,
+    uiPreferences.fontChoice,
+    uiPreferences.fontScale,
+    uiPreferences.density,
+  ]);
 
   useEffect(() => {
     if (!status) {

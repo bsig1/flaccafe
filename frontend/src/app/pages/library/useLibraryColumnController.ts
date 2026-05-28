@@ -2,6 +2,7 @@ import type { MouseEvent as ReactMouseEvent } from "react";
 import { useEffect, useState } from "react";
 
 import { placeFloatingMenu } from "../../../lib/uiInteractions";
+import { closeFloatingMenus, listenForCloseFloatingMenus } from "../../menuEvents";
 import {
   ColumnContextMenu,
   LibraryColumnDefinition,
@@ -48,10 +49,12 @@ export function useLibraryColumnController(model: any) {
     window.addEventListener("click", closeMenu);
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("resize", closeMenu);
+    const stopListeningForFloatingMenus = listenForCloseFloatingMenus(closeMenu);
     return () => {
       window.removeEventListener("click", closeMenu);
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("resize", closeMenu);
+      stopListeningForFloatingMenus();
     };
   }, [setContextMenu]);
 
@@ -73,6 +76,7 @@ export function useLibraryColumnController(model: any) {
 
   function openColumnContextMenu(event: ReactMouseEvent) {
     event.preventDefault();
+    closeFloatingMenus();
     setContextMenu(null);
     setLibraryActionsMenu(null);
     const placement = placeFloatingMenu({
@@ -90,6 +94,7 @@ export function useLibraryColumnController(model: any) {
   function toggleLibraryActionsMenu(event: ReactMouseEvent<HTMLButtonElement>) {
     event.preventDefault();
     event.stopPropagation();
+    closeFloatingMenus();
     setContextMenu(null);
     setColumnMenu(null);
     setLibraryActionsMenu((current) => {

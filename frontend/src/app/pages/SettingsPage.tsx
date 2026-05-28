@@ -2,6 +2,9 @@ import {
   useEffect,
   useState,
 } from "react";
+import type {
+  CSSProperties,
+} from "react";
 
 import {
   Disc3,
@@ -22,8 +25,13 @@ import type {
 } from "../../config/theme";
 import {
   fontChoiceLabels,
+  sidebarWidthDefaultPx,
+  sidebarWidthMaxPx,
+  sidebarWidthMinPx,
+  sidebarWidthStepPx,
   themeAccentLabels,
   themeOrder,
+  themeAccentValues,
 } from "../../config/theme";
 import {
   desktopClearDiagnostics,
@@ -57,10 +65,13 @@ import {
 } from "../components/common";
 import {
   BackendStatus,
-  FontScale,
+  CheckboxAccentPreference,
+  FontScalePreference,
   Page,
   RememberedDeleteChoice,
-  UiDensity,
+  SidebarPlacement,
+  SidebarWidthPreference,
+  UiDensityPreference,
   UiPreferences,
   clearRememberedDeleteChoice,
   readRememberedDeleteChoice,
@@ -76,6 +87,31 @@ import {
 
 const LASTFM_API_URL = "https://www.last.fm/api";
 const ACOUSTID_API_KEY_URL = "https://acoustid.org/api-key";
+const checkboxAccentLabels: Record<CheckboxAccentPreference, string> = {
+  theme: "Theme Default",
+  ember: "Ember",
+  moss: "Moss",
+  paper: "Paper",
+  softAccent: "Soft Accent",
+};
+const fontScaleLabels: Record<FontScalePreference, string> = {
+  theme: "Theme Default",
+  small: "Small",
+  default: "Default",
+  large: "Large",
+};
+const densityLabels: Record<UiDensityPreference, string> = {
+  theme: "Theme Default",
+  comfortable: "Comfortable",
+  compact: "Compact",
+};
+const sidebarWidthSliderValues: SidebarWidthPreference[] = [
+  "theme",
+  ...Array.from(
+    { length: Math.floor((sidebarWidthMaxPx - sidebarWidthMinPx) / sidebarWidthStepPx) + 1 },
+    (_, index) => sidebarWidthMinPx + index * sidebarWidthStepPx,
+  ),
+];
 
 function bulkLyricsStatusText(progress: BulkLyricsProgress) {
   if (progress.status === "completed") {
@@ -182,10 +218,23 @@ export function SettingsPage({
     () => readRememberedDeleteChoice() ?? "ask",
   );
   const settingsQuery = settingsSearch.trim().toLowerCase();
+  const themeDefaults = themeAccentValues[uiPreferences.themeAccent] ?? themeAccentValues.cafe;
+  const explicitSidebarWidth =
+    uiPreferences.sidebarWidthPx === "theme"
+      ? sidebarWidthDefaultPx
+      : Math.min(sidebarWidthMaxPx, Math.max(sidebarWidthMinPx, uiPreferences.sidebarWidthPx));
+  const sidebarWidthSliderValue =
+    uiPreferences.sidebarWidthPx === "theme"
+      ? 0
+      : Math.max(1, sidebarWidthSliderValues.indexOf(explicitSidebarWidth));
+  const sidebarWidthLabel =
+    uiPreferences.sidebarWidthPx === "theme"
+      ? `Theme Default (${themeDefaults.sidebarWidthPx}px)`
+      : `${uiPreferences.sidebarWidthPx}px`;
   const showSettingsSection = (...keywords: string[]) =>
     !settingsQuery || keywords.join(" ").toLowerCase().includes(settingsQuery);
   const visibleSettingsGroups = [
-    showSettingsSection("library preferences display ratings metadata startup theme font density podcasts file paths delete recycle remember"),
+    showSettingsSection("library preferences display ratings metadata startup theme font density sidebar width position alignment checkbox color accent podcasts file paths delete recycle remember"),
     showSettingsSection("api keys online metadata lastfm last.fm scrobbling acoustid acoustic fingerprint musicbrainz lookup autotag"),
     showSettingsSection("keyboard shortcuts hotkeys local playback controls media keys"),
     showSettingsSection("player playback audio output lyrics lyric bulk lookup preload autofetch lrc sidecar cache follow equalizer replaygain fade skip codec rust webview"),
@@ -444,7 +493,7 @@ export function SettingsPage({
             </div>
           )}
 
-          {showSettingsSection("library preferences display ratings metadata startup theme font density podcasts file paths delete recycle remember") && (
+          {showSettingsSection("library preferences display ratings metadata startup theme font density sidebar width position alignment checkbox color accent podcasts file paths delete recycle remember") && (
           <DisclosureSection title="Library Preferences" description="Display, rating storage, and startup behavior">
             <div className="grid gap-3 text-sm text-neutral-200">
               <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-ink p-3">
@@ -617,21 +666,82 @@ export function SettingsPage({
                 </button>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <label className="grid gap-2">
+                    <span className="text-xs uppercase text-muted">Checkbox Color</span>
+                    <select
+                      className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                      value={uiPreferences.checkboxAccent}
+                      onChange={(event) =>
+                        setUiPreferences((current) => ({ ...current, checkboxAccent: event.target.value as CheckboxAccentPreference }))
+                      }
+                    >
+                      {Object.entries(checkboxAccentLabels).map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="grid gap-2">
                     <span className="text-xs uppercase text-muted">Density</span>
                     <select
                       className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
                       value={uiPreferences.density}
                       onChange={(event) => {
-                        const density = event.target.value as UiDensity;
+                        const density = event.target.value as UiDensityPreference;
                         setUiPreferences((current) => ({
                           ...current,
                           density,
-                          compactLibraryRows: density === "compact",
+                          compactLibraryRows:
+                            density === "theme" ? themeDefaults.density === "compact" : density === "compact",
                         }));
                       }}
                     >
+                      <option value="theme">Theme Default ({densityLabels[themeDefaults.density]})</option>
                       <option value="comfortable">Comfortable</option>
                       <option value="compact">Compact</option>
+                    </select>
+                  </label>
+                  <label className="grid gap-2">
+                    <span className="text-xs uppercase text-muted">Sidebar Width</span>
+                    <div className="rounded border border-line bg-panel px-3 py-2">
+                      <div className="mb-1 flex items-center justify-between gap-3 text-xs">
+                        <span className="text-muted">Width</span>
+                        <span className="font-medium text-white">{sidebarWidthLabel}</span>
+                      </div>
+                      <input
+                        className="theme-slider"
+                        type="range"
+                        min={0}
+                        max={sidebarWidthSliderValues.length - 1}
+                        step={1}
+                        value={sidebarWidthSliderValue}
+                        aria-label="Sidebar width"
+                        style={{
+                          "--theme-slider-fill": `${(sidebarWidthSliderValue / (sidebarWidthSliderValues.length - 1)) * 100}%`,
+                        } as CSSProperties}
+                        onChange={(event) => {
+                          const sidebarWidthPx = sidebarWidthSliderValues[Number(event.target.value)] ?? "theme";
+                          setUiPreferences((current) => ({ ...current, sidebarWidthPx }));
+                        }}
+                      />
+                      <div className="mt-1 flex justify-between text-[11px] text-muted">
+                        <span>Theme</span>
+                        <span>{sidebarWidthMinPx}px</span>
+                        <span>{sidebarWidthMaxPx}px</span>
+                      </div>
+                    </div>
+                  </label>
+                  <label className="grid content-start gap-2 self-start">
+                    <span className="text-xs uppercase text-muted">Sidebar Position</span>
+                    <select
+                      className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                      value={uiPreferences.sidebarPlacement}
+                      onChange={(event) =>
+                        setUiPreferences((current) => ({ ...current, sidebarPlacement: event.target.value as SidebarPlacement }))
+                      }
+                    >
+                      <option value="left">Left</option>
+                      <option value="right">Right</option>
                     </select>
                   </label>
                   <label className="grid gap-2">
@@ -639,9 +749,9 @@ export function SettingsPage({
                     <select
                       className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
                       value={uiPreferences.fontChoice}
-                      onChange={(event) =>
+                      onChange={(event) => {
                         setUiPreferences((current) => ({ ...current, fontChoice: event.target.value as FontChoice }))
-                      }
+                      }}
                     >
                       {Object.entries(fontChoiceLabels).map(([value, label]) => (
                         <option key={value} value={value}>
@@ -656,12 +766,14 @@ export function SettingsPage({
                       className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
                       value={uiPreferences.fontScale}
                       onChange={(event) =>
-                        setUiPreferences((current) => ({ ...current, fontScale: event.target.value as FontScale }))
+                        setUiPreferences((current) => ({ ...current, fontScale: event.target.value as FontScalePreference }))
                       }
                     >
-                      <option value="small">Small</option>
-                      <option value="default">Default</option>
-                      <option value="large">Large</option>
+                      {Object.entries(fontScaleLabels).map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
                     </select>
                   </label>
                 </div>

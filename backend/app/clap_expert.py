@@ -52,6 +52,18 @@ def _pip_install_command(
     return command
 
 
+def _missing_dependency_message(ready: dict[str, Any]) -> str | None:
+    missing = [name for name, installed in ready.get("dependencies", {}).items() if not installed]
+    if not missing:
+        return None
+    errors = ready.get("dependency_errors") or {}
+    details = [f"{name}: {errors[name]}" for name in missing if name in errors]
+    message = "Install finished, but these CLAP dependencies are still missing: " + ", ".join(missing) + "."
+    if details:
+        message += " Import errors: " + "; ".join(details)
+    return message
+
+
 def _run_command(label: str, command: list[str]) -> None:
     _emit({"status": "log", "message": "> " + " ".join(command)})
     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -162,13 +174,9 @@ def _install(payload: dict[str, Any]) -> None:
         activate_ml_runtime(force=True)
 
     ready = clap_status(deep=True)
-    missing = [name for name, installed in ready.get("dependencies", {}).items() if not installed]
-    if missing:
-        raise RuntimeError(
-            "Install finished, but these CLAP dependencies are still missing: "
-            + ", ".join(missing)
-            + "."
-        )
+    missing_message = _missing_dependency_message(ready)
+    if missing_message:
+        raise RuntimeError(missing_message)
 
     _emit(
         {

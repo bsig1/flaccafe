@@ -24,7 +24,7 @@ export function PlayerBarView({ model }: { model: any }) {
   const currentRadioStation = model.currentRadioStation as RadioStation | null;
   const preloadedNextTrack = model.preloadedNextTrack as Track | null;
   const {
-    miniPlayer, artworkSrc, playerTitle, hideArtworkPreview, scheduleArtworkPreview, setArtworkFailed, isRadioSource, isPreviewTrack, isLibraryTrack, radioSubtitle, hasCurrentArtist, currentArtistLabel, onOpenCurrentArtist, hasCurrentAlbum, currentAlbumLabel, onOpenCurrentAlbum, onOpenCurrentTrack, cdSkipIsSettling, hasPrevious, canPreviousAction, handlePreviousTrack, playRelative, isPlaying, hasPlayableSource, togglePlayback, hasNext, usePlayback, webAudioSourceUrl, webAudioKey, audioRef, isCdPreviewTrack, syncDuration, handleTimeUpdate, setIsPlaying, suppressWebPauseUntilRef, maybeClearPendingResume, handleEnded, activeSourceKeyRef, activeSourceKey, suppressWebPlaybackErrorsUntilRef, setStatus, canPreloadNextTrack, nextAudioRef, trackAudioSourceUrl, effectiveDuration, currentTime, progressPercent, progressFill, handleSeek, handleProgressKeyDown, playbackMode, cycleRepeatMode, onOpenLyricsView, onOpenQueueView, muted, volume, handleVolumeWheel, toggleMuted, handleVolumeChange, volumePercentDraft, commitVolumePercent, setVolumePercentDraft, handleVolumePercentChange, handleVolumePercentKeyDown, onRating, showArtworkPreview,
+    miniPlayer, artworkSrc, playerTitle, hideArtworkPreview, scheduleArtworkPreview, setArtworkFailed, isRadioSource, isPreviewTrack, isLibraryTrack, radioSubtitle, hasCurrentArtist, currentArtistLabel, onOpenCurrentArtist, onOpenCurrentArtistInfo, hasCurrentAlbum, currentAlbumLabel, onOpenCurrentAlbum, onOpenCurrentTrack, cdSkipIsSettling, hasPrevious, canPreviousAction, handlePreviousTrack, playRelative, isPlaying, hasPlayableSource, togglePlayback, hasNext, usePlayback, webAudioSourceUrl, webAudioKey, audioRef, isCdPreviewTrack, syncDuration, handleTimeUpdate, setIsPlaying, suppressWebPauseUntilRef, maybeClearPendingResume, handleEnded, activeSourceKeyRef, activeSourceKey, suppressWebPlaybackErrorsUntilRef, setStatus, canPreloadNextTrack, nextAudioRef, trackAudioSourceUrl, effectiveDuration, currentTime, progressPercent, progressFill, handleSeek, handleProgressKeyDown, playbackMode, cycleRepeatMode, onOpenLyricsView, onOpenQueueView, muted, volume, handleVolumeWheel, toggleMuted, handleVolumeChange, volumePercentDraft, commitVolumePercent, setVolumePercentDraft, handleVolumePercentChange, handleVolumePercentKeyDown, onRating, showArtworkPreview,
   } = model;
 
   return (
@@ -37,12 +37,17 @@ export function PlayerBarView({ model }: { model: any }) {
     >
       <div className="flex min-w-0 items-center gap-3">
         <div className="relative shrink-0">
-          <div
-            aria-label={artworkSrc ? `Album cover for ${playerTitle}` : undefined}
-            className="grid h-16 w-16 place-items-center overflow-hidden rounded border border-line bg-panel text-moss shadow-inner outline-none transition focus-visible:ring-2 focus-visible:ring-moss/55"
-            role={artworkSrc ? "img" : undefined}
-            tabIndex={artworkSrc ? 0 : -1}
+          <button
+            aria-label={hasCurrentArtist && currentTrack && !isPreviewTrack ? `Open artist background: ${currentArtistLabel}` : artworkSrc ? `Album cover for ${playerTitle}` : undefined}
+            className="grid h-16 w-16 place-items-center overflow-hidden rounded border border-line bg-panel text-moss shadow-inner outline-none transition hover:border-moss/50 focus-visible:ring-2 focus-visible:ring-moss/55"
+            type="button"
+            title={hasCurrentArtist && currentTrack && !isPreviewTrack ? `Open artist background: ${currentArtistLabel}` : undefined}
             onBlur={hideArtworkPreview}
+            onClick={() => {
+              if (hasCurrentArtist && currentTrack && !isPreviewTrack) {
+                onOpenCurrentArtistInfo(currentTrack);
+              }
+            }}
             onFocus={scheduleArtworkPreview}
             onMouseEnter={scheduleArtworkPreview}
             onMouseLeave={hideArtworkPreview}
@@ -59,7 +64,7 @@ export function PlayerBarView({ model }: { model: any }) {
             ) : (
               <Volume2 size={22} />
             )}
-          </div>
+          </button>
           {artworkSrc && showArtworkPreview && (
             <div className="pointer-events-none absolute bottom-[calc(100%+0.75rem)] left-0 z-50 w-60 overflow-hidden rounded-lg border border-line bg-panel shadow-2xl shadow-black/45">
               <img
@@ -97,7 +102,7 @@ export function PlayerBarView({ model }: { model: any }) {
                 <button
                   className="min-w-0 max-w-full shrink truncate rounded text-left transition hover:text-white"
                   type="button"
-                  title={`Open artist: ${currentArtistLabel}`}
+                  title={`Show artist in Library: ${currentArtistLabel}`}
                   onClick={() => onOpenCurrentArtist(currentTrack)}
                 >
                   {currentArtistLabel}

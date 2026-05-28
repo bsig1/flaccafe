@@ -5,7 +5,14 @@ import mintTheme from "./themes/mint.json";
 import roseTheme from "./themes/rose.json";
 
 export type ThemeAccent = "cafe" | "mint" | "rose" | "blue" | "comic";
+export type ThemeFontScale = "small" | "default" | "large";
+export type ThemeCheckboxAccent = "ember" | "moss" | "paper" | "softAccent";
+export type ThemeDensity = "comfortable" | "compact";
 export type FontChoice = "theme" | "system" | "inter" | "serif" | "mono" | "rounded" | "comic";
+export const sidebarWidthMinPx = 192;
+export const sidebarWidthMaxPx = 320;
+export const sidebarWidthStepPx = 8;
+export const sidebarWidthDefaultPx = 224;
 
 // Values are RGB triplets because styles.css consumes them as rgb(var(--color-name) / alpha).
 export interface ThemePalette {
@@ -31,6 +38,10 @@ export interface ThemePalette {
   scrollThumb: string;
   scrollThumbHover: string;
   fontFamily: string;
+  fontScale: ThemeFontScale;
+  checkboxAccent: ThemeCheckboxAccent;
+  density: ThemeDensity;
+  sidebarWidthPx: number;
 }
 
 // Add new themes here after creating frontend/src/config/themes/<theme>.json.
@@ -63,10 +74,44 @@ export const fontChoiceValues: Record<Exclude<FontChoice, "theme">, string> = {
   comic: '"Comic Sans MS", "Comic Sans", "Comic Neue", cursive',
 };
 
+type ThemePaletteJson = Omit<ThemePalette, "fontScale" | "checkboxAccent" | "density" | "sidebarWidthPx"> & {
+  fontScale?: string;
+  checkboxAccent?: string;
+  density?: string;
+  sidebarWidthPx?: number;
+};
+
+function normalizeThemePalette(theme: ThemePaletteJson): ThemePalette {
+  const fontScale: ThemeFontScale =
+    theme.fontScale === "small" || theme.fontScale === "large" || theme.fontScale === "default"
+      ? theme.fontScale
+      : "default";
+  const checkboxAccent: ThemeCheckboxAccent =
+    theme.checkboxAccent === "moss" ||
+    theme.checkboxAccent === "paper" ||
+    theme.checkboxAccent === "softAccent" ||
+    theme.checkboxAccent === "ember"
+      ? theme.checkboxAccent
+      : "ember";
+  const density: ThemeDensity =
+    theme.density === "compact" || theme.density === "comfortable" ? theme.density : "comfortable";
+  const sidebarWidthPx =
+    typeof theme.sidebarWidthPx === "number" && Number.isFinite(theme.sidebarWidthPx)
+      ? Math.min(sidebarWidthMaxPx, Math.max(sidebarWidthMinPx, Math.round(theme.sidebarWidthPx / sidebarWidthStepPx) * sidebarWidthStepPx))
+      : sidebarWidthDefaultPx;
+  return {
+    ...theme,
+    fontScale,
+    checkboxAccent,
+    density,
+    sidebarWidthPx,
+  };
+}
+
 export const themeAccentValues: Record<ThemeAccent, ThemePalette> = {
-  cafe: cafeTheme,
-  mint: mintTheme,
-  rose: roseTheme,
-  blue: blueTheme,
-  comic: comicTheme,
+  cafe: normalizeThemePalette(cafeTheme),
+  mint: normalizeThemePalette(mintTheme),
+  rose: normalizeThemePalette(roseTheme),
+  blue: normalizeThemePalette(blueTheme),
+  comic: normalizeThemePalette(comicTheme),
 };

@@ -1,7 +1,14 @@
+import { useEffect } from "react";
+
 import type { AppController } from "./AppController";
 import { AppOverlays } from "./AppOverlays";
 import { AppPageOutlet } from "./AppPageOutlet";
 import { Sidebar } from "./components/Sidebar";
+import type { SidebarSearchTarget } from "./components/sidebarSearch";
+import {
+  themeAccentValues,
+} from "../config/theme";
+import { closeFloatingMenus, listenForCloseFloatingMenus } from "./menuEvents";
 import { PlayerBar } from "./player/PlayerBar";
 
 type AppViewProps = {
@@ -21,12 +28,16 @@ export function AppView({ controller }: AppViewProps) {
     handleCommitExternalTrackRequest,
     handleOpenCurrentAlbumFromPlayer,
     handleOpenCurrentArtistFromPlayer,
+    handleOpenCurrentArtistInfoFromPlayer,
     handleOpenCurrentTrackFromPlayer,
     handleOpenDetachedMiniPlayer,
     handleOpenLyricsViewFromPlayer,
     handleOpenQueueViewFromPlayer,
     handlePlayTrack,
     handleRating,
+    handleSelectAlbum,
+    handleSelectArtist,
+    handleSelectPlaylist,
     handleTrackEnded,
     handleTrackSkipped,
     hasAnalysisIssue,
@@ -37,26 +48,82 @@ export function AppView({ controller }: AppViewProps) {
     radioPlaybackRequestId,
     restoredPlaybackPosition,
     setActivePage,
+    setAppContextMenu,
+    setDetailTrack,
+    setFileManagementFocusToolId,
+    setLibraryView,
     setPlaybackMode,
     setPlaybackTime,
     setRestoredPlaybackPosition,
+    setSearch,
+    setSettingsFocusSection,
     setStatus,
     showCdPage,
     uiPreferences,
   } = controller;
+  const themeDefaults = themeAccentValues[uiPreferences.themeAccent] ?? themeAccentValues.cafe;
+  const sidebarWidthPx =
+    uiPreferences.sidebarWidthPx === "theme" ? themeDefaults.sidebarWidthPx : uiPreferences.sidebarWidthPx;
+  const sidebarPlacement = uiPreferences.sidebarPlacement;
+
+  useEffect(() => listenForCloseFloatingMenus(() => setAppContextMenu(null)), [setAppContextMenu]);
+
+  function openSidebarSearchTarget(target: SidebarSearchTarget) {
+    if (target.kind === "settings") {
+      setSettingsFocusSection(target.sectionId);
+      setActivePage("settings");
+      return;
+    }
+    if (target.kind === "fileManagement") {
+      setFileManagementFocusToolId(target.toolId);
+      setActivePage("fileManagement");
+      return;
+    }
+    if (target.kind === "track") {
+      setLibraryView("tracks");
+      setSearch(target.label);
+      setDetailTrack(target.track);
+      setActivePage("library");
+      return;
+    }
+    if (target.kind === "album") {
+      setSearch("");
+      setLibraryView("albums");
+      setActivePage("library");
+      void handleSelectAlbum(target.album.id);
+      return;
+    }
+    if (target.kind === "artist") {
+      setSearch("");
+      setLibraryView("artists");
+      setActivePage("library");
+      void handleSelectArtist(target.artist.name);
+      return;
+    }
+    if (target.kind === "playlist") {
+      setSearch("");
+      setLibraryView("playlists");
+      setActivePage("library");
+      void handleSelectPlaylist(target.playlist.id);
+    }
+  }
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-ink text-neutral-100" onContextMenu={openAppContextMenu}>
+    <div className="flex h-screen flex-col overflow-hidden bg-ink text-neutral-100" onContextMenuCapture={closeFloatingMenus} onContextMenu={openAppContextMenu}>
       <AppOverlays controller={controller} />
-      <div className="flex min-h-0 flex-1">
+      <div className={`relative flex min-h-0 flex-1 ${sidebarPlacement === "right" ? "flex-row-reverse" : ""}`}>
         <Sidebar
           activePage={activePage}
           setActivePage={setActivePage}
           hasDiagnosticsIssue={backendStatus === "down"}
           hasAnalysisIssue={hasAnalysisIssue}
           showCdPage={showCdPage}
+          sidebarWidthPx={sidebarWidthPx}
+          sidebarPlacement={sidebarPlacement}
+          librarySearchEnabled={backendStatus === "ok"}
           coffeeAnimating={coffeeAnimating}
           onCoffeeClick={handleCoffeeClick}
+          onOpenSearchTarget={openSidebarSearchTarget}
         />
         <div className="flex min-w-0 flex-1 flex-col">
           <AppPageOutlet controller={controller} />
@@ -100,6 +167,7 @@ export function AppView({ controller }: AppViewProps) {
         onOpenQueueView={handleOpenQueueViewFromPlayer}
         onOpenCurrentTrack={handleOpenCurrentTrackFromPlayer}
         onOpenCurrentArtist={handleOpenCurrentArtistFromPlayer}
+        onOpenCurrentArtistInfo={handleOpenCurrentArtistInfoFromPlayer}
         onOpenCurrentAlbum={(track) => void handleOpenCurrentAlbumFromPlayer(track)}
         setStatus={setStatus}
       />

@@ -97,6 +97,7 @@ export function PlayerBar({
   onOpenQueueView,
   onOpenCurrentTrack,
   onOpenCurrentArtist,
+  onOpenCurrentArtistInfo,
   onOpenCurrentAlbum,
   setStatus,
 }: PlayerBarProps) {
@@ -970,7 +971,7 @@ export function PlayerBar({
   });
 
   const playerBarViewModel = {
-    miniPlayer, artworkSrc: displayedArtworkSrc, playerTitle, hideArtworkPreview, scheduleArtworkPreview, setArtworkFailed, isRadioSource, isPreviewTrack, isLibraryTrack, currentTrack, currentRadioStation, radioSubtitle, hasCurrentArtist, currentArtistLabel, onOpenCurrentArtist, hasCurrentAlbum, currentAlbumLabel, onOpenCurrentAlbum, onOpenCurrentTrack, cdSkipIsSettling, hasPrevious, canPreviousAction, handlePreviousTrack, playRelative, isPlaying, hasPlayableSource, togglePlayback, hasNext, usePlayback, webAudioSourceUrl, webAudioKey, audioRef, isCdPreviewTrack, syncDuration, handleTimeUpdate, setIsPlaying, suppressWebPauseUntilRef, maybeClearPendingResume, handleEnded, activeSourceKeyRef, activeSourceKey, suppressWebPlaybackErrorsUntilRef, setStatus, preloadedNextTrack, canPreloadNextTrack, nextAudioRef, trackAudioSourceUrl, effectiveDuration, currentTime, progressPercent, progressFill, handleSeek, handleProgressKeyDown, playbackMode, cycleRepeatMode, onOpenLyricsView, onOpenQueueView, muted, volume, handleVolumeWheel, toggleMuted, handleVolumeChange, volumePercentDraft, commitVolumePercent, setVolumePercentDraft, handleVolumePercentChange, handleVolumePercentKeyDown, onRating, showArtworkPreview,
+    miniPlayer, artworkSrc: displayedArtworkSrc, playerTitle, hideArtworkPreview, scheduleArtworkPreview, setArtworkFailed, isRadioSource, isPreviewTrack, isLibraryTrack, currentTrack, currentRadioStation, radioSubtitle, hasCurrentArtist, currentArtistLabel, onOpenCurrentArtist, onOpenCurrentArtistInfo, hasCurrentAlbum, currentAlbumLabel, onOpenCurrentAlbum, onOpenCurrentTrack, cdSkipIsSettling, hasPrevious, canPreviousAction, handlePreviousTrack, playRelative, isPlaying, hasPlayableSource, togglePlayback, hasNext, usePlayback, webAudioSourceUrl, webAudioKey, audioRef, isCdPreviewTrack, syncDuration, handleTimeUpdate, setIsPlaying, suppressWebPauseUntilRef, maybeClearPendingResume, handleEnded, activeSourceKeyRef, activeSourceKey, suppressWebPlaybackErrorsUntilRef, setStatus, preloadedNextTrack, canPreloadNextTrack, nextAudioRef, trackAudioSourceUrl, effectiveDuration, currentTime, progressPercent, progressFill, handleSeek, handleProgressKeyDown, playbackMode, cycleRepeatMode, onOpenLyricsView, onOpenQueueView, muted, volume, handleVolumeWheel, toggleMuted, handleVolumeChange, volumePercentDraft, commitVolumePercent, setVolumePercentDraft, handleVolumePercentChange, handleVolumePercentKeyDown, onRating, showArtworkPreview,
   };
 
   return <PlayerBarView model={playerBarViewModel} />;

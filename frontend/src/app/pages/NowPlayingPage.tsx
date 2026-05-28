@@ -200,6 +200,7 @@ export function NowPlayingPage({
       ? `${display(currentTrack.artist)} - ${currentAlbumLabel}`
       : display(currentTrack.artist)
     : "Idle";
+  const lyricsSourceLabel = lyrics?.source?.trim() ?? "";
   const lyricLines = lyrics?.lyrics?.split("\n") ?? [];
   const hasLyrics = lyricLines.some((line) => line.trim().length > 0);
   const timedLines = lyricLines.map((line, index) => ({ line, index, time: parseLyricTimestamp(line) }));
@@ -691,7 +692,7 @@ export function NowPlayingPage({
       </header>
 
       {isLyricsView ? (
-        <div className="relative z-10 grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-4 overflow-hidden px-5 py-4 lg:px-8">
+        <div className="relative z-10 grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)_auto] gap-4 overflow-hidden px-5 py-4 lg:px-8">
           <section className="mx-auto flex w-full max-w-5xl items-center gap-4 border-b border-line/70 pb-4">
             <div className="h-16 w-16 shrink-0 overflow-hidden rounded border border-line bg-panel">
               {artworkSrc ? (
@@ -717,7 +718,6 @@ export function NowPlayingPage({
                   ? currentArtistAlbumLabel
                   : "Choose a track from Library or AutoDJ"}
               </div>
-              {lyrics?.source && <div className="mt-1 truncate text-xs text-muted">{lyrics.source}</div>}
             </div>
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 text-xs">
               <button
@@ -758,6 +758,7 @@ export function NowPlayingPage({
               spacious
             />
           </section>
+          {uiPreferences.nowPlayingShowLyricSource && lyricsSourceLabel && <div className="mx-auto w-full max-w-5xl truncate px-2 text-right text-[11px] text-muted/70" title={lyricsSourceLabel}>{lyricsSourceLabel}</div>}
         </div>
       ) : layout === "party" ? (
         <div className="relative z-10 grid min-h-0 flex-1 overflow-hidden px-5 py-4 text-center lg:px-8">
@@ -917,13 +918,12 @@ export function NowPlayingPage({
         </section>
 
         {showLyrics ? (
-        <section className={`grid min-h-[360px] min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden ${
+        <section className={`grid min-h-[360px] min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden ${
           isQueueLayout ? "rounded border border-line/40 bg-panel/45 xl:min-h-0" : "rounded border border-line bg-panel xl:min-h-0"
         }`}>
           <div className="flex min-h-12 flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2">
             <div>
               <div className="text-sm font-semibold text-white">Lyrics</div>
-              {lyrics?.source && <div className="truncate text-xs text-muted">{lyrics.source}</div>}
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2 text-xs">
               <button
@@ -964,6 +964,7 @@ export function NowPlayingPage({
               showLookupProgress={showLyricsLookupProgress}
             />
           </div>
+          {uiPreferences.nowPlayingShowLyricSource && lyricsSourceLabel && <div className="truncate border-t border-line/70 px-4 py-2 text-right text-[11px] text-muted/70" title={lyricsSourceLabel}>{lyricsSourceLabel}</div>}
         </section>
         ) : isQueueLayout && showQueue ? null : (
           <section className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] rounded border border-line bg-panel">

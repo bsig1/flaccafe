@@ -1,4 +1,10 @@
-import type { FontChoice, ThemeAccent } from "../../config/theme";
+import type {
+  FontChoice,
+  ThemeAccent,
+  ThemeCheckboxAccent,
+  ThemeDensity,
+  ThemeFontScale,
+} from "../../config/theme";
 import type {
   AudioAnalysisCoverage,
   AudioAnalysisProgress,
@@ -17,8 +23,13 @@ export type PlaybackMode = "normal" | "repeatOne" | "repeatQueue" | "stopAfterCu
 export type PlaybackEngine = "webview" | "rust";
 export type desktopOutputBackendMode = "cpalShared" | "wasapiExclusive" | "asio";
 export type SortDirection = "asc" | "desc";
-export type UiDensity = "comfortable" | "compact";
-export type FontScale = "small" | "default" | "large";
+export type UiDensity = ThemeDensity;
+export type UiDensityPreference = "theme" | UiDensity;
+export type FontScale = ThemeFontScale;
+export type FontScalePreference = "theme" | FontScale;
+export type CheckboxAccent = ThemeCheckboxAccent;
+export type CheckboxAccentPreference = "theme" | CheckboxAccent;
+export type SidebarWidthPreference = "theme" | number;
 export type AutoDjExperience = "simple" | "advanced";
 export type ReplayGainMode = "off" | "track" | "album";
 export type EqualizerBandMode = "10" | "15";
@@ -205,6 +216,7 @@ export interface DeleteTrackPrompt {
 
 export type RememberedDeleteChoice = "library" | "file";
 export type CdSidebarMode = "never" | "drive" | "always";
+export type SidebarPlacement = "left" | "right";
 
 export interface UiPreferences {
   hideFilePaths: boolean;
@@ -242,11 +254,15 @@ export interface UiPreferences {
   nowPlayingShowQueue: boolean;
   nowPlayingLyricSize: NowPlayingLyricSize;
   nowPlayingAutoScrollLyrics: boolean;
+  nowPlayingShowLyricSource: boolean;
   autoFetchLyrics: boolean;
   autoFetchLrcWhenPlainPresent: boolean;
   themeAccent: ThemeAccent;
-  density: UiDensity;
-  fontScale: FontScale;
+  checkboxAccent: CheckboxAccentPreference;
+  density: UiDensityPreference;
+  sidebarWidthPx: SidebarWidthPreference;
+  sidebarPlacement: SidebarPlacement;
+  fontScale: FontScalePreference;
   fontChoice: FontChoice;
   enableArtistLookup: boolean;
   libraryVisibleColumns: MetadataColumnKey[];

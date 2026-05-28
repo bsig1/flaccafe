@@ -303,9 +303,10 @@ def activate_ml_runtime(force: bool = False) -> bool:
         return True
 
     site_text = str(site_packages)
-    if site_text not in sys.path:
-        sys.path.insert(0, site_text)
-        importlib.invalidate_caches()
+    site.addsitedir(site_text)
+    sys.path[:] = [path for path in sys.path if path != site_text]
+    sys.path.insert(0, site_text)
+    importlib.invalidate_caches()
 
     _add_dll_directory(root / "Scripts")
     _add_dll_directory(root / "Library" / "bin")

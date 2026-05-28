@@ -123,21 +123,38 @@ def save_config(
     return load_config()
 
 
+def _python_import_spec(name: str):
+    try:
+        return importlib.util.find_spec(name)
+    except (ImportError, ValueError):
+        return None
+
+
+def _managed_runtime_import_spec(name: str):
+    site_packages = ml_runtime_site_packages()
+    if site_packages is not None and site_packages.exists():
+        spec = PathFinder.find_spec(name, [str(site_packages)])
+        if spec is not None:
+            return spec
+    return _python_import_spec(name)
+
+
+def _dependency_import_spec(name: str):
+    return _managed_runtime_import_spec(name) if use_managed_ml_runtime() else _python_import_spec(name)
+
+
 def quick_dependency_status() -> dict[str, bool]:
     if use_managed_ml_runtime():
-        site_packages = ml_runtime_site_packages()
-        if site_packages is None or not site_packages.exists():
-            return {name: False for name in DEPENDENCY_NAMES}
-        return {name: PathFinder.find_spec(name, [str(site_packages)]) is not None for name in DEPENDENCY_NAMES}
+        return {name: _managed_runtime_import_spec(name) is not None for name in DEPENDENCY_NAMES}
 
-    return {name: importlib.util.find_spec(name) is not None for name in DEPENDENCY_NAMES}
+    return {name: _python_import_spec(name) is not None for name in DEPENDENCY_NAMES}
 
 
 def dependency_status() -> dict[str, bool]:
     activated = activate_ml_runtime()
     if use_managed_ml_runtime() and not activated:
         return {name: False for name in DEPENDENCY_NAMES}
-    return {name: importlib.util.find_spec(name) is not None for name in DEPENDENCY_NAMES}
+    return {name: _dependency_import_spec(name) is not None for name in DEPENDENCY_NAMES}
 
 
 def dependencies_installed() -> bool:
@@ -151,7 +168,7 @@ def dependency_errors() -> dict[str, str]:
         return {}
     errors: dict[str, str] = {}
     for name in DEPENDENCY_NAMES:
-        if importlib.util.find_spec(name) is None:
+        if _dependency_import_spec(name) is None:
             continue
         try:
             importlib.import_module(name)
@@ -170,7 +187,7 @@ def _dependency_ready_status() -> tuple[dict[str, bool], dict[str, str]]:
 
 def model_cached(config: ClapConfig) -> bool:
     activate_ml_runtime()
-    if importlib.util.find_spec("transformers") is None or "transformers" in dependency_errors():
+    if _dependency_import_spec("transformers") is None or "transformers" in dependency_errors():
         return False
     try:
         transformers_utils = importlib.import_module("transformers.utils")

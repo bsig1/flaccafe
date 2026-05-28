@@ -4,7 +4,7 @@ export function LibraryTrackBranch({ model }: { model: any }) {
     <>
               {libraryView === "tracks" && (
                 <>
-                  <table className="w-full table-fixed text-left text-sm" style={{ minWidth: tableWidth }}>
+                  <table className="library-track-table w-full table-fixed text-left text-sm" style={{ minWidth: tableWidth }}>
                     <colgroup>
                       <col style={{ width: librarySelectionColumnWidth }} />
                       <col style={{ width: columnWidths.play }} />

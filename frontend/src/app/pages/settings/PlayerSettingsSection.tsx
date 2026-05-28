@@ -384,7 +384,7 @@ export function PlayerSettingsSection({
             <div className="font-medium text-white">Lyric behavior</div>
             <div className="text-xs text-muted">Automatic lookup, synced line following, and sidecar LRC caching.</div>
           </div>
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-panel px-3 py-2">
               <span className="text-muted">Auto-fetch missing lyrics</span>
               <input
@@ -414,6 +414,17 @@ export function PlayerSettingsSection({
                 className="h-4 w-4 accent-ember"
                 checked={autoWriteFetchedLyricsSidecars}
                 onChange={(event) => onAutoWriteFetchedLyricsSidecarsChange(event.target.checked)}
+              />
+            </label>
+            <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-panel px-3 py-2">
+              <span className="text-muted">Show lyric source</span>
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-ember"
+                checked={uiPreferences.nowPlayingShowLyricSource}
+                onChange={(event) =>
+                  setUiPreferences((current) => ({ ...current, nowPlayingShowLyricSource: event.target.checked }))
+                }
               />
             </label>
           </div>

@@ -151,6 +151,7 @@ export function buildAppControllerReturn<T extends Record<"acousticFingerprintRe
   handleOpenBackendLog: T["handleOpenBackendLog"];
   handleOpenCurrentAlbumFromPlayer: T["handleOpenCurrentAlbumFromPlayer"];
   handleOpenCurrentArtistFromPlayer: T["handleOpenCurrentArtistFromPlayer"];
+  handleOpenCurrentArtistInfoFromPlayer: any;
   handleOpenCurrentTrackFromPlayer: T["handleOpenCurrentTrackFromPlayer"];
   handleOpenDetachedMiniPlayer: T["handleOpenDetachedMiniPlayer"];
   handleOpenExternalUrl: T["handleOpenExternalUrl"];
@@ -633,6 +634,7 @@ export function buildAppControllerReturn<T extends Record<"acousticFingerprintRe
       handleOpenBackendLog: model.handleOpenBackendLog,
       handleOpenCurrentAlbumFromPlayer: model.handleOpenCurrentAlbumFromPlayer,
       handleOpenCurrentArtistFromPlayer: model.handleOpenCurrentArtistFromPlayer,
+      handleOpenCurrentArtistInfoFromPlayer: (model as any).handleOpenCurrentArtistInfoFromPlayer,
       handleOpenCurrentTrackFromPlayer: model.handleOpenCurrentTrackFromPlayer,
       handleOpenDetachedMiniPlayer: model.handleOpenDetachedMiniPlayer,
       handleOpenExternalUrl: model.handleOpenExternalUrl,

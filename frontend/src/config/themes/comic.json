@@ -20,5 +20,9 @@
   "scrollTrack": "24 23 38",
   "scrollThumb": "104 97 133",
   "scrollThumbHover": "137 126 169",
-  "fontFamily": "\"Comic Sans MS\", \"Comic Sans\", \"Comic Neue\", cursive"
+  "fontFamily": "\"Comic Sans MS\", \"Comic Sans\", \"Comic Neue\", cursive",
+  "fontScale": "large",
+  "checkboxAccent": "moss",
+  "density": "comfortable",
+  "sidebarWidthPx": 224
 }

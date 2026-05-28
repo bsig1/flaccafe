@@ -20,5 +20,9 @@
   "scrollTrack": "11 25 22",
   "scrollThumb": "69 112 98",
   "scrollThumbHover": "91 145 126",
-  "fontFamily": "\"Segoe UI Variable\", \"Segoe UI\", Inter, system-ui, sans-serif"
+  "fontFamily": "\"Segoe UI Variable\", \"Segoe UI\", Inter, system-ui, sans-serif",
+  "fontScale": "default",
+  "checkboxAccent": "ember",
+  "density": "comfortable",
+  "sidebarWidthPx": 224
 }

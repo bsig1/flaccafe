@@ -54,6 +54,7 @@ export type PlayerBarProps = {
   onOpenQueueView: () => void;
   onOpenCurrentTrack: (track: Track) => void;
   onOpenCurrentArtist: (track: Track) => void;
+  onOpenCurrentArtistInfo: (track: Track) => void;
   onOpenCurrentAlbum: (track: Track) => void;
   setStatus: (message: string) => void;
 };

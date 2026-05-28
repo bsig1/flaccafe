@@ -20,5 +20,9 @@
   "scrollTrack": "27 17 22",
   "scrollThumb": "114 75 86",
   "scrollThumbHover": "148 94 108",
-  "fontFamily": "Inter, \"Trebuchet MS\", \"Segoe UI\", system-ui, sans-serif"
+  "fontFamily": "Inter, \"Trebuchet MS\", \"Segoe UI\", system-ui, sans-serif",
+  "fontScale": "default",
+  "checkboxAccent": "ember",
+  "density": "comfortable",
+  "sidebarWidthPx": 224
 }

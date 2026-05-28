@@ -29,7 +29,7 @@ export const fileManagementSections: FileManagementSectionMeta[] = [
     title: "Optional Dependencies",
     description: "Install and inspect large optional runtimes such as CLAP and FFmpeg.",
     category: "Setup",
-    keywords: ["dependencies", "install", "setup", "ml", "clap", "ffmpeg", "runtime"],
+    keywords: ["dependencies", "install", "setup", "ml", "clap", "ffmpeg", "runtime", "torch", "transformers"],
   },
   {
     id: "filenameTags",

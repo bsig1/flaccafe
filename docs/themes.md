@@ -11,11 +11,15 @@ Each theme exports RGB triplets as strings, for example:
   "ember": "217 154 78",
   "moss": "118 171 150",
   "ink": "19 15 13",
-  "fontFamily": "Inter, \"Segoe UI\", system-ui, sans-serif"
+  "fontFamily": "Inter, \"Segoe UI\", system-ui, sans-serif",
+  "fontScale": "default",
+  "checkboxAccent": "ember",
+  "density": "comfortable",
+  "sidebarWidthPx": 224
 }
 ```
 
-The full required shape is defined by `ThemePalette` in `frontend/src/config/theme.ts`. Keep values as plain RGB triplets because the CSS uses them in `rgb(var(--color-name) / alpha)` expressions.
+The full required shape is defined by `ThemePalette` in `frontend/src/config/theme.ts`. Keep color values as plain RGB triplets because the CSS uses them in `rgb(var(--color-name) / alpha)` expressions.
 
 ## Adding A Theme
 
@@ -26,7 +30,15 @@ The full required shape is defined by `ThemePalette` in `frontend/src/config/the
 
 ## Fonts
 
-Themes can define their own default font through `fontFamily`. The user can override that in Settings with:
+Themes can define their own default font through `fontFamily` and their default font size through `fontScale`.
+
+`fontScale` supports:
+
+- `small`
+- `default`
+- `large`
+
+The user can override the font family in Settings with:
 
 - Theme default
 - Segoe UI
@@ -37,6 +49,36 @@ Themes can define their own default font through `fontFamily`. The user can over
 - Comic Sans
 
 Add global font choices in `fontChoiceLabels` and `fontChoiceValues` in `frontend/src/config/theme.ts`.
+
+## Checkbox Accent
+
+Themes can define the default checkbox accent through `checkboxAccent`.
+
+`checkboxAccent` supports:
+
+- `ember`
+- `moss`
+- `paper`
+- `softAccent`
+
+The user can keep Settings on Theme Default or force one of those palette slots globally.
+
+## Density
+
+Themes can define the default layout density through `density`.
+
+`density` supports:
+
+- `comfortable`
+- `compact`
+
+The user can keep Settings on Theme Default or choose Comfortable or Compact from the density dropdown.
+
+## Sidebar Width
+
+Themes can define the default sidebar width through `sidebarWidthPx`.
+
+The value is clamped to the supported sidebar-width range, currently 192-320 pixels in 8-pixel steps. The user can keep Settings on Theme Default or move the Sidebar Width slider to an explicit width.
 
 ## In-App Folder Buttons
 

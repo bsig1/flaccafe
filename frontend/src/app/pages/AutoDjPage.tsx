@@ -51,6 +51,7 @@ import type {
   SimilarTrack,
   Track,
 } from "../../types/api";
+import { closeFloatingMenus, listenForCloseFloatingMenus } from "../menuEvents";
 import { AutoDjHeader } from "./autodj/AutoDjHeader";
 import { AutoDjQueuePanel } from "./autodj/AutoDjQueuePanel";
 import { AutoDjSettingsPanel } from "./autodj/AutoDjSettingsPanel";
@@ -258,9 +259,11 @@ export function AutoDjPage({
     };
     window.addEventListener("click", close);
     window.addEventListener("keydown", closeOnEscape);
+    const stopListeningForFloatingMenus = listenForCloseFloatingMenus(close);
     return () => {
       window.removeEventListener("click", close);
       window.removeEventListener("keydown", closeOnEscape);
+      stopListeningForFloatingMenus();
     };
   }, [queueContextMenu]);
 
@@ -327,6 +330,7 @@ export function AutoDjPage({
   function openQueueContextMenu(event: ReactMouseEvent, track: QueueTrack, index: number, rowKey: string) {
     event.preventDefault();
     event.stopPropagation();
+    closeFloatingMenus();
     const placement = placeFloatingMenu({
       cursorX: event.clientX,
       cursorY: event.clientY,

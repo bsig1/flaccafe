@@ -1,5 +1,8 @@
 import type { AppController } from "./AppController";
 import {
+  themeAccentValues,
+} from "../config/theme";
+import {
   defaultCdRipTarget,
   defaultLibraryTrackQueryKey,
 } from "./appHelpers";
@@ -312,6 +315,8 @@ export function AppPageOutlet({ controller }: AppPageOutletProps) {
     uiPreferences,
     writeRatingsToFiles,
   } = controller;
+  const themeDefaults = themeAccentValues[uiPreferences.themeAccent] ?? themeAccentValues.cafe;
+  const effectiveDensity = uiPreferences.density === "theme" ? themeDefaults.density : uiPreferences.density;
 
   return (
   <div className="min-h-0 flex flex-1">
@@ -413,7 +418,7 @@ export function AppPageOutlet({ controller }: AppPageOutletProps) {
         currentTrackId={currentTrack?.id ?? null}
         currentTrack={currentTrack}
         hideFilePaths={hideFilePaths}
-        compactRows={uiPreferences.compactLibraryRows}
+        compactRows={effectiveDensity === "compact"}
         albumGrid={uiPreferences.albumGrid}
         writeRatingsToFiles={writeRatingsToFiles}
         libraryVisibleColumns={libraryVisibleColumns}

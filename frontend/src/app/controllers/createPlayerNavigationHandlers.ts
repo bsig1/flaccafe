@@ -64,6 +64,7 @@ export function createPlayerNavigationHandlers(model: any) {
     fetchArtistLocalTracks,
     findAlbumForTrack,
     handleSelectAlbum,
+    handleSelectArtist,
     primaryArtistName,
     saveArtistInfoOverride,
     setActivePage,
@@ -327,6 +328,19 @@ export function createPlayerNavigationHandlers(model: any) {
       setStatus("This track does not have an artist tag yet");
       return;
     }
+    setSearch("");
+    setDebouncedSearch("");
+    setLibraryView("artists");
+    setActivePage("library");
+    void handleSelectArtist(artistName);
+  }
+
+  function handleOpenCurrentArtistInfoFromPlayer(track: Track) {
+    const artistName = primaryArtistName(track.artist);
+    if (!artistName) {
+      setStatus("This track does not have an artist tag yet");
+      return;
+    }
     setActivePage("artist");
   }
 
@@ -436,6 +450,7 @@ export function createPlayerNavigationHandlers(model: any) {
   return {
     handleOpenCurrentTrackFromPlayer,
     handleOpenCurrentArtistFromPlayer,
+    handleOpenCurrentArtistInfoFromPlayer,
     handleOpenCurrentAlbumFromPlayer,
     loadArtistInfo,
     handleSaveArtistInfoOverride,

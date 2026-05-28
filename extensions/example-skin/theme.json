@@ -1,6 +1,10 @@
 {
   "name": "Example Skin",
   "fontChoice": "system",
+  "fontScale": "default",
+  "checkboxAccent": "ember",
+  "density": "comfortable",
+  "sidebarWidthPx": 224,
   "palette": {
     "ink": "31 25 21",
     "panel": "43 35 29",

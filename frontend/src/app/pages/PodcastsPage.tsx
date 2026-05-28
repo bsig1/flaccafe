@@ -37,6 +37,7 @@ import type {
 import {
   MENU_VIEWPORT_MARGIN,
 } from "../shared";
+import { closeFloatingMenus, listenForCloseFloatingMenus } from "../menuEvents";
 import {
   formatDate,
   formatDuration,
@@ -484,6 +485,7 @@ export function PodcastsPage({
   function openSubscriptionContextMenu(event: ReactMouseEvent, subscription: PodcastSubscription) {
     event.preventDefault();
     event.stopPropagation();
+    closeFloatingMenus();
     selectSubscription(subscription.id);
     const placement = placeFloatingMenu({
       cursorX: event.clientX,
@@ -505,6 +507,7 @@ export function PodcastsPage({
   function openEpisodeContextMenu(event: ReactMouseEvent, episode: PodcastEpisode) {
     event.preventDefault();
     event.stopPropagation();
+    closeFloatingMenus();
     if (!selectedEpisodeIds.has(episode.id)) {
       episodeSelectionAnchorId.current = episode.id;
       setSelectedEpisodeIds(new Set([episode.id]));
@@ -534,9 +537,11 @@ export function PodcastsPage({
 
     window.addEventListener("click", closeContextMenu);
     window.addEventListener("keydown", closeContextMenu);
+    const stopListeningForFloatingMenus = listenForCloseFloatingMenus(closeContextMenu);
     return () => {
       window.removeEventListener("click", closeContextMenu);
       window.removeEventListener("keydown", closeContextMenu);
+      stopListeningForFloatingMenus();
     };
   }, []);
 

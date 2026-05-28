@@ -1,4 +1,9 @@
 import type { FontChoice, ThemeAccent } from "../../config/theme";
+import {
+  sidebarWidthMaxPx,
+  sidebarWidthMinPx,
+  sidebarWidthStepPx,
+} from "../../config/theme";
 import { fontChoiceLabels } from "../../config/theme";
 import type {
   AudioAnalysisCoverage,
@@ -12,16 +17,19 @@ import type {
 import type {
   AutoDjTemplate,
   CdSidebarMode,
+  CheckboxAccentPreference,
   desktopOutputBackendMode,
   EqualizerBandMode,
-  FontScale,
+  FontScalePreference,
   NowPlayingLayout,
   NowPlayingLyricSize,
   NowPlayingVisualizerStyle,
   Page,
   PlaybackEngine,
   ReplayGainMode,
-  UiDensity,
+  SidebarPlacement,
+  SidebarWidthPreference,
+  UiDensityPreference,
   UiPreferences,
 } from "./types";
 import {
@@ -105,11 +113,15 @@ export function readUiPreferences(): UiPreferences {
     nowPlayingShowQueue: true,
     nowPlayingLyricSize: "medium",
     nowPlayingAutoScrollLyrics: true,
+    nowPlayingShowLyricSource: false,
     autoFetchLyrics: true,
     autoFetchLrcWhenPlainPresent: true,
     themeAccent: "cafe",
-    density: "comfortable",
-    fontScale: "default",
+    checkboxAccent: "theme",
+    density: "theme",
+    sidebarWidthPx: "theme",
+    sidebarPlacement: "left",
+    fontScale: "theme",
     fontChoice: "theme",
     enableArtistLookup: true,
     libraryVisibleColumns: defaultLibraryVisibleColumns,
@@ -208,6 +220,10 @@ export function readUiPreferences(): UiPreferences {
           typeof parsed.nowPlayingAutoScrollLyrics === "boolean"
             ? parsed.nowPlayingAutoScrollLyrics
             : defaults.nowPlayingAutoScrollLyrics,
+        nowPlayingShowLyricSource:
+          typeof parsed.nowPlayingShowLyricSource === "boolean"
+            ? parsed.nowPlayingShowLyricSource
+            : defaults.nowPlayingShowLyricSource,
         autoFetchLyrics:
           typeof parsed.autoFetchLyrics === "boolean" ? parsed.autoFetchLyrics : defaults.autoFetchLyrics,
         autoFetchLrcWhenPlainPresent:
@@ -230,11 +246,29 @@ export function readUiPreferences(): UiPreferences {
         themeAccent: ["cafe", "mint", "rose", "blue", "comic"].includes(parsed.themeAccent as ThemeAccent)
           ? (parsed.themeAccent as ThemeAccent)
           : defaults.themeAccent,
-        density: ["comfortable", "compact"].includes(parsed.density as UiDensity)
-          ? (parsed.density as UiDensity)
-          : defaults.density,
-        fontScale: ["small", "default", "large"].includes(parsed.fontScale as FontScale)
-          ? (parsed.fontScale as FontScale)
+        checkboxAccent: ["theme", "ember", "moss", "paper", "softAccent"].includes(parsed.checkboxAccent as CheckboxAccentPreference)
+          ? (parsed.checkboxAccent as CheckboxAccentPreference)
+          : defaults.checkboxAccent,
+        density: ["theme", "comfortable", "compact"].includes(parsed.density as UiDensityPreference)
+          ? (parsed.density as UiDensityPreference)
+          : typeof parsed.compactLibraryRows === "boolean" && parsed.compactLibraryRows
+            ? "compact"
+            : defaults.density,
+        sidebarWidthPx:
+          parsed.sidebarWidthPx === "theme"
+            ? "theme"
+            : typeof parsed.sidebarWidthPx === "number"
+              ? clampNumber(
+                  Math.round(parsed.sidebarWidthPx / sidebarWidthStepPx) * sidebarWidthStepPx,
+                  sidebarWidthMinPx,
+                  sidebarWidthMaxPx,
+                )
+              : defaults.sidebarWidthPx,
+        sidebarPlacement: ["left", "right"].includes(parsed.sidebarPlacement as SidebarPlacement)
+          ? (parsed.sidebarPlacement as SidebarPlacement)
+          : defaults.sidebarPlacement,
+        fontScale: ["theme", "small", "default", "large"].includes(parsed.fontScale as FontScalePreference)
+          ? (parsed.fontScale as FontScalePreference)
           : defaults.fontScale,
         fontChoice: Object.keys(fontChoiceLabels).includes(parsed.fontChoice as FontChoice)
           ? (parsed.fontChoice as FontChoice)
