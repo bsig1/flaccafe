@@ -338,6 +338,17 @@ export function useAppControllerEffects(model: any) {
       softAccent: accent.softAccent,
     }[selectedCheckboxAccent] ?? accent.ember;
     document.documentElement.style.setProperty("--checkbox-accent", checkboxAccent);
+    const selectedCheckboxUnchecked =
+      uiPreferences.checkboxUnchecked === "theme" ? accent.checkboxUnchecked : uiPreferences.checkboxUnchecked;
+    const checkboxUnchecked = {
+      line: accent.line,
+      muted: accent.muted,
+      ember: accent.ember,
+      moss: accent.moss,
+      paper: accent.paper,
+      softAccent: accent.softAccent,
+    }[selectedCheckboxUnchecked] ?? accent.line;
+    document.documentElement.style.setProperty("--checkbox-unchecked", checkboxUnchecked);
     const selectedFont =
       uiPreferences.fontChoice === "theme"
         ? accent.fontFamily
@@ -350,6 +361,7 @@ export function useAppControllerEffects(model: any) {
   }, [
     uiPreferences.themeAccent,
     uiPreferences.checkboxAccent,
+    uiPreferences.checkboxUnchecked,
     uiPreferences.fontChoice,
     uiPreferences.fontScale,
     uiPreferences.density,

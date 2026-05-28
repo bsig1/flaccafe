@@ -23,6 +23,7 @@
   "fontFamily": "Inter, \"Segoe UI\", system-ui, sans-serif",
   "fontScale": "default",
   "checkboxAccent": "ember",
+  "checkboxUnchecked": "line",
   "density": "comfortable",
   "sidebarWidthPx": 224
 }

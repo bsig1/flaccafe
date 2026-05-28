@@ -14,6 +14,7 @@ Each theme exports RGB triplets as strings, for example:
   "fontFamily": "Inter, \"Segoe UI\", system-ui, sans-serif",
   "fontScale": "default",
   "checkboxAccent": "ember",
+  "checkboxUnchecked": "line",
   "density": "comfortable",
   "sidebarWidthPx": 224
 }
@@ -52,10 +53,21 @@ Add global font choices in `fontChoiceLabels` and `fontChoiceValues` in `fronten
 
 ## Checkbox Accent
 
-Themes can define the default checkbox accent through `checkboxAccent`.
+Themes can define the default checked checkbox accent through `checkboxAccent` and the unchecked box color through `checkboxUnchecked`.
 
 `checkboxAccent` supports:
 
+- `ember`
+- `moss`
+- `paper`
+- `softAccent`
+
+The user can keep Settings on Theme Default or force one of those palette slots globally.
+
+`checkboxUnchecked` supports:
+
+- `line`
+- `muted`
 - `ember`
 - `moss`
 - `paper`

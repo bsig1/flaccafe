@@ -25,6 +25,7 @@
   --color-scroll-thumb: 107 87 72;
   --color-scroll-thumb-hover: 138 113 92;
   --checkbox-accent: 217 154 78;
+  --checkbox-unchecked: 58 48 40;
   --font-sans: Inter, "Segoe UI", system-ui, sans-serif;
 }
 
@@ -112,7 +113,51 @@ input[type="number"]::-webkit-outer-spin-button {
 }
 
 input[type="checkbox"] {
+  display: inline-grid;
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+  place-content: center;
+  appearance: none;
+  border: 1px solid rgb(var(--checkbox-unchecked));
+  border-radius: 0.25rem;
+  background: rgb(var(--checkbox-unchecked) / 0.12);
   accent-color: rgb(var(--checkbox-accent));
+  color: rgb(var(--checkbox-accent));
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+input[type="checkbox"]::before {
+  width: 0.55rem;
+  height: 0.55rem;
+  content: "";
+  transform: scale(0);
+  transform-origin: center;
+  transition: transform 100ms ease;
+  clip-path: polygon(14% 44%, 0 62%, 40% 100%, 100% 18%, 82% 0, 36% 66%);
+  background: rgb(var(--color-ink));
+}
+
+input[type="checkbox"]:checked {
+  border-color: rgb(var(--checkbox-accent));
+  background: rgb(var(--checkbox-accent));
+}
+
+input[type="checkbox"]:checked::before {
+  transform: scale(1);
+}
+
+input[type="checkbox"]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgb(var(--checkbox-accent) / 0.32);
+}
+
+input[type="checkbox"]:disabled {
+  cursor: not-allowed;
 }
 
 input[type="checkbox"].accent-moss,

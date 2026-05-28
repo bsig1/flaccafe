@@ -460,12 +460,71 @@ fn year_for_tags(tags: &[&Tag]) -> Option<i64> {
 fn rating_for_tags(tags: &[&Tag]) -> Option<f64> {
     for tag in tags {
         if let Some(rating) = tag.ratings().next() {
-            return Some(f64::from(rating.rating() as u8));
+            return Some(star_rating_to_f64(rating.rating()));
         }
     }
-    text_for_keys(tags, &[ItemKey::Popularimeter])
-        .and_then(|value| parse_loose_number(&value))
-        .and_then(|value| normalize_rating(Some(value)))
+    text_for_keys(tags, &[ItemKey::Popularimeter]).and_then(|value| parse_file_rating_text(&value))
+}
+
+fn star_rating_to_f64(rating: StarRating) -> f64 {
+    match rating {
+        StarRating::One => 1.0,
+        StarRating::Two => 2.0,
+        StarRating::Three => 3.0,
+        StarRating::Four => 4.0,
+        StarRating::Five => 5.0,
+    }
+}
+
+fn parse_file_rating_text(value: &str) -> Option<f64> {
+    let text = value.trim();
+    if text.is_empty() {
+        return None;
+    }
+
+    if let Some((_, rest)) = text.split_once('|') {
+        if let Some(rating_text) = rest.split('|').next() {
+            if let Some(rating) =
+                parse_loose_number(rating_text).and_then(normalize_file_rating_value)
+            {
+                return Some(rating);
+            }
+        }
+    }
+
+    parse_loose_number(text).and_then(normalize_file_rating_value)
+}
+
+fn normalize_file_rating_value(value: f64) -> Option<f64> {
+    if !value.is_finite() || value <= 0.0 {
+        return None;
+    }
+
+    if value <= 5.0 {
+        return normalize_rating(Some(value));
+    }
+
+    let rating = if value <= 20.0 {
+        1.0
+    } else if value <= 40.0 {
+        2.0
+    } else if value <= 60.0 {
+        3.0
+    } else if value <= 80.0 {
+        4.0
+    } else if value <= 100.0 {
+        5.0
+    } else if value <= 128.0 {
+        3.0
+    } else if value <= 196.0 {
+        4.0
+    } else if value <= 255.0 {
+        5.0
+    } else {
+        return None;
+    };
+
+    Some(rating)
 }
 
 fn parse_int_prefix(value: &str) -> Option<i64> {
@@ -661,6 +720,8 @@ fn looks_like_lrc(text: &str) -> bool {
 mod tests {
     use super::*;
 
+    const REPAIR_RATINGS_DB_ENV: &str = "FLAC_CAFE_REPAIR_RATINGS_DB";
+
     #[test]
     fn parses_messy_track_numbers_and_years() {
         assert_eq!(parse_int_prefix("03/12"), Some(3));
@@ -678,9 +739,169 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_common_file_rating_scales() {
+        assert_eq!(normalize_file_rating_value(1.0), Some(1.0));
+        assert_eq!(normalize_file_rating_value(4.5), Some(4.5));
+        assert_eq!(normalize_file_rating_value(20.0), Some(1.0));
+        assert_eq!(normalize_file_rating_value(40.0), Some(2.0));
+        assert_eq!(normalize_file_rating_value(60.0), Some(3.0));
+        assert_eq!(normalize_file_rating_value(80.0), Some(4.0));
+        assert_eq!(normalize_file_rating_value(100.0), Some(5.0));
+        assert_eq!(normalize_file_rating_value(128.0), Some(3.0));
+        assert_eq!(normalize_file_rating_value(196.0), Some(4.0));
+        assert_eq!(normalize_file_rating_value(255.0), Some(5.0));
+        assert_eq!(normalize_file_rating_value(0.0), None);
+        assert_eq!(normalize_file_rating_value(999.0), None);
+    }
+
+    #[test]
+    fn parses_popularimeter_text_without_clamping_to_five_stars() {
+        assert_eq!(parse_file_rating_text("MusicBee|4|0"), Some(4.0));
+        assert_eq!(parse_file_rating_text("40"), Some(2.0));
+        assert_eq!(parse_file_rating_text("RATING=80"), Some(4.0));
+    }
+
+    #[test]
     fn maps_file_rating_to_common_popularimeter_star() {
         assert_eq!(star_rating_from_f64(0.5), StarRating::One);
         assert_eq!(star_rating_from_f64(2.5), StarRating::Three);
         assert_eq!(star_rating_from_f64(5.0), StarRating::Five);
+    }
+
+    #[test]
+    #[ignore]
+    fn repair_installed_db_ratings_from_file_tags() {
+        let db_path = std::env::var(REPAIR_RATINGS_DB_ENV)
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| panic!("Set {REPAIR_RATINGS_DB_ENV} to the installed database"));
+        let connection = rusqlite::Connection::open(&db_path)
+            .unwrap_or_else(|error| panic!("Could not open {}: {error}", db_path.display()));
+        connection
+            .busy_timeout(std::time::Duration::from_secs(10))
+            .expect("Could not set SQLite busy timeout");
+
+        let before_five_star_count: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM tracks WHERE abs(coalesce(rating, -1) - 5.0) < 0.001",
+                [],
+                |row| row.get(0),
+            )
+            .expect("Could not count existing five-star ratings");
+        let before_rated_count: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM tracks WHERE rating IS NOT NULL",
+                [],
+                |row| row.get(0),
+            )
+            .expect("Could not count existing ratings");
+
+        let backup_path = db_path.with_extension(format!(
+            "ratings-backup-{}.sqlite3",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("Clock before Unix epoch")
+                .as_secs()
+        ));
+        connection
+            .execute(
+                "VACUUM main INTO ?1",
+                [backup_path.to_string_lossy().as_ref()],
+            )
+            .unwrap_or_else(|error| {
+                panic!("Could not back up DB to {}: {error}", backup_path.display())
+            });
+
+        let mut statement = connection
+            .prepare("SELECT id, path, rating FROM tracks ORDER BY id")
+            .expect("Could not prepare track rating repair query");
+        let tracks = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<f64>>(2)?,
+                ))
+            })
+            .expect("Could not query tracks")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("Could not read tracks");
+        drop(statement);
+
+        let mut updates = Vec::new();
+        let mut missing = 0usize;
+        let mut unreadable = 0usize;
+        let mut without_file_rating = 0usize;
+        for (index, (track_id, path, current_rating)) in tracks.iter().enumerate() {
+            if index > 0 && index % 250 == 0 {
+                println!("checked {index}/{} tracks", tracks.len());
+            }
+            let path = Path::new(path);
+            if !path.is_file() {
+                missing += 1;
+                continue;
+            }
+            match read_rating_from_file(path) {
+                Ok(Some(file_rating)) => {
+                    let changed = current_rating
+                        .map(|rating| (rating - file_rating).abs() >= 0.001)
+                        .unwrap_or(true);
+                    if changed {
+                        updates.push((*track_id, file_rating));
+                    }
+                }
+                Ok(None) => without_file_rating += 1,
+                Err(error) => {
+                    unreadable += 1;
+                    eprintln!("rating repair skipped {}: {error}", path.display());
+                }
+            }
+        }
+
+        let mut connection = connection;
+        let transaction = connection
+            .transaction()
+            .expect("Could not start rating repair transaction");
+        {
+            let mut update = transaction
+                .prepare("UPDATE tracks SET rating = ?1, updated_at = datetime('now') WHERE id = ?2")
+                .expect("Could not prepare rating repair update");
+            for (track_id, rating) in &updates {
+                update
+                    .execute(rusqlite::params![rating, track_id])
+                    .expect("Could not update repaired track rating");
+            }
+        }
+        transaction
+            .commit()
+            .expect("Could not commit repaired track ratings");
+        crate::library::refresh_library_derived_data(&connection)
+            .expect("Could not refresh derived library data after rating repair");
+
+        let after_five_star_count: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM tracks WHERE abs(coalesce(rating, -1) - 5.0) < 0.001",
+                [],
+                |row| row.get(0),
+            )
+            .expect("Could not count repaired five-star ratings");
+        println!(
+            "rating repair complete: backup={}, tracks={}, changed={}, missing={}, unreadable={}, no_file_rating={}, five_star_before={}, five_star_after={}, rated_before={}",
+            backup_path.display(),
+            tracks.len(),
+            updates.len(),
+            missing,
+            unreadable,
+            without_file_rating,
+            before_five_star_count,
+            after_five_star_count,
+            before_rated_count
+        );
+    }
+
+    fn read_rating_from_file(path: &Path) -> Result<Option<f64>, String> {
+        let tagged_file = lofty::read_from_path(path)
+            .map_err(|error| format!("Could not read audio metadata with Lofty: {error}"))?;
+        let tags = ordered_tags(&tagged_file);
+        Ok(rating_for_tags(&tags))
     }
 }

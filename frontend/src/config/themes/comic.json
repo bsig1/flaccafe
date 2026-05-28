@@ -23,6 +23,7 @@
   "fontFamily": "\"Comic Sans MS\", \"Comic Sans\", \"Comic Neue\", cursive",
   "fontScale": "large",
   "checkboxAccent": "moss",
+  "checkboxUnchecked": "softAccent",
   "density": "comfortable",
   "sidebarWidthPx": 224
 }

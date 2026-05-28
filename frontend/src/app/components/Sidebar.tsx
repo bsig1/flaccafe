@@ -29,6 +29,11 @@ import { SidebarMasterSearch } from "./SidebarMasterSearch";
 import {
   type SidebarSearchTarget,
 } from "./sidebarSearch";
+import {
+  coffeeTapCountLabel,
+  readCoffeeTapCount,
+  writeCoffeeTapCount,
+} from "./sidebarCoffeeCounter";
 
 type SidebarSectionKey = string;
 type SidebarDropPlacement = "before" | "after";
@@ -355,6 +360,8 @@ export function Sidebar({
   const [sectionDragTarget, setSectionDragTarget] = useState<SidebarSectionDropTarget | null>(null);
   const [editingSectionKey, setEditingSectionKey] = useState<SidebarSectionKey | null>(null);
   const [editingSectionLabel, setEditingSectionLabel] = useState("");
+  const [coffeeTapCount, setCoffeeTapCount] = useState(readCoffeeTapCount);
+  const [showCoffeeTapCount, setShowCoffeeTapCount] = useState(false);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const suppressNextClickRef = useRef<Page | null>(null);
   const sections = useMemo(
@@ -664,6 +671,19 @@ export function Sidebar({
     setContextMenu(clampMenuPosition(event.clientX, event.clientY));
   }
 
+  function handleCoffeeTap(event: ReactMouseEvent<HTMLButtonElement>) {
+    setCoffeeTapCount((current) => {
+      const next = current + 1;
+      writeCoffeeTapCount(next);
+      return next;
+    });
+    if (event.shiftKey) {
+      setShowCoffeeTapCount(true);
+      window.setTimeout(() => setShowCoffeeTapCount(false), 2200);
+    }
+    onCoffeeClick();
+  }
+
   function openSearchTarget(target: SidebarSearchTarget, query: string) {
     if (target.kind === "page") {
       setActivePage(target.page);
@@ -884,14 +904,14 @@ export function Sidebar({
         className="flex h-14 items-center gap-3 border-b border-line px-4 text-left transition hover:bg-white/[0.035]"
         type="button"
         title="Tap the cup"
-        onClick={onCoffeeClick}
+        onClick={handleCoffeeTap}
       >
         <div className={`grid h-8 w-8 place-items-center rounded bg-ember text-ink shadow-sm shadow-black/20 ${coffeeAnimating ? "animate-cafe-cup" : ""}`}>
           <Coffee size={18} />
         </div>
         <div>
           <div className="text-sm font-semibold text-white">FLAC Cafe</div>
-          <div className="text-xs text-muted">Smart local player</div>
+          <div className="text-xs text-muted">{showCoffeeTapCount ? coffeeTapCountLabel(coffeeTapCount) : "Smart local player"}</div>
         </div>
       </button>
       <SidebarMasterSearch

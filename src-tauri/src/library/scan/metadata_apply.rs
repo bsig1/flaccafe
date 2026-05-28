@@ -103,6 +103,7 @@ pub(crate) fn upsert_track(
 struct ScanMetadataWriter<'connection> {
     connection: &'connection Connection,
     existing_track: Statement<'connection>,
+    local_rating_event: Statement<'connection>,
     insert_album: Statement<'connection>,
     select_album: Statement<'connection>,
     update_track: Statement<'connection>,
@@ -116,6 +117,9 @@ impl<'connection> ScanMetadataWriter<'connection> {
             existing_track: connection
                 .prepare("SELECT id, rating FROM tracks WHERE path_key = ?")
                 .map_err(|error| format!("Could not prepare existing track lookup: {error}"))?,
+            local_rating_event: connection
+                .prepare("SELECT 1 FROM play_events WHERE track_id = ? AND event_type = 'rated' LIMIT 1")
+                .map_err(|error| format!("Could not prepare local rating event lookup: {error}"))?,
             insert_album: connection
                 .prepare("INSERT OR IGNORE INTO albums(album, album_artist, year) VALUES(?, ?, ?)")
                 .map_err(|error| format!("Could not prepare album insert: {error}"))?,
@@ -182,8 +186,8 @@ impl<'connection> ScanMetadataWriter<'connection> {
             })
             .optional()
             .map_err(|error| format!("Could not look up existing track metadata: {error}"))?;
-        if let Some((_, existing_rating)) = existing {
-            let rating = existing_rating.or_else(|| json_f64(metadata, "rating"));
+        if let Some((track_id, existing_rating)) = existing {
+            let rating = self.rating_for_scan(track_id, existing_rating, json_f64(metadata, "rating"))?;
             self.update_track
                 .execute(params![
                     path.as_str(),
@@ -242,6 +246,33 @@ impl<'connection> ScanMetadataWriter<'connection> {
         }
     }
 
+    fn rating_for_scan(
+        &mut self,
+        track_id: i64,
+        existing_rating: Option<f64>,
+        metadata_rating: Option<f64>,
+    ) -> Result<Option<f64>, String> {
+        let has_local_rating_event =
+            if is_bad_imported_five_star_repair_candidate(existing_rating, metadata_rating) {
+                self.has_local_rating_event(track_id)?
+            } else {
+                false
+            };
+        Ok(scan_rating_after_bad_five_star_repair(
+            existing_rating,
+            metadata_rating,
+            has_local_rating_event,
+        ))
+    }
+
+    fn has_local_rating_event(&mut self, track_id: i64) -> Result<bool, String> {
+        self.local_rating_event
+            .query_row(params![track_id], |_| Ok(()))
+            .optional()
+            .map(|row| row.is_some())
+            .map_err(|error| format!("Could not check local rating edits: {error}"))
+    }
+
     fn ensure_album(
         &mut self,
         metadata: &serde_json::Map<String, JsonValue>,
@@ -278,7 +309,18 @@ pub(crate) fn update_track_from_metadata(
             |row| row.get::<_, Option<f64>>(0),
         )
         .map_err(|_| "Moved track is no longer in the library".to_string())?;
-    let rating = existing_rating.or_else(|| json_f64(metadata, "rating"));
+    let metadata_rating = json_f64(metadata, "rating");
+    let has_local_rating_event =
+        if is_bad_imported_five_star_repair_candidate(existing_rating, metadata_rating) {
+            has_local_rating_event(connection, track_id)?
+        } else {
+            false
+        };
+    let rating = scan_rating_after_bad_five_star_repair(
+        existing_rating,
+        metadata_rating,
+        has_local_rating_event,
+    );
     connection
         .execute(
             "
@@ -333,6 +375,68 @@ pub(crate) fn update_track_from_metadata(
         )
         .map_err(|error| format!("Could not update moved track metadata: {error}"))?;
     Ok(())
+}
+
+fn has_local_rating_event(connection: &Connection, track_id: i64) -> Result<bool, String> {
+    connection
+        .query_row(
+            "SELECT 1 FROM play_events WHERE track_id = ? AND event_type = 'rated' LIMIT 1",
+            params![track_id],
+            |_| Ok(()),
+        )
+        .optional()
+        .map(|row| row.is_some())
+        .map_err(|error| format!("Could not check local rating edits: {error}"))
+}
+
+fn scan_rating_after_bad_five_star_repair(
+    existing_rating: Option<f64>,
+    metadata_rating: Option<f64>,
+    has_local_rating_event: bool,
+) -> Option<f64> {
+    if is_bad_imported_five_star_repair_candidate(existing_rating, metadata_rating)
+        && !has_local_rating_event
+    {
+        metadata_rating
+    } else {
+        existing_rating.or(metadata_rating)
+    }
+}
+
+fn is_bad_imported_five_star_repair_candidate(
+    existing_rating: Option<f64>,
+    metadata_rating: Option<f64>,
+) -> bool {
+    matches!(
+        (existing_rating, metadata_rating),
+        (Some(existing), Some(scanned))
+            if (existing - 5.0).abs() < f64::EPSILON && scanned < 5.0
+    )
+}
+
+#[cfg(test)]
+mod metadata_apply_tests {
+    use super::*;
+
+    #[test]
+    fn only_replaces_unedited_imported_five_star_ratings() {
+        assert_eq!(
+            scan_rating_after_bad_five_star_repair(Some(5.0), Some(2.0), false),
+            Some(2.0)
+        );
+        assert_eq!(
+            scan_rating_after_bad_five_star_repair(Some(5.0), Some(2.0), true),
+            Some(5.0)
+        );
+        assert_eq!(
+            scan_rating_after_bad_five_star_repair(Some(4.0), Some(2.0), false),
+            Some(4.0)
+        );
+        assert_eq!(
+            scan_rating_after_bad_five_star_repair(Some(5.0), Some(5.0), false),
+            Some(5.0)
+        );
+    }
 }
 
 pub(crate) fn ensure_album(

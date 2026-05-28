@@ -2,6 +2,7 @@ import type {
   FontChoice,
   ThemeAccent,
   ThemeCheckboxAccent,
+  ThemeCheckboxUnchecked,
   ThemeDensity,
   ThemeFontScale,
 } from "../../config/theme";
@@ -29,6 +30,8 @@ export type FontScale = ThemeFontScale;
 export type FontScalePreference = "theme" | FontScale;
 export type CheckboxAccent = ThemeCheckboxAccent;
 export type CheckboxAccentPreference = "theme" | CheckboxAccent;
+export type CheckboxUnchecked = ThemeCheckboxUnchecked;
+export type CheckboxUncheckedPreference = "theme" | CheckboxUnchecked;
 export type SidebarWidthPreference = "theme" | number;
 export type AutoDjExperience = "simple" | "advanced";
 export type ReplayGainMode = "off" | "track" | "album";
@@ -259,6 +262,7 @@ export interface UiPreferences {
   autoFetchLrcWhenPlainPresent: boolean;
   themeAccent: ThemeAccent;
   checkboxAccent: CheckboxAccentPreference;
+  checkboxUnchecked: CheckboxUncheckedPreference;
   density: UiDensityPreference;
   sidebarWidthPx: SidebarWidthPreference;
   sidebarPlacement: SidebarPlacement;

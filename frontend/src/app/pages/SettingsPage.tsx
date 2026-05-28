@@ -66,6 +66,7 @@ import {
 import {
   BackendStatus,
   CheckboxAccentPreference,
+  CheckboxUncheckedPreference,
   FontScalePreference,
   Page,
   RememberedDeleteChoice,
@@ -89,6 +90,15 @@ const LASTFM_API_URL = "https://www.last.fm/api";
 const ACOUSTID_API_KEY_URL = "https://acoustid.org/api-key";
 const checkboxAccentLabels: Record<CheckboxAccentPreference, string> = {
   theme: "Theme Default",
+  ember: "Ember",
+  moss: "Moss",
+  paper: "Paper",
+  softAccent: "Soft Accent",
+};
+const checkboxUncheckedLabels: Record<CheckboxUncheckedPreference, string> = {
+  theme: "Theme Default",
+  line: "Line",
+  muted: "Muted",
   ember: "Ember",
   moss: "Moss",
   paper: "Paper",
@@ -234,7 +244,7 @@ export function SettingsPage({
   const showSettingsSection = (...keywords: string[]) =>
     !settingsQuery || keywords.join(" ").toLowerCase().includes(settingsQuery);
   const visibleSettingsGroups = [
-    showSettingsSection("library preferences display ratings metadata startup theme font density sidebar width position alignment checkbox color accent podcasts file paths delete recycle remember"),
+    showSettingsSection("library preferences display ratings metadata startup theme font density sidebar width position alignment checkbox color checked unchecked accent podcasts file paths delete recycle remember"),
     showSettingsSection("api keys online metadata lastfm last.fm scrobbling acoustid acoustic fingerprint musicbrainz lookup autotag"),
     showSettingsSection("keyboard shortcuts hotkeys local playback controls media keys"),
     showSettingsSection("player playback audio output lyrics lyric bulk lookup preload autofetch lrc sidecar cache follow equalizer replaygain fade skip codec rust webview"),
@@ -493,7 +503,7 @@ export function SettingsPage({
             </div>
           )}
 
-          {showSettingsSection("library preferences display ratings metadata startup theme font density sidebar width position alignment checkbox color accent podcasts file paths delete recycle remember") && (
+          {showSettingsSection("library preferences display ratings metadata startup theme font density sidebar width position alignment checkbox color checked unchecked accent podcasts file paths delete recycle remember") && (
           <DisclosureSection title="Library Preferences" description="Display, rating storage, and startup behavior">
             <div className="grid gap-3 text-sm text-neutral-200">
               <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-ink p-3">
@@ -675,6 +685,22 @@ export function SettingsPage({
                       }
                     >
                       {Object.entries(checkboxAccentLabels).map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="grid gap-2">
+                    <span className="text-xs uppercase text-muted">Unchecked Checkbox</span>
+                    <select
+                      className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                      value={uiPreferences.checkboxUnchecked}
+                      onChange={(event) =>
+                        setUiPreferences((current) => ({ ...current, checkboxUnchecked: event.target.value as CheckboxUncheckedPreference }))
+                      }
+                    >
+                      {Object.entries(checkboxUncheckedLabels).map(([value, label]) => (
                         <option key={value} value={value}>
                           {label}
                         </option>

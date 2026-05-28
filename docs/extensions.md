@@ -47,7 +47,7 @@ Supported manifest kinds are `skin`, `plugin`, `importer`, `visualizer`, and `in
 
 Both examples are intentionally non-executable. They exist so Settings > Extensions And Skins has real manifests to validate and so contributors can copy a known-good folder structure.
 
-Skin `theme.json` files can describe palette overrides plus presentation defaults such as `fontChoice`, `fontScale`, `checkboxAccent`, `density`, and `sidebarWidthPx`. The bundled example keeps those values explicit so the theme-facing shape stays easy to copy forward.
+Skin `theme.json` files can describe palette overrides plus presentation defaults such as `fontChoice`, `fontScale`, `checkboxAccent`, `checkboxUnchecked`, `density`, and `sidebarWidthPx`. The bundled example keeps those values explicit so the theme-facing shape stays easy to copy forward.
 
 ## API
 

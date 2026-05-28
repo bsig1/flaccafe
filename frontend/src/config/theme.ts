@@ -7,6 +7,7 @@ import roseTheme from "./themes/rose.json";
 export type ThemeAccent = "cafe" | "mint" | "rose" | "blue" | "comic";
 export type ThemeFontScale = "small" | "default" | "large";
 export type ThemeCheckboxAccent = "ember" | "moss" | "paper" | "softAccent";
+export type ThemeCheckboxUnchecked = "line" | "muted" | "moss" | "ember" | "paper" | "softAccent";
 export type ThemeDensity = "comfortable" | "compact";
 export type FontChoice = "theme" | "system" | "inter" | "serif" | "mono" | "rounded" | "comic";
 export const sidebarWidthMinPx = 192;
@@ -40,6 +41,7 @@ export interface ThemePalette {
   fontFamily: string;
   fontScale: ThemeFontScale;
   checkboxAccent: ThemeCheckboxAccent;
+  checkboxUnchecked: ThemeCheckboxUnchecked;
   density: ThemeDensity;
   sidebarWidthPx: number;
 }
@@ -74,9 +76,10 @@ export const fontChoiceValues: Record<Exclude<FontChoice, "theme">, string> = {
   comic: '"Comic Sans MS", "Comic Sans", "Comic Neue", cursive',
 };
 
-type ThemePaletteJson = Omit<ThemePalette, "fontScale" | "checkboxAccent" | "density" | "sidebarWidthPx"> & {
+type ThemePaletteJson = Omit<ThemePalette, "fontScale" | "checkboxAccent" | "checkboxUnchecked" | "density" | "sidebarWidthPx"> & {
   fontScale?: string;
   checkboxAccent?: string;
+  checkboxUnchecked?: string;
   density?: string;
   sidebarWidthPx?: number;
 };
@@ -93,6 +96,15 @@ function normalizeThemePalette(theme: ThemePaletteJson): ThemePalette {
     theme.checkboxAccent === "ember"
       ? theme.checkboxAccent
       : "ember";
+  const checkboxUnchecked: ThemeCheckboxUnchecked =
+    theme.checkboxUnchecked === "line" ||
+    theme.checkboxUnchecked === "muted" ||
+    theme.checkboxUnchecked === "moss" ||
+    theme.checkboxUnchecked === "ember" ||
+    theme.checkboxUnchecked === "paper" ||
+    theme.checkboxUnchecked === "softAccent"
+      ? theme.checkboxUnchecked
+      : "line";
   const density: ThemeDensity =
     theme.density === "compact" || theme.density === "comfortable" ? theme.density : "comfortable";
   const sidebarWidthPx =
@@ -103,6 +115,7 @@ function normalizeThemePalette(theme: ThemePaletteJson): ThemePalette {
     ...theme,
     fontScale,
     checkboxAccent,
+    checkboxUnchecked,
     density,
     sidebarWidthPx,
   };

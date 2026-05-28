@@ -18,6 +18,7 @@ import type {
   AutoDjTemplate,
   CdSidebarMode,
   CheckboxAccentPreference,
+  CheckboxUncheckedPreference,
   desktopOutputBackendMode,
   EqualizerBandMode,
   FontScalePreference,
@@ -118,6 +119,7 @@ export function readUiPreferences(): UiPreferences {
     autoFetchLrcWhenPlainPresent: true,
     themeAccent: "cafe",
     checkboxAccent: "theme",
+    checkboxUnchecked: "theme",
     density: "theme",
     sidebarWidthPx: "theme",
     sidebarPlacement: "left",
@@ -249,6 +251,9 @@ export function readUiPreferences(): UiPreferences {
         checkboxAccent: ["theme", "ember", "moss", "paper", "softAccent"].includes(parsed.checkboxAccent as CheckboxAccentPreference)
           ? (parsed.checkboxAccent as CheckboxAccentPreference)
           : defaults.checkboxAccent,
+        checkboxUnchecked: ["theme", "line", "muted", "moss", "ember", "paper", "softAccent"].includes(parsed.checkboxUnchecked as CheckboxUncheckedPreference)
+          ? (parsed.checkboxUnchecked as CheckboxUncheckedPreference)
+          : defaults.checkboxUnchecked,
         density: ["theme", "comfortable", "compact"].includes(parsed.density as UiDensityPreference)
           ? (parsed.density as UiDensityPreference)
           : typeof parsed.compactLibraryRows === "boolean" && parsed.compactLibraryRows

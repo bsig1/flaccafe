@@ -3,6 +3,7 @@
   "fontChoice": "system",
   "fontScale": "default",
   "checkboxAccent": "ember",
+  "checkboxUnchecked": "line",
   "density": "comfortable",
   "sidebarWidthPx": 224,
   "palette": {
