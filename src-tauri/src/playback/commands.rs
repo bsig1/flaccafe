@@ -8,36 +8,49 @@ pub fn play_file(
     buffer_frames: Option<u32>,
     dsp_settings: Option<DesktopDspSettings>,
 ) -> Result<PlaybackStatus, String> {
-    let path_buf = PathBuf::from(&path);
+    play_source(
+        state,
+        DesktopPlaybackSource::File { path },
+        volume,
+        start_seconds,
+        device_id,
+        buffer_frames,
+        dsp_settings,
+    )
+}
+
+#[tauri::command]
+pub fn play_source(
+    state: State<'_, PlaybackState>,
+    source: DesktopPlaybackSource,
+    volume: f32,
+    start_seconds: Option<f64>,
+    device_id: Option<String>,
+    buffer_frames: Option<u32>,
+    dsp_settings: Option<DesktopDspSettings>,
+) -> Result<PlaybackStatus, String> {
+    let identity = source.identity();
     let (diagnostics, prepared_audio) = {
         let mut inner = state
             .inner
             .lock()
             .map_err(|_| "Rust playback lock poisoned".to_string())?;
         let diagnostics = inner.diagnostics.clone();
-        let prepared_audio = inner.take_prepared_audio(&path);
+        let prepared_audio = inner.take_prepared_audio(&identity);
         (diagnostics, prepared_audio)
     };
-    if !path_buf.exists() || !path_buf.is_file() {
-        let message = "Audio file does not exist".to_string();
-        remember_diagnostic(
-            &diagnostics,
-            "error",
-            "file",
-            "validate_audio_file",
-            message.clone(),
-            DesktopDiagnosticContext {
-                path: Some(path.clone()),
-                ..DesktopDiagnosticContext::default()
-            },
-        );
-        return Err(message);
-    }
-    let (mut decoder, duration_seconds) =
-        build_playback_decoder(&path_buf, prepared_audio, &diagnostics)?;
-    let start_seconds = clamp_seek_option(start_seconds, duration_seconds);
-    decoder.seek_to(start_seconds, &diagnostics, Some(path.clone()))?;
-    let sample_rate = decoder.sample_rate();
+    let mut resolved = resolve_playback_source(&source, prepared_audio, &diagnostics)?;
+    let start_seconds = clamp_seek_option(start_seconds, resolved.duration_seconds);
+    resolved
+        .decoder
+        .seek_to(start_seconds, &diagnostics, Some(resolved.identity.clone()))?;
+    let ResolvedPlaybackSource {
+        identity,
+        reload_path,
+        decoder,
+        duration_seconds,
+        sample_rate,
+    } = resolved;
 
     let mut inner = state
         .inner
@@ -73,7 +86,8 @@ pub fn play_file(
         gain,
         sample_rate,
     });
-    inner.current_path = Some(path);
+    inner.current_path = Some(identity);
+    inner.current_reload_path = reload_path;
     inner.duration_seconds = duration_seconds;
     inner.volume = bounded_volume;
     Ok(inner.status(None))
@@ -90,36 +104,51 @@ pub fn crossfade_to_file(
     buffer_frames: Option<u32>,
     dsp_settings: Option<DesktopDspSettings>,
 ) -> Result<PlaybackStatus, String> {
-    let path_buf = PathBuf::from(&path);
+    crossfade_to_source(
+        state,
+        DesktopPlaybackSource::File { path },
+        volume,
+        duration_ms,
+        start_seconds,
+        device_id,
+        buffer_frames,
+        dsp_settings,
+    )
+}
+
+#[tauri::command]
+pub fn crossfade_to_source(
+    state: State<'_, PlaybackState>,
+    source: DesktopPlaybackSource,
+    volume: f32,
+    duration_ms: u64,
+    start_seconds: Option<f64>,
+    device_id: Option<String>,
+    buffer_frames: Option<u32>,
+    dsp_settings: Option<DesktopDspSettings>,
+) -> Result<PlaybackStatus, String> {
+    let identity = source.identity();
     let (diagnostics, prepared_audio) = {
         let mut inner = state
             .inner
             .lock()
             .map_err(|_| "Rust playback lock poisoned".to_string())?;
         let diagnostics = inner.diagnostics.clone();
-        let prepared_audio = inner.take_prepared_audio(&path);
+        let prepared_audio = inner.take_prepared_audio(&identity);
         (diagnostics, prepared_audio)
     };
-    if !path_buf.exists() || !path_buf.is_file() {
-        let message = "Audio file does not exist".to_string();
-        remember_diagnostic(
-            &diagnostics,
-            "error",
-            "file",
-            "validate_crossfade_audio_file",
-            message.clone(),
-            DesktopDiagnosticContext {
-                path: Some(path.clone()),
-                ..DesktopDiagnosticContext::default()
-            },
-        );
-        return Err(message);
-    }
-    let (mut decoder, duration_seconds) =
-        build_playback_decoder(&path_buf, prepared_audio, &diagnostics)?;
-    let start_seconds = clamp_seek_option(start_seconds, duration_seconds);
-    decoder.seek_to(start_seconds, &diagnostics, Some(path.clone()))?;
-    let new_sample_rate = decoder.sample_rate();
+    let mut resolved = resolve_playback_source(&source, prepared_audio, &diagnostics)?;
+    let start_seconds = clamp_seek_option(start_seconds, resolved.duration_seconds);
+    resolved
+        .decoder
+        .seek_to(start_seconds, &diagnostics, Some(resolved.identity.clone()))?;
+    let ResolvedPlaybackSource {
+        identity,
+        reload_path,
+        decoder,
+        duration_seconds,
+        sample_rate: new_sample_rate,
+    } = resolved;
 
     let mut inner = state
         .inner
@@ -165,7 +194,8 @@ pub fn crossfade_to_file(
     };
     let old_handle = inner.player.replace(new_handle);
     inner.fading_player = old_handle.clone();
-    inner.current_path = Some(path);
+    inner.current_path = Some(identity);
+    inner.current_reload_path = reload_path;
     inner.duration_seconds = duration_seconds;
     inner.volume = target_volume;
     let status = inner.status(None);
@@ -222,7 +252,7 @@ pub fn stop(state: State<'_, PlaybackState>) -> Result<PlaybackStatus, String> {
 
 #[tauri::command]
 pub fn seek(state: State<'_, PlaybackState>, seconds: f64) -> Result<PlaybackStatus, String> {
-    let (path, diagnostics, was_paused, bounded_seconds) = {
+    let (identity, reload_path, diagnostics, was_paused, bounded_seconds) = {
         let inner = state
             .inner
             .lock()
@@ -250,10 +280,13 @@ pub fn seek(state: State<'_, PlaybackState>, seconds: f64) -> Result<PlaybackSta
             }
             Err(error) => {
                 player.gain.set_immediate(inner.volume);
-                let path = inner
+                let identity = inner
                     .current_path
                     .clone()
                     .ok_or_else(|| "No Rust audio track is loaded".to_string())?;
+                let reload_path = inner.current_reload_path.clone().ok_or_else(|| {
+                    "This Rust playback source does not support seeking yet.".to_string()
+                })?;
                 let diagnostics = inner.diagnostics.clone();
                 remember_diagnostic(
                     &diagnostics,
@@ -262,16 +295,22 @@ pub fn seek(state: State<'_, PlaybackState>, seconds: f64) -> Result<PlaybackSta
                     "seek_reload_fallback",
                     format!("Rust live seek failed; reloading current file at requested position: {error}"),
                     DesktopDiagnosticContext {
-                        path: Some(path.clone()),
+                        path: Some(identity.clone()),
                         ..DesktopDiagnosticContext::default()
                     },
                 );
-                (path, diagnostics, player.player.is_paused(), bounded_seconds)
+                (
+                    identity,
+                    reload_path,
+                    diagnostics,
+                    player.player.is_paused(),
+                    bounded_seconds,
+                )
             }
         }
     };
 
-    let path_buf = PathBuf::from(&path);
+    let path_buf = PathBuf::from(&reload_path);
     if !path_buf.exists() || !path_buf.is_file() {
         let message = "Current audio file does not exist".to_string();
         remember_diagnostic(
@@ -281,7 +320,7 @@ pub fn seek(state: State<'_, PlaybackState>, seconds: f64) -> Result<PlaybackSta
             "seek_reload_validate_audio_file",
             message.clone(),
             DesktopDiagnosticContext {
-                path: Some(path.clone()),
+                path: Some(reload_path.clone()),
                 ..DesktopDiagnosticContext::default()
             },
         );
@@ -294,14 +333,16 @@ pub fn seek(state: State<'_, PlaybackState>, seconds: f64) -> Result<PlaybackSta
         &mut decoder,
         clamp_seek_option(Some(bounded_seconds), duration_seconds),
         &diagnostics,
-        Some(path.clone()),
+        Some(identity.clone()),
     )?;
 
     let mut inner = state
         .inner
         .lock()
         .map_err(|_| "Rust playback lock poisoned".to_string())?;
-    if inner.current_path.as_deref() != Some(path.as_str()) {
+    if inner.current_path.as_deref() != Some(identity.as_str())
+        || inner.current_reload_path.as_deref() != Some(reload_path.as_str())
+    {
         return Ok(inner.status(None));
     }
     let device_id = inner.device_id.clone();
@@ -342,7 +383,8 @@ pub fn seek(state: State<'_, PlaybackState>, seconds: f64) -> Result<PlaybackSta
         gain,
         sample_rate,
     });
-    inner.current_path = Some(path);
+    inner.current_path = Some(identity);
+    inner.current_reload_path = Some(reload_path);
     inner.duration_seconds = duration_seconds;
     inner.volume = volume;
     if let Ok(mut visualizer) = inner.visualizer.lock() {
@@ -466,7 +508,15 @@ pub fn prepare_next_file(
     state: State<'_, PlaybackState>,
     path: String,
 ) -> Result<DesktopPreparedTrack, String> {
-    let path_buf = PathBuf::from(&path);
+    prepare_next_source(state, DesktopPlaybackSource::File { path })
+}
+
+#[tauri::command]
+pub fn prepare_next_source(
+    state: State<'_, PlaybackState>,
+    source: DesktopPlaybackSource,
+) -> Result<DesktopPreparedTrack, String> {
+    let identity = source.identity();
     let diagnostics = {
         let inner = state
             .inner
@@ -474,33 +524,19 @@ pub fn prepare_next_file(
             .map_err(|_| "Rust playback lock poisoned".to_string())?;
         inner.diagnostics.clone()
     };
-    if !path_buf.exists() || !path_buf.is_file() {
-        let message = "Next audio file does not exist".to_string();
-        remember_diagnostic(
-            &diagnostics,
-            "warning",
-            "file",
-            "prepare_next_file",
-            message.clone(),
-            DesktopDiagnosticContext {
-                path: Some(path.clone()),
-                ..DesktopDiagnosticContext::default()
-            },
-        );
-        return Err(message);
-    }
-    let (_, duration_seconds) = build_decoder(&path_buf, &diagnostics)?;
+    let resolved = resolve_playback_source(&source, None, &diagnostics)?;
+    let duration_seconds = resolved.duration_seconds;
     let prepared_at_ms = now_millis();
     let mut inner = state
         .inner
         .lock()
         .map_err(|_| "Rust playback lock poisoned".to_string())?;
-    inner.prepared_next_path = Some(path.clone());
+    inner.prepared_next_path = Some(identity.clone());
     inner.prepared_next_duration_seconds = duration_seconds;
     inner.prepared_next_at_ms = Some(prepared_at_ms);
     inner.prepared_next_audio = None;
     Ok(DesktopPreparedTrack {
-        path,
+        path: identity,
         duration_seconds,
         prepared_at_ms,
         message: "Next Rust track metadata prepared.".to_string(),

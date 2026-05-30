@@ -6,7 +6,6 @@ import type {
   EqualizerBandMode,
   KeyboardShortcut,
   KeyboardShortcutAction,
-  PlaybackEngine,
   PlaybackMode,
 } from "../shared";
 
@@ -33,7 +32,6 @@ export type PlayerBarProps = {
   autoPlay: boolean;
   fadeMs: number;
   skipThresholdPercent: number;
-  playbackEngine: PlaybackEngine;
   desktopOutputDeviceId: string;
   desktopBufferFrames: number;
   miniPlayer: boolean;

@@ -130,6 +130,7 @@
             handle.player.stop();
         }
         self.current_path = None;
+        self.current_reload_path = None;
         self.duration_seconds = None;
         if let Ok(mut visualizer) = self.visualizer.lock() {
             visualizer.reset();

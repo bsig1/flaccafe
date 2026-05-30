@@ -198,37 +198,21 @@ export function PlayerSettingsSection({
     }));
   }
 
-  const showDesktopSettings = uiPreferences.playbackEngine === "rust";
-
   return (
     <>
     <DisclosureSection title="Playback Engine" description="Output engine, Rust devices, diagnostics, and codec checks">
       <div className="grid gap-3 text-sm text-neutral-200">
-        <label className="grid gap-2 rounded border border-line/70 bg-ink p-3">
-          <span className="text-xs uppercase text-muted">Playback Engine</span>
-          <select
-            className="h-9 rounded border border-line bg-panel px-3 text-white outline-none ring-moss/40 focus:ring-2"
-            value={uiPreferences.playbackEngine}
-            onChange={(event) =>
-              setUiPreferences((current) => ({
-                ...current,
-                playbackEngine: event.target.value as UiPreferences["playbackEngine"],
-              }))
-            }
-          >
-            <option value="rust">Rust audio</option>
-            <option value="webview">WebView audio</option>
-          </select>
-          <span className="text-xs text-muted">
-            Rust audio is the default for local library playback. WebView remains available for radio, preview, CD, and URL-backed sources.
-          </span>
-        </label>
-        {showDesktopSettings && (
+        <div className="grid gap-2 rounded border border-line/70 bg-ink p-3">
+          <div className="font-medium text-white">Rust audio</div>
+          <div className="text-xs text-muted">
+            FLAC Cafe routes playback through the Rust engine. The WebView renders the interface only.
+          </div>
+        </div>
         <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="font-medium text-white">Rust output</div>
-              <div className="text-xs text-muted">Used when Playback Engine is set to Rust audio.</div>
+              <div className="text-xs text-muted">Used for local files, URL-backed tracks, radio streams, and CD playback.</div>
             </div>
             <button className="secondary-button h-8" type="button" onClick={() => void onRefreshDesktopDevices()}>
               <RefreshCw size={14} />
@@ -299,8 +283,6 @@ export function PlayerSettingsSection({
             The selector reports exclusive backends separately from the current shared-mode engine so future WASAPI/ASIO work can be enabled without changing the settings model.
           </div>
         </div>
-        )}
-        {showDesktopSettings && (
         <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -373,7 +355,6 @@ export function PlayerSettingsSection({
             )}
           </div>
         </div>
-        )}
       </div>
     </DisclosureSection>
 
@@ -526,9 +507,7 @@ export function PlayerSettingsSection({
                 <SlidersHorizontal size={16} />
                 Equalizer / DSP
               </div>
-              <div className="text-xs text-muted">
-                Applied in WebView and Rust playback; exact filter shape can differ slightly by engine.
-              </div>
+              <div className="text-xs text-muted">Applied in the Rust playback pipeline before output.</div>
             </div>
             <label className="flex items-center gap-2 text-sm text-neutral-200">
               <span>Enabled</span>
@@ -622,7 +601,7 @@ export function PlayerSettingsSection({
       </div>
     </DisclosureSection>
 
-    <DisclosureSection title="Playback Behavior & Codecs" description="Fade, skip threshold, and codec support for the selected engine">
+    <DisclosureSection title="Playback Behavior & Codecs" description="Fade, skip threshold, and Rust codec support">
       <div className="grid gap-3 text-sm text-neutral-200">
         <label className="grid gap-2">
           <span className="text-xs uppercase text-muted">Fade Length {uiPreferences.playerFadeMs}ms</span>
@@ -657,58 +636,23 @@ export function PlayerSettingsSection({
             Leaving a track before this much has played counts as a skip; after that it counts as a play.
           </span>
         </label>
-        {uiPreferences.playbackEngine === "webview" ? (
-          <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="font-medium text-white">WebView codec support</div>
-                <div className="text-xs text-muted">
-                  Reported by WebView2 for the currently selected WebView audio engine.
-                </div>
-              </div>
-              <button className="secondary-button h-8" type="button" onClick={onRefreshCodecSupport}>
-                <RefreshCw size={14} />
-                Recheck
-              </button>
-            </div>
-            <div className="grid gap-1 text-xs">
-              {codecSupport.map((codec) => (
-                <div key={codec.label} className="grid grid-cols-[110px_1fr] gap-3 rounded bg-panel px-2 py-1.5">
-                  <span className="text-neutral-200">{codec.label}</span>
-                  <span
-                    className={
-                      codec.support === "probably"
-                        ? "text-moss"
-                        : codec.support === "maybe"
-                          ? "text-ember"
-                          : "text-muted"
-                    }
-                  >
-                    {codec.support === "no" ? "not reported" : codec.support}
-                  </span>
-                </div>
-              ))}
+        <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
+          <div>
+            <div className="font-medium text-white">Rust codec support</div>
+            <div className="text-xs text-muted">
+              Reported from the bundled rodio + Symphonia decoder set. Playback failures are recorded in Rust audio diagnostics.
             </div>
           </div>
-        ) : (
-          <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
-            <div>
-              <div className="font-medium text-white">Rust codec support</div>
-              <div className="text-xs text-muted">
-                Reported from the bundled rodio + Symphonia decoder set. Playback failures are recorded in Rust audio diagnostics.
+          <div className="grid gap-1 text-xs">
+            {CODEC_SUPPORT.map((codec) => (
+              <div key={codec.label} className="grid grid-cols-[110px_88px_1fr] gap-3 rounded bg-panel px-2 py-1.5">
+                <span className="text-neutral-200">{codec.label}</span>
+                <span className="text-moss">{codec.support}</span>
+                <span className="truncate text-muted">{codec.detail}</span>
               </div>
-            </div>
-            <div className="grid gap-1 text-xs">
-              {CODEC_SUPPORT.map((codec) => (
-                <div key={codec.label} className="grid grid-cols-[110px_88px_1fr] gap-3 rounded bg-panel px-2 py-1.5">
-                  <span className="text-neutral-200">{codec.label}</span>
-                  <span className="text-moss">{codec.support}</span>
-                  <span className="truncate text-muted">{codec.detail}</span>
-                </div>
-              ))}
-            </div>
+            ))}
           </div>
-        )}
+        </div>
       </div>
     </DisclosureSection>
     </>

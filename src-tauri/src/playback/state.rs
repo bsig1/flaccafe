@@ -15,7 +15,7 @@ use rodio::{
     },
     Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 mod dsp;
@@ -34,6 +34,7 @@ struct PlaybackInner {
     player: Option<PlaybackHandle>,
     fading_player: Option<PlaybackHandle>,
     current_path: Option<String>,
+    current_reload_path: Option<String>,
     duration_seconds: Option<f64>,
     volume: f32,
     device_id: Option<String>,
@@ -154,6 +155,7 @@ impl Default for PlaybackInner {
             player: None,
             fading_player: None,
             current_path: None,
+            current_reload_path: None,
             duration_seconds: None,
             volume: 1.0,
             device_id: None,

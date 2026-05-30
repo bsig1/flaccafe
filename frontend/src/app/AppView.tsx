@@ -146,7 +146,6 @@ export function AppView({ controller }: AppViewProps) {
         autoPlay={autoPlayOnTrackChange}
         fadeMs={uiPreferences.playerFadeMs}
         skipThresholdPercent={uiPreferences.skipThresholdPercent}
-        playbackEngine={uiPreferences.playbackEngine}
         desktopOutputDeviceId={uiPreferences.desktopOutputDeviceId}
         desktopBufferFrames={uiPreferences.desktopBufferFrames}
         miniPlayer={false}

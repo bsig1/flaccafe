@@ -83,6 +83,11 @@ export interface desktopPreparedTrack {
   message: string;
 }
 
+export type DesktopPlaybackSource =
+  | { kind: "file"; path: string }
+  | { kind: "url"; url: string; cache_key?: string | null; title?: string | null; live?: boolean }
+  | { kind: "cd_track"; drive_id: string; track_number: number; title?: string | null };
+
 export interface desktopOutputBackend {
   id: "cpalShared" | "wasapiExclusive" | "asio" | string;
   label: string;
@@ -121,6 +126,31 @@ export function desktopPlayFile({
   });
 }
 
+export function desktopPlaySource({
+  source,
+  volume,
+  startSeconds,
+  deviceId,
+  bufferFrames,
+  dspSettings,
+}: {
+  source: DesktopPlaybackSource;
+  volume: number;
+  startSeconds?: number | null;
+  deviceId?: string | null;
+  bufferFrames?: number | null;
+  dspSettings?: desktopDspSettings | null;
+}): Promise<PlaybackStatus> {
+  return invokeDesktop<PlaybackStatus>("play_source", {
+    source,
+    volume,
+    startSeconds: startSeconds ?? null,
+    deviceId: deviceId ?? null,
+    bufferFrames: bufferFrames || null,
+    dspSettings: dspSettings ?? null,
+  });
+}
+
 export function desktopCrossfadeToFile({
   path,
   volume,
@@ -140,6 +170,34 @@ export function desktopCrossfadeToFile({
 }): Promise<PlaybackStatus> {
   return invokeDesktop<PlaybackStatus>("crossfade_to_file", {
     path,
+    volume,
+    durationMs,
+    startSeconds: startSeconds ?? null,
+    deviceId: deviceId ?? null,
+    bufferFrames: bufferFrames || null,
+    dspSettings: dspSettings ?? null,
+  });
+}
+
+export function desktopCrossfadeToSource({
+  source,
+  volume,
+  durationMs,
+  startSeconds,
+  deviceId,
+  bufferFrames,
+  dspSettings,
+}: {
+  source: DesktopPlaybackSource;
+  volume: number;
+  durationMs: number;
+  startSeconds?: number | null;
+  deviceId?: string | null;
+  bufferFrames?: number | null;
+  dspSettings?: desktopDspSettings | null;
+}): Promise<PlaybackStatus> {
+  return invokeDesktop<PlaybackStatus>("crossfade_to_source", {
+    source,
     volume,
     durationMs,
     startSeconds: startSeconds ?? null,
@@ -195,6 +253,10 @@ export function desktopClearDiagnostics(): Promise<PlaybackDiagnosticsResponse> 
 
 export function desktopPrepareNextFile(path: string): Promise<desktopPreparedTrack> {
   return invokeDesktop<desktopPreparedTrack>("prepare_next_file", { path });
+}
+
+export function desktopPrepareNextSource(source: DesktopPlaybackSource): Promise<desktopPreparedTrack> {
+  return invokeDesktop<desktopPreparedTrack>("prepare_next_source", { source });
 }
 
 export function desktopOutputBackends(): Promise<desktopOutputBackend[]> {

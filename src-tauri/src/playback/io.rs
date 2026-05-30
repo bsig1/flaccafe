@@ -228,9 +228,96 @@ fn open_output_sink(
     Ok((sink, resolved))
 }
 
+use std::fs;
+use std::io::{self, Read, Seek, SeekFrom};
+use std::path::Path;
+use std::sync::Mutex as StdMutex;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DesktopPlaybackSource {
+    File {
+        path: String,
+    },
+    Url {
+        url: String,
+        cache_key: Option<String>,
+        title: Option<String>,
+        #[serde(default)]
+        live: bool,
+    },
+    CdTrack {
+        drive_id: String,
+        track_number: u32,
+        title: Option<String>,
+    },
+}
+
+impl DesktopPlaybackSource {
+    fn identity(&self) -> String {
+        match self {
+            DesktopPlaybackSource::File { path } => path.clone(),
+            DesktopPlaybackSource::Url { url, .. } => url.clone(),
+            DesktopPlaybackSource::CdTrack {
+                drive_id,
+                track_number,
+                ..
+            } => format!("cdda://{drive_id}/track/{track_number:02}"),
+        }
+    }
+}
+
+struct ResolvedPlaybackSource {
+    identity: String,
+    reload_path: Option<String>,
+    decoder: DesktopPlaybackDecoder,
+    duration_seconds: Option<f64>,
+    sample_rate: u32,
+}
+
+struct HttpStreamReader {
+    reader: StdMutex<Box<dyn Read + Send>>,
+    position: u64,
+}
+
+impl HttpStreamReader {
+    fn new(reader: Box<dyn Read + Send>) -> Self {
+        Self {
+            reader: StdMutex::new(reader),
+            position: 0,
+        }
+    }
+}
+
+impl Read for HttpStreamReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let mut reader = self
+            .reader
+            .lock()
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "HTTP stream lock poisoned"))?;
+        let read = reader.read(buf)?;
+        self.position = self.position.saturating_add(read as u64);
+        Ok(read)
+    }
+}
+
+impl Seek for HttpStreamReader {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        match position {
+            SeekFrom::Current(0) => Ok(self.position),
+            SeekFrom::Start(target) if target == self.position => Ok(self.position),
+            SeekFrom::End(_) | SeekFrom::Start(_) | SeekFrom::Current(_) => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Live HTTP audio streams are not seekable",
+            )),
+        }
+    }
+}
+
 enum DesktopPlaybackDecoder {
     File(Decoder<std::io::BufReader<File>>),
     Prepared(Decoder<Cursor<Arc<[u8]>>>),
+    Stream(Decoder<HttpStreamReader>),
 }
 
 impl DesktopPlaybackDecoder {
@@ -238,6 +325,7 @@ impl DesktopPlaybackDecoder {
         match self {
             DesktopPlaybackDecoder::File(decoder) => decoder.sample_rate().get(),
             DesktopPlaybackDecoder::Prepared(decoder) => decoder.sample_rate().get(),
+            DesktopPlaybackDecoder::Stream(decoder) => decoder.sample_rate().get(),
         }
     }
 
@@ -252,6 +340,7 @@ impl DesktopPlaybackDecoder {
             DesktopPlaybackDecoder::Prepared(decoder) => {
                 seek_source(decoder, seconds, diagnostics, path)
             }
+            DesktopPlaybackDecoder::Stream(decoder) => seek_source(decoder, seconds, diagnostics, path),
         }
     }
 
@@ -269,8 +358,297 @@ impl DesktopPlaybackDecoder {
             DesktopPlaybackDecoder::Prepared(decoder) => {
                 append_dsp_source(player, decoder, dsp_settings, gain, visualizer);
             }
+            DesktopPlaybackDecoder::Stream(decoder) => {
+                append_dsp_source(player, decoder, dsp_settings, gain, visualizer);
+            }
         }
     }
+}
+
+fn validate_file_source(
+    path: &str,
+    diagnostics: &Arc<Mutex<Vec<PlaybackDiagnostic>>>,
+    operation: &str,
+) -> Result<PathBuf, String> {
+    let path_buf = PathBuf::from(path);
+    if !path_buf.exists() || !path_buf.is_file() {
+        return Err(diagnostic_error(
+            diagnostics,
+            "file",
+            operation,
+            "Audio file does not exist".to_string(),
+            DesktopDiagnosticContext {
+                path: Some(path.to_string()),
+                ..DesktopDiagnosticContext::default()
+            },
+        ));
+    }
+    Ok(path_buf)
+}
+
+fn resolve_playback_source(
+    source: &DesktopPlaybackSource,
+    prepared_audio: Option<DesktopPreparedAudio>,
+    diagnostics: &Arc<Mutex<Vec<PlaybackDiagnostic>>>,
+) -> Result<ResolvedPlaybackSource, String> {
+    let identity = source.identity();
+    match source {
+        DesktopPlaybackSource::File { path } => {
+            let path_buf = validate_file_source(path, diagnostics, "validate_audio_file")?;
+            let (decoder, duration_seconds) =
+                build_playback_decoder(&path_buf, prepared_audio, diagnostics)?;
+            let sample_rate = decoder.sample_rate();
+            Ok(ResolvedPlaybackSource {
+                identity,
+                reload_path: Some(path.clone()),
+                decoder,
+                duration_seconds,
+                sample_rate,
+            })
+        }
+        DesktopPlaybackSource::Url {
+            url,
+            cache_key,
+            title,
+            live,
+        } => {
+            if *live {
+                let (decoder, duration_seconds) =
+                    build_stream_decoder(url, title.as_deref(), diagnostics)?;
+                let sample_rate = decoder.sample_rate().get();
+                return Ok(ResolvedPlaybackSource {
+                    identity,
+                    reload_path: None,
+                    decoder: DesktopPlaybackDecoder::Stream(decoder),
+                    duration_seconds,
+                    sample_rate,
+                });
+            }
+            let path_buf =
+                download_url_source_to_cache(url, cache_key.as_deref(), title.as_deref(), diagnostics)?;
+            let path_text = path_buf.display().to_string();
+            let (decoder, duration_seconds) = build_playback_decoder(&path_buf, None, diagnostics)?;
+            let sample_rate = decoder.sample_rate();
+            Ok(ResolvedPlaybackSource {
+                identity,
+                reload_path: Some(path_text),
+                decoder,
+                duration_seconds,
+                sample_rate,
+            })
+        }
+        DesktopPlaybackSource::CdTrack {
+            drive_id,
+            track_number,
+            title,
+        } => {
+            let path_buf = crate::library::cd::prepare_cd_playback_wav(
+                drive_id,
+                i64::from(*track_number),
+                title.as_deref(),
+            )?;
+            let path_text = path_buf.display().to_string();
+            let (decoder, duration_seconds) = build_playback_decoder(&path_buf, None, diagnostics)?;
+            let sample_rate = decoder.sample_rate();
+            Ok(ResolvedPlaybackSource {
+                identity,
+                reload_path: Some(path_text),
+                decoder,
+                duration_seconds,
+                sample_rate,
+            })
+        }
+    }
+}
+
+fn playback_cache_dir() -> Result<PathBuf, String> {
+    let path = std::env::temp_dir().join("flac-cafe").join("playback-cache");
+    fs::create_dir_all(&path).map_err(|error| format!("Could not create playback cache: {error}"))?;
+    Ok(path)
+}
+
+fn sanitize_cache_part(value: &str) -> String {
+    let mut output = String::new();
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+            output.push(character);
+        } else {
+            output.push('_');
+        }
+    }
+    let trimmed = output.trim_matches('_');
+    if trimmed.is_empty() {
+        "source".to_string()
+    } else {
+        trimmed.chars().take(96).collect()
+    }
+}
+
+fn extension_from_url(url: &str) -> &'static str {
+    let without_query = url.split(['?', '#']).next().unwrap_or(url);
+    match Path::new(without_query)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("mp3") => "mp3",
+        Some("m4a") => "m4a",
+        Some("aac") => "aac",
+        Some("ogg") => "ogg",
+        Some("opus") => "opus",
+        Some("flac") => "flac",
+        Some("wav") => "wav",
+        _ => "audio",
+    }
+}
+
+fn download_url_source_to_cache(
+    url: &str,
+    cache_key: Option<&str>,
+    title: Option<&str>,
+    diagnostics: &Arc<Mutex<Vec<PlaybackDiagnostic>>>,
+) -> Result<PathBuf, String> {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(diagnostic_error(
+            diagnostics,
+            "url",
+            "resolve_url_source",
+            "Only http and https audio URLs can be played by the Rust audio engine right now".to_string(),
+            DesktopDiagnosticContext {
+                path: Some(url.to_string()),
+                ..DesktopDiagnosticContext::default()
+            },
+        ));
+    }
+    let cache_dir = playback_cache_dir()?;
+    let base = cache_key
+        .or(title)
+        .map(sanitize_cache_part)
+        .unwrap_or_else(|| sanitize_cache_part(url));
+    let extension = extension_from_url(url);
+    let target = cache_dir.join(format!("{base}.{extension}"));
+    if target.exists() && target.is_file() {
+        return Ok(target);
+    }
+    let partial = cache_dir.join(format!("{base}.{extension}.part"));
+    let response = ureq::get(url)
+        .set("User-Agent", "FLAC Cafe/0.6 (https://github.com/bsig1/flaccafe)")
+        .call()
+        .map_err(|error| {
+            diagnostic_error(
+                diagnostics,
+                "url",
+                "download_url_source",
+                format!("Could not open audio URL: {error}"),
+                DesktopDiagnosticContext {
+                    path: Some(url.to_string()),
+                    ..DesktopDiagnosticContext::default()
+                },
+            )
+        })?;
+    let mut reader = response.into_reader();
+    let mut file = File::create(&partial).map_err(|error| {
+        diagnostic_error(
+            diagnostics,
+            "file",
+            "create_url_cache_file",
+            format!("Could not create audio cache file: {error}"),
+            DesktopDiagnosticContext {
+                path: Some(partial.display().to_string()),
+                ..DesktopDiagnosticContext::default()
+            },
+        )
+    })?;
+    io::copy(&mut reader, &mut file).map_err(|error| {
+        diagnostic_error(
+            diagnostics,
+            "url",
+            "write_url_cache_file",
+            format!("Could not cache audio URL: {error}"),
+            DesktopDiagnosticContext {
+                path: Some(url.to_string()),
+                ..DesktopDiagnosticContext::default()
+            },
+        )
+    })?;
+    fs::rename(&partial, &target).map_err(|error| {
+        diagnostic_error(
+            diagnostics,
+            "file",
+            "commit_url_cache_file",
+            format!("Could not finalize audio cache file: {error}"),
+            DesktopDiagnosticContext {
+                path: Some(target.display().to_string()),
+                ..DesktopDiagnosticContext::default()
+            },
+        )
+    })?;
+    Ok(target)
+}
+
+fn build_stream_decoder(
+    url: &str,
+    title: Option<&str>,
+    diagnostics: &Arc<Mutex<Vec<PlaybackDiagnostic>>>,
+) -> Result<(Decoder<HttpStreamReader>, Option<f64>), String> {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(diagnostic_error(
+            diagnostics,
+            "url",
+            "open_live_stream",
+            "Only http and https radio streams can be played by the Rust audio engine right now".to_string(),
+            DesktopDiagnosticContext {
+                path: Some(url.to_string()),
+                ..DesktopDiagnosticContext::default()
+            },
+        ));
+    }
+    let response = ureq::get(url)
+        .set("User-Agent", "FLAC Cafe/0.6 (https://github.com/bsig1/flaccafe)")
+        .call()
+        .map_err(|error| {
+            diagnostic_error(
+                diagnostics,
+                "url",
+                "open_live_stream",
+                format!(
+                    "Could not open live audio stream{}: {error}",
+                    title
+                        .map(|value| format!(" for {value}"))
+                        .unwrap_or_default()
+                ),
+                DesktopDiagnosticContext {
+                    path: Some(url.to_string()),
+                    ..DesktopDiagnosticContext::default()
+                },
+            )
+        })?;
+    let content_type = response
+        .header("content-type")
+        .map(str::to_string)
+        .unwrap_or_default();
+    let mut builder = Decoder::builder()
+        .with_data(HttpStreamReader::new(response.into_reader()))
+        .with_seekable(false);
+    if !content_type.is_empty() {
+        builder = builder.with_mime_type(&content_type);
+    } else {
+        builder = builder.with_hint(extension_from_url(url));
+    }
+    let decoder = builder.build().map_err(|error| {
+        diagnostic_error(
+            diagnostics,
+            "symphonia",
+            "decode_live_stream",
+            format!("Could not decode live audio stream with Rust audio engine: {error}"),
+            DesktopDiagnosticContext {
+                path: Some(url.to_string()),
+                ..DesktopDiagnosticContext::default()
+            },
+        )
+    })?;
+    Ok((decoder, None))
 }
 
 fn build_playback_decoder(

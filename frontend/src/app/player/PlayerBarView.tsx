@@ -14,7 +14,6 @@ import {
 } from "lucide-react";
 import type { CSSProperties } from "react";
 
-import { audioUrl } from "../../lib/api";
 import type { RadioStation, Track } from "../../types/api";
 import { RatingStars } from "../components/common";
 import { display, formatPlaybackTime } from "../shared";
@@ -24,9 +23,8 @@ const PLAYBACK_SCRUB_STEP_SECONDS = 0.01;
 export function PlayerBarView({ model }: { model: any }) {
   const currentTrack = model.currentTrack as Track | null;
   const currentRadioStation = model.currentRadioStation as RadioStation | null;
-  const preloadedNextTrack = model.preloadedNextTrack as Track | null;
   const {
-    miniPlayer, artworkSrc, playerTitle, hideArtworkPreview, scheduleArtworkPreview, setArtworkFailed, isRadioSource, isPreviewTrack, isLibraryTrack, radioSubtitle, hasCurrentArtist, currentArtistLabel, onOpenCurrentArtist, onOpenCurrentArtistInfo, hasCurrentAlbum, currentAlbumLabel, onOpenCurrentAlbum, onOpenCurrentTrack, cdSkipIsSettling, hasPrevious, canPreviousAction, handlePreviousTrack, playRelative, isPlaying, hasPlayableSource, togglePlayback, hasNext, usePlayback, webAudioSourceUrl, webAudioKey, audioRef, isCdPreviewTrack, syncDuration, handleTimeUpdate, setIsPlaying, suppressWebPauseUntilRef, maybeClearPendingResume, handleEnded, activeSourceKeyRef, activeSourceKey, suppressWebPlaybackErrorsUntilRef, setStatus, canPreloadNextTrack, nextAudioRef, trackAudioSourceUrl, effectiveDuration, currentTime, progressPercent, progressFill, handleSeek, handleProgressKeyDown, playbackSeekStepSeconds, playbackMode, cycleRepeatMode, onOpenLyricsView, onOpenQueueView, muted, volume, handleVolumeWheel, toggleMuted, handleVolumeChange, volumePercentDraft, commitVolumePercent, setVolumePercentDraft, handleVolumePercentChange, handleVolumePercentKeyDown, onRating, showArtworkPreview,
+    miniPlayer, artworkSrc, playerTitle, hideArtworkPreview, scheduleArtworkPreview, setArtworkFailed, isRadioSource, isPreviewTrack, isLibraryTrack, radioSubtitle, hasCurrentArtist, currentArtistLabel, onOpenCurrentArtist, onOpenCurrentArtistInfo, hasCurrentAlbum, currentAlbumLabel, onOpenCurrentAlbum, onOpenCurrentTrack, cdSkipIsSettling, hasPrevious, canPreviousAction, handlePreviousTrack, playRelative, isPlaying, hasPlayableSource, togglePlayback, hasNext, effectiveDuration, currentTime, progressPercent, progressFill, handleSeek, handleProgressKeyDown, playbackSeekStepSeconds, playbackMode, cycleRepeatMode, onOpenLyricsView, onOpenQueueView, muted, volume, handleVolumeWheel, toggleMuted, handleVolumeChange, volumePercentDraft, commitVolumePercent, setVolumePercentDraft, handleVolumePercentChange, handleVolumePercentKeyDown, onRating, showArtworkPreview,
   } = model;
 
   return (
@@ -163,65 +161,6 @@ export function PlayerBarView({ model }: { model: any }) {
           </button>
         </div>
 
-        {!usePlayback && webAudioSourceUrl ? (
-          <audio
-            key={webAudioKey}
-            ref={audioRef}
-            className="hidden"
-            crossOrigin="anonymous"
-            preload={isRadioSource || isCdPreviewTrack ? "metadata" : "auto"}
-            src={webAudioSourceUrl}
-            onLoadedMetadata={syncDuration}
-            onTimeUpdate={handleTimeUpdate}
-            onPlay={() => {
-              setIsPlaying(true);
-            }}
-            onPause={() => {
-              if (window.performance.now() < suppressWebPauseUntilRef.current) {
-                return;
-              }
-              setIsPlaying(false);
-            }}
-            onCanPlay={() => {
-              syncDuration();
-            }}
-            onSeeked={() => {
-              const audio = audioRef.current;
-              if (audio) {
-                maybeClearPendingResume(audio.currentTime);
-              }
-            }}
-            onEnded={isRadioSource ? () => setIsPlaying(false) : handleEnded}
-            onError={() => {
-              const isStaleEvent = activeSourceKeyRef.current !== activeSourceKey;
-              const isSuppressedTeardownError = window.performance.now() < suppressWebPlaybackErrorsUntilRef.current;
-              if (isStaleEvent || isSuppressedTeardownError) {
-                return;
-              }
-              const code = audioRef.current?.error?.code;
-              const message =
-                isRadioSource
-                  ? "Radio stream could not be loaded."
-                  : code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
-                    ? "This file is not supported by the current WebView codec stack. Use the external-player button for a fallback."
-                    : "Audio source failed to load. The backend may need a restart, or the file may be missing.";
-              setStatus(message);
-            }}
-          />
-        ) : !usePlayback ? (
-          <audio ref={audioRef} className="hidden" crossOrigin="anonymous" />
-        ) : null}
-        {!usePlayback && preloadedNextTrack && canPreloadNextTrack && (
-          <audio
-            key={`next-${preloadedNextTrack.id}`}
-            ref={nextAudioRef}
-            className="hidden"
-            crossOrigin="anonymous"
-            preload="auto"
-            src={trackAudioSourceUrl(preloadedNextTrack)}
-          />
-        )}
-
         <div
           className={`grid ${
             isRadioSource
@@ -246,7 +185,7 @@ export function PlayerBarView({ model }: { model: any }) {
               aria-label="Playback position"
               className="player-progress"
               data-wheel-step={playbackSeekStepSeconds}
-              disabled={!currentTrack || effectiveDuration <= 0 || isCdPreviewTrack}
+              disabled={!currentTrack || effectiveDuration <= 0}
               max={Math.max(effectiveDuration, 0)}
               min={0}
               step={PLAYBACK_SCRUB_STEP_SECONDS}

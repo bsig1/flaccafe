@@ -247,7 +247,7 @@ export function SettingsPage({
     showSettingsSection("library preferences display ratings metadata startup theme font density sidebar width position alignment checkbox color checked unchecked accent podcasts file paths delete recycle remember"),
     showSettingsSection("api keys online metadata lastfm last.fm scrobbling acoustid acoustic fingerprint musicbrainz lookup autotag"),
     showSettingsSection("keyboard shortcuts hotkeys local playback controls media keys"),
-    showSettingsSection("player playback audio output lyrics lyric bulk lookup preload autofetch lrc sidecar cache follow equalizer replaygain fade skip codec rust webview"),
+    showSettingsSection("player playback audio output lyrics lyric bulk lookup preload autofetch lrc sidecar cache follow equalizer replaygain fade skip codec rust"),
     showSettingsSection("maintenance backend diagnostics database support bundle source folder logs cache reset local data"),
     showSettingsSection("extensions skins plugins themes manifest customization"),
   ].filter(Boolean).length;
@@ -937,7 +937,7 @@ export function SettingsPage({
           />
           )}
 
-          {showSettingsSection("player playback audio output lyrics lyric bulk lookup preload autofetch lrc sidecar cache follow equalizer replaygain fade skip codec rust webview") && (
+          {showSettingsSection("player playback audio output lyrics lyric bulk lookup preload autofetch lrc sidecar cache follow equalizer replaygain fade skip codec rust") && (
           <PlayerSettingsSection
             uiPreferences={uiPreferences}
             setUiPreferences={setUiPreferences}

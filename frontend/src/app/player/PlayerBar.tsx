@@ -2,49 +2,31 @@ import { FileText, ListMusic, Pause, Play, Radio, Repeat, Repeat1, Repeat2, Skip
 import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent, WheelEvent as ReactWheelEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 
-import { albumArtworkUrl, audioUrl } from "../../lib/api";
+import { albumArtworkUrl } from "../../lib/api";
 import {
-  desktopCrossfadeToFile,
-  desktopFadeVolume as desktopFadeVolumeCommand,
-  desktopPause,
-  desktopPlayFile,
-  desktopPrepareNextFile,
-  desktopResume,
+  desktopPrepareNextSource,
   desktopSeek,
-  desktopSetDsp,
-  desktopSetVolume,
   desktopStatus,
   desktopStop,
-  desktopVisualizerFrame,
 } from "../../lib/desktopPlayback";
-import type { desktopDspSettings } from "../../lib/desktopPlayback";
+import type { DesktopPlaybackSource, desktopDspSettings } from "../../lib/desktopPlayback";
 import type { SmtcButtonPayload } from "../../lib/tauriMedia";
 import { clearSmtcState, listenForSmtcButtons, updateSmtcState } from "../../lib/tauriMedia";
 import type { RadioStation, Track } from "../../types/api";
 import type { PlayerBarProps } from "./PlayerBarTypes";
 import { PlayerBarView } from "./PlayerBarView";
-import { createWebAudioRuntime } from "./webAudioRuntime";
-import { createPlaybackTransitions, webCrossfadeDurationMs } from "./playbackTransitions";
+import { createPlaybackTransitions } from "./playbackTransitions";
 import { playbackEndedEarly } from "./playbackEarlyEnd";
 import { usePlayerBarAudioEffects } from "./usePlayerBarAudioEffects";
 import { usePlayerBarMediaEffects } from "./usePlayerBarMediaEffects";
 import { RatingStars } from "../components/common";
 import {
-  END_FADE_SECONDS,
-  EqualizerBandMode,
-  KeyboardShortcutAction,
-  KeyboardShortcut,
   MiniPlayerCommand,
-  PlaybackEngine,
-  PlaybackMode,
   VISUALIZER_FRAME_EVENT,
   VisualizerFrame,
   clampNumber,
-  dbToGain,
   display,
   displayAlbumForTrack,
-  equalizerFrequenciesForMode,
-  formatPlaybackTime,
   miniPlayerChannelName,
   miniPlayerTrackSnapshot,
   normalizeEqualizerGains,
@@ -79,7 +61,6 @@ export function PlayerBar({
   autoPlay,
   fadeMs,
   skipThresholdPercent,
-  playbackEngine,
   desktopOutputDeviceId,
   desktopBufferFrames,
   miniPlayer,
@@ -104,34 +85,10 @@ export function PlayerBar({
   onOpenCurrentAlbum,
   setStatus,
 }: PlayerBarProps) {
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const nextAudioRef = useRef<HTMLAudioElement | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const currentSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
-  const currentSourceElementRef = useRef<HTMLAudioElement | null>(null);
-  const nextSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
-  const nextSourceElementRef = useRef<HTMLAudioElement | null>(null);
-  const currentSourceGainRef = useRef<GainNode | null>(null);
-  const nextSourceGainRef = useRef<GainNode | null>(null);
-  const dspInputRef = useRef<GainNode | null>(null);
-  const dspNormalizationRef = useRef<GainNode | null>(null);
-  const dspPreampRef = useRef<GainNode | null>(null);
-  const dspFiltersRef = useRef<BiquadFilterNode[]>([]);
-  const dspCompressorRef = useRef<DynamicsCompressorNode | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const dspModeRef = useRef<EqualizerBandMode | null>(null);
-  const dspLimiterRef = useRef<boolean | null>(null);
-  const fadeTimerRef = useRef<number | null>(null);
   const desktopFadeTimerRef = useRef<number | null>(null);
-  const crossfadeTimerRef = useRef<number | null>(null);
   const visualizerFrameRef = useRef<number | null>(null);
   const visualizerLastEmitRef = useRef(0);
-  const endFadeTrackRef = useRef<number | null>(null);
   const crossfadeTrackRef = useRef<number | null>(null);
-  const crossfadeSourceRef = useRef<HTMLAudioElement | null>(null);
-  const handoffSourceGainRef = useRef<GainNode | null>(null);
-  const handoffRef = useRef<{ trackId: number; currentTime: number } | null>(null);
-  const handoffSourceRef = useRef<HTMLAudioElement | null>(null);
   const pendingResumePositionRef = useRef<number | null>(null);
   const desktopLoadedTrackIdRef = useRef<number | null>(null);
   const desktopEndedTrackIdRef = useRef<number | null>(null);
@@ -142,8 +99,6 @@ export function PlayerBar({
   const prepareNextInFlightRef = useRef(false);
   const prepareNextPendingPathRef = useRef<string | null>(null);
   const activeSourceKeyRef = useRef("empty");
-  const suppressWebPlaybackErrorsUntilRef = useRef(0);
-  const suppressWebPauseUntilRef = useRef(0);
   const smtcActionRef = useRef<(payload: SmtcButtonPayload) => void>(() => {});
   const miniPlayerChannelRef = useRef<BroadcastChannel | null>(null);
   const miniPlayerCommandRef = useRef<(command: MiniPlayerCommand) => void>(() => {});
@@ -167,25 +122,21 @@ export function PlayerBar({
   const currentIndex = currentTrack && !isRadioSource ? queue.findIndex((track) => track.id === currentTrack.id) : -1;
   const hasPrevious = currentIndex > 0;
   const hasNext = currentIndex >= 0 && currentIndex < queue.length - 1;
-  const canPreviousAction = hasPrevious || Boolean(currentTrack && !isRadioSource && !isCdPreviewTrack);
+  const canPreviousAction = hasPrevious || Boolean(currentTrack && !isRadioSource);
   const cdSkipIsSettling = isCdPreviewTrack && isPlaying && currentTime < CD_SKIP_SETTLE_SECONDS;
-  const trackNeedsWebPlayback = (track: Track | null) =>
-    Boolean(track?.audio_url || track?.is_preview || track?.path?.startsWith("cdda://"));
-  const usePlayback = playbackEngine === "rust" && !isRadioSource && !trackNeedsWebPlayback(currentTrack);
   const preloadedNextTrack =
     !isRadioSource && hasNext
       ? queue[currentIndex + 1]
       : !isRadioSource && playbackMode === "repeatQueue" && queue.length > 0
         ? queue[0]
         : null;
-  const canPreloadNextTrack = Boolean(preloadedNextTrack && !trackNeedsWebPlayback(preloadedNextTrack));
+  const canPreloadNextTrack = Boolean(preloadedNextTrack);
   const effectiveDuration = isRadioSource ? 0 : duration || currentTrack?.duration_seconds || 0;
   const progressRatio = effectiveDuration > 0 ? clampNumber(currentTime / effectiveDuration, 0, 1) : 0;
   const progressPercent = progressRatio * 100;
   const progressFill = progressRatio > 0 ? `calc(${progressPercent}% + ${7 - progressRatio * 14}px)` : "0px";
   const smtcPositionSecond = Math.floor(currentTime);
   const trackSwitchFadeMs = Math.max(0, fadeMs);
-  const webTrackSwitchFadeMs = webCrossfadeDurationMs(fadeMs);
   function replayGainForTrack(track: Track | null) {
     return replayGainMultiplier(
       track,
@@ -199,26 +150,88 @@ export function PlayerBar({
   const replayGain = replayGainForTrack(currentTrack);
   const outputVolume = muted ? 0 : clampNumber(volume, 0, 1);
   const radioSubtitle = currentRadioStation ? display(currentRadioStation.genre, "Live web radio") : null;
-  const trackAudioSourceUrl = (track: Track) => track.audio_url ?? audioUrl(track.id);
-  const webAudioSourceUrl = currentRadioStation?.stream_url ?? (currentTrack ? trackAudioSourceUrl(currentTrack) : null);
-  const webAudioKey = currentRadioStation ? `radio-${currentRadioStation.id}` : currentTrack ? `track-${currentTrack.id}-${currentTrack.audio_url ?? ""}` : "empty";
   const visualizerTrackId = currentTrack?.id ?? (currentRadioStation ? -currentRadioStation.id : null);
   activeSourceKeyRef.current = activeSourceKey;
 
-  const webAudioRuntime = createWebAudioRuntime({
-    replayGainForTrack, equalizerEnabled, equalizerBandMode, equalizerPreampDb, equalizerGains, dspLimiterEnabled, currentTrack, isPlaying, usePlayback, outputVolume, replayGain, smoothFadeProgress, cancelFade,
-    audioRef, nextAudioRef, audioContextRef, currentSourceRef, currentSourceElementRef, nextSourceRef, nextSourceElementRef, currentSourceGainRef, nextSourceGainRef, dspInputRef, dspNormalizationRef, dspPreampRef, dspFiltersRef, dspCompressorRef, analyserRef, dspModeRef, dspLimiterRef, handoffSourceRef, handoffSourceGainRef, fadeTimerRef, visualizerFrameRef,
-  });
-  const {
-    desktopDspSettingsForTrack, currentPlaybackDspSettings, ensureWebAudioGraph, connectMediaElementSource, updateDspSettings, resumeWebAudioGraph, emitVisualizerFrame, emitVisualizerState, holdAudioParam, setWebSourceGain, rampWebGainNode, finishWebHandoffToMain, fadeWebSourceGain, smoothFadeCurve, cancelWebSourceGainAutomation, cancelVisualizerLoop,
-  } = webAudioRuntime;
-
-  function cancelFade() {
-    if (fadeTimerRef.current !== null) {
-      window.clearInterval(fadeTimerRef.current);
-      fadeTimerRef.current = null;
+  function playbackSourceForTrack(track: Track): DesktopPlaybackSource {
+    if (track.path.startsWith("cdda://")) {
+      const [driveId = "", trackText = "1"] = track.path.slice("cdda://".length).split("/track/");
+      const trackNumber = Number.parseInt(trackText, 10);
+      return {
+        kind: "cd_track",
+        drive_id: driveId,
+        track_number: Number.isFinite(trackNumber) && trackNumber > 0 ? trackNumber : track.track_number ?? 1,
+        title: track.title ?? null,
+      };
     }
-    cancelWebSourceGainAutomation(currentSourceGainRef);
+    if (track.audio_url) {
+      return {
+        kind: "url",
+        url: track.audio_url,
+        cache_key: `track-${track.id}`,
+        title: track.title ?? null,
+        live: false,
+      };
+    }
+    return { kind: "file", path: track.path };
+  }
+
+  function playbackSourceForRadio(station: RadioStation): DesktopPlaybackSource {
+    return {
+      kind: "url",
+      url: station.stream_url,
+      cache_key: `radio-${station.id}`,
+      title: station.name ?? null,
+      live: true,
+    };
+  }
+
+  function playbackSourceIdentity(source: DesktopPlaybackSource): string {
+    if (source.kind === "file") {
+      return source.path;
+    }
+    if (source.kind === "url") {
+      return source.url;
+    }
+    return `cdda://${source.drive_id}/track/${String(source.track_number).padStart(2, "0")}`;
+  }
+
+  function desktopDspSettingsForTrack(track: Track | null): desktopDspSettings {
+    return {
+      normalizationGain: replayGainForTrack(track),
+      equalizerEnabled,
+      equalizerBandMode,
+      equalizerPreampDb,
+      equalizerGains: normalizeEqualizerGains(equalizerGains, equalizerBandMode),
+      limiterEnabled: dspLimiterEnabled,
+    };
+  }
+
+  function currentPlaybackDspSettings(): desktopDspSettings {
+    return desktopDspSettingsForTrack(currentTrack);
+  }
+
+  function emitVisualizerFrame(frame: VisualizerFrame) {
+    window.dispatchEvent(new CustomEvent<VisualizerFrame>(VISUALIZER_FRAME_EVENT, { detail: frame }));
+  }
+
+  function emitVisualizerState(isLive = false) {
+    emitVisualizerFrame({
+      trackId: visualizerTrackId,
+      isPlaying,
+      isLive,
+      level: 0,
+      frequencyBins: [],
+      waveform: [],
+      timestamp: window.performance.now(),
+    });
+  }
+
+  function cancelVisualizerLoop() {
+    if (visualizerFrameRef.current !== null) {
+      window.cancelAnimationFrame(visualizerFrameRef.current);
+      visualizerFrameRef.current = null;
+    }
   }
 
   function cancelPlaybackFade() {
@@ -229,23 +242,7 @@ export function PlayerBar({
   }
 
   function cancelCrossfade() {
-    if (crossfadeTimerRef.current !== null) {
-      window.clearInterval(crossfadeTimerRef.current);
-      crossfadeTimerRef.current = null;
-    }
-    const crossfadeSource = crossfadeSourceRef.current;
-    if (crossfadeSource && crossfadeSource !== audioRef.current) {
-      crossfadeSource.pause();
-      setWebSourceGain(crossfadeSource, nextSourceGainRef, 0);
-    }
-    crossfadeSourceRef.current = null;
-    cancelWebSourceGainAutomation(currentSourceGainRef);
-    cancelWebSourceGainAutomation(nextSourceGainRef);
-  }
-
-  function smoothFadeProgress(progress: number) {
-    const bounded = clampNumber(progress, 0, 1);
-    return bounded * bounded * (3 - 2 * bounded);
+    crossfadeTrackRef.current = null;
   }
 
   function suppressDesktopEarlyEndWarning(durationMs = INTENTIONAL_PLAYBACK_STOP_SUPPRESS_MS) {
@@ -256,15 +253,15 @@ export function PlayerBar({
   }
 
   const playbackTransitions = createPlaybackTransitions({
-    audioRef, nextAudioRef, currentSourceGainRef, nextSourceGainRef, crossfadeSourceRef, crossfadeTrackRef, handoffRef, handoffSourceRef, handoffSourceGainRef, pendingResumePositionRef, desktopLoadedTrackIdRef, desktopEndedTrackIdRef, lastPlaybackStreamErrorRef, suppressWebPlaybackErrorsUntilRef, suppressWebPauseUntilRef, artworkPreviewTimerRef, fadeTimerRef, dspInputRef, currentSourceRef, currentSourceElementRef, nextSourceRef, nextSourceElementRef, desktopFadeTimerRef, crossfadeTimerRef,
-    currentTrack, currentTime, isPlaying, isCdPreviewTrack, usePlayback, outputVolume, fadeMs, desktopOutputDeviceId, desktopBufferFrames, queue, preloadedNextTrack, activeSourceKey, activeSourceKeyRef, isRadioSource, getArtworkSrc: () => artworkSrc, setShowArtworkPreview, setDuration, setCurrentTime, setIsPlaying, setStatus, onPlaybackTime, onTrackEnded, onSelectTrack, trackNeedsWebPlayback, trackAudioSourceUrl, applyPendingResumeToAudio, cancelFade, cancelPlaybackFade, cancelCrossfade, smoothFadeProgress, suppressDesktopEarlyEndWarning, currentPlaybackDspSettings, desktopDspSettingsForTrack, fadeWebSourceGain, setWebSourceGain, cancelWebSourceGainAutomation, ensureWebAudioGraph, connectMediaElementSource, updateDspSettings, resumeWebAudioGraph, rampWebGainNode, smoothFadeCurve, holdAudioParam,
+    crossfadeTrackRef, pendingResumePositionRef, desktopLoadedTrackIdRef, desktopEndedTrackIdRef, lastPlaybackStreamErrorRef, artworkPreviewTimerRef, desktopFadeTimerRef,
+    currentTrack, currentRadioStation, currentTime, isPlaying, isCdPreviewTrack, outputVolume, fadeMs, desktopOutputDeviceId, desktopBufferFrames, queue, getArtworkSrc: () => artworkSrc, setShowArtworkPreview, setDuration, setCurrentTime, setIsPlaying, setStatus, onPlaybackTime, onTrackEnded, onSelectTrack, playbackSourceForTrack, playbackSourceForRadio, cancelPlaybackFade, cancelCrossfade, suppressDesktopEarlyEndWarning, currentPlaybackDspSettings, desktopDspSettingsForTrack,
   });
   const {
-    pauseWebAudioForPreviewSwitch, clearArtworkPreviewTimer, scheduleArtworkPreview, hideArtworkPreview, cdStreamIsSettling, fadeVolume, fadePlaybackVolume, startPlaybackTrack, startPlaybackCrossfade, resumePlaybackWithFade, createWebCrossfadeElement, webCrossfadeSourceFor, startCrossfade, playWithFade, pauseWithFade,
+    clearArtworkPreviewTimer, scheduleArtworkPreview, hideArtworkPreview, cdStreamIsSettling, fadePlaybackVolume, startPlaybackTrack, startPlaybackCrossfade, playWithFade, pauseWithFade,
   } = playbackTransitions;
 
   usePlayerBarAudioEffects({
-    cancelFade, cancelPlaybackFade, cancelCrossfade, clearArtworkPreviewTimer, cancelVisualizerLoop, miniPlayerChannelRef, audioContextRef, volume, muted, usePlayback, desktopFadeTimerRef, outputVolume, fadeTimerRef, crossfadeTimerRef, audioRef, currentSourceGainRef, nextAudioRef, nextSourceGainRef, desktopLoadedTrackIdRef, desktopEndedTrackIdRef, miniPlayerCommandRef, canPreloadNextTrack, preloadedNextTrack, ensureWebAudioGraph, activeSourceKey, equalizerEnabled, equalizerBandMode, equalizerPreampDb, equalizerGains, dspLimiterEnabled, replayGain, currentPlaybackDspSettings, emitVisualizerState, isPlaying, visualizerTrackId, currentTrack, visualizerLastEmitRef, emitVisualizerFrame, visualizerFrameRef, analyserRef, setWebSourceGain,
+    cancelPlaybackFade, cancelCrossfade, clearArtworkPreviewTimer, cancelVisualizerLoop, miniPlayerChannelRef, volume, muted, desktopFadeTimerRef, outputVolume, desktopLoadedTrackIdRef, desktopEndedTrackIdRef, miniPlayerCommandRef, equalizerEnabled, equalizerBandMode, equalizerPreampDb, equalizerGains, dspLimiterEnabled, replayGain, currentPlaybackDspSettings, emitVisualizerState, isPlaying, visualizerTrackId, visualizerLastEmitRef, emitVisualizerFrame, visualizerFrameRef,
   });
 
   useEffect(() => {
@@ -278,17 +275,9 @@ export function PlayerBar({
 
     cancelCrossfade();
     crossfadeTrackRef.current = null;
-    nextAudioRef.current?.pause();
-
-    if (isCdPreviewTrack) {
-      const audio = audioRef.current;
-      pauseWebAudioForPreviewSwitch(audio);
-      commitTrackRequest();
-      return;
-    }
 
     if (!hasPlayableSource || !isPlaying || trackSwitchFadeMs <= 0) {
-      if (usePlayback) {
+      if (hasPlayableSource) {
         suppressDesktopEarlyEndWarning();
         void desktopStop().finally(commitTrackRequest);
         return;
@@ -297,84 +286,42 @@ export function PlayerBar({
       return;
     }
 
-    if (usePlayback) {
-      if (trackNeedsWebPlayback(externalTrackRequest.track)) {
-        void recordCurrentTrackExit();
+    if (isPlaying && trackSwitchFadeMs > 0) {
+      void recordCurrentTrackExit();
+      void startPlaybackCrossfade(externalTrackRequest.track, false, externalTrackRequest.queue, false).then((started) => {
+        if (started) {
+          commitTrackRequest({ suppressExitRecord: true });
+          return;
+        }
         fadePlaybackVolume(0, trackSwitchFadeMs, () => {
           suppressDesktopEarlyEndWarning();
           void desktopStop().finally(() => commitTrackRequest({ suppressExitRecord: true }));
         });
-        return;
-      }
-      if (isPlaying && trackSwitchFadeMs > 0) {
-        void recordCurrentTrackExit();
-        void startPlaybackCrossfade(externalTrackRequest.track, false, externalTrackRequest.queue, false).then((started) => {
-          if (started) {
-            commitTrackRequest({ suppressExitRecord: true });
-            return;
-          }
-          fadePlaybackVolume(0, trackSwitchFadeMs, () => {
-            suppressDesktopEarlyEndWarning();
-            void desktopStop().finally(() => commitTrackRequest({ suppressExitRecord: true }));
-          });
-        });
-        return;
-      }
-      fadePlaybackVolume(0, trackSwitchFadeMs, () => {
-        suppressDesktopEarlyEndWarning();
-        void desktopStop().finally(commitTrackRequest);
       });
       return;
     }
-
-    const audio = audioRef.current;
-    if (!audio || audio.paused) {
-      commitTrackRequest();
-      return;
-    }
-
-    void recordCurrentTrackExit();
-    void startCrossfade(externalTrackRequest.track, {
-      nextQueue: externalTrackRequest.queue,
-      recordCompletion: false,
-      sourceElement: webCrossfadeSourceFor(externalTrackRequest.track),
-      onCommit: () => commitTrackRequest({ suppressExitRecord: true }),
-    }).then((started) => {
-      if (started) {
-        return;
-      }
-      fadeVolume(0, trackSwitchFadeMs, () => {
-        audio.pause();
-        try {
-          audio.currentTime = 0;
-        } catch {
-          // Some codecs do not permit seeking during teardown.
-        }
-        commitTrackRequest({ suppressExitRecord: true });
-      });
+    fadePlaybackVolume(0, trackSwitchFadeMs, () => {
+      suppressDesktopEarlyEndWarning();
+      void desktopStop().finally(commitTrackRequest);
     });
-    return;
   }, [externalTrackRequest?.id]);
 
   useEffect(() => {
-    cancelFade();
+    cancelPlaybackFade();
     setCurrentTime(0);
     onPlaybackTime(0);
     setDuration(isRadioSource ? 0 : currentTrack?.duration_seconds ?? 0);
     setArtworkFailed(false);
     setIsPlaying(false);
-    endFadeTrackRef.current = null;
     crossfadeTrackRef.current = null;
     desktopEndedTrackIdRef.current = null;
     pendingResumePositionRef.current = null;
 
     if (!hasPlayableSource) {
-      if (usePlayback) {
-        desktopLoadedTrackIdRef.current = null;
-        void desktopStop().catch(() => {
-          // Rust playback may not be available in browser preview.
-        });
-      }
+      desktopLoadedTrackIdRef.current = null;
+      void desktopStop().catch(() => {
+        // Rust playback may not be available in browser preview.
+      });
       return;
     }
     if (isRadioSource) {
@@ -386,42 +333,14 @@ export function PlayerBar({
     if (!currentTrack) {
       return;
     }
-    if (usePlayback) {
-      if (autoPlay) {
-        if (desktopLoadedTrackIdRef.current === currentTrack.id) {
-          setIsPlaying(true);
-          return;
-        }
-        void startPlaybackTrack(currentTrack);
-      }
-      return;
-    }
-    const audio = audioRef.current;
-    if (!audio) {
-      return;
-    }
-    const handoff = handoffRef.current;
-    if (handoff?.trackId === currentTrack.id) {
-      handoffRef.current = null;
-      const handoffSource = handoffSourceRef.current;
-      audio.currentTime = handoff.currentTime;
-      ensureWebAudioGraph();
-      setWebSourceGain(audio, currentSourceGainRef, 0);
-      void resumeWebAudioGraph()
-        .then(() => audio.play())
-        .then(() => {
-          setIsPlaying(true);
-          finishWebHandoffToMain(audio, handoffSource);
-        })
-        .catch(() => {
-          setStatus("Playback could not continue after crossfade.");
-        });
-      return;
-    }
     if (autoPlay) {
-      void playWithFade();
+      if (desktopLoadedTrackIdRef.current === currentTrack.id) {
+        setIsPlaying(true);
+        return;
+      }
+      void startPlaybackTrack(currentTrack);
     }
-  }, [activeSourceKey, radioPlaybackRequestId, autoPlay, usePlayback]);
+  }, [activeSourceKey, radioPlaybackRequestId, autoPlay, hasPlayableSource]);
 
   useEffect(() => {
     if (!currentTrack) {
@@ -447,10 +366,7 @@ export function PlayerBar({
     onPlaybackTime(boundedTime);
     pendingResumePositionRef.current = boundedTime;
 
-    const audio = audioRef.current;
-    if (!usePlayback && audio) {
-      applyPendingResumeToAudio();
-    } else if (usePlayback && desktopLoadedTrackIdRef.current === currentTrack.id) {
+    if (desktopLoadedTrackIdRef.current === currentTrack.id) {
       void desktopSeek(boundedTime).catch(() => {
         // A restored position can still be used when playback starts.
       });
@@ -458,51 +374,7 @@ export function PlayerBar({
     }
 
     onResumePositionApplied();
-  }, [currentTrack?.id, resumePositionSeconds, usePlayback]);
-
-  function applyPendingResumeToAudio() {
-    const audio = audioRef.current;
-    const pendingResumePosition = pendingResumePositionRef.current;
-    if (!audio || pendingResumePosition === null || pendingResumePosition <= 0) {
-      return false;
-    }
-
-    const durationLimit = Number.isFinite(audio.duration)
-      ? Math.max(0, audio.duration - 1)
-      : effectiveDuration > 0
-        ? Math.max(0, effectiveDuration - 1)
-        : pendingResumePosition;
-    const targetTime = Math.min(pendingResumePosition, durationLimit);
-
-    try {
-      audio.currentTime = targetTime;
-      setCurrentTime(targetTime);
-      onPlaybackTime(targetTime);
-      return true;
-    } catch {
-      // Some codecs allow seeking only after metadata finishes loading.
-      return false;
-    }
-  }
-
-  function maybeClearPendingResume(actualTime: number) {
-    const pendingResumePosition = pendingResumePositionRef.current;
-    if (pendingResumePosition === null) {
-      return;
-    }
-    if (Math.abs(actualTime - pendingResumePosition) <= 1 || actualTime > pendingResumePosition) {
-      pendingResumePositionRef.current = null;
-    }
-  }
-
-  function syncDuration() {
-    const audio = audioRef.current;
-    if (!audio) {
-      return;
-    }
-    setDuration(isRadioSource ? 0 : Number.isFinite(audio.duration) ? audio.duration : currentTrack?.duration_seconds ?? 0);
-    applyPendingResumeToAudio();
-  }
+  }, [currentTrack?.id, resumePositionSeconds]);
 
   function handleSeek(event: ChangeEvent<HTMLInputElement>) {
     const nextTime = Number(event.target.value);
@@ -535,51 +407,32 @@ export function PlayerBar({
   }
 
   function seekTo(nextTime: number) {
-    if (isRadioSource || isCdPreviewTrack) {
+    if (isRadioSource) {
       return;
     }
-    const audio = audioRef.current;
     const boundedTime = clampSeekTime(nextTime);
     setCurrentTime(boundedTime);
     onPlaybackTime(boundedTime);
     pendingResumePositionRef.current = null;
-    if (usePlayback) {
-      const restartEndedTrack = currentTrack && desktopEndedTrackIdRef.current === currentTrack.id;
-      desktopEndedTrackIdRef.current = null;
-      if (restartEndedTrack) {
-        void startPlaybackTrack(currentTrack, boundedTime);
-        return;
-      }
-      void desktopSeek(boundedTime).catch((error) => {
-        setStatus(error instanceof Error ? error.message : "Rust seek failed.");
-      });
+    const restartEndedTrack = currentTrack && desktopEndedTrackIdRef.current === currentTrack.id;
+    desktopEndedTrackIdRef.current = null;
+    if (restartEndedTrack) {
+      void startPlaybackTrack(currentTrack, boundedTime);
       return;
     }
-    if (audio && Number.isFinite(nextTime)) {
-      audio.currentTime = boundedTime;
-    }
+    void desktopSeek(boundedTime).catch((error) => {
+      setStatus(error instanceof Error ? error.message : "Rust seek failed.");
+    });
   }
 
   async function togglePlayback() {
-    if (usePlayback) {
-      if (!currentTrack) {
-        return;
-      }
-      if (isPlaying) {
-        pauseWithFade();
-      } else {
-        await playWithFade();
-      }
+    if (!hasPlayableSource) {
       return;
     }
-    const audio = audioRef.current;
-    if (!audio || !hasPlayableSource) {
-      return;
-    }
-    if (audio.paused) {
-      await playWithFade();
-    } else {
+    if (isPlaying) {
       pauseWithFade();
+    } else {
+      await playWithFade();
     }
   }
 
@@ -587,7 +440,7 @@ export function PlayerBar({
     if (cdSkipIsSettling || !canPreviousAction) {
       return;
     }
-    if (usePlayback && currentTrack && desktopEndedTrackIdRef.current === currentTrack.id) {
+    if (currentTrack && desktopEndedTrackIdRef.current === currentTrack.id) {
       seekTo(0);
       return;
     }
@@ -668,77 +521,21 @@ export function PlayerBar({
       if (cdStreamIsSettling()) {
         return;
       }
-      const audio = audioRef.current;
       if (recordExit) {
         void recordCurrentTrackExit();
       }
       cancelCrossfade();
       crossfadeTrackRef.current = null;
-      nextAudioRef.current?.pause();
-      if (isCdPreviewTrack) {
-        // CD queue items may need a fresh live stream URL. Let the app prepare
-        // that URL before we touch the current stream, otherwise a failed skip
-        // leaves the player paused on the old track.
-        onSelectTrack(nextTrack, queue, { suppressExitRecord: true });
+      if (isPlaying && fadeMs > 0) {
+        void startPlaybackCrossfade(nextTrack, false);
         return;
       }
-      if (usePlayback) {
-        if (trackNeedsWebPlayback(nextTrack)) {
-          fadePlaybackVolume(0, trackSwitchFadeMs, () => {
-            suppressDesktopEarlyEndWarning();
-            void desktopStop().finally(() => {
-              onSelectTrack(nextTrack, queue, { suppressExitRecord: true });
-            });
-          });
-          return;
-        }
-        if (isPlaying && fadeMs > 0) {
-          void startPlaybackCrossfade(nextTrack, false);
-          return;
-        }
-        fadePlaybackVolume(0, trackSwitchFadeMs, () => {
-          suppressDesktopEarlyEndWarning();
-          void desktopStop().finally(() => {
-            onSelectTrack(nextTrack, queue, { suppressExitRecord: true });
-          });
-        });
-        return;
-      }
-      if (audio && !audio.paused) {
-        if (trackSwitchFadeMs > 0) {
-          void startCrossfade(nextTrack, {
-            nextQueue: queue,
-            recordCompletion: false,
-            sourceElement: webCrossfadeSourceFor(nextTrack),
-          }).then((started) => {
-            if (started) {
-              return;
-            }
-            fadeVolume(0, trackSwitchFadeMs, () => {
-              audio.pause();
-              try {
-                audio.currentTime = 0;
-              } catch {
-                // Some codecs do not permit seeking during teardown.
-              }
-              onSelectTrack(nextTrack, queue, { suppressExitRecord: true });
-            });
-          });
-          return;
-        }
-        fadeVolume(0, trackSwitchFadeMs, () => {
-          audio.pause();
-          try {
-            audio.currentTime = 0;
-          } catch {
-            // Some codecs do not permit seeking during teardown.
-          }
+      fadePlaybackVolume(0, trackSwitchFadeMs, () => {
+        suppressDesktopEarlyEndWarning();
+        void desktopStop().finally(() => {
           onSelectTrack(nextTrack, queue, { suppressExitRecord: true });
         });
-      } else {
-        cancelFade();
-        onSelectTrack(nextTrack, queue, { suppressExitRecord: true });
-      }
+      });
     }
   }
 
@@ -756,57 +553,6 @@ export function PlayerBar({
     }
   }
 
-  function handleTimeUpdate() {
-    const audio = audioRef.current;
-    if (!audio) {
-      return;
-    }
-    const nextTime = audio.currentTime;
-    const pendingResumePosition = pendingResumePositionRef.current;
-    if (pendingResumePosition !== null) {
-      if (nextTime < 1 || nextTime < pendingResumePosition - 2) {
-        if (applyPendingResumeToAudio()) {
-          return;
-        }
-      }
-      maybeClearPendingResume(nextTime);
-    }
-    setCurrentTime(nextTime);
-    onPlaybackTime(nextTime);
-    const audioDuration = Number.isFinite(audio.duration) ? audio.duration : effectiveDuration;
-    const crossfadeLeadSeconds = Math.max(0.08, webTrackSwitchFadeMs / 1000);
-    if (
-      currentTrack &&
-      preloadedNextTrack &&
-      canPreloadNextTrack &&
-      playbackMode !== "stopAfterCurrent" &&
-      playbackMode !== "repeatOne" &&
-      fadeMs > 0 &&
-      audioDuration > crossfadeLeadSeconds * 2 &&
-      audioDuration - nextTime <= crossfadeLeadSeconds &&
-      crossfadeTrackRef.current !== currentTrack.id
-    ) {
-      void startCrossfade(preloadedNextTrack);
-      return;
-    }
-    if (
-      currentTrack &&
-      !isCdPreviewTrack &&
-      (!preloadedNextTrack || playbackMode === "stopAfterCurrent") &&
-      audioDuration > END_FADE_SECONDS * 2 &&
-      audioDuration - nextTime <= END_FADE_SECONDS &&
-      endFadeTrackRef.current !== currentTrack.id
-    ) {
-      endFadeTrackRef.current = currentTrack.id;
-      const fadeGuardMs = 100;
-
-      const remainingMs = Math.max(0, (audioDuration - nextTime) * 1000);
-      const fadeDuration = Math.min(fadeMs, Math.max(0, remainingMs - fadeGuardMs));
-
-      fadeVolume(0, fadeDuration);
-    }
-  }
-
   async function handleEnded() {
     if (!currentTrack) {
       return;
@@ -814,13 +560,13 @@ export function PlayerBar({
     if (crossfadeTrackRef.current === currentTrack.id) {
       return;
     }
-    const endedAt = usePlayback ? currentTime : audioRef.current?.currentTime ?? currentTime;
+    const endedAt = currentTime;
     if (isCdPreviewTrack && effectiveDuration > 15 && endedAt < effectiveDuration - 8) {
       setIsPlaying(false);
       setStatus("CD playback stopped early. Use the play button in the player bar to retry, or refresh the CD page if the disc changed.");
       return;
     }
-    if (!usePlayback && !isCdPreviewTrack && playbackEndedEarly(endedAt, effectiveDuration)) {
+    if (!isCdPreviewTrack && playbackEndedEarly(endedAt, effectiveDuration)) {
       setIsPlaying(false);
       setStatus("Track appears corrupted or truncated; playback stopped before the saved duration.");
       return;
@@ -846,7 +592,7 @@ export function PlayerBar({
   }
 
   useEffect(() => {
-    if (!usePlayback) {
+    if (!hasPlayableSource) {
       return;
     }
     let canceled = false;
@@ -902,7 +648,7 @@ export function PlayerBar({
           currentTrack &&
           status.ended &&
           !status.is_paused &&
-          status.current_path === currentTrack.path &&
+          status.current_path === playbackSourceIdentity(playbackSourceForTrack(currentTrack)) &&
           desktopLoadedTrackIdRef.current === currentTrack.id &&
           desktopEndedTrackIdRef.current !== currentTrack.id
         ) {
@@ -927,13 +673,14 @@ export function PlayerBar({
       canceled = true;
       window.clearInterval(timer);
     };
-  }, [usePlayback, currentTrack?.id, playbackMode, currentIndex, queue, fadeMs, preloadedNextTrack?.id, canPreloadNextTrack, outputVolume]);
+  }, [hasPlayableSource, currentTrack?.id, playbackMode, currentIndex, queue, fadeMs, preloadedNextTrack?.id, canPreloadNextTrack, outputVolume]);
 
   useEffect(() => {
-    if (!usePlayback || !preloadedNextTrack || !canPreloadNextTrack || playbackMode === "stopAfterCurrent") {
+    if (!hasPlayableSource || !preloadedNextTrack || !canPreloadNextTrack || playbackMode === "stopAfterCurrent") {
       return;
     }
-    const requestedPath = preloadedNextTrack.path;
+    const requestedSource = playbackSourceForTrack(preloadedNextTrack);
+    const requestedPath = JSON.stringify(requestedSource);
     if (preparedNextPathRef.current === requestedPath) {
       return;
     }
@@ -949,7 +696,8 @@ export function PlayerBar({
       }
       prepareNextPendingPathRef.current = null;
       prepareNextInFlightRef.current = true;
-      void desktopPrepareNextFile(nextPath)
+      const nextSource = playbackSourceForTrack(preloadedNextTrack);
+      void desktopPrepareNextSource(nextSource)
         .then(() => {
           preparedNextPathRef.current = nextPath;
         })
@@ -964,7 +712,7 @@ export function PlayerBar({
         });
     };
     drainPrepareQueue();
-  }, [usePlayback, preloadedNextTrack?.id, preloadedNextTrack?.path, canPreloadNextTrack, playbackMode]);
+  }, [hasPlayableSource, preloadedNextTrack?.id, preloadedNextTrack?.path, canPreloadNextTrack, playbackMode]);
 
   const artworkSrc =
     currentTrack && !isRadioSource && (!isPreviewTrack || isCdPreviewTrack) && !artworkFailed
@@ -1012,7 +760,7 @@ export function PlayerBar({
   });
 
   const playerBarViewModel = {
-    miniPlayer, artworkSrc: displayedArtworkSrc, playerTitle, hideArtworkPreview, scheduleArtworkPreview, setArtworkFailed, isRadioSource, isPreviewTrack, isLibraryTrack, currentTrack, currentRadioStation, radioSubtitle, hasCurrentArtist, currentArtistLabel, onOpenCurrentArtist, onOpenCurrentArtistInfo, hasCurrentAlbum, currentAlbumLabel, onOpenCurrentAlbum, onOpenCurrentTrack, cdSkipIsSettling, hasPrevious, canPreviousAction, handlePreviousTrack, playRelative, isPlaying, hasPlayableSource, togglePlayback, hasNext, usePlayback, webAudioSourceUrl, webAudioKey, audioRef, isCdPreviewTrack, syncDuration, handleTimeUpdate, setIsPlaying, suppressWebPauseUntilRef, maybeClearPendingResume, handleEnded, activeSourceKeyRef, activeSourceKey, suppressWebPlaybackErrorsUntilRef, setStatus, preloadedNextTrack, canPreloadNextTrack, nextAudioRef, trackAudioSourceUrl, effectiveDuration, currentTime, progressPercent, progressFill, handleSeek, handleProgressKeyDown, playbackSeekStepSeconds: PLAYBACK_KEYBOARD_SEEK_STEP_SECONDS, playbackMode, cycleRepeatMode, onOpenLyricsView, onOpenQueueView, muted, volume, handleVolumeWheel, toggleMuted, handleVolumeChange, volumePercentDraft, commitVolumePercent, setVolumePercentDraft, handleVolumePercentChange, handleVolumePercentKeyDown, onRating, showArtworkPreview,
+    miniPlayer, artworkSrc: displayedArtworkSrc, playerTitle, hideArtworkPreview, scheduleArtworkPreview, setArtworkFailed, isRadioSource, isPreviewTrack, isLibraryTrack, currentTrack, currentRadioStation, radioSubtitle, hasCurrentArtist, currentArtistLabel, onOpenCurrentArtist, onOpenCurrentArtistInfo, hasCurrentAlbum, currentAlbumLabel, onOpenCurrentAlbum, onOpenCurrentTrack, cdSkipIsSettling, hasPrevious, canPreviousAction, handlePreviousTrack, playRelative, isPlaying, hasPlayableSource, togglePlayback, hasNext, effectiveDuration, currentTime, progressPercent, progressFill, handleSeek, handleProgressKeyDown, playbackSeekStepSeconds: PLAYBACK_KEYBOARD_SEEK_STEP_SECONDS, playbackMode, cycleRepeatMode, onOpenLyricsView, onOpenQueueView, muted, volume, handleVolumeWheel, toggleMuted, handleVolumeChange, volumePercentDraft, commitVolumePercent, setVolumePercentDraft, handleVolumePercentChange, handleVolumePercentKeyDown, onRating, showArtworkPreview,
   };
 
   return <PlayerBarView model={playerBarViewModel} />;

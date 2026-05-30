@@ -92,6 +92,55 @@ pub fn stop_cd_playback() -> JsonValue {
     })
 }
 
+pub fn prepare_cd_playback_wav(
+    drive_id: &str,
+    track_number: i64,
+    title: Option<&str>,
+) -> Result<PathBuf, String> {
+    let drive_id = normalize_drive_id(drive_id)
+        .ok_or_else(|| "Choose a CD drive first.".to_string())?;
+    if active_rip_for_drive(&drive_id) {
+        return Err("Stop the active rip before playing this CD drive.".to_string());
+    }
+    let safe_title = title
+        .map(sanitize_cd_cache_part)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| format!("track_{track_number:02}"));
+    let safe_drive = sanitize_cd_cache_part(&drive_id);
+    let cache_dir = std::env::temp_dir()
+        .join("flac-cafe")
+        .join("cd-playback-cache")
+        .join(safe_drive);
+    fs::create_dir_all(&cache_dir)
+        .map_err(|error| format!("Could not create CD playback cache: {error}"))?;
+    let wav_path = cache_dir.join(format!("{track_number:02}_{safe_title}.wav"));
+    if wav_path.exists() && wav_path.is_file() {
+        return Ok(wav_path);
+    }
+    let partial_path = cache_dir.join(format!("{track_number:02}_{safe_title}.wav.part"));
+    rip_track_to_wav(&drive_id, track_number, &partial_path)?;
+    fs::rename(&partial_path, &wav_path)
+        .map_err(|error| format!("Could not finalize CD playback WAV: {error}"))?;
+    Ok(wav_path)
+}
+
+fn sanitize_cd_cache_part(value: &str) -> String {
+    let mut output = String::new();
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+            output.push(character);
+        } else {
+            output.push('_');
+        }
+    }
+    let trimmed = output.trim_matches('_');
+    if trimmed.is_empty() {
+        "cd".to_string()
+    } else {
+        trimmed.chars().take(80).collect()
+    }
+}
+
 fn wav_header_bytes(data_size: usize) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(44);
     let _ = write_wav_header(&mut bytes, data_size as u32);

@@ -135,9 +135,8 @@ export function readUiPreferences(): UiPreferences {
     if (modern) {
       const parsed = JSON.parse(modern) as Partial<UiPreferences> & { playerLayout?: string };
       const rawPlaybackEngine = (parsed as { playbackEngine?: unknown }).playbackEngine;
-      const parsedPlaybackEngine = rawPlaybackEngine === "desktop" ? "rust" : rawPlaybackEngine;
       const migrateWebviewDefaultToRust =
-        parsedPlaybackEngine === "webview" &&
+        (rawPlaybackEngine === "webview" || rawPlaybackEngine === "desktop") &&
         window.localStorage.getItem(storageKeys.rustPlaybackDefaultMigration) !== RUST_PLAYBACK_DEFAULT_MIGRATION_VALUE;
       completeRustPlaybackDefaultMigration(
         migrateWebviewDefaultToRust ? { ...parsed, playbackEngine: defaults.playbackEngine } : undefined,
@@ -165,11 +164,7 @@ export function readUiPreferences(): UiPreferences {
             : typeof (parsed as { replayGainTargetLufs?: unknown }).replayGainTargetLufs === "number"
               ? replayGainTargetPercentFromLegacyLufs((parsed as { replayGainTargetLufs: number }).replayGainTargetLufs)
               : defaults.replayGainTargetVolumePercent,
-        playbackEngine: migrateWebviewDefaultToRust
-          ? defaults.playbackEngine
-          : ["webview", "rust"].includes(parsedPlaybackEngine as PlaybackEngine)
-            ? (parsedPlaybackEngine as PlaybackEngine)
-            : defaults.playbackEngine,
+        playbackEngine: defaults.playbackEngine,
         desktopOutputBackend: ["cpalShared", "wasapiExclusive", "asio"].includes(parsed.desktopOutputBackend as desktopOutputBackendMode)
           ? (parsed.desktopOutputBackend as desktopOutputBackendMode)
           : defaults.desktopOutputBackend,

@@ -150,7 +150,7 @@ describe("UI preferences", () => {
     });
   });
 
-  it("respects WebView playback after the Rust-default migration has run", () => {
+  it("keeps Rust playback even when old settings ask for WebView", () => {
     localStorage.setItem(storageKeys.rustPlaybackDefaultMigration, "done");
     localStorage.setItem(
       storageKeys.uiPreferences,
@@ -160,7 +160,7 @@ describe("UI preferences", () => {
     );
 
     expect(readUiPreferences()).toMatchObject({
-      playbackEngine: "webview",
+      playbackEngine: "rust",
     });
   });
 
