@@ -4,9 +4,9 @@ import {
   ExternalLink,
   FileText,
   Library,
+  RadioTower,
   Settings,
   UserRound,
-  Wand2,
   X,
 } from "lucide-react";
 
@@ -93,7 +93,7 @@ export function AppOverlays({ controller }: AppOverlaysProps) {
             [
               ["library", "Library", Library],
               ["nowPlaying", "Now Playing", FileText],
-              ["autodj", "AutoDJ", Wand2],
+              ["autodj", "AutoDJ", RadioTower],
               ["artist", "Artist", UserRound],
               ["history", "History", Clock3],
               ["settings", "Settings", Settings],

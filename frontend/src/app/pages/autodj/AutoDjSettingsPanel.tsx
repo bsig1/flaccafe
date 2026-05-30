@@ -2,8 +2,8 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Play,
+  RadioTower,
   SlidersHorizontal,
-  Wand2,
   X,
 } from "lucide-react";
 
@@ -263,7 +263,7 @@ export function AutoDjSettingsPanel({ model }: { model: any }) {
                     })
                   }
                 >
-                  <Wand2 size={15} />
+                  <RadioTower size={15} />
                   {settings.seed_track_id ? "Seeded from current track" : "Use current track"}
                 </button>
               </label>
@@ -610,7 +610,7 @@ export function AutoDjSettingsPanel({ model }: { model: any }) {
                   })
                 }
               >
-                <Wand2 size={15} />
+                <RadioTower size={15} />
                 {settings.seed_track_id ? "Seeded from current track" : "Use current track as seed"}
               </button>
               {settings.seed_track_id && (

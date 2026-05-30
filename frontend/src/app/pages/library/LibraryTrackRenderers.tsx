@@ -150,6 +150,7 @@ export function createLibraryTrackRenderers(model: any) {
       <tr
         key={track.id}
         data-track-row
+        data-track-id={track.id}
         style={{ height: trackRowHeight }}
         className={`cursor-pointer border-b border-line/60 hover:bg-white/[0.035] ${
           detailTrack?.id === track.id ? "bg-white/[0.06]" : selectedTrackIds.has(track.id) ? "bg-white/[0.035]" : ""

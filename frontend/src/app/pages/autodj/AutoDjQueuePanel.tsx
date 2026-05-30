@@ -7,10 +7,10 @@ import {
   Info,
   Play,
   Plus,
+  RadioTower,
   SkipForward,
   Trash2,
   Volume2,
-  Wand2,
   X,
 } from "lucide-react";
 
@@ -453,7 +453,7 @@ export function AutoDjQueuePanel({ model }: { model: any }) {
                   setQueueContextMenu(null);
                 }}
               >
-                <Wand2 size={15} />
+                <RadioTower size={15} />
                 AutoDJ From Track
               </button>
               <button

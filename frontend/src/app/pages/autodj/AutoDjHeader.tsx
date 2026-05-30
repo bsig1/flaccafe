@@ -1,8 +1,8 @@
 import {
   Download,
   Plus,
+  RadioTower,
   Repeat2,
-  Wand2,
   X,
 } from "lucide-react";
 
@@ -48,7 +48,7 @@ export function AutoDjHeader({
           {continuousAutoDjBusy ? "Filling" : continuousAutoDjEnabled ? "Continuous On" : "Continuous"}
         </button>
         <button className="primary-button" type="button" onClick={() => void onGenerate()} disabled={busy}>
-          <Wand2 size={17} />
+          <RadioTower size={17} />
           {busy ? "Generating" : "Generate Queue"}
         </button>
         <button className="secondary-button" type="button" onClick={() => void onExport()}>

@@ -58,6 +58,9 @@ import {
 } from "../shared";
 
 const CD_SKIP_SETTLE_SECONDS = 1.15;
+const INTENTIONAL_PLAYBACK_STOP_SUPPRESS_MS = 2500;
+const PLAYBACK_SEEK_END_GUARD_SECONDS = 0.25;
+const PLAYBACK_KEYBOARD_SEEK_STEP_SECONDS = 5;
 
 export function PlayerBar({
   currentTrack,
@@ -132,6 +135,7 @@ export function PlayerBar({
   const pendingResumePositionRef = useRef<number | null>(null);
   const desktopLoadedTrackIdRef = useRef<number | null>(null);
   const desktopEndedTrackIdRef = useRef<number | null>(null);
+  const desktopEarlyEndSuppressUntilRef = useRef(0);
   const lastPlaybackStreamErrorRef = useRef<string | null>(null);
   const handledExternalTrackRequestRef = useRef<number | null>(null);
   const preparedNextPathRef = useRef<string | null>(null);
@@ -244,9 +248,16 @@ export function PlayerBar({
     return bounded * bounded * (3 - 2 * bounded);
   }
 
+  function suppressDesktopEarlyEndWarning(durationMs = INTENTIONAL_PLAYBACK_STOP_SUPPRESS_MS) {
+    desktopEarlyEndSuppressUntilRef.current = Math.max(
+      desktopEarlyEndSuppressUntilRef.current,
+      window.performance.now() + durationMs,
+    );
+  }
+
   const playbackTransitions = createPlaybackTransitions({
     audioRef, nextAudioRef, currentSourceGainRef, nextSourceGainRef, crossfadeSourceRef, crossfadeTrackRef, handoffRef, handoffSourceRef, handoffSourceGainRef, pendingResumePositionRef, desktopLoadedTrackIdRef, desktopEndedTrackIdRef, lastPlaybackStreamErrorRef, suppressWebPlaybackErrorsUntilRef, suppressWebPauseUntilRef, artworkPreviewTimerRef, fadeTimerRef, dspInputRef, currentSourceRef, currentSourceElementRef, nextSourceRef, nextSourceElementRef, desktopFadeTimerRef, crossfadeTimerRef,
-    currentTrack, currentTime, isPlaying, isCdPreviewTrack, usePlayback, outputVolume, fadeMs, desktopOutputDeviceId, desktopBufferFrames, queue, preloadedNextTrack, activeSourceKey, activeSourceKeyRef, isRadioSource, getArtworkSrc: () => artworkSrc, setShowArtworkPreview, setDuration, setCurrentTime, setIsPlaying, setStatus, onPlaybackTime, onTrackEnded, onSelectTrack, trackNeedsWebPlayback, trackAudioSourceUrl, applyPendingResumeToAudio, cancelFade, cancelPlaybackFade, cancelCrossfade, smoothFadeProgress, currentPlaybackDspSettings, desktopDspSettingsForTrack, fadeWebSourceGain, setWebSourceGain, cancelWebSourceGainAutomation, ensureWebAudioGraph, connectMediaElementSource, updateDspSettings, resumeWebAudioGraph, rampWebGainNode, smoothFadeCurve, holdAudioParam,
+    currentTrack, currentTime, isPlaying, isCdPreviewTrack, usePlayback, outputVolume, fadeMs, desktopOutputDeviceId, desktopBufferFrames, queue, preloadedNextTrack, activeSourceKey, activeSourceKeyRef, isRadioSource, getArtworkSrc: () => artworkSrc, setShowArtworkPreview, setDuration, setCurrentTime, setIsPlaying, setStatus, onPlaybackTime, onTrackEnded, onSelectTrack, trackNeedsWebPlayback, trackAudioSourceUrl, applyPendingResumeToAudio, cancelFade, cancelPlaybackFade, cancelCrossfade, smoothFadeProgress, suppressDesktopEarlyEndWarning, currentPlaybackDspSettings, desktopDspSettingsForTrack, fadeWebSourceGain, setWebSourceGain, cancelWebSourceGainAutomation, ensureWebAudioGraph, connectMediaElementSource, updateDspSettings, resumeWebAudioGraph, rampWebGainNode, smoothFadeCurve, holdAudioParam,
   });
   const {
     pauseWebAudioForPreviewSwitch, clearArtworkPreviewTimer, scheduleArtworkPreview, hideArtworkPreview, cdStreamIsSettling, fadeVolume, fadePlaybackVolume, startPlaybackTrack, startPlaybackCrossfade, resumePlaybackWithFade, createWebCrossfadeElement, webCrossfadeSourceFor, startCrossfade, playWithFade, pauseWithFade,
@@ -278,6 +289,7 @@ export function PlayerBar({
 
     if (!hasPlayableSource || !isPlaying || trackSwitchFadeMs <= 0) {
       if (usePlayback) {
+        suppressDesktopEarlyEndWarning();
         void desktopStop().finally(commitTrackRequest);
         return;
       }
@@ -289,6 +301,7 @@ export function PlayerBar({
       if (trackNeedsWebPlayback(externalTrackRequest.track)) {
         void recordCurrentTrackExit();
         fadePlaybackVolume(0, trackSwitchFadeMs, () => {
+          suppressDesktopEarlyEndWarning();
           void desktopStop().finally(() => commitTrackRequest({ suppressExitRecord: true }));
         });
         return;
@@ -301,12 +314,14 @@ export function PlayerBar({
             return;
           }
           fadePlaybackVolume(0, trackSwitchFadeMs, () => {
+            suppressDesktopEarlyEndWarning();
             void desktopStop().finally(() => commitTrackRequest({ suppressExitRecord: true }));
           });
         });
         return;
       }
       fadePlaybackVolume(0, trackSwitchFadeMs, () => {
+        suppressDesktopEarlyEndWarning();
         void desktopStop().finally(commitTrackRequest);
       });
       return;
@@ -495,13 +510,28 @@ export function PlayerBar({
   }
 
   function handleProgressKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
-    if (event.key !== " " && event.code !== "Space") {
+    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      event.preventDefault();
+      seekTo(currentTime + (event.key === "ArrowRight" ? PLAYBACK_KEYBOARD_SEEK_STEP_SECONDS : -PLAYBACK_KEYBOARD_SEEK_STEP_SECONDS));
       return;
     }
-    event.preventDefault();
-    if (hasPlayableSource) {
-      void togglePlayback();
+
+    if (event.key === " " || event.code === "Space") {
+      event.preventDefault();
+      if (hasPlayableSource) {
+        void togglePlayback();
+      }
     }
+  }
+
+  function clampSeekTime(nextTime: number) {
+    const finiteTime = Number.isFinite(nextTime) ? nextTime : 0;
+    if (effectiveDuration <= 0) {
+      return Math.max(0, finiteTime);
+    }
+    const endGuard = Math.min(PLAYBACK_SEEK_END_GUARD_SECONDS, effectiveDuration / 2);
+    const maxSeekTime = Math.max(0, effectiveDuration - endGuard);
+    return Math.min(Math.max(0, finiteTime), maxSeekTime);
   }
 
   function seekTo(nextTime: number) {
@@ -509,12 +539,17 @@ export function PlayerBar({
       return;
     }
     const audio = audioRef.current;
-    const boundedTime =
-      effectiveDuration > 0 ? Math.min(Math.max(0, nextTime), effectiveDuration) : Math.max(0, nextTime);
+    const boundedTime = clampSeekTime(nextTime);
     setCurrentTime(boundedTime);
     onPlaybackTime(boundedTime);
     pendingResumePositionRef.current = null;
     if (usePlayback) {
+      const restartEndedTrack = currentTrack && desktopEndedTrackIdRef.current === currentTrack.id;
+      desktopEndedTrackIdRef.current = null;
+      if (restartEndedTrack) {
+        void startPlaybackTrack(currentTrack, boundedTime);
+        return;
+      }
       void desktopSeek(boundedTime).catch((error) => {
         setStatus(error instanceof Error ? error.message : "Rust seek failed.");
       });
@@ -550,6 +585,10 @@ export function PlayerBar({
 
   function handlePreviousTrack() {
     if (cdSkipIsSettling || !canPreviousAction) {
+      return;
+    }
+    if (usePlayback && currentTrack && desktopEndedTrackIdRef.current === currentTrack.id) {
+      seekTo(0);
       return;
     }
     if (currentTime > 4 || !hasPrevious) {
@@ -646,6 +685,7 @@ export function PlayerBar({
       if (usePlayback) {
         if (trackNeedsWebPlayback(nextTrack)) {
           fadePlaybackVolume(0, trackSwitchFadeMs, () => {
+            suppressDesktopEarlyEndWarning();
             void desktopStop().finally(() => {
               onSelectTrack(nextTrack, queue, { suppressExitRecord: true });
             });
@@ -657,6 +697,7 @@ export function PlayerBar({
           return;
         }
         fadePlaybackVolume(0, trackSwitchFadeMs, () => {
+          suppressDesktopEarlyEndWarning();
           void desktopStop().finally(() => {
             onSelectTrack(nextTrack, queue, { suppressExitRecord: true });
           });
@@ -773,13 +814,13 @@ export function PlayerBar({
     if (crossfadeTrackRef.current === currentTrack.id) {
       return;
     }
-    const endedAt = audioRef.current?.currentTime ?? currentTime;
+    const endedAt = usePlayback ? currentTime : audioRef.current?.currentTime ?? currentTime;
     if (isCdPreviewTrack && effectiveDuration > 15 && endedAt < effectiveDuration - 8) {
       setIsPlaying(false);
       setStatus("CD playback stopped early. Use the play button in the player bar to retry, or refresh the CD page if the disc changed.");
       return;
     }
-    if (!isCdPreviewTrack && playbackEndedEarly(endedAt, effectiveDuration)) {
+    if (!usePlayback && !isCdPreviewTrack && playbackEndedEarly(endedAt, effectiveDuration)) {
       setIsPlaying(false);
       setStatus("Track appears corrupted or truncated; playback stopped before the saved duration.");
       return;
@@ -860,13 +901,13 @@ export function PlayerBar({
         if (
           currentTrack &&
           status.ended &&
+          !status.is_paused &&
+          status.current_path === currentTrack.path &&
           desktopLoadedTrackIdRef.current === currentTrack.id &&
           desktopEndedTrackIdRef.current !== currentTrack.id
         ) {
-          if (playbackEndedEarly(status.position_seconds, desktopDuration)) {
-            desktopEndedTrackIdRef.current = currentTrack.id;
+          if (window.performance.now() < desktopEarlyEndSuppressUntilRef.current) {
             setIsPlaying(false);
-            setStatus("Track appears corrupted or truncated; Rust playback stopped before the saved duration.");
             return;
           }
           desktopEndedTrackIdRef.current = currentTrack.id;
@@ -971,7 +1012,7 @@ export function PlayerBar({
   });
 
   const playerBarViewModel = {
-    miniPlayer, artworkSrc: displayedArtworkSrc, playerTitle, hideArtworkPreview, scheduleArtworkPreview, setArtworkFailed, isRadioSource, isPreviewTrack, isLibraryTrack, currentTrack, currentRadioStation, radioSubtitle, hasCurrentArtist, currentArtistLabel, onOpenCurrentArtist, onOpenCurrentArtistInfo, hasCurrentAlbum, currentAlbumLabel, onOpenCurrentAlbum, onOpenCurrentTrack, cdSkipIsSettling, hasPrevious, canPreviousAction, handlePreviousTrack, playRelative, isPlaying, hasPlayableSource, togglePlayback, hasNext, usePlayback, webAudioSourceUrl, webAudioKey, audioRef, isCdPreviewTrack, syncDuration, handleTimeUpdate, setIsPlaying, suppressWebPauseUntilRef, maybeClearPendingResume, handleEnded, activeSourceKeyRef, activeSourceKey, suppressWebPlaybackErrorsUntilRef, setStatus, preloadedNextTrack, canPreloadNextTrack, nextAudioRef, trackAudioSourceUrl, effectiveDuration, currentTime, progressPercent, progressFill, handleSeek, handleProgressKeyDown, playbackMode, cycleRepeatMode, onOpenLyricsView, onOpenQueueView, muted, volume, handleVolumeWheel, toggleMuted, handleVolumeChange, volumePercentDraft, commitVolumePercent, setVolumePercentDraft, handleVolumePercentChange, handleVolumePercentKeyDown, onRating, showArtworkPreview,
+    miniPlayer, artworkSrc: displayedArtworkSrc, playerTitle, hideArtworkPreview, scheduleArtworkPreview, setArtworkFailed, isRadioSource, isPreviewTrack, isLibraryTrack, currentTrack, currentRadioStation, radioSubtitle, hasCurrentArtist, currentArtistLabel, onOpenCurrentArtist, onOpenCurrentArtistInfo, hasCurrentAlbum, currentAlbumLabel, onOpenCurrentAlbum, onOpenCurrentTrack, cdSkipIsSettling, hasPrevious, canPreviousAction, handlePreviousTrack, playRelative, isPlaying, hasPlayableSource, togglePlayback, hasNext, usePlayback, webAudioSourceUrl, webAudioKey, audioRef, isCdPreviewTrack, syncDuration, handleTimeUpdate, setIsPlaying, suppressWebPauseUntilRef, maybeClearPendingResume, handleEnded, activeSourceKeyRef, activeSourceKey, suppressWebPlaybackErrorsUntilRef, setStatus, preloadedNextTrack, canPreloadNextTrack, nextAudioRef, trackAudioSourceUrl, effectiveDuration, currentTime, progressPercent, progressFill, handleSeek, handleProgressKeyDown, playbackSeekStepSeconds: PLAYBACK_KEYBOARD_SEEK_STEP_SECONDS, playbackMode, cycleRepeatMode, onOpenLyricsView, onOpenQueueView, muted, volume, handleVolumeWheel, toggleMuted, handleVolumeChange, volumePercentDraft, commitVolumePercent, setVolumePercentDraft, handleVolumePercentChange, handleVolumePercentKeyDown, onRating, showArtworkPreview,
   };
 
   return <PlayerBarView model={playerBarViewModel} />;

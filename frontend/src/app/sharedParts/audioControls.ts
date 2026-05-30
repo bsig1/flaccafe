@@ -273,7 +273,13 @@ export function useRangeWheelControls() {
 
       const min = Number(input.min || 0);
       const max = Number(input.max || 100);
-      const step = input.step && input.step !== "any" ? Number(input.step) : 1;
+      const wheelStep = input.dataset.wheelStep ? Number(input.dataset.wheelStep) : Number.NaN;
+      const step =
+        Number.isFinite(wheelStep) && wheelStep > 0
+          ? wheelStep
+          : input.step && input.step !== "any"
+            ? Number(input.step)
+            : 1;
       const current = Number(input.value);
       if (!Number.isFinite(min) || !Number.isFinite(max) || !Number.isFinite(step) || !Number.isFinite(current)) {
         return;

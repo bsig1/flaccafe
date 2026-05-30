@@ -56,6 +56,7 @@ struct PlaybackInner {
 struct PlaybackHandle {
     player: Arc<Player>,
     gain: DesktopGainControl,
+    sample_rate: u32,
 }
 
 #[derive(Clone)]
@@ -209,8 +210,9 @@ const VISUALIZER_ANALYSIS_SAMPLES: usize = 2048;
 const VISUALIZER_BINS: usize = 48;
 const VISUALIZER_WAVEFORM_POINTS: usize = 96;
 const VISUALIZER_STALE_MS: u64 = 750;
-const FADE_STOP_PAD_MS: u64 = 80;
-const CLICKLESS_START_RAMP_MS: u64 = 6;
+const FADE_STOP_PAD_MS: u64 = 200;
+const CLICKLESS_START_RAMP_MS: u64 = 18;
+const CLICKLESS_SEEK_RAMP_MS: u64 = 28;
 
 static NEXT_DIAGNOSTIC_ID: AtomicU64 = AtomicU64::new(1);
 

@@ -214,43 +214,16 @@ pub fn recycle_paths(paths: Vec<String>) -> RecycleResponse {
 
 #[cfg(windows)]
 fn recycle_file(path: &Path) -> Result<(), String> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows::core::PCWSTR;
-    use windows::Win32::UI::Shell::{
-        SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT,
-        FOF_WANTNUKEWARNING, FO_DELETE, SHFILEOPSTRUCTW,
-    };
-
-    let resolved = path
-        .canonicalize()
-        .map_err(|error| format!("Could not resolve path: {error}"))?;
-    let mut from: Vec<u16> = resolved.as_os_str().encode_wide().collect();
-    from.push(0);
-    from.push(0);
-
-    let flags =
-        FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT | FOF_WANTNUKEWARNING;
-    let mut operation = SHFILEOPSTRUCTW {
-        hwnd: Default::default(),
-        wFunc: FO_DELETE,
-        pFrom: PCWSTR(from.as_ptr()),
-        pTo: PCWSTR::null(),
-        fFlags: flags.0 as u16,
-        fAnyOperationsAborted: Default::default(),
-        hNameMappings: Default::default(),
-        lpszProgressTitle: PCWSTR::null(),
-    };
-
-    let result = unsafe { SHFileOperationW(&mut operation) };
-    if result != 0 {
-        return Err(format!(
-            "Could not move file to the Recycle Bin (shell error {result})"
-        ));
-    }
-    if operation.fAnyOperationsAborted.as_bool() {
-        return Err("Recycle Bin operation was canceled".to_string());
-    }
-    if resolved.exists() {
+    trash::delete(path).map_err(|error| match error {
+        trash::Error::Os { code, description } => {
+            format!("Could not move file to the Recycle Bin (Windows error {code}: {description})")
+        }
+        trash::Error::Unknown { description } => {
+            format!("Could not move file to the Recycle Bin ({description})")
+        }
+        other => format!("Could not move file to the Recycle Bin ({other})"),
+    })?;
+    if path.exists() {
         return Err("Recycle Bin operation completed, but the file is still present".to_string());
     }
     Ok(())

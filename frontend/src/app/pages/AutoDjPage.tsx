@@ -12,7 +12,6 @@ import {
   SlidersHorizontal,
   Trash2,
   Volume2,
-  Wand2,
   X,
 } from "lucide-react";
 import type {

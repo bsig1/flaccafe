@@ -33,8 +33,11 @@ pub fn play_file(
         );
         return Err(message);
     }
-    let (decoder, duration_seconds) =
+    let (mut decoder, duration_seconds) =
         build_playback_decoder(&path_buf, prepared_audio, &diagnostics)?;
+    let start_seconds = clamp_seek_option(start_seconds, duration_seconds);
+    decoder.seek_to(start_seconds, &diagnostics, Some(path.clone()))?;
+    let sample_rate = decoder.sample_rate();
 
     let mut inner = state
         .inner
@@ -63,15 +66,13 @@ pub fn play_file(
         gain.clone(),
         inner.visualizer.clone(),
     );
-    seek_player(
-        &player,
-        start_seconds,
-        &inner.diagnostics,
-        Some(path.clone()),
-    )?;
     player.play();
 
-    inner.player = Some(PlaybackHandle { player, gain });
+    inner.player = Some(PlaybackHandle {
+        player,
+        gain,
+        sample_rate,
+    });
     inner.current_path = Some(path);
     inner.duration_seconds = duration_seconds;
     inner.volume = bounded_volume;
@@ -114,8 +115,11 @@ pub fn crossfade_to_file(
         );
         return Err(message);
     }
-    let (decoder, duration_seconds) =
+    let (mut decoder, duration_seconds) =
         build_playback_decoder(&path_buf, prepared_audio, &diagnostics)?;
+    let start_seconds = clamp_seek_option(start_seconds, duration_seconds);
+    decoder.seek_to(start_seconds, &diagnostics, Some(path.clone()))?;
+    let new_sample_rate = decoder.sample_rate();
 
     let mut inner = state
         .inner
@@ -138,7 +142,6 @@ pub fn crossfade_to_file(
     new_player.set_volume(1.0);
     let bounded_duration = duration_ms.min(20_000);
     let fade_duration = Duration::from_millis(bounded_duration);
-    let sample_rate = inner.sample_rate.unwrap_or(48_000);
     let new_gain = DesktopGainControl::new(if bounded_duration > 0 {
         0.0
     } else {
@@ -153,17 +156,12 @@ pub fn crossfade_to_file(
         new_gain.clone(),
         inner.visualizer.clone(),
     );
-    seek_player(
-        &new_player,
-        start_seconds,
-        &inner.diagnostics,
-        Some(path.clone()),
-    )?;
     new_player.play();
 
     let new_handle = PlaybackHandle {
         player: new_player.clone(),
         gain: new_gain.clone(),
+        sample_rate: new_sample_rate,
     };
     let old_handle = inner.player.replace(new_handle);
     inner.fading_player = old_handle.clone();
@@ -173,8 +171,10 @@ pub fn crossfade_to_file(
     let status = inner.status(None);
 
     if let Some(old_handle) = old_handle {
-        old_handle.gain.fade_to(0.0, fade_duration, sample_rate);
-        new_gain.fade_to(target_volume, fade_duration, sample_rate);
+        old_handle
+            .gain
+            .fade_to(0.0, fade_duration, old_handle.sample_rate);
+        new_gain.fade_to(target_volume, fade_duration, new_sample_rate);
         spawn_stop_after_fade(old_handle.player, bounded_duration);
     } else {
         new_gain.set_immediate(target_volume);
@@ -222,13 +222,7 @@ pub fn stop(state: State<'_, PlaybackState>) -> Result<PlaybackStatus, String> {
 
 #[tauri::command]
 pub fn seek(state: State<'_, PlaybackState>, seconds: f64) -> Result<PlaybackStatus, String> {
-    let bounded_seconds = if seconds.is_finite() && seconds > 0.0 {
-        seconds
-    } else {
-        0.0
-    };
-
-    let (path, diagnostics, was_paused) = {
+    let (path, diagnostics, was_paused, bounded_seconds) = {
         let inner = state
             .inner
             .lock()
@@ -237,17 +231,25 @@ pub fn seek(state: State<'_, PlaybackState>, seconds: f64) -> Result<PlaybackSta
             .player
             .as_ref()
             .ok_or_else(|| "No Rust audio track is loaded".to_string())?;
+        let bounded_seconds = clamp_seek_seconds(seconds, inner.duration_seconds);
+        player.gain.set_immediate(0.0);
         match player
             .player
             .try_seek(Duration::from_secs_f64(bounded_seconds))
         {
             Ok(()) => {
+                player.gain.fade_to(
+                    inner.volume,
+                    Duration::from_millis(CLICKLESS_SEEK_RAMP_MS),
+                    player.sample_rate,
+                );
                 if let Ok(mut visualizer) = inner.visualizer.lock() {
                     visualizer.reset();
                 }
                 return Ok(inner.status(None));
             }
             Err(error) => {
+                player.gain.set_immediate(inner.volume);
                 let path = inner
                     .current_path
                     .clone()
@@ -264,7 +266,7 @@ pub fn seek(state: State<'_, PlaybackState>, seconds: f64) -> Result<PlaybackSta
                         ..DesktopDiagnosticContext::default()
                     },
                 );
-                (path, diagnostics, player.player.is_paused())
+                (path, diagnostics, player.player.is_paused(), bounded_seconds)
             }
         }
     };
@@ -285,7 +287,15 @@ pub fn seek(state: State<'_, PlaybackState>, seconds: f64) -> Result<PlaybackSta
         );
         return Err(message);
     }
-    let (decoder, duration_seconds) = build_seek_fallback_decoder(&path_buf, &diagnostics)?;
+    let (mut decoder, duration_seconds) = build_seek_fallback_decoder(&path_buf, &diagnostics)?;
+    let bounded_seconds = clamp_seek_seconds(bounded_seconds, duration_seconds);
+    let sample_rate = decoder.sample_rate().get();
+    seek_source(
+        &mut decoder,
+        clamp_seek_option(Some(bounded_seconds), duration_seconds),
+        &diagnostics,
+        Some(path.clone()),
+    )?;
 
     let mut inner = state
         .inner
@@ -308,7 +318,7 @@ pub fn seek(state: State<'_, PlaybackState>, seconds: f64) -> Result<PlaybackSta
         .clone();
     let player = Arc::new(Player::connect_new(&mixer));
     player.set_volume(1.0);
-    let gain = DesktopGainControl::new(volume);
+    let gain = DesktopGainControl::new(0.0);
     append_dsp_source(
         &player,
         decoder,
@@ -316,19 +326,22 @@ pub fn seek(state: State<'_, PlaybackState>, seconds: f64) -> Result<PlaybackSta
         gain.clone(),
         inner.visualizer.clone(),
     );
-    seek_player(
-        &player,
-        Some(bounded_seconds),
-        &inner.diagnostics,
-        Some(path.clone()),
-    )?;
     if was_paused {
         player.pause();
     } else {
         player.play();
     }
+    gain.fade_to(
+        volume,
+        Duration::from_millis(CLICKLESS_SEEK_RAMP_MS),
+        sample_rate,
+    );
 
-    inner.player = Some(PlaybackHandle { player, gain });
+    inner.player = Some(PlaybackHandle {
+        player,
+        gain,
+        sample_rate,
+    });
     inner.current_path = Some(path);
     inner.duration_seconds = duration_seconds;
     inner.volume = volume;
@@ -362,12 +375,11 @@ pub fn fade_volume(
         .lock()
         .map_err(|_| "Rust playback lock poisoned".to_string())?;
     let bounded = clamp_volume(volume);
-    let sample_rate = inner.sample_rate.unwrap_or(48_000);
     if let Some(handle) = &inner.player {
         handle.gain.fade_to(
             bounded,
             Duration::from_millis(duration_ms.min(20_000)),
-            sample_rate,
+            handle.sample_rate,
         );
     }
     inner.volume = bounded;
@@ -687,6 +699,16 @@ mod tests {
         assert_eq!(smooth_fade_progress(2.0), 1.0);
         assert!(smooth_fade_progress(0.25) < 0.25);
         assert!(smooth_fade_progress(0.75) > 0.75);
+    }
+
+    #[test]
+    fn seek_clamp_keeps_requests_before_end_of_track() {
+        assert_eq!(clamp_seek_seconds(f64::NAN, Some(180.0)), 0.0);
+        assert_eq!(clamp_seek_seconds(-4.0, Some(180.0)), 0.0);
+        assert_eq!(clamp_seek_seconds(30.0, Some(180.0)), 30.0);
+        assert_eq!(clamp_seek_seconds(180.0, Some(180.0)), 179.75);
+        assert_eq!(clamp_seek_seconds(999.0, Some(180.0)), 179.75);
+        assert_eq!(clamp_seek_seconds(1.0, Some(0.4)), 0.2);
     }
 
     #[test]

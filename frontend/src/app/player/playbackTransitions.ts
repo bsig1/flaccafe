@@ -24,7 +24,7 @@ export function webCrossfadeDurationMs(fadeMs: number) {
 export function createPlaybackTransitions(ctx: any) {
   const {
     audioRef, nextAudioRef, currentSourceGainRef, nextSourceGainRef, crossfadeSourceRef, crossfadeTrackRef, handoffRef, handoffSourceRef, handoffSourceGainRef, pendingResumePositionRef, desktopLoadedTrackIdRef, desktopEndedTrackIdRef, lastPlaybackStreamErrorRef, suppressWebPlaybackErrorsUntilRef, suppressWebPauseUntilRef, artworkPreviewTimerRef, fadeTimerRef, dspInputRef, currentSourceRef, currentSourceElementRef, nextSourceRef, nextSourceElementRef, desktopFadeTimerRef, crossfadeTimerRef,
-    currentTrack, currentTime, isPlaying, isCdPreviewTrack, usePlayback, outputVolume, fadeMs, desktopOutputDeviceId, desktopBufferFrames, queue, preloadedNextTrack, activeSourceKey, activeSourceKeyRef, isRadioSource, getArtworkSrc, setShowArtworkPreview, setDuration, setCurrentTime, setIsPlaying, setStatus, onPlaybackTime, onTrackEnded, onSelectTrack, trackNeedsWebPlayback, trackAudioSourceUrl, applyPendingResumeToAudio, cancelFade, cancelPlaybackFade, cancelCrossfade, smoothFadeProgress, currentPlaybackDspSettings, desktopDspSettingsForTrack, fadeWebSourceGain, setWebSourceGain, cancelWebSourceGainAutomation, ensureWebAudioGraph, connectMediaElementSource, updateDspSettings, resumeWebAudioGraph, rampWebGainNode, smoothFadeCurve, holdAudioParam,
+    currentTrack, currentTime, isPlaying, isCdPreviewTrack, usePlayback, outputVolume, fadeMs, desktopOutputDeviceId, desktopBufferFrames, queue, preloadedNextTrack, activeSourceKey, activeSourceKeyRef, isRadioSource, getArtworkSrc, setShowArtworkPreview, setDuration, setCurrentTime, setIsPlaying, setStatus, onPlaybackTime, onTrackEnded, onSelectTrack, trackNeedsWebPlayback, trackAudioSourceUrl, applyPendingResumeToAudio, cancelFade, cancelPlaybackFade, cancelCrossfade, smoothFadeProgress, suppressDesktopEarlyEndWarning, currentPlaybackDspSettings, desktopDspSettingsForTrack, fadeWebSourceGain, setWebSourceGain, cancelWebSourceGainAutomation, ensureWebAudioGraph, connectMediaElementSource, updateDspSettings, resumeWebAudioGraph, rampWebGainNode, smoothFadeCurve, holdAudioParam,
   } = ctx;
 
   function pauseWebAudioForPreviewSwitch(element: HTMLAudioElement | null) {
@@ -106,6 +106,9 @@ export function createPlaybackTransitions(ctx: any) {
 
   function fadePlaybackVolume(targetVolume: number, durationMs: number, afterFade?: () => void, startVolumeOverride?: number) {
     cancelPlaybackFade();
+    if (targetVolume <= 0) {
+      suppressDesktopEarlyEndWarning?.();
+    }
     const clampedTarget = clampNumber(targetVolume, 0, 1.5);
     if (durationMs <= 0) {
       void desktopSetVolume(clampedTarget).finally(() => afterFade?.());
@@ -203,8 +206,9 @@ export function createPlaybackTransitions(ctx: any) {
     if (!currentTrack) {
       return;
     }
-    if (desktopLoadedTrackIdRef.current !== currentTrack.id || desktopEndedTrackIdRef.current === currentTrack.id) {
-      await startPlaybackTrack(currentTrack, currentTime);
+    const restartingEndedTrack = desktopEndedTrackIdRef.current === currentTrack.id;
+    if (desktopLoadedTrackIdRef.current !== currentTrack.id || restartingEndedTrack) {
+      await startPlaybackTrack(currentTrack, restartingEndedTrack ? 0 : currentTime);
       return;
     }
     try {

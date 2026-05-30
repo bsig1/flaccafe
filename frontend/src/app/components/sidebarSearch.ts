@@ -19,12 +19,12 @@ import {
   Palette,
   Podcast,
   Radio,
+  RadioTower,
   Send,
   Settings,
   SlidersHorizontal,
   Tags,
   UserRound,
-  Wand2,
   Wrench,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -116,7 +116,7 @@ const pageTargets: SidebarSearchTarget[] = [
     label: "AutoDJ",
     description: "Generate queues, recommendation profiles, and avoid rules",
     keywords: ["recommendations", "queue", "profiles", "avoid"],
-    icon: Wand2,
+    icon: RadioTower,
   },
   {
     key: "page-audiobooks",

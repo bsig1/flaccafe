@@ -12,12 +12,12 @@ import {
   Plus,
   Podcast,
   Radio,
+  RadioTower,
   RotateCcw,
   Send,
   Settings,
   Trash2,
   UserRound,
-  Wand2,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { ChangeEvent, MouseEvent as ReactMouseEvent } from "react";
@@ -86,7 +86,7 @@ const defaultSidebarSections: SidebarSectionDefinition[] = [
       { id: "library", label: "Library", icon: Library },
       { id: "nowPlaying", label: "Now Playing", icon: FileText },
       { id: "artist", label: "Artist", icon: UserRound },
-      { id: "autodj", label: "AutoDJ", icon: Wand2 },
+      { id: "autodj", label: "AutoDJ", icon: RadioTower },
     ],
   },
   {

@@ -125,6 +125,8 @@ export function NowPlayingPage({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const lyricsScrollRef = useRef<HTMLDivElement | null>(null);
   const activeLyricRef = useRef<HTMLElement | null>(null);
+  const suppressLyricsAutoScrollRef = useRef(false);
+  const suppressLyricsAutoScrollFrameRef = useRef<number | null>(null);
   const builderLineIdRef = useRef(0);
   const queueScrollRef = useRef<HTMLDivElement | null>(null);
   const queueScrollFrameRef = useRef<number | null>(null);
@@ -140,20 +142,46 @@ export function NowPlayingPage({
   useEffect(() => {
     resetLyricsEditorToSource(lyrics?.lyrics ?? "", Boolean(lyrics?.is_synced), "text");
     setIsEditingLyrics(false);
-  }, [currentTrack?.id, lyrics?.lyrics, lyrics?.is_synced]);
+  }, [currentTrack?.id]);
+
+  useEffect(() => {
+    if (isEditingLyrics) {
+      return;
+    }
+    resetLyricsEditorToSource(lyrics?.lyrics ?? "", Boolean(lyrics?.is_synced), "text");
+  }, [isEditingLyrics, lyrics?.lyrics, lyrics?.is_synced, lyrics?.source]);
+
+  useEffect(() => {
+    suppressLyricsAutoScrollRef.current = true;
+    if (suppressLyricsAutoScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(suppressLyricsAutoScrollFrameRef.current);
+    }
+    suppressLyricsAutoScrollFrameRef.current = window.requestAnimationFrame(() => {
+      suppressLyricsAutoScrollFrameRef.current = window.requestAnimationFrame(() => {
+        suppressLyricsAutoScrollFrameRef.current = null;
+        suppressLyricsAutoScrollRef.current = false;
+      });
+    });
+    return () => {
+      if (suppressLyricsAutoScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(suppressLyricsAutoScrollFrameRef.current);
+        suppressLyricsAutoScrollFrameRef.current = null;
+      }
+    };
+  }, [currentTrack?.id, lyrics?.lyrics, lyrics?.is_synced, lyrics?.source]);
 
   useEffect(() => {
     if (!showLyricsLookupProgress) {
       setLyricsLookupProgress(0);
       return undefined;
     }
-    setLyricsLookupProgress((current) => (current > 0 ? current : 12));
+    setLyricsLookupProgress((current) => (current > 0 ? current : 8));
     const timer = window.setInterval(() => {
       setLyricsLookupProgress((current) => {
-        const step = current < 45 ? 7 : current < 75 ? 4 : 1.5;
-        return Math.min(94, current + step);
+        const step = current < 45 ? 5 : current < 75 ? 3 : 1;
+        return Math.min(92, current + step);
       });
-    }, 180);
+    }, 220);
     return () => window.clearInterval(timer);
   }, [currentTrack?.id, showLyricsLookupProgress]);
 
@@ -409,11 +437,18 @@ export function NowPlayingPage({
   }
 
   useEffect(() => {
-    if (!uiPreferences.nowPlayingAutoScrollLyrics || !showLyrics || isEditingLyrics || activeLyricIndex < 0) {
+    if (
+      !uiPreferences.nowPlayingAutoScrollLyrics ||
+      !showLyrics ||
+      isEditingLyrics ||
+      showLyricsLookupProgress ||
+      suppressLyricsAutoScrollRef.current ||
+      activeLyricIndex < 0
+    ) {
       return;
     }
     activeLyricRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
-  }, [activeLyricIndex, isEditingLyrics, showLyrics, uiPreferences.nowPlayingAutoScrollLyrics]);
+  }, [activeLyricIndex, isEditingLyrics, showLyrics, showLyricsLookupProgress, uiPreferences.nowPlayingAutoScrollLyrics]);
 
   useEffect(() => {
     function closeQueueContextMenu() {
@@ -487,6 +522,7 @@ export function NowPlayingPage({
     if (!currentTrack) {
       return;
     }
+    const wasEditingLyrics = isEditingLyrics;
     setLyricsBusy(true);
     setLyricsLookupBusy(true);
     try {
@@ -494,8 +530,8 @@ export function NowPlayingPage({
       setLyricsLookupProgress(100);
       const fetchedText = fetched.lyrics ?? "";
       const fetchedSynced = fetched.is_synced || lyricsTextLooksSynced(fetchedText);
-      resetLyricsEditorToSource(fetchedText, fetchedSynced, fetchedSynced ? "sync" : "text");
-      setIsEditingLyrics(true);
+      resetLyricsEditorToSource(fetchedText, fetchedSynced, wasEditingLyrics && fetchedSynced ? "sync" : "text");
+      setIsEditingLyrics(wasEditingLyrics);
     } finally {
       setLyricsBusy(false);
       setLyricsLookupBusy(false);

@@ -234,6 +234,27 @@ enum DesktopPlaybackDecoder {
 }
 
 impl DesktopPlaybackDecoder {
+    fn sample_rate(&self) -> u32 {
+        match self {
+            DesktopPlaybackDecoder::File(decoder) => decoder.sample_rate().get(),
+            DesktopPlaybackDecoder::Prepared(decoder) => decoder.sample_rate().get(),
+        }
+    }
+
+    fn seek_to(
+        &mut self,
+        seconds: Option<f64>,
+        diagnostics: &Arc<Mutex<Vec<PlaybackDiagnostic>>>,
+        path: Option<String>,
+    ) -> Result<(), String> {
+        match self {
+            DesktopPlaybackDecoder::File(decoder) => seek_source(decoder, seconds, diagnostics, path),
+            DesktopPlaybackDecoder::Prepared(decoder) => {
+                seek_source(decoder, seconds, diagnostics, path)
+            }
+        }
+    }
+
     fn append_to(
         self,
         player: &Player,
@@ -360,15 +381,48 @@ fn build_prepared_decoder(
     })
 }
 
-fn seek_player(
-    player: &Player,
+const SEEK_END_GUARD_SECONDS: f64 = 0.25;
+
+fn clamp_seek_seconds(seconds: f64, duration_seconds: Option<f64>) -> f64 {
+    let mut bounded = if seconds.is_finite() && seconds > 0.0 {
+        seconds
+    } else {
+        0.0
+    };
+    if let Some(duration) = duration_seconds {
+        if duration.is_finite() && duration > 0.0 {
+            let end_guard = SEEK_END_GUARD_SECONDS.min(duration / 2.0);
+            let max_seek = (duration - end_guard).max(0.0);
+            if bounded > max_seek {
+                bounded = max_seek;
+            }
+        }
+    }
+    bounded
+}
+
+fn clamp_seek_option(seconds: Option<f64>, duration_seconds: Option<f64>) -> Option<f64> {
+    let seconds = seconds?;
+    let bounded = clamp_seek_seconds(seconds, duration_seconds);
+    if bounded > 0.0 {
+        Some(bounded)
+    } else {
+        None
+    }
+}
+
+fn seek_source<S>(
+    source: &mut S,
     seconds: Option<f64>,
     diagnostics: &Arc<Mutex<Vec<PlaybackDiagnostic>>>,
     path: Option<String>,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    S: Source<Item = f32>,
+{
     if let Some(seconds) = seconds {
         if seconds.is_finite() && seconds > 0.0 {
-            player
+            source
                 .try_seek(Duration::from_secs_f64(seconds))
                 .map_err(|error| {
                     diagnostic_error(

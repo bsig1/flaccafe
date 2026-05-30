@@ -34,6 +34,8 @@ import {
 
 const MINI_PLAYER_WIDTH = 420;
 const MINI_PLAYER_HEIGHT = 118;
+const PLAYBACK_SCRUB_STEP_SECONDS = 0.01;
+const PLAYBACK_KEYBOARD_SEEK_STEP_SECONDS = 5;
 
 export function MiniPlayerWindow() {
   useRangeWheelControls();
@@ -48,6 +50,18 @@ export function MiniPlayerWindow() {
   const isPodcastTrack = Boolean(track?.genre?.toLowerCase().includes("podcast"));
   const trackArtistLabel = display(track?.artist, isPodcastTrack ? "Podcast" : "Unknown artist");
   const [artworkFailed, setArtworkFailed] = useState(false);
+
+  function clampSeekTime(seconds: number) {
+    const finiteSeconds = Number.isFinite(seconds) ? seconds : 0;
+    if (duration <= 0) {
+      return Math.max(0, finiteSeconds);
+    }
+    return Math.min(Math.max(0, finiteSeconds), duration);
+  }
+
+  function seekFromMiniPlayer(seconds: number) {
+    sendMiniPlayerCommand({ type: "seek", seconds: clampSeekTime(seconds) });
+  }
 
   useEffect(() => {
     if (!("BroadcastChannel" in window)) {
@@ -174,15 +188,21 @@ export function MiniPlayerWindow() {
             <input
               aria-label="Mini player position"
               className="player-progress"
+              data-wheel-step={PLAYBACK_KEYBOARD_SEEK_STEP_SECONDS}
               disabled={!track || duration <= 0}
               max={Math.max(duration, 0)}
               min={0}
-              step={1}
+              step={PLAYBACK_SCRUB_STEP_SECONDS}
               style={{ "--progress": `${progressPercent}%`, "--progress-fill": progressFill } as CSSProperties}
               type="range"
               value={duration > 0 ? Math.min(snapshot.currentTime, duration) : 0}
-              onChange={(event) => sendMiniPlayerCommand({ type: "seek", seconds: Number(event.target.value) })}
+              onChange={(event) => seekFromMiniPlayer(Number(event.target.value))}
               onKeyDown={(event) => {
+                if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+                  event.preventDefault();
+                  seekFromMiniPlayer(snapshot.currentTime + (event.key === "ArrowRight" ? PLAYBACK_KEYBOARD_SEEK_STEP_SECONDS : -PLAYBACK_KEYBOARD_SEEK_STEP_SECONDS));
+                  return;
+                }
                 if (event.key !== " " && event.code !== "Space") {
                   return;
                 }
