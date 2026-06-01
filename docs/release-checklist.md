@@ -1,6 +1,6 @@
 # FLAC Cafe Release Checklist
 
-Use this before publishing an MSI.
+Use this before publishing packaged builds.
 
 ## Build
 
@@ -12,6 +12,15 @@ Use this before publishing an MSI.
 - On a disposable profile, run `powershell -ExecutionPolicy Bypass -File scripts\ci_installer_roundtrip.ps1 -AllowAppDataCleanup`.
 - Confirm release notes were generated in `docs/release-notes/`.
 - Confirm GitHub Actions uploaded the MSI artifact for the release commit.
+
+## Linux Packages
+
+- Build Linux packages on a Linux host or CI runner, not from native Windows.
+- Run `npm run package:deb` for a Debian package.
+- Run `npm run package:appimage` for an AppImage.
+- Run `npm run package:linux` to build both package formats.
+- The Linux package script generates a clean Tauri overlay and audits built package contents so Windows-only MSI/WiX resources, `.exe` tools, `.dll` files, `.ico` icons, and Windows third-party notices do not leak into the Linux artifacts.
+- On Windows, run `npm.cmd run package:deb -- --dry-run` or `npm.cmd run package:appimage -- --dry-run` to verify the generated Linux package config without building.
 
 ## GitHub Release
 

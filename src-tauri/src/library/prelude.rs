@@ -71,7 +71,8 @@ pub use self::playlists::{
 };
 use self::playlists::{compact_playlist_positions, playlist_summary_by_id};
 use self::recommendations::{
-    autodj_settings, cosine_similarity, normalize_token, round4, similarity_adjustment,
+    autodj_settings, cosine_similarity, normalize_token, parse_embedding, round4,
+    similarity_adjustment,
 };
 use self::rows::{
     audiobook_bookmark_from_row, audiobook_chapter_from_row, audiobook_where_clause,
@@ -79,7 +80,8 @@ use self::rows::{
     radio_station_from_row, track_from_row, TRACK_COLUMNS,
 };
 use self::search::{
-    csv_ints, fuzzy_sql_parts, music_only_clause, sort_expression, track_where_clause,
+    article_sort_expression, csv_ints, fuzzy_sql_parts, music_only_clause, sort_expression,
+    track_where_clause,
 };
 pub(super) use self::storage::{
     app_storage_root, database_path, get_setting, local_app_data, open_database, repo_root,

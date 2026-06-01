@@ -1,11 +1,11 @@
 import {
-  useEffect,
-  useRef,
+useEffect,
+useRef,
 } from "react";
 
 import type {
-  NowPlayingVisualizerStyle,
-  VisualizerFrame,
+NowPlayingVisualizerStyle,
+VisualizerFrame,
 } from "../shared";
 
 function cssRgb(name: string, fallback: string) {

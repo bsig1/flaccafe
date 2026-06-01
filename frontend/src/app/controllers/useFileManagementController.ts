@@ -1,80 +1,43 @@
-import type { Dispatch, SetStateAction } from "react";
+import type { Dispatch,SetStateAction } from "react";
 import { useState } from "react";
 
 import {
-  applyDuplicateAction,
-  autoTagMusicBrainz,
-  cancelAudioConversion,
-  clearArtistCache,
-  clearLibraryCaches,
-  exportFileOrganizationReport,
-  exportMetadataCsv,
-  exportMetadataCsvImportReport,
-  fetchAudioConversionFfmpegInstall,
-  fetchAudioConversionProgress,
-  fetchAudioConversionSetup,
-  fetchBulkUndoBatches,
-  fetchBulkUndoLog,
-  fetchCdRipSetup,
-  fetchChromaprintSetup,
-  fetchDuplicateReview,
-  importMetadataCsv,
-  inferFilenameTags,
-  organizeFiles,
-  previewAudioConversion,
-  readReportFile,
-  replaceTagsWithRegex,
-  restoreBulkUndoBatch,
-  restoreBulkUndoEntry,
-  runAcousticFingerprintPass,
-  saveAudioConversionSetup,
-  saveChromaprintSetup,
-  startAudioConversion,
-  startAudioConversionFfmpegInstall,
-  syncDeviceFolder,
-  syncTrackMetadata,
+autoTagMusicBrainz,
+clearArtistCache,
+clearLibraryCaches,
+exportFileOrganizationReport,
+fetchChromaprintSetup,
+inferFilenameTags,
+organizeFiles,
+readReportFile,
+replaceTagsWithRegex,
+runAcousticFingerprintPass,
+saveChromaprintSetup,
+syncDeviceFolder,
+syncTrackMetadata
 } from "../../lib/api";
 import type {
-  AcousticFingerprintResponse,
-  ArtistInfoResponse,
-  AudioConversionFormat,
-  AudioConversionInstallProgress,
-  AudioConversionPreviewResponse,
-  AudioConversionProgress,
-  AudioConversionSetupResponse,
-  AutoTagResponse,
-  BulkUndoBatchEntry,
-  BulkUndoLogEntry,
-  BulkUndoRestoreResponse,
-  CacheClearTarget,
-  CdRipSetupResponse,
-  ChromaprintStatusResponse,
-  CsvMetadataExportResponse,
-  CsvMetadataImportReportResponse,
-  CsvMetadataImportResponse,
-  DuplicateActionRequest,
-  DuplicateActionResponse,
-  DuplicateReviewResponse,
-  DeviceSyncResponse,
-  FileOrganizationReportResponse,
-  FileOrganizationResponse,
-  FilenameTagInferenceResponse,
-  ReportFileResponse,
-  TagRegexReplaceResponse,
-  Track,
+AcousticFingerprintResponse,
+ArtistInfoResponse,
+AutoTagResponse,
+CacheClearTarget,
+ChromaprintStatusResponse,
+DeviceSyncResponse,
+FileOrganizationReportResponse,
+FileOrganizationResponse,
+FilenameTagInferenceResponse,
+ReportFileResponse,
+TagRegexReplaceResponse,
+Track
 } from "../../types/api";
-import {
-  display,
-  formatTime,
+import type {
+LibraryView,
+Page,
+UndoAction,
 } from "../shared";
 import { useAudioConversionController } from "./fileManagement/useAudioConversionController";
 import { useBulkUndoController } from "./fileManagement/useBulkUndoController";
 import { useMetadataImportController } from "./fileManagement/useMetadataImportController";
-import type {
-  LibraryView,
-  Page,
-  UndoAction,
-} from "../shared";
 
 type FileManagementControllerDeps = {
   findTracksByIds: (trackIds: number[]) => Track[];
@@ -107,7 +70,6 @@ export function useFileManagementController({
   setArtistInfo,
   setFileManagementFocusToolId,
   setFileManagementScopeIds,
-  setLibraryView,
   setStatus,
   undoAction,
 }: FileManagementControllerDeps) {
@@ -351,7 +313,7 @@ export function useFileManagementController({
     saveArtwork: boolean,
     writeToFile: boolean,
     trackIds?: number[] | null,
-    options?: { fingerprintOnly?: boolean },
+    options?: { fingerprintOnly?: boolean; acceptedPreviews?: AutoTagResponse["previews"] },
   ) {
     const sourceLabel = options?.fingerprintOnly ? "AcoustID fingerprint" : "MusicBrainz";
     const action = missingOnly ? `fill missing metadata from ${sourceLabel} matches` : `replace existing metadata with ${sourceLabel} matches`;
@@ -369,6 +331,9 @@ export function useFileManagementController({
         save_artwork: saveArtwork,
         fingerprint_only: options?.fingerprintOnly ?? false,
         write_to_file: writeToFile,
+        // Accepted previews are the fast path for Apply Accepted; Rust still
+        // recomputes the missing-only write set before touching SQLite/files.
+        accepted_previews: options?.acceptedPreviews ?? null,
         apply: true,
         limit: 200,
         candidate_limit: 3,

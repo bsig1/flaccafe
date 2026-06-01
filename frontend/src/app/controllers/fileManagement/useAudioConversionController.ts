@@ -1,24 +1,24 @@
-import type { Dispatch, SetStateAction } from "react";
+import type { Dispatch,SetStateAction } from "react";
 import { useState } from "react";
 
 import {
-  cancelAudioConversion,
-  fetchAudioConversionFfmpegInstall,
-  fetchAudioConversionProgress,
-  fetchAudioConversionSetup,
-  fetchCdRipSetup,
-  previewAudioConversion,
-  saveAudioConversionSetup,
-  startAudioConversion,
-  startAudioConversionFfmpegInstall,
+cancelAudioConversion,
+fetchAudioConversionFfmpegInstall,
+fetchAudioConversionProgress,
+fetchAudioConversionSetup,
+fetchCdRipSetup,
+previewAudioConversion,
+saveAudioConversionSetup,
+startAudioConversion,
+startAudioConversionFfmpegInstall,
 } from "../../../lib/api";
 import type {
-  AudioConversionFormat,
-  AudioConversionInstallProgress,
-  AudioConversionPreviewResponse,
-  AudioConversionProgress,
-  AudioConversionSetupResponse,
-  CdRipSetupResponse,
+AudioConversionFormat,
+AudioConversionInstallProgress,
+AudioConversionPreviewResponse,
+AudioConversionProgress,
+AudioConversionSetupResponse,
+CdRipSetupResponse,
 } from "../../../types/api";
 import { formatTime } from "../../shared";
 

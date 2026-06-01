@@ -146,6 +146,103 @@ pub fn update_settings(
 }
 
 #[tauri::command]
+pub fn remove_library_source(
+    _state: State<'_, DesktopLibraryState>,
+    path: String,
+) -> Result<DesktopLibrarySourceRemoveResponse, String> {
+    let trimmed_path = path.trim();
+    if trimmed_path.is_empty() {
+        return Err("Library source path is required".to_string());
+    }
+
+    let source_path = PathBuf::from(trimmed_path);
+    let source_key = normalized_path_key(&source_path.to_string_lossy());
+    let mut connection = open_database()?;
+    let mut library_paths = read_library_paths(&connection);
+    // Removing a source is a SQLite/cache cleanup only. Audio files stay on disk
+    // unless the user chooses an explicit destructive file operation elsewhere.
+    let track_rows = {
+        let mut statement = connection
+            .prepare("SELECT path, path_key FROM tracks")
+            .map_err(|error| format!("Could not prepare library source cleanup: {error}"))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|error| format!("Could not read tracks for library source cleanup: {error}"))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| format!("Could not decode tracks for library source cleanup: {error}"))?
+            .into_iter()
+            .filter(|(track_path, _)| path_under_source(track_path, &source_path))
+            .collect::<Vec<_>>()
+    };
+
+    library_paths.retain(|saved_path| normalized_path_key(saved_path) != source_key);
+    let library_paths_json =
+        serde_json::to_string(&library_paths).unwrap_or_else(|_| "[]".to_string());
+
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Could not start library source cleanup: {error}"))?;
+    let mut removed_metadata_cache = 0i64;
+    let mut removed_artwork_cache = 0i64;
+    let mut removed_tracks = 0i64;
+    for (track_path, path_key) in &track_rows {
+        removed_metadata_cache += transaction
+            .execute(
+                "DELETE FROM track_metadata_cache WHERE path_key = ?",
+                params![path_key],
+            )
+            .map_err(|error| format!("Could not clear metadata cache for removed source: {error}"))?
+            as i64;
+        let artwork_cache_key = format!("v2:{path_key}");
+        removed_artwork_cache += transaction
+            .execute(
+                "DELETE FROM artwork_cache WHERE path = ? OR path_key = ? OR path_key = ?",
+                params![track_path, path_key, artwork_cache_key],
+            )
+            .map_err(|error| format!("Could not clear artwork cache for removed source: {error}"))?
+            as i64;
+        removed_tracks += transaction
+            .execute("DELETE FROM tracks WHERE path_key = ?", params![path_key])
+            .map_err(|error| format!("Could not remove tracks for library source: {error}"))?
+            as i64;
+    }
+    set_setting(
+        &transaction,
+        "library_path",
+        library_paths.first().map(String::as_str),
+    )?;
+    set_setting(
+        &transaction,
+        "library_paths_json",
+        Some(library_paths_json.as_str()),
+    )?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Could not finish library source cleanup: {error}"))?;
+
+    if removed_tracks > 0 {
+        refresh_library_derived_data(&connection)?;
+    } else {
+        clear_library_query_cache(&connection);
+    }
+
+    Ok(DesktopLibrarySourceRemoveResponse {
+        path: trimmed_path.to_string(),
+        library_paths,
+        removed_tracks,
+        removed_metadata_cache,
+        removed_artwork_cache,
+        message: if removed_tracks > 0 {
+            format!("Removed {removed_tracks} track(s) from the library source.")
+        } else {
+            "Removed library source. No tracks were associated with it.".to_string()
+        },
+    })
+}
+
+#[tauri::command]
 pub fn track(
     _state: State<'_, DesktopLibraryState>,
     track_id: i64,
@@ -217,10 +314,18 @@ pub fn similar_tracks(
 ) -> Result<Vec<DesktopSimilarTrack>, String> {
     let connection = open_database()?;
     let seed_track = track_by_id(&connection, track_id)?;
+    if parse_embedding(seed_track.analysis_embedding.as_deref()).is_none() {
+        return Ok(Vec::new());
+    }
     let limit = limit.unwrap_or(12).clamp(1, 50);
     let mut statement = connection
         .prepare(&format!(
-            "SELECT {TRACK_COLUMNS} FROM tracks WHERE id <> ? AND {music_filter}",
+            "SELECT {TRACK_COLUMNS}
+             FROM tracks
+             WHERE id <> ?
+               AND analysis_embedding IS NOT NULL
+               AND trim(analysis_embedding) <> ''
+               AND {music_filter}",
             music_filter = music_only_clause()
         ))
         .map_err(|error| format!("Could not prepare Rust similar-track query: {error}"))?;
@@ -232,14 +337,14 @@ pub fn similar_tracks(
     for row in rows {
         let track = row.map_err(|error| format!("Could not decode Rust similar track: {error}"))?;
         let (mut score, reason) = similarity_adjustment(&track, Some(&seed_track), &settings);
-        let audio_similarity = cosine_similarity(
+        let Some(audio_similarity) = cosine_similarity(
             track.analysis_embedding.as_deref(),
             seed_track.analysis_embedding.as_deref(),
-        );
-        if let Some(value) = audio_similarity {
-            if value > 0.0 {
-                score += value;
-            }
+        ) else {
+            continue;
+        };
+        if audio_similarity > 0.0 {
+            score += audio_similarity;
         }
         if score <= 0.0 {
             continue;
@@ -248,11 +353,11 @@ pub fn similar_tracks(
             track,
             similarity_score: round4(score),
             similarity_reason: if reason.is_empty() {
-                "metadata similarity".to_string()
+                "CLAP audio similarity".to_string()
             } else {
                 reason
             },
-            audio_similarity: audio_similarity.map(round4),
+            audio_similarity: Some(round4(audio_similarity)),
         });
     }
     candidates.sort_by(|left, right| {
@@ -268,6 +373,295 @@ pub fn similar_tracks(
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
             .then_with(|| right.track.bitrate.cmp(&left.track.bitrate))
+    });
+    candidates.truncate(limit);
+    Ok(candidates)
+}
+
+#[derive(Clone)]
+struct SimilarAlbumCandidate {
+    summary: DesktopAlbumSummary,
+    vector_sum: Vec<f64>,
+    analyzed_tracks: i64,
+}
+
+#[derive(Clone)]
+struct SimilarArtistCandidate {
+    summary: DesktopArtistSummary,
+    vector_sum: Vec<f64>,
+    analyzed_tracks: i64,
+}
+
+fn add_embedding(vector_sum: &mut Vec<f64>, analyzed_tracks: &mut i64, raw: Option<&str>) {
+    let Some(vector) = parse_embedding(raw) else {
+        return;
+    };
+    if vector_sum.is_empty() {
+        *vector_sum = vector;
+        *analyzed_tracks = 1;
+        return;
+    }
+    if vector_sum.len() != vector.len() {
+        return;
+    }
+    for (target, value) in vector_sum.iter_mut().zip(vector) {
+        *target += value;
+    }
+    *analyzed_tracks += 1;
+}
+
+fn average_vector(vector_sum: &[f64], analyzed_tracks: i64) -> Option<Vec<f64>> {
+    if vector_sum.is_empty() || analyzed_tracks <= 0 {
+        return None;
+    }
+    Some(
+        vector_sum
+            .iter()
+            .map(|value| value / analyzed_tracks as f64)
+            .collect(),
+    )
+}
+
+fn cosine_vector_similarity(left: &[f64], right: &[f64]) -> Option<f64> {
+    if left.len() != right.len() || left.is_empty() {
+        return None;
+    }
+    let dot: f64 = left.iter().zip(right).map(|(a, b)| a * b).sum();
+    let left_norm = left.iter().map(|value| value * value).sum::<f64>().sqrt();
+    let right_norm = right.iter().map(|value| value * value).sum::<f64>().sqrt();
+    if left_norm <= 0.0 || right_norm <= 0.0 {
+        None
+    } else {
+        Some(dot / (left_norm * right_norm))
+    }
+}
+
+fn sample_size_adjusted_similarity(score: f64, analyzed_tracks: i64) -> f64 {
+    if score <= 0.0 {
+        return score;
+    }
+    let sample_count = analyzed_tracks.max(0) as f64;
+    if sample_count <= 0.0 {
+        return 0.0;
+    }
+    // Single-track artists/albums can look deceptively close because one CLAP
+    // embedding has no internal variance. This confidence curve lets them show
+    // only when the raw match is very strong while multi-track groups converge
+    // quickly toward the real cosine score.
+    let confidence = 1.0 - (-sample_count / 3.0).exp();
+    score * confidence
+}
+
+#[tauri::command]
+pub fn similar_albums(
+    _state: State<'_, DesktopLibraryState>,
+    album_id: i64,
+    limit: Option<usize>,
+) -> Result<Vec<DesktopSimilarAlbum>, String> {
+    let connection = open_database()?;
+    ensure_library_derived_data_current(&connection)?;
+    let limit = limit.unwrap_or(8).clamp(1, 50);
+    let mut statement = connection
+        .prepare(&format!(
+            r#"
+            SELECT
+                album_summaries.id,
+                album_summaries.album,
+                album_summaries.album_artist,
+                album_summaries.year,
+                album_summaries.years_csv,
+                album_summaries.album_ids_csv,
+                album_summaries.edition_count,
+                album_summaries.artwork_path,
+                album_summaries.artwork_locked,
+                album_summaries.track_count,
+                album_summaries.expected_track_count,
+                album_summaries.missing_track_count,
+                album_summaries.duration_seconds,
+                album_summaries.average_rating,
+                album_summaries.artwork_track_id,
+                album_summaries.completion_expected_track_count,
+                album_summaries.completion_source,
+                album_summaries.completion_release_id,
+                album_summaries.completion_release_title,
+                album_summaries.completion_checked_at,
+                tracks.analysis_embedding
+            FROM album_summaries
+            JOIN albums
+              ON lower(trim(coalesce(albums.album, ''))) = lower(trim(coalesce(album_summaries.album, '')))
+             AND lower(trim(coalesce(albums.album_artist, ''))) = lower(trim(coalesce(album_summaries.album_artist, '')))
+            JOIN tracks ON tracks.album_id = albums.id
+            WHERE tracks.analysis_embedding IS NOT NULL
+              AND trim(tracks.analysis_embedding) <> ''
+              AND {music_filter}
+            "#,
+            music_filter = music_only_clause()
+        ))
+        .map_err(|error| format!("Could not prepare Rust similar-album query: {error}"))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                album_summary_from_row(row)?,
+                row.get::<_, Option<String>>("analysis_embedding")?,
+            ))
+        })
+        .map_err(|error| format!("Could not read Rust similar albums: {error}"))?;
+    let mut groups: BTreeMap<i64, SimilarAlbumCandidate> = BTreeMap::new();
+    for row in rows {
+        let (summary, embedding) =
+            row.map_err(|error| format!("Could not decode Rust similar album: {error}"))?;
+        let entry = groups.entry(summary.id).or_insert_with(|| SimilarAlbumCandidate {
+            summary,
+            vector_sum: Vec::new(),
+            analyzed_tracks: 0,
+        });
+        add_embedding(
+            &mut entry.vector_sum,
+            &mut entry.analyzed_tracks,
+            embedding.as_deref(),
+        );
+    }
+
+    let Some(seed) = groups.get(&album_id) else {
+        return Ok(Vec::new());
+    };
+    let Some(seed_vector) = average_vector(&seed.vector_sum, seed.analyzed_tracks) else {
+        return Ok(Vec::new());
+    };
+    let mut candidates = Vec::new();
+    for (candidate_id, candidate) in groups {
+        if candidate_id == album_id {
+            continue;
+        }
+        let Some(candidate_vector) =
+            average_vector(&candidate.vector_sum, candidate.analyzed_tracks)
+        else {
+            continue;
+        };
+        let Some(score) = cosine_vector_similarity(&candidate_vector, &seed_vector) else {
+            continue;
+        };
+        let adjusted_score = sample_size_adjusted_similarity(score, candidate.analyzed_tracks);
+        if adjusted_score <= 0.0 {
+            continue;
+        }
+        candidates.push(DesktopSimilarAlbum {
+            album: candidate.summary,
+            similarity_score: round4(adjusted_score),
+            analyzed_tracks: candidate.analyzed_tracks,
+        });
+    }
+    candidates.sort_by(|left, right| {
+        right
+            .similarity_score
+            .partial_cmp(&left.similarity_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| right.album.average_rating.partial_cmp(&left.album.average_rating).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| right.album.track_count.cmp(&left.album.track_count))
+    });
+    candidates.truncate(limit);
+    Ok(candidates)
+}
+
+#[tauri::command]
+pub fn similar_artists(
+    _state: State<'_, DesktopLibraryState>,
+    artist_name: String,
+    limit: Option<usize>,
+) -> Result<Vec<DesktopSimilarArtist>, String> {
+    let connection = open_database()?;
+    ensure_library_derived_data_current(&connection)?;
+    let limit = limit.unwrap_or(8).clamp(1, 50);
+    let artist_expr = primary_artist_sql("tracks");
+    let mut statement = connection
+        .prepare(&format!(
+            r#"
+            SELECT
+                artist_summaries.name,
+                artist_summaries.track_count,
+                artist_summaries.album_count,
+                artist_summaries.duration_seconds,
+                artist_summaries.average_rating,
+                artist_summaries.play_count,
+                artist_summaries.skip_count,
+                artist_summaries.first_year,
+                artist_summaries.last_year,
+                artist_summaries.artwork_track_id,
+                tracks.analysis_embedding
+            FROM artist_summaries
+            JOIN tracks ON lower({artist_expr}) = lower(artist_summaries.name)
+            WHERE tracks.analysis_embedding IS NOT NULL
+              AND trim(tracks.analysis_embedding) <> ''
+              AND {music_filter}
+            "#,
+            music_filter = music_only_clause()
+        ))
+        .map_err(|error| format!("Could not prepare Rust similar-artist query: {error}"))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                artist_summary_from_row(row)?,
+                row.get::<_, Option<String>>("analysis_embedding")?,
+            ))
+        })
+        .map_err(|error| format!("Could not read Rust similar artists: {error}"))?;
+    let mut groups: BTreeMap<String, SimilarArtistCandidate> = BTreeMap::new();
+    for row in rows {
+        let (summary, embedding) =
+            row.map_err(|error| format!("Could not decode Rust similar artist: {error}"))?;
+        let key = normalize_token(Some(&summary.name));
+        if key.is_empty() {
+            continue;
+        }
+        let entry = groups.entry(key).or_insert_with(|| SimilarArtistCandidate {
+            summary,
+            vector_sum: Vec::new(),
+            analyzed_tracks: 0,
+        });
+        add_embedding(
+            &mut entry.vector_sum,
+            &mut entry.analyzed_tracks,
+            embedding.as_deref(),
+        );
+    }
+
+    let seed_key = normalize_token(Some(&artist_name));
+    let Some(seed) = groups.get(&seed_key) else {
+        return Ok(Vec::new());
+    };
+    let Some(seed_vector) = average_vector(&seed.vector_sum, seed.analyzed_tracks) else {
+        return Ok(Vec::new());
+    };
+    let mut candidates = Vec::new();
+    for (candidate_key, candidate) in groups {
+        if candidate_key == seed_key {
+            continue;
+        }
+        let Some(candidate_vector) =
+            average_vector(&candidate.vector_sum, candidate.analyzed_tracks)
+        else {
+            continue;
+        };
+        let Some(score) = cosine_vector_similarity(&candidate_vector, &seed_vector) else {
+            continue;
+        };
+        let adjusted_score = sample_size_adjusted_similarity(score, candidate.analyzed_tracks);
+        if adjusted_score <= 0.0 {
+            continue;
+        }
+        candidates.push(DesktopSimilarArtist {
+            artist: candidate.summary,
+            similarity_score: round4(adjusted_score),
+            analyzed_tracks: candidate.analyzed_tracks,
+        });
+    }
+    candidates.sort_by(|left, right| {
+        right
+            .similarity_score
+            .partial_cmp(&left.similarity_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| right.artist.play_count.cmp(&left.artist.play_count))
+            .then_with(|| right.artist.track_count.cmp(&left.artist.track_count))
     });
     candidates.truncate(limit);
     Ok(candidates)
@@ -332,88 +726,6 @@ pub fn loved_tracks(
         .map_err(|error| format!("Could not read Rust loved tracks: {error}"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|error| format!("Could not decode Rust loved tracks: {error}"))
-}
-
-#[tauri::command]
-pub fn update_track_love(
-    _state: State<'_, DesktopLibraryState>,
-    track_id: i64,
-    loved: bool,
-    source: Option<String>,
-) -> Result<DesktopTrackLoveResponse, String> {
-    let mut connection = open_database()?;
-    let transaction = connection
-        .transaction()
-        .map_err(|error| format!("Could not start Rust loved-track update: {error}"))?;
-    let track: Option<(
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    )> = transaction
-        .query_row(
-            "SELECT artist, title, album, album_artist FROM tracks WHERE id = ?",
-            params![track_id],
-            |row| {
-                Ok((
-                    row.get("artist")?,
-                    row.get("title")?,
-                    row.get("album")?,
-                    row.get("album_artist")?,
-                ))
-            },
-        )
-        .ok();
-    let Some((artist, title, album, album_artist)) = track else {
-        return Err("Track not found".to_string());
-    };
-    let source = clean_optional_text(source).unwrap_or_else(|| "local".to_string());
-    transaction
-        .execute(
-            "INSERT INTO track_loves(track_id, loved, source, updated_at)
-             VALUES(?, ?, ?, datetime('now'))
-             ON CONFLICT(track_id) DO UPDATE SET
-               loved = excluded.loved,
-               source = excluded.source,
-               updated_at = datetime('now')",
-            params![track_id, if loved { 1 } else { 0 }, source],
-        )
-        .map_err(|error| format!("Could not save Rust loved-track state: {error}"))?;
-    if loved {
-        if let (Some(artist), Some(title)) = (
-            artist.filter(|v| !v.trim().is_empty()),
-            title.filter(|v| !v.trim().is_empty()),
-        ) {
-            transaction
-                .execute(
-                    "INSERT INTO scrobble_outbox(service, track_id, event_type, artist, title, album, album_artist, listened_at)
-                     VALUES('lastfm', ?, 'loved', ?, ?, ?, ?, strftime('%s', 'now'))",
-                    params![track_id, artist, title, album, album_artist],
-                )
-                .map_err(|error| format!("Could not queue Rust loved-track scrobble: {error}"))?;
-        }
-    }
-    transaction
-        .commit()
-        .map_err(|error| format!("Could not commit Rust loved-track update: {error}"))?;
-    connection
-        .query_row(
-            "SELECT track_id, loved, source, updated_at FROM track_loves WHERE track_id = ?",
-            params![track_id],
-            |row| {
-                Ok(DesktopTrackLoveResponse {
-                    track_id: row.get("track_id")?,
-                    loved: row.get::<_, Option<i64>>("loved")?.unwrap_or(0) != 0,
-                    source: row
-                        .get::<_, Option<String>>("source")?
-                        .unwrap_or_else(|| "local".to_string()),
-                    updated_at: row
-                        .get::<_, Option<String>>("updated_at")?
-                        .unwrap_or_default(),
-                })
-            },
-        )
-        .map_err(|error| format!("Could not read Rust loved-track state: {error}"))
 }
 
 #[tauri::command]

@@ -1,63 +1,61 @@
-import { ArrowDown, ArrowUp, Clock, Download, GripVertical, ListMusic, Maximize2, Minimize2, Pencil, Play, Plus, RefreshCw, SlidersHorizontal, Trash2, Volume2, X } from "lucide-react";
+import { Download,GripVertical,Maximize2,Minimize2,Pencil,SlidersHorizontal,Volume2 } from "lucide-react";
 import type {
-  MouseEvent as ReactMouseEvent,
-  PointerEvent as ReactPointerEvent,
+MouseEvent as ReactMouseEvent,
+PointerEvent as ReactPointerEvent,
 } from "react";
 import {
-  useEffect,
-  useRef,
-  useState,
+useEffect,
+useRef,
+useState,
 } from "react";
 
 import {
-  albumArtworkUrl,
+albumArtworkUrl,
 } from "../../lib/api";
 import {
-  placeFloatingMenu,
+placeFloatingMenu,
 } from "../../lib/uiInteractions";
 import type {
-  LyricsResponse,
-  LyricsUpdateRequest,
-  Track,
+LyricsResponse,
+LyricsUpdateRequest,
+Track,
 } from "../../types/api";
 import {
-  AudioVisualizer,
+AudioVisualizer,
 } from "../components/AudioVisualizer";
 import {
-  DragGhostPreview,
+DragGhostPreview,
 } from "../components/common";
 import {
-  NowPlayingLyricsContent,
+DragGhost,
+MENU_VIEWPORT_MARGIN,
+type MiniPlayerSnapshot,
+PlaybackQueueContextMenu,
+UiPreferences,
+VISUALIZER_FRAME_EVENT,
+VisualizerFrame,
+beginPointerReorderDrag,
+display,
+displayAlbumForTrack,
+isTimestampOnlyLyricLine,
+miniPlayerChannelName,
+parseLyricTimestamp,
+readMiniPlayerSnapshot,
+stripLyricTimestamp,
+trackGenre
+} from "../shared";
+import {
+NowPlayingLyricsContent,
 } from "./now-playing/NowPlayingLyricsContent";
 import {
-  NowPlayingQueuePanel,
+NowPlayingQueuePanel,
 } from "./now-playing/NowPlayingQueuePanel";
 import {
-  LyricsEditMode,
-  LrcBuilderLine,
-  builderLinesFromLyricsText,
-  formatLrcTimestamp,
-  lrcDraftFromBuilderLines,
+LrcBuilderLine,
+LyricsEditMode,
+builderLinesFromLyricsText,
+lrcDraftFromBuilderLines
 } from "./now-playing/lyricsBuilder";
-import {
-  DragGhost,
-  MENU_VIEWPORT_MARGIN,
-  type MiniPlayerSnapshot,
-  PlaybackQueueContextMenu,
-  beginPointerReorderDrag,
-  display,
-  displayAlbumForTrack,
-  formatPlaybackTime,
-  isTimestampOnlyLyricLine,
-  miniPlayerChannelName,
-  parseLyricTimestamp,
-  readMiniPlayerSnapshot,
-  stripLyricTimestamp,
-  trackGenre,
-  UiPreferences,
-  VISUALIZER_FRAME_EVENT,
-  VisualizerFrame,
-} from "../shared";
 
 const QUEUE_VIRTUALIZATION_THRESHOLD = 160;
 const QUEUE_VIRTUALIZATION_OVERSCAN = 10;

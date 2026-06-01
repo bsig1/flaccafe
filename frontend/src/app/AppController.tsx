@@ -1,282 +1,115 @@
-import type { MouseEvent as ReactMouseEvent } from "react";
-import { useEffect, useRef, useState } from "react";
-import type { ThemePalette } from "../config/theme";
-import { fontChoiceValues, themeAccentLabels, themeAccentValues, themeOrder } from "../config/theme";
+import { useEffect } from "react";
 import {
-  addTracksToPlaylist,
-  applyFolderWatchChanges,
-  acknowledgeFolderWatchNotifications,
-  autoTagMusicBrainz,
-  backupDatabase,
-  cancelAudioConversion,
-  cancelClapAudioAnalysis,
-  clearArtistCache,
-  clearLibraryCaches,
-  createAutoDjAvoidRule,
-  createInboxAutoReviewRule,
-  createPlaylist,
-  createSupportBundle,
-  deleteAutoDjAvoidRule,
-  deleteInboxAutoReviewRule,
-  deletePlaylist,
-  deleteRecommendationProfile,
-  deleteTrack,
-  deleteTracks,
-  exportMetadataCsv,
-  exportMetadataCsvImportReport,
-  exportPlaylist,
-  exportQueue,
-  fetchAudioConversionProgress,
-  fetchAudioConversionSetup,
-  fetchAlbumTracks,
-  fetchAlbums,
-  fetchArtistInfo,
-  fetchAudioConversionFfmpegInstall,
-  fetchArtistLocalTracks,
-  fetchArtists,
-  fetchAutoDjAvoidRules,
-  fetchBackendHealth,
-  fetchBackendLog,
-  fetchClapAudioAnalysis,
-  fetchClapCoverage,
-  fetchClapInstall,
-  fetchClapStatus,
-  fetchFolderWatchStatus,
-  fetchHistory,
-  fetchHistoryStats,
-  fetchLibraryHealth,
-  fetchLibraryInbox,
-  fetchLibraryStats,
-  fetchLyrics,
-  fetchLyricsByMetadata,
-  fetchLyricsOnline,
-  fetchPlaylistTracks,
-  fetchPlaylists,
-  fetchRecommendationHistory,
-  fetchRecommendationProfiles,
-  fetchScanProgress,
-  fetchSettings,
-  fetchStartupDiagnostics,
-  fetchTrack,
-  fetchTracksBatch,
-  fetchTracks,
-  fetchTrackPage,
-  generateAutoDj,
-  importPlaylist,
-  importMetadataCsv,
-  inferFilenameTags,
-  markRadioStationPlayed,
-  markTrackPlayed,
-  markTrackSkipped,
-  moveTrackInPlaylist,
-  organizeFiles,
-  pauseClapAudioAnalysis,
-  playCdTrack,
-  recordRecommendationFeedback,
-  refreshFolderWatch,
-  removeLibrarySource,
-  removeTrackFromPlaylist,
-  replaceTagsWithRegex,
-  reviewAllInboxTracks,
-  reviewInboxTracks,
-  restoreTrack,
-  resumeClapAudioAnalysis,
-  resetLocalData,
-  saveAudioConversionSetup,
-  saveArtistInfoOverride,
-  saveRecommendationProfile,
-  setDefaultRecommendationProfile,
-  startAudioConversion,
-  startAudioConversionFfmpegInstall,
-  startClapAudioAnalysis,
-  startClapInstall,
-  startFolderWatch,
-  startScanLibrary,
-  stopFolderWatch,
-  syncTrackMetadata,
-  syncDeviceFolder,
-  updateClapConfig,
-  updateInboxAutoReviewRule,
-  updateInboxNote,
-  updateLyrics,
-  updateSettings,
-  updateTrackMetadata,
-  updateTrackRating,
-  applyDuplicateAction,
-  exportFileOrganizationReport,
-  fetchBulkUndoLog,
-  fetchBulkUndoBatches,
-  fetchChromaprintSetup,
-  fetchCdRipSetup,
-  fetchDuplicateReview,
-  readReportFile,
-  restoreBulkUndoBatch,
-  restoreBulkUndoEntry,
-  runAcousticFingerprintPass,
-  saveChromaprintSetup,
-  previewAudioConversion,
+addTracksToPlaylist,
+createAutoDjAvoidRule,
+createInboxAutoReviewRule,
+createPlaylist,
+deleteAutoDjAvoidRule,
+deleteInboxAutoReviewRule,
+deletePlaylist,
+deleteRecommendationProfile,
+deleteTrack,
+deleteTracks,
+exportPlaylist,
+exportQueue,
+fetchAlbumTracks,
+fetchAlbums,
+fetchArtistInfo,
+fetchArtistLocalTracks,
+fetchArtists,
+fetchAutoDjAvoidRules,
+fetchHistory,
+fetchHistoryStats,
+fetchLibraryHealth,
+fetchLibraryInbox,
+fetchLibraryStats,
+fetchLyricsByMetadata,
+fetchLyricsOnline,
+fetchPlaylistTracks,
+fetchPlaylists,
+fetchRecommendationHistory,
+fetchRecommendationProfiles,
+fetchSettings,
+fetchTrackPage,
+fetchTracks,
+fetchTracksBatch,
+generateAutoDj,
+importPlaylist,
+markRadioStationPlayed,
+markTrackPlayed,
+markTrackSkipped,
+moveTrackInPlaylist,
+playCdTrack,
+recordRecommendationFeedback,
+removeTrackFromPlaylist,
+restoreTrack,
+reviewAllInboxTracks,
+reviewInboxTracks,
+saveArtistInfoOverride,
+saveRecommendationProfile,
+setDefaultRecommendationProfile,
+updateInboxAutoReviewRule,
+updateInboxNote,
+updateTrackMetadata,
+updateTrackRating
 } from "../lib/api";
-import { placeFloatingMenu } from "../lib/uiInteractions";
-import { openExternalUrl } from "../lib/externalLinks";
-import { desktopFetchTrackPage, desktopRemoveLibrarySource } from "../lib/desktopLibrary";
+import { desktopFetchTrackPage } from "../lib/desktopLibrary";
 import {
-  BACKEND_STARTUP_GRACE_MS,
-  BACKEND_STARTUP_POLL_MS,
-  CD_PLAYBACK_PREPARE_DEBOUNCE_MS,
-  DEFAULT_LIBRARY_SORT,
-  StaleCdPlaybackRequestError,
-  StartupLibrarySnapshot,
-  buildArtistSummariesFromTracks,
-  cdDriveIdFromTrack,
-  cdTrackLooksActive,
-  cdTrackNumberFromTrack,
-  defaultCdRipTarget,
-  defaultLibraryTrackQueryKey,
-  findAlbumForTrack,
-  indexedStartupTracks,
-  isStaleCdPlaybackRequest,
-  libraryTrackQueryKey,
-  lyricsHaveText,
-  lyricsLookupRequestForTrack,
-  readStartupLibrarySnapshot,
-  shouldLookupLyricsByMetadata,
-  sortedCachedTracks,
-  sourceFolderKey,
-  uniqueFolderPaths,
-  waitFor,
-  writeStartupLibrarySnapshot,
-} from "./appHelpers";
-import {
-  isDesktopBridgeUnavailable,
-  listenFolderWatchEvents,
-  FolderWatchMarkEvent,
-  FolderWatchStart,
-  FolderWatchStop,
-  PathInfo,
-  RecyclePaths,
-  desktopScanAudioPaths,
-  type RecycleResponse,
+RecyclePaths,
+isDesktopBridgeUnavailable,
+type RecycleResponse
 } from "../lib/desktopPath";
 import type {
-  AlbumSummary,
-  AcousticFingerprintResponse,
-  AdvancedTrackSearchFilters,
-  ArtistInfoResponse,
-  ArtistSummary,
-  AudioAnalysisCoverage,
-  AudioAnalysisProgress,
-  AudioConversionInstallProgress,
-  AudioConversionPreviewResponse,
-  AudioConversionProgress,
-  AudioConversionSetupResponse,
-  AudioConversionFormat,
-  AutoDjAvoidRule,
-  AutoDjSettings,
-  AutoTagResponse,
-  BulkUndoLogEntry,
-  BulkUndoBatchEntry,
-  BulkUndoRestoreResponse,
-  CacheClearTarget,
-  ChromaprintStatusResponse,
-  CdRipSetupResponse,
-  ClapInstallDevice,
-  ClapInstallProgress,
-  ClapStatusResponse,
-  CsvMetadataExportResponse,
-  CsvMetadataImportReportResponse,
-  CsvMetadataImportResponse,
-  DuplicateActionRequest,
-  DuplicateActionResponse,
-  DeviceSyncResponse,
-  DuplicateReviewResponse,
-  FileOrganizationReportResponse,
-  FileOrganizationResponse,
-  FolderWatchApplyResponse,
-  FolderWatchStatus,
-  FilenameTagInferenceResponse,
-  InboxAutoReviewRule,
-  InboxAutoReviewRuleRequest,
-  InboxResponse,
-  HistoryStatsResponse,
-  LibraryHealthResponse,
-  LibrarySourceRemoveResponse,
-  LibraryStatsResponse,
-  LogTailResponse,
-  LyricsResponse,
-  LyricsUpdateRequest,
-  desktopScanSnapshot,
-  PlayEventEntry,
-  PlaylistSummary,
-  QueueTrack,
-  RadioStation,
-  RecommendationDrift,
-  RecommendationProfile,
-  RecommendationRun,
-  ReportFileResponse,
-  ScanProgress,
-  ScanResult,
-  SettingsResponse,
-  StartupDiagnosticsResponse,
-  TagRegexReplaceResponse,
-  Track,
-  TrackPage,
-  TrackMetadataUpdate,
+AdvancedTrackSearchFilters,
+Track,
+TrackPage
 } from "../types/api";
-import type { EditableMetadataKey } from "./components/modals";
 import {
-  APP_CONTEXT_MENU_HEIGHT,
-  APP_CONTEXT_MENU_WIDTH,
-  AppContextMenu,
-  BackendStatus,
-  DeleteTrackPrompt,
-  LIBRARY_PAGE_SIZE,
-  LibraryView,
-  MENU_VIEWPORT_MARGIN,
-  MetadataColumnKey,
-  Page,
-  PlaybackMode,
-  QUEUE_HISTORY_LIMIT,
-  SortState,
-  StoredPlaybackSession,
-  UiPreferences,
-  UndoAction,
-  defaultAutoDj,
-  display,
-  emptyRecommendationDrift,
-  fontScaleValues,
-  formatTime,
-  isAnalysisTerminal,
-  isClapInstallTerminal,
-  legacyStorageKeys,
-  normalizeLibraryColumns,
-  normalizePlaybackResumePosition,
-  primaryArtistName,
-  splitArtistNames,
-  readQuickStartDismissed,
-  readRememberedDeleteChoice,
-  readUiPreferences,
-  shortcutMatchesEvent,
-  shouldRecordTrackAsPlayed,
-  shuffleItems,
-  storageKeys,
-  supportsFileTagWriting,
-  trackGenre,
-  useRangeWheelControls,
-  writeQuickStartDismissed,
-  writeRememberedDeleteChoice,
-} from "./shared";
-import { useFileManagementController } from "./controllers/useFileManagementController";
-import { useSourceScanController } from "./controllers/useSourceScanController";
-import { useAnalysisController } from "./controllers/useAnalysisController";
+CD_PLAYBACK_PREPARE_DEBOUNCE_MS,
+StaleCdPlaybackRequestError,
+buildArtistSummariesFromTracks,
+cdDriveIdFromTrack,
+cdTrackLooksActive,
+cdTrackNumberFromTrack,
+defaultLibraryTrackQueryKey,
+findAlbumForTrack,
+isStaleCdPlaybackRequest,
+libraryTrackQueryKey,
+lyricsLookupRequestForTrack,
+shouldLookupLyricsByMetadata,
+sortedCachedTracks,
+waitFor,
+writeStartupLibrarySnapshot
+} from "./appHelpers";
 import { buildAppControllerReturn } from "./controllers/buildAppControllerReturn";
-import { createLibraryActionHandlers } from "./controllers/createLibraryActionHandlers";
-import { usePlaybackAutoDjController } from "./controllers/usePlaybackAutoDjController";
-import { useAppControllerEffects } from "./controllers/useAppControllerEffects";
 import { createBackendSupportHandlers } from "./controllers/createBackendSupportHandlers";
-import { useAppControllerState } from "./controllers/useAppControllerState";
+import { createLibraryActionHandlers } from "./controllers/createLibraryActionHandlers";
 import { createPlayerNavigationHandlers } from "./controllers/createPlayerNavigationHandlers";
 import { createUiActionHandlers } from "./controllers/createUiActionHandlers";
+import { useAnalysisController } from "./controllers/useAnalysisController";
+import { useAppControllerEffects } from "./controllers/useAppControllerEffects";
+import { useAppControllerState } from "./controllers/useAppControllerState";
 import { useDeferredFileTagWriter } from "./controllers/useDeferredFileTagWriter";
+import { useFileManagementController } from "./controllers/useFileManagementController";
+import { usePlaybackAutoDjController } from "./controllers/usePlaybackAutoDjController";
+import { useSourceScanController } from "./controllers/useSourceScanController";
+import {
+LIBRARY_PAGE_SIZE,
+LibraryColumnKey,
+UndoAction,
+defaultAutoDj,
+display,
+normalizeLibraryColumns,
+primaryArtistName,
+readRememberedDeleteChoice,
+shouldRecordTrackAsPlayed,
+shuffleItems,
+splitArtistNames,
+supportsFileTagWriting,
+trackGenre,
+useRangeWheelControls,
+writeRememberedDeleteChoice
+} from "./shared";
 
 export function useAppController() {
   useRangeWheelControls();
@@ -459,6 +292,8 @@ export function useAppController() {
     setScanResult,
     scanProgress,
     setScanProgress,
+    scanStuck,
+    scanStuckMessage,
     isScanning,
     setIsScanning,
     folderWatchStatus,
@@ -468,6 +303,8 @@ export function useAppController() {
     applyFolderWatchStatus,
     loadFolderWatchStatus,
     handleScan,
+    handleCancelScan,
+    handleRetryScan,
     handleRemoveLibrarySource,
     handleStartFolderWatch,
     handleStopFolderWatch,
@@ -497,11 +334,23 @@ export function useAppController() {
     setStatus,
   });
   const hideFilePaths = uiPreferences.hideFilePaths;
-  const libraryVisibleColumns = normalizeLibraryColumns(uiPreferences.libraryVisibleColumns);
+  const libraryVisibleColumns = normalizeLibraryColumns(
+    uiPreferences.libraryColumnLayouts?.[libraryView] ?? uiPreferences.libraryVisibleColumns,
+  );
   const setHideFilePaths = (value: boolean) =>
     setUiPreferences((current) => ({ ...current, hideFilePaths: value }));
-  const setLibraryVisibleColumns = (columns: MetadataColumnKey[]) =>
-    setUiPreferences((current) => ({ ...current, libraryVisibleColumns: normalizeLibraryColumns(columns) }));
+  const setLibraryVisibleColumns = (columns: LibraryColumnKey[]) =>
+    setUiPreferences((current) => {
+      const normalized = normalizeLibraryColumns(columns);
+      return {
+        ...current,
+        libraryVisibleColumns: normalized,
+        libraryColumnLayouts: {
+          ...(current.libraryColumnLayouts ?? {}),
+          [libraryView]: normalized,
+        },
+      };
+    });
 
   function patchCachedTrack(updated: Track) {
     let next: Map<number, Track> | null = null;
@@ -887,7 +736,7 @@ export function useAppController() {
     const [eventsResult, statsResult, historyStatsResult] = await Promise.allSettled([
       fetchHistory(),
       fetchLibraryStats(),
-      fetchHistoryStats(10),
+      fetchHistoryStats(25),
     ]);
     if (eventsResult.status === "fulfilled") {
       setHistoryEvents(eventsResult.value);
@@ -900,8 +749,15 @@ export function useAppController() {
     } else {
       setHistoryStats(null);
     }
-    if (eventsResult.status === "rejected" || statsResult.status === "rejected") {
-      const error = eventsResult.status === "rejected" ? eventsResult.reason : statsResult.status === "rejected" ? statsResult.reason : null;
+    if (eventsResult.status === "rejected" || statsResult.status === "rejected" || historyStatsResult.status === "rejected") {
+      const error =
+        eventsResult.status === "rejected"
+          ? eventsResult.reason
+          : statsResult.status === "rejected"
+            ? statsResult.reason
+            : historyStatsResult.status === "rejected"
+              ? historyStatsResult.reason
+              : null;
       setStatus(error instanceof Error ? error.message : "Could not load history");
     }
   }
@@ -990,7 +846,7 @@ export function useAppController() {
     }
   }, [activePage, showCdPage]);
 
-  const appControllerReturnModel = { acousticFingerprintResult, activePage, advancedTrackSearch, albums, appContextMenu, applyClapStatus, applyFolderWatchResponse, applyFolderWatchStatus, artistInfo, artists, artistTracks, audioAnalysisCoverage, audioAnalysisEligibleTrackTotal, audioAnalysisJobId, audioAnalysisLimit, audioAnalysisOnlyMissing, audioAnalysisOverwrite, audioAnalysisProgress, audioConversionInstallProgress, audioConversionJobId, audioConversionPreview, audioConversionProgress, audioConversionRequest, audioConversionSetup, autoDjAvoidRules, autoPlayOnTrackChange, autoTagPreview, autoWriteFetchedLyricsSidecars, backendCheckedAt, backendLog, backendMessage, backendStatus, beginLibraryLoad, buildDesktopScanSnapshot, bulkUndoBatches, bulkUndoLog, bulkUndoRestoreResult, cdAutoLookupMetadata, cdDriveDetected, cdPlaybackPrepareChainRef, cdPlaybackPrepareRequestIdRef, cdRipSetup, checkBackendStatus, chromaprintSetup, clapBatchSize, clapCacheDir, clapInstallProgress, clapSamplesPerTrack, clapModelId, clapNeedsOptionalInstall, clapStatus, clapStatusLoadMessage, clapStatusLoadPercent, clearFrontendLocalData, coffeeAnimating, commitPlayTrack, commitTrackIndexCache, confirmDeleteTracks, continuousAutoDjBusy, continuousAutoDjEnabled, continuousAutoDjInFlightRef, continuousAutoDjSettings, currentCdPlaybackDriveId, currentLibraryTrackQueryKey, currentRadioStation, currentTrack, debouncedAdvancedTrackSearch, debouncedSearch, deletePrompt, detailTrack, deviceSyncPreview, dismissQuickStart, duplicateActionResult, duplicateReview, endLibraryLoad, ensureLatestCdPlaybackRequest, extendContinuousAutoDj, externalTrackRequest, externalTrackRequestIdRef, fileManagementFocusToolId, fileManagementScopeIds, filenameTagPreview, fileOrganizationPreview, fileOrganizationReport, findTracksByIds, folderPath, FolderWatchRefreshTimerRef, folderWatchStatus, handleAcknowledgeFolderWatchNotifications, handleAcoustIdApiKeyChange, handleAddToQueue, handleAddTracksToPlaylist, handleAdvancedTagLibraryChanged, handleAnalyzeAudio, handleAnalyzeTracks, handleApplyAutoTag, handleApplyFilenameTags, handleApplyFileOrganization, handleApplyFolderWatch, handleApplyMetadataCsv, handleApplyTagRegex, handleAutoWriteFetchedLyricsSidecars, handleAvoidAutoDj, handleBackupDatabase, handleBrowseAudioConversionTarget, handleBrowseCdRipTarget, handleBrowseFolder, handleBulkMetadata, handleBulkRating, handleCancelAudioAnalysis, handleCancelAudioConversion, handleCdAutoLookupMetadata, handleChooseMusicFolderAndScan, handleClearArtistCache, handleClearIgnoredDuplicateGroups, handleClearLibraryCaches, handleClearPlaybackQueue, handleCoffeeClick, handleCommitExternalTrackRequest, handleContinuousAutoDjChange, handleCopySupportBundlePath, handleCreatePlaylist, handleCreateSupportBundle, handleCycleTheme, handleDeleteAutoDjAvoidRule, handleDeleteInboxAutoReviewRule, handleDeletePlaylist, handleDeleteRecommendationProfile, handleDeleteTrack, handleDeleteTracks, handleDeviceSync, handleDuplicateAction, handleExportFileOrganizationReport, handleExportMetadataCsv, handleExportMetadataCsvReport, handleExportPlaylist, handleExportTracks, handleFetchLyrics, handleIgnoreDuplicateGroup, handleImportPlaylist, handleInstallAudioConversionFfmpeg, handleInstallClap, handleLastFmApiCredentialsChange, handleLibraryAutoTagTracks, handleLibraryClapGenreTagTracks, handleLibraryFingerprintTagTracks, handleLibraryVolumeTagTracks, handleLoadDuplicateReview, handleMovePlaybackQueueTrack, handleMovePlaylistTrack, handleOpenBackendLog, handleOpenCurrentAlbumFromPlayer, handleOpenCurrentArtistFromPlayer, handleOpenCurrentArtistInfoFromPlayer, handleOpenCurrentTrackFromPlayer, handleOpenDetachedMiniPlayer, handleOpenExternalUrl, handleOpenFileManagementForTracks, handleOpenLyricsViewFromPlayer, handleOpenOptionalDependencies, handleOpenQueueViewFromPlayer, handleOpenSourceFolder, handlePauseAudioAnalysis, handlePlayAlbum, handlePlayArtist, handlePlayCdPreviewTrack, handlePlayNext, handlePlayRadioStation, handlePlayTrack, handlePreviewAudioConversion, handlePreviewAutoTag, handlePreviewFilenameTags, handlePreviewFileOrganization, handlePreviewMetadataCsv, handlePreviewTagRegex, handleQuickAutoDj, handleRating, handleReadReportFile, handleRefreshFolderWatch, handleRemoveLibrarySource, handleRemovePlaybackQueueTrack, handleRemoveTrackFromPlaylist, handleRemoveTracksFromPlaylist, handleReorderPlaybackQueueTrack, handleResetLocalData, handleRestartBackend, handleRestoreBulkUndoBatch, handleRestoreBulkUndoEntry, handleRestorePlaybackQueue, handleResumeAudioAnalysis, handleRevealTrack, handleRevealTracksByIds, handleReviewInboxTracks, handleRunAcousticFingerprintPass, handleSaveAudioConversionSetup, handleSaveArtistInfoOverride, handleSaveChromaprintSetup, handleSaveClapConfig, handleSaveInboxAutoReviewRule, handleSaveLyrics, handleSavePlaybackQueue, handleSaveRecommendationProfile, handleSaveTrackMetadata, handleScan, handleSelectAlbum, handleSelectArtist, handleSelectPlaylist, handleSetDefaultRecommendationProfile, handleShuffleTracks, handleStartAudioConversion, handleStartFolderWatch, handleStopFolderWatch, handleStopRadioStation, handleSyncFileMetadata, handleTrackEnded, handleTrackSkipped, handleUndoAction, handleUndoRecentChange, handleUpdateInboxNote, handleUseSuggestedFolder, handleWriteRatingsToFiles, hasAdvancedLibraryFilters, hasAnalysisIssue, hasLoadedInitialLibrary, hasMoreTracks, hideFilePaths, historyEvents, historyStats, importPlaylistPath, inbox, isArtistLoading, isAudioAnalyzing, isCdPlaybackActive, isClapInstalling, isClapStatusLoading, isLibraryLoading, isLyricsLoading, isScanning, lastFolderWatchNotificationIdRef, lastSessionRestoreAttemptedRef, lastSessionRestoreFinishedRef, lastSessionWriteKeyRef, libraryAlbumScrollTop, libraryArtistScrollTop, libraryCacheQueryKeyRef, libraryCompletionScrollTop, libraryFolders, libraryHealth, libraryLoadingCountRef, libraryPageRequestsInFlightRef, libraryPlaylistScrollTop, libraryRequestId, libraryScrollTop, librarySort, libraryStats, libraryTotal, libraryView, libraryVisibleColumns, loadAlbums, loadAnalysisClapReadiness, loadArtistInfo, loadArtists, loadAudioConversionSetup, loadAutoDjAvoidRules, loadBulkUndoLog, loadCdRipSetup, loadChromaprintSetup, loadClapCoverage, loadClapStatus, loadFolderWatchStatus, loadHistory, loadInbox, loadLibraryStats, loadMoreTracks, loadPlaylists, loadPriorityLibraryTracks, loadRecommendationHistory, loadRecommendationProfiles, loadSettings, loadStartupDiagnostics, loadTracksPage, loadTrackWindow, lyrics, mergeTrackPage, metadataCsvExport, metadataCsvImportPreview, metadataCsvImportReport, metadataEditInitialField, metadataEditTrack, newPlaylistName, openApiKeysSettings, openAppContextMenu, openMetadataEditor, playbackMode, playbackQueue, playbackTime, playlists, priorityLibraryLoadStartedRef, priorityLibraryQueryKeyRef, queue, queueHistory, queueUpcomingPlaybackTracks, quickStartDismissed, radioPlaybackRequestId, recommendationDrift, recommendationHistory, recommendationProfiles, recordTrackExitQuiet, recycleFilesWithDesktop, refreshAnalyzedState, refreshCdPreviewTrack, refreshTracks, rememberQueueSnapshot, rememberRecommendationFeedback, removeTrackEverywhere, replaceTrackEverywhere, replaceUpcomingPlaybackQueue, reportFile, requestDeleteTracks, resolveTracksForAction, restoredPlaybackPosition, restoreLastPlaybackSession, scanProgress, scanResult, scheduleFolderWatchRefresh, search, selectedAlbumId, selectedAlbumTracks, selectedArtistName, selectedArtistTracks, selectedPlaylistId, selectedPlaylistTracks, setAcousticFingerprintResult, setActivePage, setAdvancedTrackSearch, setAlbums, setAppContextMenu, setArtistInfo, setArtists, setArtistTracks, setAudioAnalysisCoverage, setAudioAnalysisEligibleTrackTotal, setAudioAnalysisJobId, setAudioAnalysisLimit, setAudioAnalysisOnlyMissing, setAudioAnalysisOverwrite, setAudioAnalysisProgress, setAudioConversionInstallProgress, setAudioConversionJobId, setAudioConversionPreview, setAudioConversionProgress, setAudioConversionSetup, setAutoDjAvoidRules, setAutoPlayOnTrackChange, setAutoTagPreview, setAutoWriteFetchedLyricsSidecars, setBackendCheckedAt, setBackendLog, setBackendMessage, setBackendStatus, setBulkUndoBatches, setBulkUndoLog, setBulkUndoRestoreResult, setCdAutoLookupMetadata, setCdRipSetup, setChromaprintSetup, setClapBatchSize, setClapCacheDir, setClapInstallProgress, setClapSamplesPerTrack, setClapModelId, setClapStatus, setClapStatusLoadMessage, setClapStatusLoadPercent, setCoffeeAnimating, setContinuousAutoDjBusy, setContinuousAutoDjEnabled, setContinuousAutoDjSettings, setCurrentRadioStation, setCurrentTrack, setDebouncedAdvancedTrackSearch, setDebouncedSearch, setDeletePrompt, setDetailTrack, setDeviceSyncPreview, setDuplicateActionResult, setDuplicateReview, setExternalTrackRequest, setFileManagementFocusToolId, setFileManagementScopeIds, setFilenameTagPreview, setFileOrganizationPreview, setFileOrganizationReport, setFolderPath, setFolderWatchStatus, setHasLoadedInitialLibrary, setHasMoreTracks, setHideFilePaths, setHistoryEvents, setHistoryStats, setImportPlaylistPath, setInbox, setIsArtistLoading, setIsAudioAnalyzing, setIsClapInstalling, setIsClapStatusLoading, setIsLibraryLoading, setIsLyricsLoading, setIsScanning, setLibraryAlbumScrollTop, setLibraryArtistScrollTop, setLibraryCompletionScrollTop, setLibraryFolders, setLibraryHealth, setLibraryPlaylistScrollTop, setLibraryScrollTop, setLibrarySort, setLibraryStats, setLibraryTotal, setLibraryView, setLibraryVisibleColumns, setLyrics, setMetadataCsvExport, setMetadataCsvImportPreview, setMetadataCsvImportReport, setMetadataEditInitialField, setMetadataEditTrack, setNewPlaylistName, setPlaybackMode, setPlaybackQueue, setPlaybackTime, setPlaylists, setQueue, setQueueHistory, setQuickStartDismissed, setRadioPlaybackRequestId, setRecommendationDrift, setRecommendationHistory, setRecommendationProfiles, setReportFile, setRestoredPlaybackPosition, setScanProgress, setScanResult, setSearch, setSelectedAlbumId, setSelectedAlbumTracks, setSelectedArtistName, setSelectedArtistTracks, setSelectedPlaylistId, setSelectedPlaylistTracks, setSettings, setSettingsFocusSection, setStartupDiagnostics, setStatus, setSupportBundlePath, setTagRegexPreview, setTargetPlaylistId, settings, settingsFocusSection, setTrackIndexCache, setTracks, setUiPreferences, setUndoAction, setWriteRatingsToFiles, showCdPage, showUndoAction, startupBackgroundHydratedRef, startupDiagnostics, startupLibrarySnapshot, status, supportBundlePath, tagRegexPreview, targetPlaylistId, trackIndexCache, trackIndexCacheRef, tracks, uiPreferences, undoAction, undoTimerRef, updateCachedTracks, validateMusicFoldersWithDesktop, waitForBackendStartup, writeRatingsToFiles };
+  const appControllerReturnModel = { acousticFingerprintResult, activePage, advancedTrackSearch, albums, appContextMenu, applyClapStatus, applyFolderWatchResponse, applyFolderWatchStatus, artistInfo, artists, artistTracks, audioAnalysisCoverage, audioAnalysisEligibleTrackTotal, audioAnalysisJobId, audioAnalysisLimit, audioAnalysisOnlyMissing, audioAnalysisOverwrite, audioAnalysisProgress, audioConversionInstallProgress, audioConversionJobId, audioConversionPreview, audioConversionProgress, audioConversionRequest, audioConversionSetup, autoDjAvoidRules, autoPlayOnTrackChange, autoTagPreview, autoWriteFetchedLyricsSidecars, backendCheckedAt, backendLog, backendMessage, backendStatus, beginLibraryLoad, buildDesktopScanSnapshot, bulkUndoBatches, bulkUndoLog, bulkUndoRestoreResult, cdAutoLookupMetadata, cdDriveDetected, cdPlaybackPrepareChainRef, cdPlaybackPrepareRequestIdRef, cdRipSetup, checkBackendStatus, chromaprintSetup, clapBatchSize, clapCacheDir, clapInstallProgress, clapSamplesPerTrack, clapModelId, clapNeedsOptionalInstall, clapStatus, clapStatusLoadMessage, clapStatusLoadPercent, clearFrontendLocalData, coffeeAnimating, commitPlayTrack, commitTrackIndexCache, confirmDeleteTracks, continuousAutoDjBusy, continuousAutoDjEnabled, continuousAutoDjInFlightRef, continuousAutoDjSettings, currentCdPlaybackDriveId, currentLibraryTrackQueryKey, currentRadioStation, currentTrack, debouncedAdvancedTrackSearch, debouncedSearch, deletePrompt, detailTrack, deviceSyncPreview, dismissQuickStart, duplicateActionResult, duplicateReview, endLibraryLoad, ensureLatestCdPlaybackRequest, extendContinuousAutoDj, externalTrackRequest, externalTrackRequestIdRef, fileManagementFocusToolId, fileManagementScopeIds, filenameTagPreview, fileOrganizationPreview, fileOrganizationReport, findTracksByIds, folderPath, FolderWatchRefreshTimerRef, folderWatchStatus, handleAcknowledgeFolderWatchNotifications, handleAcoustIdApiKeyChange, handleAddToQueue, handleAddTracksToPlaylist, handleAdvancedTagLibraryChanged, handleAnalyzeAudio, handleAnalyzeTracks, handleApplyAutoTag, handleApplyFilenameTags, handleApplyFileOrganization, handleApplyFolderWatch, handleApplyMetadataCsv, handleApplyTagRegex, handleAutoWriteFetchedLyricsSidecars, handleAvoidAutoDj, handleBackupDatabase, handleBrowseAudioConversionTarget, handleBrowseCdRipTarget, handleBrowseFolder, handleBulkMetadata, handleBulkRating, handleCancelAudioAnalysis, handleCancelAudioConversion, handleCancelScan, handleCdAutoLookupMetadata, handleChooseMusicFolderAndScan, handleClearArtistCache, handleClearIgnoredDuplicateGroups, handleClearLibraryCaches, handleClearPlaybackQueue, handleCoffeeClick, handleCommitExternalTrackRequest, handleContinuousAutoDjChange, handleCopySupportBundlePath, handleCreatePlaylist, handleCreateSupportBundle, handleCycleTheme, handleDeleteAutoDjAvoidRule, handleDeleteInboxAutoReviewRule, handleDeletePlaylist, handleDeleteRecommendationProfile, handleDeleteTrack, handleDeleteTracks, handleDeviceSync, handleDuplicateAction, handleExportFileOrganizationReport, handleExportMetadataCsv, handleExportMetadataCsvReport, handleExportPlaylist, handleExportTracks, handleFetchLyrics, handleIgnoreDuplicateGroup, handleImportPlaylist, handleInstallAudioConversionFfmpeg, handleInstallClap, handleLastFmApiCredentialsChange, handleLibraryAutoTagTracks, handleLibraryClapGenreTagTracks, handleLibraryFingerprintTagTracks, handleLibraryVolumeTagTracks, handleLoadDuplicateReview, handleMovePlaybackQueueTrack, handleMovePlaylistTrack, handleOpenBackendLog, handleOpenCurrentAlbumFromPlayer, handleOpenCurrentArtistFromPlayer, handleOpenCurrentArtistInfoFromPlayer, handleOpenCurrentTrackFromPlayer, handleOpenDetachedMiniPlayer, handleOpenExternalUrl, handleOpenFileManagementForTracks, handleOpenLyricsViewFromPlayer, handleOpenOptionalDependencies, handleOpenQueueViewFromPlayer, handleOpenSourceFolder, handlePauseAudioAnalysis, handlePlayAlbum, handlePlayArtist, handlePlayCdPreviewTrack, handlePlayNext, handlePlayRadioStation, handlePlayTrack, handlePreviewAudioConversion, handlePreviewAutoTag, handlePreviewFilenameTags, handlePreviewFileOrganization, handlePreviewMetadataCsv, handlePreviewTagRegex, handleQuickAutoDj, handleRating, handleReadReportFile, handleRefreshFolderWatch, handleRemoveLibrarySource, handleRemovePlaybackQueueTrack, handleRemoveTrackFromPlaylist, handleRemoveTracksFromPlaylist, handleReorderPlaybackQueueTrack, handleResetLocalData, handleRestartBackend, handleRestoreBulkUndoBatch, handleRestoreBulkUndoEntry, handleRestorePlaybackQueue, handleResumeAudioAnalysis, handleRevealTrack, handleRevealTracksByIds, handleReviewInboxTracks, handleRetryScan, handleRunAcousticFingerprintPass, handleSaveAudioConversionSetup, handleSaveArtistInfoOverride, handleSaveChromaprintSetup, handleSaveClapConfig, handleSaveInboxAutoReviewRule, handleSaveLyrics, handleSavePlaybackQueue, handleSaveRecommendationProfile, handleSaveTrackMetadata, handleScan, handleSelectAlbum, handleSelectArtist, handleSelectPlaylist, handleSetDefaultRecommendationProfile, handleShuffleTracks, handleStartAudioConversion, handleStartFolderWatch, handleStopFolderWatch, handleStopRadioStation, handleSyncFileMetadata, handleTrackEnded, handleTrackSkipped, handleUndoAction, handleUndoRecentChange, handleUpdateInboxNote, handleUseSuggestedFolder, handleWriteRatingsToFiles, hasAdvancedLibraryFilters, hasAnalysisIssue, hasLoadedInitialLibrary, hasMoreTracks, hideFilePaths, historyEvents, historyStats, importPlaylistPath, inbox, isArtistLoading, isAudioAnalyzing, isCdPlaybackActive, isClapInstalling, isClapStatusLoading, isLibraryLoading, isLyricsLoading, isScanning, lastFolderWatchNotificationIdRef, lastSessionRestoreAttemptedRef, lastSessionRestoreFinishedRef, lastSessionWriteKeyRef, libraryAlbumScrollTop, libraryArtistScrollTop, libraryCacheQueryKeyRef, libraryCompletionScrollTop, libraryFolders, libraryHealth, libraryLoadingCountRef, libraryPageRequestsInFlightRef, libraryPlaylistScrollTop, libraryRequestId, libraryScrollTop, librarySort, libraryStats, libraryTotal, libraryView, libraryVisibleColumns, loadAlbums, loadAnalysisClapReadiness, loadArtistInfo, loadArtists, loadAudioConversionSetup, loadAutoDjAvoidRules, loadBulkUndoLog, loadCdRipSetup, loadChromaprintSetup, loadClapCoverage, loadClapStatus, loadFolderWatchStatus, loadHistory, loadInbox, loadLibraryStats, loadMoreTracks, loadPlaylists, loadPriorityLibraryTracks, loadRecommendationHistory, loadRecommendationProfiles, loadSettings, loadStartupDiagnostics, loadTracksPage, loadTrackWindow, lyrics, mergeTrackPage, metadataCsvExport, metadataCsvImportPreview, metadataCsvImportReport, metadataEditInitialField, metadataEditTrack, newPlaylistName, openApiKeysSettings, openAppContextMenu, openMetadataEditor, playbackMode, playbackQueue, playbackTime, playlists, priorityLibraryLoadStartedRef, priorityLibraryQueryKeyRef, queue, queueHistory, queueUpcomingPlaybackTracks, quickStartDismissed, radioPlaybackRequestId, recommendationDrift, recommendationHistory, recommendationProfiles, recordTrackExitQuiet, recycleFilesWithDesktop, refreshAnalyzedState, refreshCdPreviewTrack, refreshTracks, rememberQueueSnapshot, rememberRecommendationFeedback, removeTrackEverywhere, replaceTrackEverywhere, replaceUpcomingPlaybackQueue, reportFile, requestDeleteTracks, resolveTracksForAction, restoredPlaybackPosition, restoreLastPlaybackSession, scanProgress, scanResult, scanStuck, scanStuckMessage, scheduleFolderWatchRefresh, search, selectedAlbumId, selectedAlbumTracks, selectedArtistName, selectedArtistTracks, selectedPlaylistId, selectedPlaylistTracks, setAcousticFingerprintResult, setActivePage, setAdvancedTrackSearch, setAlbums, setAppContextMenu, setArtistInfo, setArtists, setArtistTracks, setAudioAnalysisCoverage, setAudioAnalysisEligibleTrackTotal, setAudioAnalysisJobId, setAudioAnalysisLimit, setAudioAnalysisOnlyMissing, setAudioAnalysisOverwrite, setAudioAnalysisProgress, setAudioConversionInstallProgress, setAudioConversionJobId, setAudioConversionPreview, setAudioConversionProgress, setAudioConversionSetup, setAutoDjAvoidRules, setAutoPlayOnTrackChange, setAutoTagPreview, setAutoWriteFetchedLyricsSidecars, setBackendCheckedAt, setBackendLog, setBackendMessage, setBackendStatus, setBulkUndoBatches, setBulkUndoLog, setBulkUndoRestoreResult, setCdAutoLookupMetadata, setCdRipSetup, setChromaprintSetup, setClapBatchSize, setClapCacheDir, setClapInstallProgress, setClapSamplesPerTrack, setClapModelId, setClapStatus, setClapStatusLoadMessage, setClapStatusLoadPercent, setCoffeeAnimating, setContinuousAutoDjBusy, setContinuousAutoDjEnabled, setContinuousAutoDjSettings, setCurrentRadioStation, setCurrentTrack, setDebouncedAdvancedTrackSearch, setDebouncedSearch, setDeletePrompt, setDetailTrack, setDeviceSyncPreview, setDuplicateActionResult, setDuplicateReview, setExternalTrackRequest, setFileManagementFocusToolId, setFileManagementScopeIds, setFilenameTagPreview, setFileOrganizationPreview, setFileOrganizationReport, setFolderPath, setFolderWatchStatus, setHasLoadedInitialLibrary, setHasMoreTracks, setHideFilePaths, setHistoryEvents, setHistoryStats, setImportPlaylistPath, setInbox, setIsArtistLoading, setIsAudioAnalyzing, setIsClapInstalling, setIsClapStatusLoading, setIsLibraryLoading, setIsLyricsLoading, setIsScanning, setLibraryAlbumScrollTop, setLibraryArtistScrollTop, setLibraryCompletionScrollTop, setLibraryFolders, setLibraryHealth, setLibraryPlaylistScrollTop, setLibraryScrollTop, setLibrarySort, setLibraryStats, setLibraryTotal, setLibraryView, setLibraryVisibleColumns, setLyrics, setMetadataCsvExport, setMetadataCsvImportPreview, setMetadataCsvImportReport, setMetadataEditInitialField, setMetadataEditTrack, setNewPlaylistName, setPlaybackMode, setPlaybackQueue, setPlaybackTime, setPlaylists, setQueue, setQueueHistory, setQuickStartDismissed, setRadioPlaybackRequestId, setRecommendationDrift, setRecommendationHistory, setRecommendationProfiles, setReportFile, setRestoredPlaybackPosition, setScanProgress, setScanResult, setSearch, setSelectedAlbumId, setSelectedAlbumTracks, setSelectedArtistName, setSelectedArtistTracks, setSelectedPlaylistId, setSelectedPlaylistTracks, setSettings, setSettingsFocusSection, setStartupDiagnostics, setStatus, setSupportBundlePath, setTagRegexPreview, setTargetPlaylistId, settings, settingsFocusSection, setTrackIndexCache, setTracks, setUiPreferences, setUndoAction, setWriteRatingsToFiles, showCdPage, showUndoAction, startupBackgroundHydratedRef, startupDiagnostics, startupLibrarySnapshot, status, supportBundlePath, tagRegexPreview, targetPlaylistId, trackIndexCache, trackIndexCacheRef, tracks, uiPreferences, undoAction, undoTimerRef, updateCachedTracks, validateMusicFoldersWithDesktop, waitForBackendStartup, writeRatingsToFiles };
   useAppControllerEffects(appControllerReturnModel);
   return buildAppControllerReturn(appControllerReturnModel);
 }

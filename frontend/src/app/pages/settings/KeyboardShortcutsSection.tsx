@@ -1,34 +1,34 @@
-import type {
-  KeyboardEvent as ReactKeyboardEvent,
-} from "react";
 import {
-  useMemo,
-  useState,
-} from "react";
-import {
-  Download,
-  FileText,
-  Keyboard,
-  RotateCcw,
-  Search,
-  X,
+Download,
+FileText,
+Keyboard,
+RotateCcw,
+Search,
+X,
 } from "lucide-react";
+import type {
+KeyboardEvent as ReactKeyboardEvent,
+} from "react";
+import {
+useMemo,
+useState,
+} from "react";
 
 import {
-  DisclosureSection,
+DisclosureSection,
 } from "../../components/common";
-import { AdvancedHttpShortcutsSection } from "./AdvancedHttpShortcutsSection";
 import {
-  KeyboardShortcutAction,
-  UiPreferences,
-  defaultKeyboardShortcuts,
-  formatShortcut,
-  keyboardShortcutGroups,
-  keyboardShortcutLabels,
-  normalizeKeyboardShortcuts,
-  shortcutConflictGroups,
-  shortcutFromEvent,
+KeyboardShortcutAction,
+UiPreferences,
+defaultKeyboardShortcuts,
+formatShortcut,
+keyboardShortcutGroups,
+keyboardShortcutLabels,
+normalizeKeyboardShortcuts,
+shortcutConflictGroups,
+shortcutFromEvent,
 } from "../../shared";
+import { AdvancedHttpShortcutsSection } from "./AdvancedHttpShortcutsSection";
 
 export function KeyboardShortcutsSection({
   uiPreferences,

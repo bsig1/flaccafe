@@ -1,5 +1,5 @@
-import { AppView } from "./AppView";
 import { useAppController } from "./AppController";
+import { AppView } from "./AppView";
 import { MiniPlayerWindow } from "./player/MiniPlayerWindow";
 
 export default function App() {

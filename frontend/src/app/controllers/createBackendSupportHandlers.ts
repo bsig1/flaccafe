@@ -1,27 +1,30 @@
 // @ts-nocheck
 import {
-  backupDatabase,
-  createSupportBundle,
-  fetchBackendHealth,
-  fetchBackendLog,
-  fetchStartupDiagnostics,
-  fetchTracksBatch,
-  resetLocalData,
-  updateSettings,
+backupDatabase,
+createSupportBundle,
+fetchBackendHealth,
+fetchBackendLog,
+fetchStartupDiagnostics,
+fetchTracksBatch,
+resetLocalData,
+updateSettings,
 } from "../../lib/api";
 import { openExternalUrl } from "../../lib/externalLinks";
-import {
-  BACKEND_STARTUP_GRACE_MS,
-  BACKEND_STARTUP_POLL_MS,
-} from "../appHelpers";
-import {
-  legacyStorageKeys,
-  normalizePlaybackResumePosition,
-  storageKeys,
-  type StoredPlaybackSession,
-} from "../shared";
 import type { Track } from "../../types/api";
+import {
+BACKEND_STARTUP_GRACE_MS,
+BACKEND_STARTUP_POLL_MS,
+} from "../appHelpers";
 import type { EditableMetadataKey } from "../components/modals";
+import {
+legacyStorageKeys,
+miniPlayerPresetFromPreferences,
+miniPlayerSizeForPreset,
+readUiPreferences,
+normalizePlaybackResumePosition,
+storageKeys,
+type StoredPlaybackSession,
+} from "../shared";
 
 export function createBackendSupportHandlers(model: any) {
   const {
@@ -207,14 +210,18 @@ export function createBackendSupportHandlers(model: any) {
         await existing.setFocus();
         return;
       }
+      const miniPrefs = readUiPreferences();
+      const miniPreset = miniPlayerPresetFromPreferences(miniPrefs);
+      const miniSize = miniPlayerSizeForPreset(miniPreset, false);
       const miniWindow = new WebviewWindow("mini-player", {
         title: "FLAC Cafe Mini Player",
         url: "/index.html?miniPlayer=1",
-        width: 640,
-        height: 138,
-        minWidth: 420,
-        minHeight: 118,
-        resizable: true,
+        width: miniSize.width,
+        height: miniSize.height,
+        minWidth: 300,
+        minHeight: 92,
+        resizable: false,
+        maximizable: false,
         decorations: true,
       });
       miniWindow.once("tauri://created", () => {
@@ -422,13 +429,19 @@ export function createBackendSupportHandlers(model: any) {
     }
   }
 
-  async function handleOpenSourceFolder(kind: "source" | "themes" = "source") {
+  async function handleOpenSourceFolder(kind: "source" | "themes" | "lyrics" = "source") {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       await invoke("open_source_folder", { kind });
-      setStatus(kind === "themes" ? "Opened themes folder" : "Opened source folder");
+      setStatus(kind === "themes" ? "Opened themes folder" : kind === "lyrics" ? "Opened cached lyrics folder" : "Opened source folder");
     } catch {
-      setStatus(kind === "themes" ? "Themes live in frontend/src/config/themes" : "Source folder is the current project directory.");
+      setStatus(
+        kind === "themes"
+          ? "Themes live in frontend/src/config/themes"
+          : kind === "lyrics"
+            ? "Cached lyrics live under the FLAC Cafe data folder."
+            : "Source folder is the current project directory.",
+      );
     }
   }
 

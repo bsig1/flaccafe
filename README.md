@@ -35,7 +35,7 @@ Windows beta installers are published on the [GitHub Releases page](https://gith
 - SQLite-backed ratings, play history, playlists, lyrics, recommendation history, podcasts, audiobooks, and web radio bookmarks.
 - Optional metadata and rating writes back to files when the setting is enabled.
 - MusicBee-inspired library tools for filename-to-tag inference, MusicBrainz auto-tagging, acoustic fingerprints, volume tags, tag backups, CSV cleanup, file organization previews, desktop-library stats import, and cache cleanup.
-- Local playback through the Tauri WebView or experimental Rust audio engine, with queue controls, fade/crossfade, sleep timer, lyrics, visualizers, artist info, and media-key integration.
+- Rust-owned local playback, URL/radio playback, CD track preparation, queue controls, fade/crossfade, sleep timer, lyrics, visualizers, artist info, and media-key integration.
 - AutoDJ with beginner and advanced controls, temperature sampling, cooldowns, unrated exploration, seed-track similarity, and optional CLAP audio embeddings.
 - Album, artist, playlist, audiobook, podcast, radio, source-folder, history, and file-management views.
 - Optional CD detection, live CD preview/playback, MusicBrainz disc lookup, and FLAC/MP3/WAV ripping workflows.
@@ -79,16 +79,16 @@ python -m venv .venv
 Install frontend dependencies:
 
 ```powershell
-npm install
+npm.cmd install
 ```
 
 Run the desktop shell:
 
 ```powershell
-npm run desktop
+npm.cmd run desktop
 ```
 
-`npm run dev` is now a Windows-friendly alias for the desktop shell. The Python side runs as named worker calls instead of a long-running HTTP backend. If an old dev server is still running:
+`npm.cmd run dev` is now a Windows-friendly alias for the desktop shell. The Python side runs as named worker calls instead of a long-running HTTP backend. If an old dev server is still running:
 
 ```powershell
 .\scripts\stop_dev.ps1
@@ -113,17 +113,16 @@ Manual dev install:
 ## Checks
 
 ```powershell
-npm run check
-npm run test
-npm run build
-Set-Location src-tauri
-cargo check
+npm.cmd run check
+npm.cmd run test
+npm.cmd run build
+cargo check --manifest-path src-tauri\Cargo.toml --all-targets
 ```
 
 ## Packaging
 
 ```powershell
-npm run package:msi
+npm.cmd run package:msi
 ```
 
 The Windows MSI product version must be numeric, so beta builds use a numeric Windows product version such as `0.5.0` and a release/installer label such as `0.5.0-beta`.

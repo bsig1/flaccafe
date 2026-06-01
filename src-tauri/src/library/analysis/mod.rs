@@ -238,6 +238,8 @@ fn run_analysis(job_id: &str) -> Result<(), String> {
     let mut worker = ClapWorker::start()?;
     let configured_batch_size = clap_analysis_batch_size();
     let samples_per_track = configured_clap_analysis_samples_per_track();
+    // User-facing batch size is tracks, but the worker batches audio windows.
+    // Cap tracks so a high sample count does not explode memory per request.
     let max_track_batch_for_windows =
         (CLAP_ANALYSIS_MAX_BATCH_WINDOWS / samples_per_track.max(1)).max(1);
     let batch_size = configured_batch_size.min(max_track_batch_for_windows);
@@ -377,6 +379,8 @@ pub(crate) fn configured_clap_analysis_samples_per_track() -> usize {
     {
         return samples.clamp(1, CLAP_ANALYSIS_MAX_SAMPLES_PER_TRACK);
     }
+    // Older builds stored a seconds budget. Convert that preference to the new
+    // 10-second sample count so upgrades keep roughly the same analysis depth.
     get_setting(&connection, "clap_max_duration_seconds")
         .and_then(|value| legacy_clap_samples_from_duration(&value))
         .unwrap_or(CLAP_ANALYSIS_DEFAULT_SAMPLES_PER_TRACK)

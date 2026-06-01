@@ -1,19 +1,19 @@
 import {
-  Eye,
+Eye,
 } from "lucide-react";
 
 import type {
-  CsvMetadataImportReportResponse,
-  DuplicateActionResponse,
-  FileOrganizationReportResponse,
-  ReportFileResponse,
+CsvMetadataImportReportResponse,
+DuplicateActionResponse,
+FileOrganizationReportResponse,
+ReportFileResponse,
 } from "../../../types/api";
 import {
-  DisclosureSection,
+DisclosureSection,
 } from "../../components/common";
 import {
-  formatJson,
-  reportSummary,
+formatJson,
+reportSummary,
 } from "./fileManagementUtils";
 
 export function ReportViewerSection({

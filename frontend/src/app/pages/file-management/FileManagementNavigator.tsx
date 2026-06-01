@@ -1,6 +1,6 @@
 import {
-  Search,
-  X,
+Search,
+X,
 } from "lucide-react";
 
 export type FileManagementCategory = "All" | "Setup" | "Tags" | "Files" | "Devices" | "Import" | "Maintenance";
@@ -86,13 +86,6 @@ export const fileManagementSections: FileManagementSectionMeta[] = [
     description: "Copy files and playlists to phones, USB drives, or portable players.",
     category: "Devices",
     keywords: ["android", "usb", "playlist export", "sync"],
-  },
-  {
-    id: "cdRipper",
-    title: "CD Ripper",
-    description: "CD playback, extraction, metadata lookup, and verification.",
-    category: "Files",
-    keywords: ["rip", "flac", "mp3", "disc", "musicbrainz"],
   },
   {
     id: "audioConversion",

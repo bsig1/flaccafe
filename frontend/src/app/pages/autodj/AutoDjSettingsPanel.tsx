@@ -1,30 +1,30 @@
 import {
-  PanelLeftClose,
-  PanelLeftOpen,
-  Play,
-  RadioTower,
-  SlidersHorizontal,
-  X,
+PanelLeftClose,
+PanelLeftOpen,
+Play,
+RadioTower,
+SlidersHorizontal,
+X,
 } from "lucide-react";
 
 import type {
-  AutoDjAvoidRule,
-  AutoDjSettings,
-  RecommendationAbTestResponse,
-  RecommendationProfile,
-  RecommendationProfileComparison,
-  SimilarTrack,
-  Track,
+AutoDjAvoidRule,
+AutoDjSettings,
+RecommendationAbTestResponse,
+RecommendationProfile,
+RecommendationProfileComparison,
+SimilarTrack,
+Track,
 } from "../../../types/api";
 import { NumberField } from "../../components/common";
 import {
-  AutoDjExperience,
-  AutoDjTemplate,
-  autoDjMoodSeedOptions,
-  defaultAutoDj,
-  display,
-  formatDuration,
-  formatShortDate,
+AutoDjExperience,
+AutoDjTemplate,
+autoDjMoodSeedOptions,
+defaultAutoDj,
+display,
+formatDuration,
+formatShortDate,
 } from "../../shared";
 
 export function AutoDjSettingsPanel({ model }: { model: any }) {
@@ -74,44 +74,63 @@ export function AutoDjSettingsPanel({ model }: { model: any }) {
     onDeleteAvoidRule,
   } = model;
   const selectedMoodSeeds = settings.mood_seeds ?? [];
+  const selectedAvoidMoodSeeds = settings.mood_avoid_seeds ?? [];
   const moodSeedWeight = Number(settings.mood_seed_weight ?? defaultAutoDj.mood_seed_weight ?? 1.4);
-  const toggleMoodSeed = (mood: string) => {
-    const next = selectedMoodSeeds.includes(mood)
+  const moodAvoidWeight = Number(settings.mood_avoid_weight ?? defaultAutoDj.mood_avoid_weight ?? 1.4);
+  const toggleMoodSeed = (mood: string, polarity: "positive" | "negative") => {
+    const positive = selectedMoodSeeds.includes(mood)
       ? selectedMoodSeeds.filter((seed) => seed !== mood)
-      : [...selectedMoodSeeds, mood];
+      : polarity === "positive"
+        ? [...selectedMoodSeeds, mood]
+        : selectedMoodSeeds;
+    const negative = selectedAvoidMoodSeeds.includes(mood)
+      ? selectedAvoidMoodSeeds.filter((seed) => seed !== mood)
+      : polarity === "negative"
+        ? [...selectedAvoidMoodSeeds, mood]
+        : selectedAvoidMoodSeeds;
     setSettings({
       ...settings,
-      mood_seeds: next,
+      mood_seeds: polarity === "positive" ? positive : positive.filter((seed) => seed !== mood),
+      mood_avoid_seeds: polarity === "negative" ? negative : negative.filter((seed) => seed !== mood),
       mood_seed_weight: settings.mood_seed_weight ?? defaultAutoDj.mood_seed_weight,
+      mood_avoid_weight: settings.mood_avoid_weight ?? defaultAutoDj.mood_avoid_weight,
     });
   };
   const renderMoodSeedControls = () => (
     <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
       <div className="flex items-center justify-between gap-3">
         <div className="text-xs font-medium uppercase text-muted">Mood Seeds</div>
-        {selectedMoodSeeds.length > 0 && (
+        {selectedMoodSeeds.length > 0 || selectedAvoidMoodSeeds.length > 0 ? (
           <button
             className="text-xs text-muted hover:text-white"
             type="button"
-            onClick={() => setSettings({ ...settings, mood_seeds: [] })}
+            onClick={() => setSettings({ ...settings, mood_seeds: [], mood_avoid_seeds: [] })}
           >
             Clear
           </button>
-        )}
+        ) : null}
       </div>
       <div className="flex flex-wrap gap-1.5">
         {autoDjMoodSeedOptions.map((mood) => {
           const selected = selectedMoodSeeds.includes(mood);
+          const avoided = selectedAvoidMoodSeeds.includes(mood);
           return (
             <button
               key={mood}
               className={`rounded border px-2 py-1 text-xs transition ${
                 selected
                   ? "border-moss bg-moss/15 text-white"
+                  : avoided
+                    ? "border-ember bg-ember/15 text-ember"
                   : "border-line/70 bg-panel text-muted hover:text-white"
               }`}
               type="button"
-              onClick={() => toggleMoodSeed(mood)}
+              title="Left-click to prefer; right-click to avoid"
+              onClick={() => toggleMoodSeed(mood, "positive")}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                toggleMoodSeed(mood, "negative");
+              }}
             >
               {mood.slice(0, 1).toUpperCase() + mood.slice(1)}
             </button>
@@ -129,6 +148,20 @@ export function AutoDjSettingsPanel({ model }: { model: any }) {
             value={moodSeedWeight}
             onChange={(event) => setSettings({ ...settings, mood_seed_weight: Number(event.target.value) })}
             className="accent-moss"
+          />
+        </label>
+      )}
+      {selectedAvoidMoodSeeds.length > 0 && (
+        <label className="grid gap-1">
+          <span className="text-xs text-muted">Avoid strength {moodAvoidWeight.toFixed(1)}</span>
+          <input
+            type="range"
+            min={0}
+            max={5}
+            step={0.1}
+            value={moodAvoidWeight}
+            onChange={(event) => setSettings({ ...settings, mood_avoid_weight: Number(event.target.value) })}
+            className="accent-ember"
           />
         </label>
       )}

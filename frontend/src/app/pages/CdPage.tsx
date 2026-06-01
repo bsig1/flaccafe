@@ -1,5 +1,5 @@
 import type {
-  Track,
+Track,
 } from "../../types/api";
 import { CdRipperSection } from "./file-management/CdRipperSection";
 

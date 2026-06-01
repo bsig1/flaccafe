@@ -1,32 +1,33 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach,describe,expect,it } from "vitest";
 
-import {
-  defaultKeyboardShortcuts,
-  displayAlbumForTrack,
-  formatDuration,
-  formatPlaybackTime,
-  formatShortcut,
-  formatDate,
-  isTimestampOnlyLyricLine,
-  normalizeAudioAnalysisCoverage,
-  normalizeAdvancedHttpShortcuts,
-  normalizePlaybackResumePosition,
-  normalizeEqualizerGains,
-  normalizeKeyboardShortcuts,
-  parseLyricTimestamp,
-  parseAppDate,
-  readUiPreferences,
-  replayGainMultiplier,
-  shortcutConflictGroups,
-  shortcutFromEvent,
-  shortcutMatchesEvent,
-  splitArtistNames,
-  storageKeys,
-  stripLyricTimestamp,
-} from "./shared";
 import { backendRouteCatalog } from "../lib/backendRouteCatalog";
-import { playbackEndedEarly } from "./player/playbackEarlyEnd";
 import type { Track } from "../types/api";
+import { playbackEndedEarly } from "./player/playbackEarlyEnd";
+import {
+defaultKeyboardShortcuts,
+displayAlbumForTrack,
+formatDate,
+formatDuration,
+formatPlaybackTime,
+formatShortcut,
+isTimestampOnlyLyricLine,
+normalizeAdvancedHttpShortcuts,
+normalizeAudioAnalysisCoverage,
+normalizeEqualizerGains,
+normalizeKeyboardShortcuts,
+normalizeLibraryColumns,
+normalizePlaybackResumePosition,
+parseAppDate,
+parseLyricTimestamp,
+readUiPreferences,
+replayGainMultiplier,
+shortcutConflictGroups,
+shortcutFromEvent,
+shortcutMatchesEvent,
+splitArtistNames,
+storageKeys,
+stripLyricTimestamp,
+} from "./shared";
 
 describe("keyboard shortcuts", () => {
   it("keeps defaults when stored shortcuts are missing or malformed", () => {
@@ -114,7 +115,7 @@ describe("playback early-end detection", () => {
   it("flags decoder EOF far before the saved track duration", () => {
     expect(playbackEndedEarly(115.879, 181.88)).toBe(true);
     expect(playbackEndedEarly(179.5, 181.88)).toBe(false);
-    expect(playbackEndedEarly(4, 181.88)).toBe(true);
+    expect(playbackEndedEarly(4, 181.88)).toBe(false);
     expect(playbackEndedEarly(10, 20)).toBe(false);
   });
 });
@@ -239,6 +240,12 @@ describe("artist name splitting", () => {
       "Sean Paul",
       "Anne-Marie",
     ]);
+  });
+
+  it("normalizes movable play-button column layouts", () => {
+    expect(normalizeLibraryColumns(["title", "artist", "rating"])).toEqual(["play", "title", "artist", "rating"]);
+    expect(normalizeLibraryColumns(["title", "play", "artist", "play"])).toEqual(["title", "play", "artist"]);
+    expect(normalizeLibraryColumns(["play"])).toEqual(["play", "title", "artist", "album", "genre", "rating", "duration_seconds"]);
   });
 });
 

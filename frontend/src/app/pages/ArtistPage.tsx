@@ -1,24 +1,25 @@
 import {
-  ExternalLink,
-  Pencil,
-  RefreshCw,
-  Save,
-  UserRound,
+ExternalLink,
+Pencil,
+Plus,
+RefreshCw,
+Save,
+UserRound,
 } from "lucide-react";
 import {
-  useEffect,
-  useMemo,
-  useState,
+useEffect,
+useMemo,
+useState,
 } from "react";
 
 import type {
-  ArtistInfoResponse,
-  Track,
+ArtistInfoResponse,
+Track,
 } from "../../types/api";
 import {
-  display,
-  formatRating,
-  splitArtistNames,
+display,
+formatRating,
+splitArtistNames,
 } from "../shared";
 
 function artistInfoMatchesName(info: ArtistInfoResponse | null | undefined, name: string) {
@@ -294,19 +295,28 @@ export function ArtistPage({
           <div className="min-h-0 overflow-auto px-7 py-6">
             {isOverrideOpen && (
               <form
-                className="mb-5 flex flex-wrap items-center gap-2"
+                className="mb-5 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-start"
                 onSubmit={(event) => {
                   event.preventDefault();
                   void handleSaveOverride();
                 }}
               >
-                <input
-                  aria-label="Wikipedia title or URL"
-                  className="min-w-[220px] flex-1 rounded border border-line bg-ink px-3 py-2 text-sm text-white outline-none focus:border-moss"
-                  placeholder="Wikipedia title or URL"
+                <textarea
+                  aria-label="Wikipedia titles or URLs"
+                  className="min-h-20 min-w-[220px] rounded border border-line bg-ink px-3 py-2 text-sm text-white outline-none focus:border-moss"
+                  placeholder="Wikipedia title or URL, one per line"
                   value={overrideDraft}
                   onChange={(event) => setOverrideDraft(event.target.value)}
                 />
+                <button
+                  className="secondary-button h-9"
+                  type="button"
+                  disabled={!activeArtistName}
+                  onClick={() => setOverrideDraft((current) => (current.trim() ? `${current.replace(/\s+$/, "")}\n` : ""))}
+                >
+                  <Plus size={14} />
+                  URL
+                </button>
                 <button className="secondary-button h-9" type="submit" disabled={!canSaveOverride}>
                   <Save size={14} />
                   Use Page

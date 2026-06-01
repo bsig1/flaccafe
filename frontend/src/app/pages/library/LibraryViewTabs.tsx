@@ -1,19 +1,19 @@
 import {
-  Album,
-  Inbox,
-  ListMusic,
-  MoreHorizontal,
-  ShieldCheck,
-  UserRound,
+Album,
+Inbox,
+ListMusic,
+MoreHorizontal,
+ShieldCheck,
+UserRound,
 } from "lucide-react";
 import {
-  useEffect,
-  useRef,
-  useState,
+useEffect,
+useRef,
+useState,
 } from "react";
 
 import type {
-  LibraryView,
+LibraryView,
 } from "../../shared";
 
 export function LibraryViewTabs({

@@ -1,11 +1,11 @@
 import {
-  Search,
-  X,
+Search,
+X,
 } from "lucide-react";
 
 import type {
-  BulkLyricsProgress,
-  BulkLyricsSaveLocation,
+BulkLyricsProgress,
+BulkLyricsSaveLocation,
 } from "../../../types/api";
 
 export function BulkLyricsLookupCard({

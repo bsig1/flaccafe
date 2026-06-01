@@ -122,6 +122,37 @@ pub fn update_audiobook_progress(
 }
 
 #[tauri::command]
+pub fn track_resume_progress(
+    _state: State<'_, DesktopLibraryState>,
+    track_id: i64,
+) -> Result<Option<DesktopAudiobookProgressResponse>, String> {
+    let connection = open_database()?;
+    let mut statement = connection
+        .prepare(
+            "SELECT track_id, position_seconds, duration_seconds, updated_at
+             FROM audiobook_progress
+             WHERE track_id = ?",
+        )
+        .map_err(|error| format!("Could not prepare resume progress query: {error}"))?;
+    let mut rows = statement
+        .query_map(params![track_id], |row| {
+            Ok(DesktopAudiobookProgressResponse {
+                track_id: row.get("track_id")?,
+                position_seconds: row.get("position_seconds")?,
+                duration_seconds: row.get("duration_seconds")?,
+                updated_at: row.get("updated_at")?,
+            })
+        })
+        .map_err(|error| format!("Could not read resume progress: {error}"))?;
+    match rows.next() {
+        Some(row) => row
+            .map(Some)
+            .map_err(|error| format!("Could not decode resume progress: {error}")),
+        None => Ok(None),
+    }
+}
+
+#[tauri::command]
 pub fn audiobook_bookmarks(
     _state: State<'_, DesktopLibraryState>,
     track_id: i64,

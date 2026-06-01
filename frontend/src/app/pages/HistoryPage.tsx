@@ -1,26 +1,32 @@
 import {
-  RefreshCw,
+Play,
+RefreshCw,
 } from "lucide-react";
 import {
-  useState,
+useState,
 } from "react";
 
 import type {
-  HistoryStatsResponse,
-  HistoryTrackStat,
-  LibraryStatsResponse,
-  PlayEventEntry,
-  Track,
+HistoryAlbumCompletionStat,
+HistoryDensityStat,
+HistoryPeriodStat,
+HistoryRatingStat,
+HistoryStatsResponse,
+HistoryTrackStat,
+LibraryStatsResponse,
+LibraryTimelineStat,
+PlayEventEntry,
+Track,
 } from "../../types/api";
 import {
-  ResizableHeader,
+ResizableHeader,
 } from "../components/common";
 import {
-  HistoryColumnKey,
-  defaultHistoryColumnWidths,
-  display,
-  formatDuration,
-  parseAppDate,
+HistoryColumnKey,
+defaultHistoryColumnWidths,
+display,
+formatDuration,
+parseAppDate,
 } from "../shared";
 
 function eventLabel(eventType: PlayEventEntry["event_type"]) {
@@ -68,6 +74,143 @@ function formatListeningTime(seconds: number | null | undefined) {
     return "0:00";
   }
   return formatDuration(seconds);
+}
+
+function periodRowsFor(
+  stats: HistoryStatsResponse | null,
+  period: "day" | "week" | "month",
+): HistoryPeriodStat[] {
+  if (!stats) {
+    return [];
+  }
+  if (period === "day") {
+    return stats.events_by_day ?? [];
+  }
+  if (period === "week") {
+    return stats.events_by_week ?? [];
+  }
+  return stats.events_by_month ?? [];
+}
+
+function timelineRowsFor(
+  stats: HistoryStatsResponse | null,
+  period: "day" | "week" | "month",
+): LibraryTimelineStat[] {
+  if (!stats) {
+    return [];
+  }
+  if (period === "day") {
+    return stats.library_added_by_day ?? [];
+  }
+  if (period === "week") {
+    return stats.library_added_by_week ?? [];
+  }
+  return stats.library_added_by_month ?? [];
+}
+
+function ratingLabel(rating: number) {
+  return Number.isInteger(rating) ? String(rating) : rating.toFixed(1);
+}
+
+function renderRatingDistribution(rows: HistoryRatingStat[]) {
+  const maxCount = Math.max(1, ...rows.map((row) => row.count));
+  return (
+    <div className="grid gap-2">
+      {rows.map((row) => (
+        <div key={row.rating} className="grid grid-cols-[3rem_minmax(0,1fr)_3rem] items-center gap-2 text-xs">
+          <span className="text-muted">{ratingLabel(row.rating)}</span>
+          <div className="h-2 overflow-hidden rounded bg-ink">
+            <div className="h-full rounded bg-moss" style={{ width: `${Math.max(4, (row.count / maxCount) * 100)}%` }} />
+          </div>
+          <span className="text-right tabular-nums text-neutral-200">{compactNumber(row.count)}</span>
+        </div>
+      ))}
+      {rows.length === 0 && (
+        <div className="rounded border border-line/70 bg-ink px-3 py-6 text-center text-xs text-muted">
+          No rated tracks yet.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function renderPeriodBars(rows: HistoryPeriodStat[]) {
+  const maxPlays = Math.max(1, ...rows.map((row) => row.plays));
+  const visibleRows = rows.slice(-18);
+  return (
+    <div className="grid gap-2">
+      {visibleRows.map((row) => (
+        <div key={row.period} className="grid grid-cols-[5.75rem_minmax(0,1fr)_3rem] items-center gap-2 text-xs" title={`${row.plays.toLocaleString()} plays, ${row.skips.toLocaleString()} skips, ${formatListeningTime(row.listened_seconds)}`}>
+          <span className="truncate text-muted">{row.period}</span>
+          <div className="h-2 overflow-hidden rounded bg-ink">
+            <div className="h-full rounded bg-ember" style={{ width: `${Math.max(4, (row.plays / maxPlays) * 100)}%` }} />
+          </div>
+          <span className="text-right tabular-nums text-neutral-200">{compactNumber(row.plays)}</span>
+        </div>
+      ))}
+      {visibleRows.length === 0 && (
+        <div className="rounded border border-line/70 bg-ink px-3 py-6 text-center text-xs text-muted">
+          No listening events yet.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function renderTimelineBars(rows: LibraryTimelineStat[]) {
+  const maxTracks = Math.max(1, ...rows.map((row) => row.tracks));
+  const visibleRows = rows.slice(-18);
+  return (
+    <div className="grid gap-2">
+      {visibleRows.map((row) => (
+        <div key={row.period} className="grid grid-cols-[5.75rem_minmax(0,1fr)_3rem] items-center gap-2 text-xs" title={`${row.tracks.toLocaleString()} tracks, ${formatListeningTime(row.duration_seconds)}`}>
+          <span className="truncate text-muted">{row.period}</span>
+          <div className="h-2 overflow-hidden rounded bg-ink">
+            <div className="h-full rounded bg-moss" style={{ width: `${Math.max(4, (row.tracks / maxTracks) * 100)}%` }} />
+          </div>
+          <span className="text-right tabular-nums text-neutral-200">{compactNumber(row.tracks)}</span>
+        </div>
+      ))}
+      {visibleRows.length === 0 && (
+        <div className="rounded border border-line/70 bg-ink px-3 py-6 text-center text-xs text-muted">
+          No library additions yet.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function renderListeningDensity(rows: HistoryDensityStat[]) {
+  const rowMap = new Map(rows.map((row) => [`${row.weekday}:${row.hour}`, row.plays]));
+  const maxPlays = Math.max(1, ...rows.map((row) => row.plays));
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  return (
+    <div className="grid gap-1">
+      <div className="grid grid-cols-[2.2rem_repeat(24,minmax(0,1fr))] gap-1 text-[9px] text-muted">
+        <span />
+        {Array.from({ length: 24 }, (_, hour) => (
+          <span key={hour} className="text-center">{hour % 6 === 0 ? hour : ""}</span>
+        ))}
+      </div>
+      {days.map((day, weekday) => (
+        <div key={day} className="grid grid-cols-[2.2rem_repeat(24,minmax(0,1fr))] gap-1">
+          <span className="text-[10px] text-muted">{day}</span>
+          {Array.from({ length: 24 }, (_, hour) => {
+            const plays = rowMap.get(`${weekday}:${hour}`) ?? 0;
+            const opacity = plays === 0 ? 0.08 : 0.22 + (plays / maxPlays) * 0.68;
+            return (
+              <div
+                key={`${day}-${hour}`}
+                className="aspect-square rounded-sm bg-moss"
+                style={{ opacity }}
+                title={`${day} ${hour}:00 - ${plays.toLocaleString()} play${plays === 1 ? "" : "s"}`}
+              />
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function deriveHistoryStats(events: PlayEventEntry[], stats: LibraryStatsResponse | null): HistoryStatsResponse | null {
@@ -129,6 +272,11 @@ function deriveHistoryStats(events: PlayEventEntry[], stats: LibraryStatsRespons
     unique_played_tracks: rows.filter((row) => row.play_count > 0).length,
     unique_skipped_tracks: rows.filter((row) => row.skip_count > 0).length,
     total_listened_seconds: rows.reduce((total, row) => total + row.listened_seconds, 0),
+    albums_completed: 0,
+    albums_tracked: stats?.total_albums ?? 0,
+    album_completion_percent: 0,
+    completed_albums: [],
+    next_albums: [],
     top_played: rows
       .filter((row) => row.play_count > 0)
       .sort((left, right) => right.play_count - left.play_count || right.listened_seconds - left.listened_seconds)
@@ -156,8 +304,11 @@ export function HistoryPage({
   const playable = events.map((event) => event.track).filter((track): track is Track => Boolean(track));
   const [columnWidths, setColumnWidths] = useState<Record<HistoryColumnKey, number>>(defaultHistoryColumnWidths);
   const [historyView, setHistoryView] = useState<"stats" | "recent">("stats");
+  const [historyPeriod, setHistoryPeriod] = useState<"day" | "week" | "month">("week");
   const tableWidth = Object.values(columnWidths).reduce((total, width) => total + width, 0);
   const displayStats = historyStats ?? deriveHistoryStats(events, stats);
+  const periodRows = periodRowsFor(displayStats, historyPeriod);
+  const timelineRows = timelineRowsFor(displayStats, historyPeriod);
 
   function handleResize(column: string, width: number) {
     if (!(column in columnWidths)) {
@@ -197,6 +348,107 @@ export function HistoryPage({
     );
   }
 
+  function renderAlbumProgress(row: HistoryAlbumCompletionStat) {
+    const percent = Math.max(0, Math.min(100, row.completion_percent));
+    return (
+      <div className="mt-2 h-2 overflow-hidden rounded bg-ink">
+        <div
+          className={`h-full rounded ${row.unplayed_track_count === 0 ? "bg-moss" : "bg-ember"}`}
+          style={{ width: `${Math.max(4, percent)}%` }}
+        />
+      </div>
+    );
+  }
+
+  function renderAlbumCompletionRow(row: HistoryAlbumCompletionStat, mode: "next" | "completed") {
+    const nextTrack = row.next_track;
+    const subtitle = `${display(row.album_artist, "Unknown artist")} - ${row.played_track_count.toLocaleString()}/${row.track_count.toLocaleString()} tracks`;
+    return (
+      <div
+        key={`${mode}-${row.album_artist ?? "unknown"}-${row.album}`}
+        className="rounded border border-line/70 bg-ink px-3 py-2 text-xs"
+      >
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-medium text-neutral-100">{display(row.album, "Unknown album")}</div>
+            <div className="truncate text-muted">{subtitle}</div>
+          </div>
+          <div className={mode === "completed" ? "shrink-0 tabular-nums text-moss" : "shrink-0 tabular-nums text-ember"}>
+            {mode === "completed" ? "done" : `${row.unplayed_track_count} left`}
+          </div>
+        </div>
+        {renderAlbumProgress(row)}
+        <div className="mt-2 flex min-w-0 items-center justify-between gap-3 text-[11px] text-muted">
+          <span className="truncate">
+            {mode === "completed"
+              ? row.last_played_at
+                ? `Completed by ${formatHistoryDate(row.last_played_at)}`
+                : "All local tracks have been played"
+              : nextTrack
+                ? `Next: ${display(nextTrack.title, "Untitled")}`
+                : "No unplayed track found"}
+          </span>
+          {mode === "next" && nextTrack && (
+            <button
+              className="inline-flex h-7 shrink-0 items-center gap-1 rounded border border-moss/40 px-2 text-moss transition hover:bg-moss/10"
+              type="button"
+              title="Play next unplayed track"
+              onClick={() => onPlayTrack(nextTrack, [nextTrack])}
+            >
+              <Play size={12} />
+              Play
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  function renderAlbumCompletionPanel() {
+    const nextAlbums = displayStats?.next_albums ?? [];
+    const completedAlbums = displayStats?.completed_albums ?? [];
+    const primaryNextAlbum = nextAlbums[0] ?? null;
+    return (
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+        <div className="rounded border border-line bg-panel p-4">
+          <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-white">Next Album To Finish</div>
+              <div className="text-xs text-muted">Closest incomplete albums by unplayed track count.</div>
+            </div>
+            {primaryNextAlbum && (
+              <span className="rounded border border-ember/30 bg-ember/10 px-2 py-1 text-xs text-ember">
+                {primaryNextAlbum.unplayed_track_count.toLocaleString()} left
+              </span>
+            )}
+          </div>
+          <div className="grid gap-2">
+            {nextAlbums.slice(0, 5).map((row) => renderAlbumCompletionRow(row, "next"))}
+            {nextAlbums.length === 0 && (
+              <div className="rounded border border-line/70 bg-ink px-3 py-8 text-center text-xs text-muted">
+                No incomplete albums found.
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="rounded border border-line bg-panel p-4">
+          <div className="mb-3">
+            <div className="text-sm font-semibold text-white">Completed Albums</div>
+            <div className="text-xs text-muted">Most recently finished local album groups.</div>
+          </div>
+          <div className="grid max-h-80 gap-2 overflow-auto pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {completedAlbums.map((row) => renderAlbumCompletionRow(row, "completed"))}
+            {completedAlbums.length === 0 && (
+              <div className="rounded border border-line/70 bg-ink px-3 py-8 text-center text-xs text-muted">
+                No completed albums yet.
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <main className="flex min-w-0 flex-1 flex-col">
       <header className="flex min-h-16 flex-wrap items-center justify-between gap-3 border-b border-line px-6 py-3">
@@ -229,7 +481,7 @@ export function HistoryPage({
       {historyView === "stats" ? (
         <section className="min-h-0 flex-1 overflow-auto p-4">
           <div className="mx-auto grid max-w-6xl gap-4">
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
               <div className="rounded border border-line bg-panel p-4">
                 <div className="text-xs uppercase text-muted">Total Listens</div>
                 <div className="mt-2 text-2xl font-semibold text-white">{compactNumber(displayStats?.total_play_count)}</div>
@@ -246,11 +498,65 @@ export function HistoryPage({
                 <div className="mt-1 text-xs text-muted">{compactNumber(displayStats?.unique_skipped_tracks)} tracks skipped</div>
               </div>
               <div className="rounded border border-line bg-panel p-4">
+                <div className="text-xs uppercase text-muted">Albums Completed</div>
+                <div className="mt-2 text-2xl font-semibold text-white">{compactNumber(displayStats?.albums_completed)}</div>
+                <div className="mt-1 text-xs text-muted">
+                  {compactNumber(displayStats?.albums_tracked)} tracked / {(displayStats?.album_completion_percent ?? 0).toFixed(1)}%
+                </div>
+              </div>
+              <div className="rounded border border-line bg-panel p-4">
                 <div className="text-xs uppercase text-muted">Library</div>
                 <div className="mt-2 text-2xl font-semibold text-white">{compactNumber(stats?.total_tracks)}</div>
                 <div className="mt-1 text-xs text-muted">
                   {compactNumber(stats?.rated_tracks)} rated tracks / {compactNumber(displayStats?.total_rated_events)} rating events
                 </div>
+              </div>
+            </div>
+            {renderAlbumCompletionPanel()}
+            <div className="grid gap-4 xl:grid-cols-2">
+              <div className="rounded border border-line bg-panel p-4">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-white">Listening By {historyPeriod[0].toUpperCase() + historyPeriod.slice(1)}</div>
+                    <div className="text-xs text-muted">Plays, skips, ratings, and estimated listening time.</div>
+                  </div>
+                  <div className="grid grid-cols-3 rounded border border-line bg-ink p-1 text-xs">
+                    {(["day", "week", "month"] as const).map((period) => (
+                      <button
+                        key={period}
+                        className={`h-7 rounded px-2 capitalize transition ${historyPeriod === period ? "bg-white/10 text-white" : "text-muted hover:text-white"}`}
+                        type="button"
+                        onClick={() => setHistoryPeriod(period)}
+                      >
+                        {period}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {renderPeriodBars(periodRows)}
+              </div>
+              <div className="rounded border border-line bg-panel p-4">
+                <div className="mb-3">
+                  <div className="text-sm font-semibold text-white">Library Timeline</div>
+                  <div className="text-xs text-muted">Tracks added by {historyPeriod}.</div>
+                </div>
+                {renderTimelineBars(timelineRows)}
+              </div>
+            </div>
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+              <div className="rounded border border-line bg-panel p-4">
+                <div className="mb-3">
+                  <div className="text-sm font-semibold text-white">Rating Stats</div>
+                  <div className="text-xs text-muted">Distribution across saved track ratings.</div>
+                </div>
+                {renderRatingDistribution(displayStats?.rating_distribution ?? [])}
+              </div>
+              <div className="rounded border border-line bg-panel p-4">
+                <div className="mb-3">
+                  <div className="text-sm font-semibold text-white">Listening Density</div>
+                  <div className="text-xs text-muted">Play events by day of week and hour.</div>
+                </div>
+                {renderListeningDensity(displayStats?.listening_density ?? [])}
               </div>
             </div>
             <div className="grid gap-4 xl:grid-cols-2">
@@ -282,7 +588,7 @@ export function HistoryPage({
           </div>
         </section>
       ) : (
-        <section className="min-w-0 overflow-auto">
+        <section className="min-w-0 overflow-auto px-4 py-3">
           <table className="w-full table-fixed text-left text-sm" style={{ minWidth: tableWidth }}>
             <colgroup>
               <col style={{ width: columnWidths.event }} />

@@ -1,42 +1,69 @@
 import {
-  Copy,
-  Download,
-  Music2,
-  Pause,
-  Play,
-  RefreshCw,
-  ShieldCheck,
-  Wand2,
-  X,
+Copy,
+Download,
+Music2,
+Pause,
+Play,
+RefreshCw,
+ShieldCheck,
+Wand2,
+X,
 } from "lucide-react";
 import {
-  useState,
+useState,
+useEffect,
 } from "react";
 
+import {
+fetchClapLibraryStats,
+} from "../../lib/api";
 import type {
-  AudioAnalysisCoverage,
-  AudioAnalysisProgress,
-  ClapInstallDevice,
-  ClapInstallProgress,
-  ClapStatusResponse,
-  Track,
+AudioAnalysisCoverage,
+AudioAnalysisProgress,
+ClapInstallDevice,
+ClapInstallProgress,
+ClapLibraryStats,
+ClapStatusResponse,
+Track,
 } from "../../types/api";
 import {
-  DisclosureSection,
-  NumberField,
+DisclosureSection,
+NumberField,
 } from "../components/common";
 import {
-  fileName,
-  formatPercent,
-  formatTime,
-  isAnalysisTerminal,
-  normalizeAudioAnalysisCoverage,
+fileName,
+formatPercent,
+formatTime,
+isAnalysisTerminal,
+normalizeAudioAnalysisCoverage,
 } from "../shared";
 
 const CLAP_RUNTIME_SIZE_HINTS = {
   cpu: "Approx runtime size: 1-2 GB installed",
   cuda: "Approx runtime size: 5-7 GB installed",
 } satisfies Record<ClapInstallDevice, string>;
+
+const GPU_CAPABILITY_CACHE_KEY = "flaccafe.gpuCapabilityLabel";
+const GPU_ESTIMATE_CACHE_KEY = "flaccafe.gpuEstimateLabel";
+
+function readGpuLabelCache(key: string) {
+  try {
+    return window.sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeGpuLabelCache(key: string, value: string) {
+  try {
+    window.sessionStorage.setItem(key, value);
+  } catch {
+    // Session storage can be unavailable in hardened WebView environments.
+  }
+}
+
+let lastGpuCapabilityLabel: string | null = readGpuLabelCache(GPU_CAPABILITY_CACHE_KEY);
+let lastGpuEstimateLabel: string | null = readGpuLabelCache(GPU_ESTIMATE_CACHE_KEY);
 
 export function AnalysisPage({
   clapStatus,
@@ -109,6 +136,7 @@ export function AnalysisPage({
 }) {
   const [installPromptOpen, setInstallPromptOpen] = useState(false);
   const [clapLogCopied, setClapLogCopied] = useState(false);
+  const [clapLibraryStats, setClapLibraryStats] = useState<ClapLibraryStats | null>(null);
   const clapReady = Boolean(clapStatus?.installed);
   const clapStatusLoaded = Boolean(clapStatus);
   const clapDependencyErrorCount = Object.keys(clapStatus?.dependency_errors ?? {}).length;
@@ -160,7 +188,78 @@ export function AnalysisPage({
   const torchRuntime = clapStatus?.torch_device
     ? `${clapStatus.torch_device.toUpperCase()}${clapStatus.cuda_device_name ? ` - ${clapStatus.cuda_device_name}` : ""}`
     : "Not installed";
+  const hasCudaSignal = Boolean(
+    clapStatus?.cuda_available ||
+    clapStatus?.cuda_device_name ||
+    clapStatus?.torch_device?.toLowerCase() === "cuda",
+  );
+  const resolvedGpuCapability = hasCudaSignal
+    ? `CUDA available${clapStatus?.cuda_device_name ? ` - ${clapStatus.cuda_device_name}` : ""}`
+    : "No CUDA GPU detected";
+  const resolvedGpuEstimate = hasCudaSignal
+    ? "GPU analysis can be several times faster when disk reads keep up."
+    : "CPU analysis is compatible but usually slower for large libraries.";
+  if (clapStatusLoaded && (hasCudaSignal || !lastGpuCapabilityLabel)) {
+    lastGpuCapabilityLabel = resolvedGpuCapability;
+    lastGpuEstimateLabel = resolvedGpuEstimate;
+    writeGpuLabelCache(GPU_CAPABILITY_CACHE_KEY, resolvedGpuCapability);
+    writeGpuLabelCache(GPU_ESTIMATE_CACHE_KEY, resolvedGpuEstimate);
+  }
+  const gpuCapability = clapStatusLoaded && (hasCudaSignal || !lastGpuCapabilityLabel)
+    ? resolvedGpuCapability
+    : lastGpuCapabilityLabel ?? "Checking";
+  const gpuEstimate = clapStatusLoaded && (hasCudaSignal || !lastGpuEstimateLabel)
+    ? resolvedGpuEstimate
+    : lastGpuEstimateLabel ?? "CPU/GPU capability will appear after CLAP status loads.";
   const runtimeActionLabel = clapReady ? "Change Runtime" : "Install CLAP";
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!clapStatusLoaded) {
+      return () => {
+        cancelled = true;
+      };
+    }
+    void fetchClapLibraryStats()
+      .then((stats) => {
+        if (!cancelled) {
+          setClapLibraryStats(stats);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setClapLibraryStats(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [clapStatusLoaded, displayCoverage?.analyzed_tracks, displayCoverage?.failed_tracks]);
+
+  function renderLabelStats(title: string, rows: ClapLibraryStats["top_genres"]) {
+    const maxCount = Math.max(1, ...rows.map((row) => row.count));
+    return (
+      <div className="rounded border border-line bg-panel p-4">
+        <div className="mb-3 text-sm font-semibold text-white">{title}</div>
+        <div className="grid gap-2">
+          {rows.slice(0, 8).map((row) => (
+            <div key={`${title}-${row.label}`} className="grid gap-1">
+              <div className="flex items-center justify-between gap-3 text-xs">
+                <span className="truncate text-neutral-200">{row.label}</span>
+                <span className="shrink-0 tabular-nums text-muted">
+                  {row.count.toLocaleString()} / {formatPercent(row.average_confidence * 100)}
+                </span>
+              </div>
+              <div className="h-1.5 overflow-hidden rounded bg-ink">
+                <div className="h-full rounded bg-moss" style={{ width: `${Math.max(4, (row.count / maxCount) * 100)}%` }} />
+              </div>
+            </div>
+          ))}
+          {rows.length === 0 && <div className="rounded border border-line/70 bg-ink p-3 text-xs text-muted">No labels yet.</div>}
+        </div>
+      </div>
+    );
+  }
 
   async function copyClapLog() {
     if (!clapLogText) {
@@ -256,6 +355,16 @@ export function AnalysisPage({
               </div>
               <div className="mt-1 truncate text-xs text-muted">{torchRuntime}</div>
             </div>
+          </div>
+
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1fr)]">
+            <div className="rounded border border-line bg-panel p-4">
+              <div className="text-xs uppercase text-muted">GPU Capability</div>
+              <div className="mt-1 text-sm font-semibold text-white">{gpuCapability}</div>
+              <div className="mt-1 text-xs text-muted">{gpuEstimate}</div>
+            </div>
+            {renderLabelStats("Top CLAP Genres", clapLibraryStats?.top_genres ?? [])}
+            {renderLabelStats("Top CLAP Moods", clapLibraryStats?.top_moods ?? [])}
           </div>
 
           {installProgress && (

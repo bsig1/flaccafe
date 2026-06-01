@@ -1,165 +1,143 @@
 import {
-  Album,
-  ArrowDown,
-  ArrowUp,
-  BarChart3,
-  BookOpen,
-  CheckCircle2,
-  Download,
-  Fingerprint,
-  FolderOpen,
-  LayoutGrid,
-  List,
-  MoreHorizontal,
-  Pencil,
-  Play,
-  Podcast,
-  Plus,
-  RadioTower,
-  RefreshCw,
-  Save,
-  Search,
-  ShieldCheck,
-  Shuffle,
-  SkipForward,
-  SlidersHorizontal,
-  Star,
-  Tag,
-  Trash2,
-  Upload,
-  UserRound,
-  Volume2,
-  Wand2,
-  X,
+Album,
+ArrowDown,
+ArrowUp,
+BarChart3,
+BookOpen,
+CheckCircle2,
+Download,
+Fingerprint,
+FolderOpen,
+LayoutGrid,
+List,
+MoreHorizontal,
+Pencil,
+Play,
+Plus,
+Podcast,
+RadioTower,
+RefreshCw,
+Save,
+Search,
+ShieldCheck,
+Shuffle,
+SkipForward,
+SlidersHorizontal,
+Star,
+Tag,
+Trash2,
+Upload,
+UserRound,
+Volume2,
+Wand2,
+X,
 } from "lucide-react";
 import type {
-  CSSProperties,
-  DragEvent as ReactDragEvent,
-  MouseEvent as ReactMouseEvent,
-  MutableRefObject,
-  UIEvent as ReactUIEvent,
+CSSProperties,
+MouseEvent as ReactMouseEvent
 } from "react";
 import {
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
+useEffect,
+useLayoutEffect,
+useMemo,
+useRef,
+useState,
 } from "react";
 
 import {
-  albumArtworkUrl,
-  albumCoverUrl,
-  chooseAlbumArtwork,
-  clearAlbumArtwork,
-  embedAlbumArtworkFromPath,
-  embedEmbeddedAlbumArtwork,
-  fetchAlbumArtworkCandidates,
-  fetchTracks,
-  saveEmbeddedAlbumArtwork,
-  saveWebAlbumArtwork,
-  searchAlbumArtworkWeb,
-  lookupAlbumCompletion,
+albumArtworkUrl,
+albumCoverUrl,
+chooseAlbumArtwork,
+clearAlbumArtwork,
+embedAlbumArtworkFromPath,
+embedEmbeddedAlbumArtwork,
+fetchAlbumArtworkCandidates,
+fetchSimilarAlbums,
+fetchSimilarArtists,
+lookupAlbumCompletion,
+saveEmbeddedAlbumArtwork,
+saveWebAlbumArtwork,
+searchAlbumArtworkWeb,
+setAlbumArtworkLocked
 } from "../../lib/api";
 import {
-  placeFloatingMenu,
+placeFloatingMenu,
 } from "../../lib/uiInteractions";
 import type {
-  AlbumSummary,
-  AlbumArtworkCandidate,
-  AdvancedTrackSearchFilters,
-  ArtistSummary,
-  DuplicateGroup,
-  InboxAutoReviewField,
-  InboxAutoReviewMatchType,
-  InboxAutoReviewRule,
-  InboxAutoReviewRuleRequest,
-  LibraryHealthResponse,
-  LibraryStatsResponse,
-  InboxResponse,
-  PlaylistSummary,
-  Track,
-  TrackMetadataUpdate,
+AdvancedTrackSearchFilters,
+AlbumArtworkCandidate,
+AlbumSummary,
+InboxAutoReviewField,
+InboxAutoReviewMatchType,
+InboxAutoReviewRule,
+InboxAutoReviewRuleRequest,
+SimilarAlbum,
+SimilarArtist,
+Track
 } from "../../types/api";
 import {
-  RatingStars,
-  ResizableHeader,
+RatingStars,
+ResizableHeader,
 } from "../components/common";
 import { BulkMetadataModal } from "../components/modals";
-import type {
-  EditableMetadataKey,
-} from "../components/modals";
 import { QuickStartPanel } from "../components/QuickStartPanel";
 import { TrackDetailsPanel } from "../components/TrackDetailsPanel";
-import { LibraryViewTabs } from "./library/LibraryViewTabs";
+import {
+MENU_VIEWPORT_MARGIN,
+TRACK_AVOID_SUBMENU_HEIGHT,
+TRACK_AVOID_SUBMENU_WIDTH,
+TRACK_CONTEXT_MENU_HEIGHT,
+TRACK_CONTEXT_MENU_WIDTH,
+TRACK_CONTEXT_SUBMENU_WIDTH,
+TrackContextMenu,
+defaultLibraryVisibleColumns,
+display,
+fileName,
+formatBitrate,
+formatDuration,
+formatFingerprint,
+formatPercent,
+formatRating,
+formatShortDate,
+formatTime,
+libraryColumnDefinitions,
+librarySelectionColumnWidth,
+trackGenre
+} from "../shared";
+import type { LibraryPageProps } from "./library/LibraryPageTypes";
 import { LibraryPageView } from "./library/LibraryPageView";
 import { createLibraryTrackRenderers } from "./library/LibraryTrackRenderers";
-import { useLibraryColumnController } from "./library/useLibraryColumnController";
-import { useLibrarySelectionController } from "./library/useLibrarySelectionController";
-import { useLibraryScrollController } from "./library/useLibraryScrollController";
-import type { LibraryPageProps } from "./library/LibraryPageTypes";
+import { LibraryViewTabs } from "./library/LibraryViewTabs";
 import {
-  ColumnContextMenu,
-  LibraryColumnDefinition,
-  LibraryColumnKey,
-  LibraryView,
-  LIBRARY_PAGE_SIZE,
-  MENU_VIEWPORT_MARGIN,
-  MetadataColumnKey,
-  SortKey,
-  SortState,
-  TRACK_AVOID_SUBMENU_HEIGHT,
-  TRACK_AVOID_SUBMENU_WIDTH,
-  TRACK_CONTEXT_SUBMENU_WIDTH,
-  TRACK_CONTEXT_MENU_HEIGHT,
-  TRACK_CONTEXT_MENU_WIDTH,
-  TrackContextMenu,
-  defaultLibraryColumnWidths,
-  defaultLibraryVisibleColumns,
-  display,
-  fileName,
-  formatBitrate,
-  formatDuration,
-  formatFingerprint,
-  formatPercent,
-  formatRating,
-  formatShortDate,
-  formatTime,
-  libraryColumnDefinitions,
-  libraryColumnKeySet,
-  librarySelectionColumnWidth,
-  normalizeLibraryColumns,
-  trackGenre,
-} from "../shared";
-import {
-  ALBUM_GRID_ROW_HEIGHT,
-  ALBUM_LIST_ROW_HEIGHT,
-  ARTIST_ROW_HEIGHT,
-  COMPLETION_COLLAPSED_ROW_HEIGHT,
-  COMPLETION_EXPANDED_ROW_ESTIMATE,
-  ContextSubmenuKey,
-  LIBRARY_ACTIONS_MENU_HEIGHT,
-  LIBRARY_ACTIONS_MENU_WIDTH,
-  MissingMetadataFilter,
-  PLAYLIST_ROW_HEIGHT,
-  PLAYLIST_TOOLBAR_HEIGHT,
-  TRACK_CONTEXT_DIVIDER_HEIGHT,
-  TRACK_CONTEXT_HEADER_HEIGHT,
-  TRACK_CONTEXT_ROW_HEIGHT,
-  TRACK_PLAYLIST_SUBMENU_WIDTH,
-  TRACK_RATING_SUBMENU_HEIGHT,
-  TRACK_RATING_SUBMENU_WIDTH,
-  TRACK_SUBMENU_CLOSE_DELAY_MS,
-  TRACK_TAGGING_SUBMENU_HEIGHT,
-  TRACK_VIRTUALIZATION_OVERSCAN,
-  TRACK_VIRTUALIZATION_THRESHOLD,
-  albumMetaLabel,
-  artistMetaLabel,
-  missingMetadataFields,
-  missingMetadataFilters,
-  virtualCollectionWindow,
-  virtualVariableCollectionWindow,
+ALBUM_GRID_ROW_HEIGHT,
+ALBUM_LIST_ROW_HEIGHT,
+ARTIST_ROW_HEIGHT,
+COMPLETION_COLLAPSED_ROW_HEIGHT,
+COMPLETION_EXPANDED_ROW_ESTIMATE,
+ContextSubmenuKey,
+LIBRARY_ACTIONS_MENU_HEIGHT,
+LIBRARY_ACTIONS_MENU_WIDTH,
+MissingMetadataFilter,
+PLAYLIST_ROW_HEIGHT,
+PLAYLIST_TOOLBAR_HEIGHT,
+TRACK_CONTEXT_DIVIDER_HEIGHT,
+TRACK_CONTEXT_HEADER_HEIGHT,
+TRACK_CONTEXT_ROW_HEIGHT,
+TRACK_PLAYLIST_SUBMENU_WIDTH,
+TRACK_RATING_SUBMENU_HEIGHT,
+TRACK_RATING_SUBMENU_WIDTH,
+TRACK_SUBMENU_CLOSE_DELAY_MS,
+TRACK_TAGGING_SUBMENU_HEIGHT,
+TRACK_VIRTUALIZATION_OVERSCAN,
+TRACK_VIRTUALIZATION_THRESHOLD,
+albumMetaLabel,
+artistMetaLabel,
+missingMetadataFields,
+missingMetadataFilters
 } from "./library/libraryViewUtils";
+import { useLibraryColumnController } from "./library/useLibraryColumnController";
+import { useLibraryScrollController } from "./library/useLibraryScrollController";
+import { useLibrarySelectionController } from "./library/useLibrarySelectionController";
 
 export function LibraryPage({
   tracks,
@@ -251,10 +229,13 @@ export function LibraryPage({
   currentTrack,
   hideFilePaths,
   compactRows,
+  displayRatingsAsNumbers,
   albumGrid,
   writeRatingsToFiles,
   libraryVisibleColumns,
   setLibraryVisibleColumns,
+  librarySavedColumnLayouts,
+  onLibrarySavedColumnLayoutsChange,
   onAlbumGridChange,
   setTargetPlaylistId,
   setNewPlaylistName,
@@ -269,8 +250,8 @@ export function LibraryPage({
 }: LibraryPageProps) {
   const [contextMenu, setContextMenu] = useState<TrackContextMenu | null>(null);
   const [activeContextSubmenu, setActiveContextSubmenu] = useState<ContextSubmenuKey | null>(null);
-  const columnController = useLibraryColumnController({ libraryVisibleColumns, setLibraryVisibleColumns, setSort, setContextMenu });
-  const { columnWidths, setColumnWidths, columnMenu, setColumnMenu, libraryActionsMenu, setLibraryActionsMenu, draggedColumn, setDraggedColumn, dragOverColumn, setDragOverColumn, visibleColumns, visibleColumnDefs, tableWidth, handleSort, handleResize, openColumnContextMenu, toggleLibraryActionsMenu, toggleVisibleColumn, moveVisibleColumn, handleColumnDragStart, handleColumnDragOver, handleColumnDrop, handleColumnDragEnd, columnFromPoint, handleColumnPointerDragStart } = columnController;
+  const columnController = useLibraryColumnController({ libraryView, libraryVisibleColumns, setLibraryVisibleColumns, librarySavedColumnLayouts, onLibrarySavedColumnLayoutsChange, setSort, setContextMenu });
+  const { columnWidths, setColumnWidths, columnMenu, setColumnMenu, libraryActionsMenu, setLibraryActionsMenu, draggedColumn, setDraggedColumn, dragOverColumn, setDragOverColumn, visibleColumns, visibleMetadataColumnKeys, visibleColumnDefs, fixedTrackColumns, orderedTrackColumns, tableWidth, columnLayoutName, setColumnLayoutName, saveColumnLayout, applyColumnLayout, deleteColumnLayout, handleSort, handleResize, openColumnContextMenu, toggleLibraryActionsMenu, toggleVisibleColumn, moveVisibleColumn, handleColumnDragStart, handleColumnDragOver, handleColumnDrop, handleColumnDragEnd, columnFromPoint, handleColumnPointerDragStart } = columnController;
   const [showAllDuplicateGroups, setShowAllDuplicateGroups] = useState(false);
   const [showAllMissingMetadata, setShowAllMissingMetadata] = useState(false);
   const [missingMetadataFilter, setMissingMetadataFilter] = useState<MissingMetadataFilter>("all");
@@ -304,10 +285,16 @@ export function LibraryPage({
     etaSeconds: number | null;
   } | null>(null);
   const [showAdvancedSearch, setShowAdvancedSearch] = useState(false);
+  const [similarAlbums, setSimilarAlbums] = useState<SimilarAlbum[]>([]);
+  const [similarArtists, setSimilarArtists] = useState<SimilarArtist[]>([]);
+  const [similarAlbumsLoading, setSimilarAlbumsLoading] = useState(false);
+  const [similarArtistsLoading, setSimilarArtistsLoading] = useState(false);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const contextSubmenuCloseTimer = useRef<number | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const completionLookupCancelRef = useRef(false);
+  const similarAlbumCacheRef = useRef<Map<number, SimilarAlbum[]>>(new Map());
+  const similarArtistCacheRef = useRef<Map<string, SimilarArtist[]>>(new Map());
 
   const advancedSearchActiveCount = Object.entries(advancedTrackSearch).filter(([key, value]) => {
     if (key === "rating_state") {
@@ -386,7 +373,7 @@ export function LibraryPage({
     [albums, completionFilter, completionQuery],
   );
   const scrollController = useLibraryScrollController({ ArrowUp, albumGrid, albumMode, albumScrollTop, albums, artistScrollTop, artists, columnMenu, completionHeightVersion, completionOpenAlbumId, completionScrollTop, contextMenu, hasMoreTracks, isLoading, libraryActionsMenu, libraryView, loadMoreTracks, loadTrackWindow, playlistScrollTop, playlists, scrollTop, setAlbumScrollTop, setArtistScrollTop, setColumnMenu, setCompletionHeightVersion, setCompletionScrollTop, setContextMenu, setLibraryActionsMenu, setPlaylistScrollTop, setScrollTop, totalTracks, trackIndexCache, trackRowHeight, tracks, visibleCompletionAlbums });
-  const { virtualScrollTop, setVirtualScrollTop, trackViewportHeight, setTrackViewportHeight, scrollRef, artistListRef, albumListRef, completionListRef, completionRowHeightsRef, completionRowObserversRef, playlistListRef, shouldVirtualizeTrackRows, maxVirtualScrollTop, effectiveVirtualScrollTop, virtualTrackStartIndex, virtualTrackVisibleCount, virtualTrackEndIndex, renderedTrackList, virtualTopSpacerHeight, virtualBottomSpacerHeight, completionListScrollTop, completionWindow, renderedCompletionAlbums, artistWindow, renderedArtists, albumGridColumns, albumBrowseRowHeight, albumWindow, renderedBrowseAlbums, playlistWindow, renderedPlaylists, getReachableScrollTop, applyScrollRestore, cancelScrollRestoreForUserInput, scrollCollectionPaneToTop, saveTrackPaneScrollTop, renderPaneTopButton, renderActiveTopButton, updateCompletionRowHeight, setCompletionRowElement, scheduleVirtualScrollUpdate, flushScrollPositionSave, scheduleScrollPositionSave, handleScroll } = scrollController;
+  const { virtualScrollTop, setVirtualScrollTop, trackViewportHeight, setTrackViewportHeight, scrollRef, artistListRef, albumListRef, completionListRef, playlistListRef, shouldVirtualizeTrackRows, maxVirtualScrollTop, effectiveVirtualScrollTop, virtualTrackStartIndex, virtualTrackVisibleCount, virtualTrackEndIndex, renderedTrackList, virtualTopSpacerHeight, virtualBottomSpacerHeight, completionListScrollTop, completionWindow, renderedCompletionAlbums, artistWindow, renderedArtists, albumGridColumns, albumBrowseRowHeight, albumWindow, renderedBrowseAlbums, playlistWindow, renderedPlaylists, getReachableScrollTop, applyScrollRestore, cancelScrollRestoreForUserInput, scrollCollectionPaneToTop, saveTrackPaneScrollTop, renderPaneTopButton, renderActiveTopButton, updateCompletionRowHeight, setCompletionRowElement, scheduleVirtualScrollUpdate, flushScrollPositionSave, scheduleScrollPositionSave, handleScroll } = scrollController;
   const completeAlbumCount = albums.length - completionAlbums.length;
   const missingTrackEstimate = completionAlbums.reduce((total, album) => total + (album.missing_track_count ?? 0), 0);
   const advancedSelectionKey = useMemo(() => JSON.stringify(advancedTrackSearch), [advancedTrackSearch]);
@@ -411,7 +398,7 @@ export function LibraryPage({
               ? `${(inbox?.total_new ?? 0).toLocaleString()} new inbox track${inbox?.total_new === 1 ? "" : "s"}`
               : libraryView === "health"
                 ? "Library health tools"
-                : `${loadedTrackCount.toLocaleString()} of ${totalTracks.toLocaleString()} tracks cached`;
+                : `${totalTracks.toLocaleString()} track${totalTracks === 1 ? "" : "s"}`;
   const viewTracks =
     libraryView === "albums"
       ? selectedAlbumTracks
@@ -425,7 +412,7 @@ export function LibraryPage({
   const selectionController = useLibrarySelectionController({ advancedSelectionKey, advancedTrackSearch, detailTrack, inbox, libraryView, onEditTrack, onRequestDeleteTracks, search, searchInputRef, setBulkMetadataOpen, setDetailTrack, setShowAllDuplicateGroups, selectedAlbumId, selectedArtistName, selectedPlaylistId, sort, totalTracks, tracks, viewTracks });
   const { selectedTrackIds, setSelectedTrackIds, selectedTrackCache, setSelectedTrackCache, isSelectingAllTracks, setIsSelectingAllTracks, selectionAnchorId, viewTrackLookup, selectedIds, selectedTracks, selectableTrackCount, allViewSelected, inboxNotesByTrackId, selectedInboxTrack, selectedInboxNote, toggleTrackSelection, selectSingleTrack, selectTrackLikeWindows, setSelectionForList, selectAllCurrentScope, handleHeaderSelectionChange, suppressCheckboxContextMenu, clearSelection, cancelPendingTrackDetailOpen, scheduleTrackDetailOpen } = selectionController;
 
-  function scrollToTrackInCurrentView(track: Track) {
+  function scrollToTrackInCurrentView(track: Track, forceTrackIndexSearch = false) {
     const renderedRow = scrollRef.current?.querySelector<HTMLElement>(
       `[data-track-row][data-track-id="${track.id}"]`,
     );
@@ -434,7 +421,7 @@ export function LibraryPage({
       return;
     }
 
-    if (libraryView !== "tracks" || !scrollRef.current) {
+    if ((!forceTrackIndexSearch && libraryView !== "tracks") || !scrollRef.current) {
       return;
     }
 
@@ -463,7 +450,12 @@ export function LibraryPage({
 
   function selectAndScrollToTrack(track: Track) {
     selectSingleTrack(track);
-    window.requestAnimationFrame(() => scrollToTrackInCurrentView(track));
+    if (libraryView !== "tracks") {
+      setLibraryView("tracks");
+    }
+    window.requestAnimationFrame(() =>
+      window.requestAnimationFrame(() => scrollToTrackInCurrentView(track, true)),
+    );
   }
 
   useEffect(() => {
@@ -486,6 +478,77 @@ export function LibraryPage({
       void loadAlbumArtworkCandidates(activeAlbum.id);
     }
   }, [activeAlbum?.id, isAlbumArtworkOpen]);
+
+  useEffect(() => {
+    if (libraryView !== "albums" || albumMode !== "browse" || selectedAlbumId === null) {
+      setSimilarAlbumsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    const cached = similarAlbumCacheRef.current.get(selectedAlbumId);
+    if (cached) {
+      setSimilarAlbums(cached);
+    } else {
+      setSimilarAlbums([]);
+    }
+    setSimilarAlbumsLoading(true);
+    fetchSimilarAlbums(selectedAlbumId, 5)
+      .then((rows) => {
+        if (!cancelled) {
+          similarAlbumCacheRef.current.set(selectedAlbumId, rows);
+          setSimilarAlbums(rows);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSimilarAlbums([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setSimilarAlbumsLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [albumMode, libraryView, selectedAlbumId]);
+
+  useEffect(() => {
+    if (libraryView !== "artists" || !selectedArtistName) {
+      setSimilarArtistsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    const cacheKey = selectedArtistName.trim().toLowerCase();
+    const cached = similarArtistCacheRef.current.get(cacheKey);
+    if (cached) {
+      setSimilarArtists(cached);
+    } else {
+      setSimilarArtists([]);
+    }
+    setSimilarArtistsLoading(true);
+    fetchSimilarArtists(selectedArtistName, 6)
+      .then((rows) => {
+        if (!cancelled) {
+          similarArtistCacheRef.current.set(cacheKey, rows);
+          setSimilarArtists(rows);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSimilarArtists([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setSimilarArtistsLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [libraryView, selectedArtistName]);
 
   function resetInboxRuleForm() {
     setEditingInboxRuleId(null);
@@ -639,6 +702,17 @@ export function LibraryPage({
       void refreshTracks();
     } catch (error) {
       setAlbumArtworkStatus(error instanceof Error ? error.message : "Could not clear album artwork");
+    }
+  }
+
+  async function toggleAlbumArtworkLock(albumId: number, locked: boolean) {
+    try {
+      const response = await setAlbumArtworkLocked(albumId, locked);
+      setAlbumArtworkCandidates(response.candidates);
+      setAlbumArtworkStatus(locked ? "Album artwork locked" : "Album artwork unlocked");
+      void refreshAlbums();
+    } catch (error) {
+      setAlbumArtworkStatus(error instanceof Error ? error.message : "Could not update album artwork lock");
     }
   }
 
@@ -796,6 +870,23 @@ export function LibraryPage({
     setAdvancedTrackSearch(() => ({}));
   }
 
+  function searchByAnalysisTag(tag: string, kind: "genre" | "mood") {
+    const cleaned = tag.trim();
+    if (!cleaned) {
+      return;
+    }
+    setLibraryView("tracks");
+    setSearch("");
+    setAdvancedTrackSearch((current) => ({
+      ...current,
+      [kind]: cleaned,
+    }));
+    setSort(() => ({
+      key: kind === "mood" ? "analysis_mood_confidence" : "analysis_genre_confidence",
+      direction: "desc",
+    }));
+  }
+
   const contextSelectionTracks =
     contextMenu && selectedTrackIds.has(contextMenu.track.id) ? selectedTracks : contextMenu ? [contextMenu.track] : [];
   const contextSelectionIds = contextSelectionTracks.map((track) => track.id);
@@ -887,7 +978,8 @@ export function LibraryPage({
     contextSelectionIds.length,
   ]);
 
-  const libraryPageModelBase = { Album, ArrowDown, ArrowUp, BarChart3, BookOpen, CheckCircle2, Download, Fingerprint, FolderOpen, LayoutGrid, List, MoreHorizontal, Pencil, Play, Podcast, Plus, RadioTower, RefreshCw, Save, Search, ShieldCheck, Shuffle, SkipForward, SlidersHorizontal, Star, Tag, Trash2, Upload, UserRound, Volume2, Wand2, X, RatingStars, ResizableHeader, BulkMetadataModal, QuickStartPanel, TrackDetailsPanel, LibraryViewTabs, albumArtworkUrl, albumCoverUrl, defaultLibraryVisibleColumns, libraryColumnDefinitions, librarySelectionColumnWidth, display, fileName, formatBitrate, formatDuration, formatFingerprint, formatPercent, formatRating, formatShortDate, formatTime, trackGenre, albumMetaLabel, artistMetaLabel, missingMetadataFields, missingMetadataFilters, ALBUM_GRID_ROW_HEIGHT, ALBUM_LIST_ROW_HEIGHT, ARTIST_ROW_HEIGHT, COMPLETION_COLLAPSED_ROW_HEIGHT, COMPLETION_EXPANDED_ROW_ESTIMATE, LIBRARY_ACTIONS_MENU_HEIGHT, LIBRARY_ACTIONS_MENU_WIDTH, MENU_VIEWPORT_MARGIN, PLAYLIST_ROW_HEIGHT, PLAYLIST_TOOLBAR_HEIGHT, TRACK_AVOID_SUBMENU_HEIGHT, TRACK_AVOID_SUBMENU_WIDTH, TRACK_CONTEXT_DIVIDER_HEIGHT, TRACK_CONTEXT_HEADER_HEIGHT, TRACK_CONTEXT_MENU_HEIGHT, TRACK_CONTEXT_MENU_WIDTH, TRACK_CONTEXT_ROW_HEIGHT, TRACK_CONTEXT_SUBMENU_WIDTH, TRACK_PLAYLIST_SUBMENU_WIDTH, TRACK_RATING_SUBMENU_HEIGHT, TRACK_RATING_SUBMENU_WIDTH, TRACK_SUBMENU_CLOSE_DELAY_MS, TRACK_TAGGING_SUBMENU_HEIGHT, TRACK_VIRTUALIZATION_OVERSCAN, TRACK_VIRTUALIZATION_THRESHOLD, tracks, trackIndexCache, totalTracks, albums, artists, playlists, selectedAlbumId, selectedAlbumTracks, selectedArtistName, selectedArtistTracks, selectedPlaylistId, selectedPlaylistTracks, libraryStats, libraryHealth, inbox, targetPlaylistId, newPlaylistName, importPlaylistPath, libraryView, setLibraryView, search, setSearch, advancedTrackSearch, setAdvancedTrackSearch, refreshTracks, refreshAlbums, loadMoreTracks, loadTrackWindow, isLoading, hasMoreTracks, sort, setSort, scrollTop, setScrollTop, artistScrollTop, setArtistScrollTop, albumScrollTop, setAlbumScrollTop, completionScrollTop, setCompletionScrollTop, playlistScrollTop, setPlaylistScrollTop, onRating, onBulkRating, onPlayTrack, onPlayNext, onAddToQueue, onSelectAlbum, onSelectArtist, onPlayAlbum, onPlayArtist, onSelectPlaylist, onCreatePlaylist, onDeletePlaylist, onAddTracksToPlaylist, onDeleteTrack, onEditTrack, onBulkMetadata, onAutoTagTracks, onSyncFileMetadata, onFingerprintTagTracks, onClapGenreTagTracks, onVolumeTagTracks, onOpenFileManagementTracks, onRequestDeleteTracks, onRemoveTrackFromPlaylist, onRemoveTracksFromPlaylist, onMovePlaylistTrack, onExportTracks, onExportPlaylist, onImportPlaylist, onReviewInboxTracks, onUpdateInboxNote, onSaveInboxAutoReviewRule, onDeleteInboxAutoReviewRule, onShuffleTracks, onQuickAutoDj, onAvoidAutoDj, onRevealTrack, detailTrack, setDetailTrack, onAnalyzeTracks, onIgnoreDuplicateGroup, onClearIgnoredDuplicateGroups, isAudioAnalyzing, currentTrackId, currentTrack, hideFilePaths, compactRows, albumGrid, writeRatingsToFiles, libraryVisibleColumns, setLibraryVisibleColumns, onAlbumGridChange, setTargetPlaylistId, setNewPlaylistName, setImportPlaylistPath, showQuickStart, isScanning, suggestedMusicPath, onChooseMusicFolder, onUseSuggestedFolder, onDismissQuickStart, onOpenSettings, columnWidths, setColumnWidths, contextMenu, setContextMenu, columnMenu, setColumnMenu, libraryActionsMenu, setLibraryActionsMenu, activeContextSubmenu, setActiveContextSubmenu, selectedTrackIds, setSelectedTrackIds, selectedTrackCache, setSelectedTrackCache, isSelectingAllTracks, setIsSelectingAllTracks, showAllDuplicateGroups, setShowAllDuplicateGroups, showAllMissingMetadata, setShowAllMissingMetadata, missingMetadataFilter, setMissingMetadataFilter, bulkMetadataOpen, setBulkMetadataOpen, draggedColumn, setDraggedColumn, dragOverColumn, setDragOverColumn, albumArtworkCandidates, setAlbumArtworkCandidates, isAlbumArtworkOpen, setIsAlbumArtworkOpen, isSearchingAlbumArtwork, setIsSearchingAlbumArtwork, albumArtworkStatus, setAlbumArtworkStatus, inboxNoteDraft, setInboxNoteDraft, editingInboxRuleId, setEditingInboxRuleId, inboxRuleName, setInboxRuleName, inboxRuleEnabled, setInboxRuleEnabled, inboxRuleField, setInboxRuleField, inboxRuleMatchType, setInboxRuleMatchType, inboxRuleValue, setInboxRuleValue, inboxRuleNote, setInboxRuleNote, inboxRuleApplyExisting, setInboxRuleApplyExisting, albumMode, setAlbumMode, completionFilter, setCompletionFilter, completionHeightVersion, setCompletionHeightVersion, completionOpenAlbumId, setCompletionOpenAlbumId, completionLoadingAlbumId, setCompletionLoadingAlbumId, completionLookupAlbumId, setCompletionLookupAlbumId, completionLookupMessages, setCompletionLookupMessages, completionLookupAllActive, setCompletionLookupAllActive, completionLookupAllProgress, setCompletionLookupAllProgress, showAdvancedSearch, setShowAdvancedSearch, virtualScrollTop, setVirtualScrollTop, trackViewportHeight, setTrackViewportHeight, scrollRef, artistListRef, albumListRef, completionListRef, playlistListRef, contextMenuRef, searchInputRef, selectionAnchorId, completionLookupCancelRef, visibleColumns, visibleColumnDefs, advancedSearchActiveCount, trackSearchActive, libraryHasAnyTracks, tableWidth, rowPadding, trackRowHeight, loadedTrackCount, shouldVirtualizeTrackRows, maxVirtualScrollTop, effectiveVirtualScrollTop, virtualTrackStartIndex, virtualTrackVisibleCount, virtualTrackEndIndex, renderedTrackList, virtualTopSpacerHeight, virtualBottomSpacerHeight, advancedSearchInputClass, activeAlbum, activeArtist, activePlaylist, missingMetadataRows, filteredMissingMetadataRows, visibleMissingMetadataRows, visibleDuplicateGroups, completionQuery, completionSearchTerms, completionMatchesSearch, albumCompletionExpected, albumCompletionMissing, completionAlbums, visibleCompletionAlbums, completionListScrollTop, completionWindow, renderedCompletionAlbums, artistWindow, renderedArtists, albumGridColumns, albumBrowseRowHeight, albumWindow, renderedBrowseAlbums, playlistWindow, renderedPlaylists, completeAlbumCount, missingTrackEstimate, advancedSelectionKey, completionLookupEta, librarySummaryText, viewTracks, viewTrackLookup, selectedIds, selectedTracks, selectableTrackCount, allViewSelected, inboxNotesByTrackId, selectedInboxTrack, selectedInboxNote, getReachableScrollTop, applyScrollRestore, cancelScrollRestoreForUserInput, scrollCollectionPaneToTop, saveTrackPaneScrollTop, renderPaneTopButton, renderActiveTopButton, updateCompletionRowHeight, setCompletionRowElement, scheduleVirtualScrollUpdate, flushScrollPositionSave, scheduleScrollPositionSave, resetInboxRuleForm, editInboxRule, saveInboxRule, handleSort, handleResize, toggleTrackSelection, selectSingleTrack, selectAndScrollToTrack, selectTrackLikeWindows, setSelectionForList, selectAllCurrentScope, handleHeaderSelectionChange, suppressCheckboxContextMenu, clearSelection, cancelPendingTrackDetailOpen, scheduleTrackDetailOpen, loadAlbumArtworkCandidates, openAlbumArtworkManager, albumArtworkActionStatus, chooseSidecarArtwork, embedSidecarArtwork, saveEmbeddedArtwork, embedEmbeddedArtwork, searchWebArtwork, saveWebArtwork, clearSelectedAlbumArtwork, handleScroll, openTrackContextMenu, openColumnContextMenu, toggleLibraryActionsMenu, toggleVisibleColumn, moveVisibleColumn, handleColumnDragStart, handleColumnDragOver, handleColumnDrop, handleColumnDragEnd, columnFromPoint, handleColumnPointerDragStart, toggleCompletionAlbum, handleCompletionLengthLookup, handleCompletionLookupAll, cancelCompletionLookupAll, updateAdvancedTrackSearch, clearAdvancedTrackSearch, contextSelectionTracks, contextSelectionIds, contextBulk, contextLabel, contextPlaylistSubmenuHeight, contextSubmenuStyle, openContextSubmenu, scheduleContextSubmenuClose, contextSubmenuClass };
+  const libraryPageModelBase = { Album, ArrowDown, ArrowUp, BarChart3, BookOpen, CheckCircle2, Download, Fingerprint, FolderOpen, LayoutGrid, List, MoreHorizontal, Pencil, Play, Podcast, Plus, RadioTower, RefreshCw, Save, Search, ShieldCheck, Shuffle, SkipForward, SlidersHorizontal, Star, Tag, Trash2, Upload, UserRound, Volume2, Wand2, X, RatingStars, ResizableHeader, BulkMetadataModal, QuickStartPanel, TrackDetailsPanel, LibraryViewTabs, albumArtworkUrl, albumCoverUrl, defaultLibraryVisibleColumns, libraryColumnDefinitions, librarySelectionColumnWidth, display, fileName, formatBitrate, formatDuration, formatFingerprint, formatPercent, formatRating, formatShortDate, formatTime, trackGenre, albumMetaLabel, artistMetaLabel, missingMetadataFields, missingMetadataFilters, ALBUM_GRID_ROW_HEIGHT, ALBUM_LIST_ROW_HEIGHT, ARTIST_ROW_HEIGHT, COMPLETION_COLLAPSED_ROW_HEIGHT, COMPLETION_EXPANDED_ROW_ESTIMATE, LIBRARY_ACTIONS_MENU_HEIGHT, LIBRARY_ACTIONS_MENU_WIDTH, MENU_VIEWPORT_MARGIN, PLAYLIST_ROW_HEIGHT, PLAYLIST_TOOLBAR_HEIGHT, TRACK_AVOID_SUBMENU_HEIGHT, TRACK_AVOID_SUBMENU_WIDTH, TRACK_CONTEXT_DIVIDER_HEIGHT, TRACK_CONTEXT_HEADER_HEIGHT, TRACK_CONTEXT_MENU_HEIGHT, TRACK_CONTEXT_MENU_WIDTH, TRACK_CONTEXT_ROW_HEIGHT, TRACK_CONTEXT_SUBMENU_WIDTH, TRACK_PLAYLIST_SUBMENU_WIDTH, TRACK_RATING_SUBMENU_HEIGHT, TRACK_RATING_SUBMENU_WIDTH, TRACK_SUBMENU_CLOSE_DELAY_MS, TRACK_TAGGING_SUBMENU_HEIGHT, TRACK_VIRTUALIZATION_OVERSCAN, TRACK_VIRTUALIZATION_THRESHOLD, tracks, trackIndexCache, totalTracks, albums, artists, playlists, selectedAlbumId, selectedAlbumTracks, selectedArtistName, selectedArtistTracks, selectedPlaylistId, selectedPlaylistTracks, libraryStats, libraryHealth, inbox, targetPlaylistId, newPlaylistName, importPlaylistPath, libraryView, setLibraryView, search, setSearch, advancedTrackSearch, setAdvancedTrackSearch, refreshTracks, refreshAlbums, loadMoreTracks, loadTrackWindow, isLoading, hasMoreTracks, sort, setSort, scrollTop, setScrollTop, artistScrollTop, setArtistScrollTop, albumScrollTop, setAlbumScrollTop, completionScrollTop, setCompletionScrollTop, playlistScrollTop, setPlaylistScrollTop, onRating, onBulkRating, onPlayTrack, onPlayNext, onAddToQueue, onSelectAlbum, onSelectArtist, onPlayAlbum, onPlayArtist, onSelectPlaylist, onCreatePlaylist, onDeletePlaylist, onAddTracksToPlaylist, onDeleteTrack, onEditTrack, onBulkMetadata, onAutoTagTracks, onSyncFileMetadata, onFingerprintTagTracks, onClapGenreTagTracks, onVolumeTagTracks, onOpenFileManagementTracks, onRequestDeleteTracks, onRemoveTrackFromPlaylist, onRemoveTracksFromPlaylist, onMovePlaylistTrack, onExportTracks, onExportPlaylist, onImportPlaylist, onReviewInboxTracks, onUpdateInboxNote, onSaveInboxAutoReviewRule, onDeleteInboxAutoReviewRule, onShuffleTracks, onQuickAutoDj, onAvoidAutoDj, onRevealTrack, detailTrack, setDetailTrack, onAnalyzeTracks, onIgnoreDuplicateGroup, onClearIgnoredDuplicateGroups, isAudioAnalyzing, currentTrackId, currentTrack, hideFilePaths, compactRows, displayRatingsAsNumbers, albumGrid, writeRatingsToFiles, libraryVisibleColumns, setLibraryVisibleColumns, librarySavedColumnLayouts, onLibrarySavedColumnLayoutsChange, onAlbumGridChange, setTargetPlaylistId, setNewPlaylistName, setImportPlaylistPath, showQuickStart, isScanning, suggestedMusicPath, onChooseMusicFolder, onUseSuggestedFolder, onDismissQuickStart, onOpenSettings, columnWidths, setColumnWidths, contextMenu, setContextMenu, columnMenu, setColumnMenu, libraryActionsMenu, setLibraryActionsMenu, activeContextSubmenu, setActiveContextSubmenu, selectedTrackIds, setSelectedTrackIds, selectedTrackCache, setSelectedTrackCache, isSelectingAllTracks, setIsSelectingAllTracks, showAllDuplicateGroups, setShowAllDuplicateGroups, showAllMissingMetadata, setShowAllMissingMetadata, missingMetadataFilter, setMissingMetadataFilter, bulkMetadataOpen, setBulkMetadataOpen, draggedColumn, setDraggedColumn, dragOverColumn, setDragOverColumn, columnLayoutName, setColumnLayoutName, saveColumnLayout, applyColumnLayout, deleteColumnLayout, albumArtworkCandidates, setAlbumArtworkCandidates, isAlbumArtworkOpen, setIsAlbumArtworkOpen, isSearchingAlbumArtwork, setIsSearchingAlbumArtwork, albumArtworkStatus, setAlbumArtworkStatus, inboxNoteDraft, setInboxNoteDraft, editingInboxRuleId, setEditingInboxRuleId, inboxRuleName, setInboxRuleName, inboxRuleEnabled, setInboxRuleEnabled, inboxRuleField, setInboxRuleField, inboxRuleMatchType, setInboxRuleMatchType, inboxRuleValue, setInboxRuleValue, inboxRuleNote, setInboxRuleNote, inboxRuleApplyExisting, setInboxRuleApplyExisting, albumMode, setAlbumMode, completionFilter, setCompletionFilter, completionHeightVersion, setCompletionHeightVersion, completionOpenAlbumId, setCompletionOpenAlbumId, completionLoadingAlbumId, setCompletionLoadingAlbumId, completionLookupAlbumId, setCompletionLookupAlbumId, completionLookupMessages, setCompletionLookupMessages, completionLookupAllActive, setCompletionLookupAllActive, completionLookupAllProgress, setCompletionLookupAllProgress, showAdvancedSearch, setShowAdvancedSearch, virtualScrollTop, setVirtualScrollTop, trackViewportHeight, setTrackViewportHeight, scrollRef, artistListRef, albumListRef, completionListRef, playlistListRef, contextMenuRef, searchInputRef, selectionAnchorId, completionLookupCancelRef, visibleColumns, visibleMetadataColumnKeys, visibleColumnDefs, fixedTrackColumns, orderedTrackColumns, advancedSearchActiveCount, trackSearchActive, libraryHasAnyTracks, tableWidth, rowPadding, trackRowHeight, loadedTrackCount, shouldVirtualizeTrackRows, maxVirtualScrollTop, effectiveVirtualScrollTop, virtualTrackStartIndex, virtualTrackVisibleCount, virtualTrackEndIndex, renderedTrackList, virtualTopSpacerHeight, virtualBottomSpacerHeight, advancedSearchInputClass, activeAlbum, activeArtist, activePlaylist, missingMetadataRows, filteredMissingMetadataRows, visibleMissingMetadataRows, visibleDuplicateGroups, completionQuery, completionSearchTerms, completionMatchesSearch, albumCompletionExpected, albumCompletionMissing, completionAlbums, visibleCompletionAlbums, completionListScrollTop, completionWindow, renderedCompletionAlbums, artistWindow, renderedArtists, albumGridColumns, albumBrowseRowHeight, albumWindow, renderedBrowseAlbums, playlistWindow, renderedPlaylists, completeAlbumCount, missingTrackEstimate, advancedSelectionKey, completionLookupEta, librarySummaryText, viewTracks, viewTrackLookup, selectedIds, selectedTracks, selectableTrackCount, allViewSelected, inboxNotesByTrackId, selectedInboxTrack, selectedInboxNote, getReachableScrollTop, applyScrollRestore, cancelScrollRestoreForUserInput, scrollCollectionPaneToTop, saveTrackPaneScrollTop, renderPaneTopButton, renderActiveTopButton, updateCompletionRowHeight, setCompletionRowElement, scheduleVirtualScrollUpdate, flushScrollPositionSave, scheduleScrollPositionSave, resetInboxRuleForm, editInboxRule, saveInboxRule, handleSort, handleResize, toggleTrackSelection, selectSingleTrack, selectAndScrollToTrack, selectTrackLikeWindows, setSelectionForList, selectAllCurrentScope, handleHeaderSelectionChange, suppressCheckboxContextMenu, clearSelection, cancelPendingTrackDetailOpen, scheduleTrackDetailOpen, loadAlbumArtworkCandidates, openAlbumArtworkManager, albumArtworkActionStatus, chooseSidecarArtwork, embedSidecarArtwork, saveEmbeddedArtwork, embedEmbeddedArtwork, searchWebArtwork, saveWebArtwork, clearSelectedAlbumArtwork, handleScroll, openTrackContextMenu, openColumnContextMenu, toggleLibraryActionsMenu, toggleVisibleColumn, moveVisibleColumn, handleColumnDragStart, handleColumnDragOver, handleColumnDrop, handleColumnDragEnd, columnFromPoint, handleColumnPointerDragStart, toggleCompletionAlbum, handleCompletionLengthLookup, handleCompletionLookupAll, cancelCompletionLookupAll, updateAdvancedTrackSearch, clearAdvancedTrackSearch, searchByAnalysisTag, contextSelectionTracks, contextSelectionIds, contextBulk, contextLabel, contextPlaylistSubmenuHeight, contextSubmenuStyle, openContextSubmenu, scheduleContextSubmenuClose, contextSubmenuClass };
+  Object.assign(libraryPageModelBase, { toggleAlbumArtworkLock, similarAlbums, similarArtists, similarAlbumsLoading, similarArtistsLoading });
   const trackRenderers = createLibraryTrackRenderers(libraryPageModelBase);
   const libraryPageModel = { ...libraryPageModelBase, ...trackRenderers };
   return <LibraryPageView model={libraryPageModel} />;

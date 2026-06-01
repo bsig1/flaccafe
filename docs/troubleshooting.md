@@ -10,24 +10,24 @@ This page covers the checks most likely to help during alpha builds.
 4. In development, run:
 
 ```powershell
-npm run desktop
+npm.cmd run desktop
 ```
 
 Common causes:
 
 - A stale old dev backend is still holding a port. Run `.\scripts\stop_dev.ps1` if you previously used an older build.
-- The packaged Python CLAP expert sidecar was built without a needed optional dependency. Rebuild with `npm run package:msi`.
+- The packaged Python CLAP expert sidecar was built without a needed optional dependency. Rebuild with `npm.cmd run package:msi`.
 - Optional ML packages were installed into the main app environment instead of the managed ML runtime.
 
 ## Codec Support
 
-WebView playback depends on WebView2 codec support. MP3 is the safest baseline; FLAC works through the app's local serving path on current Windows/WebView2 builds, and the experimental Rust path uses Rust audio crates for broader local decoding tests.
+Playback goes through the Rust player. MP3, FLAC, WAV, AIFF, Ogg/Vorbis, Opus, and M4A/AAC support comes from the bundled Rust decoding stack; failures should show in Rust audio diagnostics.
 
 If a track will not play:
 
 - Confirm the file still exists from Library or File Management.
-- Try the codec diagnostics in Settings.
-- Try both WebView playback and experimental Rust playback if Rust playback is enabled.
+- Check Rust audio diagnostics in Settings > Player.
+- Try shared output before WASAPI exclusive if the selected output device is busy or configured unusually.
 - Check whether the file has unusual containers, broken headers, or DRM.
 
 ## Optional ML Runtime
@@ -53,7 +53,7 @@ If CLAP analysis fails:
 Build the MSI with:
 
 ```powershell
-npm run package:msi
+npm.cmd run package:msi
 ```
 
 For CI or disposable profiles, the installer round-trip script silently installs, checks the packaged app/runtime health, uninstalls, and verifies app data cleanup:
@@ -69,11 +69,10 @@ Windows uses the MSI cached when the app was installed. If uninstall behavior ch
 ## Useful Local Commands
 
 ```powershell
-npm run check
-npm run test
-npm run build
-Set-Location src-tauri
-cargo test
+npm.cmd run check
+npm.cmd run test
+npm.cmd run build
+cargo test --manifest-path src-tauri\Cargo.toml
 ```
 
 For release validation, follow [Release Checklist](release-checklist.md).

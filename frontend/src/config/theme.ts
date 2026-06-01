@@ -10,10 +10,115 @@ export type ThemeCheckboxAccent = "ember" | "moss" | "paper" | "softAccent";
 export type ThemeCheckboxUnchecked = "line" | "muted" | "moss" | "ember" | "paper" | "softAccent";
 export type ThemeDensity = "comfortable" | "compact";
 export type FontChoice = "theme" | "system" | "inter" | "serif" | "mono" | "rounded" | "comic";
+export type MiniPlayerLayoutPreset = "classic" | "wide" | "artwork" | "compact";
+export type MiniPlayerWindowMode = "native";
 export const sidebarWidthMinPx = 192;
 export const sidebarWidthMaxPx = 320;
 export const sidebarWidthStepPx = 8;
 export const sidebarWidthDefaultPx = 224;
+
+export const themeColorKeys = [
+  "ember",
+  "moss",
+  "ink",
+  "panel",
+  "line",
+  "muted",
+  "paper",
+  "hoverPanel",
+  "sidebar",
+  "strip",
+  "subtle",
+  "popover",
+  "quiet",
+  "mini",
+  "miniPanel",
+  "surfaceGlow",
+  "primaryHover",
+  "softAccent",
+  "scrollTrack",
+  "scrollThumb",
+  "scrollThumbHover",
+] as const;
+export type ThemeColorKey = (typeof themeColorKeys)[number];
+export type ThemeColorOverrideValue = "theme" | ThemeColorKey;
+export type ThemeColorOverrides = Partial<Record<ThemeColorKey, ThemeColorOverrideValue>>;
+
+export const themeColorLabels: Record<ThemeColorKey, string> = {
+  ember: "Primary",
+  moss: "Secondary",
+  ink: "App Background",
+  panel: "Panel",
+  line: "Border",
+  muted: "Muted Text",
+  paper: "Bright Text",
+  hoverPanel: "Hover Panel",
+  sidebar: "Sidebar",
+  strip: "Header Strip",
+  subtle: "Row Surface",
+  popover: "Popover",
+  quiet: "Page Surface",
+  mini: "Mini Player",
+  miniPanel: "Mini Panel",
+  surfaceGlow: "Surface Glow",
+  primaryHover: "Primary Hover",
+  softAccent: "Soft Accent",
+  scrollTrack: "Scroll Track",
+  scrollThumb: "Scroll Thumb",
+  scrollThumbHover: "Scroll Thumb Hover",
+};
+
+export const themeColorCssVariables: Record<ThemeColorKey, string> = {
+  ember: "--color-ember",
+  moss: "--color-moss",
+  ink: "--color-ink",
+  panel: "--color-panel",
+  line: "--color-line",
+  muted: "--color-muted",
+  paper: "--color-paper",
+  hoverPanel: "--color-hover-panel",
+  sidebar: "--color-sidebar",
+  strip: "--color-strip",
+  subtle: "--color-subtle",
+  popover: "--color-popover",
+  quiet: "--color-quiet",
+  mini: "--color-mini",
+  miniPanel: "--color-mini-panel",
+  surfaceGlow: "--color-surface-glow",
+  primaryHover: "--color-primary-hover",
+  softAccent: "--color-soft-accent",
+  scrollTrack: "--color-scroll-track",
+  scrollThumb: "--color-scroll-thumb",
+  scrollThumbHover: "--color-scroll-thumb-hover",
+};
+
+export interface ThemeMiniPlayerPreset {
+  layout: MiniPlayerLayoutPreset;
+  showArt: boolean;
+  showLibraryButton: boolean;
+  showAlwaysOnTopButton: boolean;
+  showMediaControls: boolean;
+  showPlaybar: boolean;
+  showPlaytimeNumbers: boolean;
+  showAlbumName: boolean;
+  windowMode: MiniPlayerWindowMode;
+  opacity: number;
+  showQueue: boolean;
+}
+
+export const defaultMiniPlayerPreset: ThemeMiniPlayerPreset = {
+  layout: "classic",
+  showArt: true,
+  showLibraryButton: true,
+  showAlwaysOnTopButton: true,
+  showMediaControls: true,
+  showPlaybar: true,
+  showPlaytimeNumbers: true,
+  showAlbumName: true,
+  windowMode: "native",
+  opacity: 1,
+  showQueue: true,
+};
 
 // Values are RGB triplets because styles.css consumes them as rgb(var(--color-name) / alpha).
 export interface ThemePalette {
@@ -44,6 +149,17 @@ export interface ThemePalette {
   checkboxUnchecked: ThemeCheckboxUnchecked;
   density: ThemeDensity;
   sidebarWidthPx: number;
+  miniPlayer: ThemeMiniPlayerPreset;
+}
+
+export function resolveThemeColor(
+  palette: ThemePalette,
+  overrides: ThemeColorOverrides | undefined,
+  key: ThemeColorKey,
+): string {
+  const override = overrides?.[key];
+  const sourceKey = override && override !== "theme" ? override : key;
+  return palette[sourceKey] ?? palette[key];
 }
 
 // Add new themes here after creating frontend/src/config/themes/<theme>.json.
@@ -76,13 +192,47 @@ export const fontChoiceValues: Record<Exclude<FontChoice, "theme">, string> = {
   comic: '"Comic Sans MS", "Comic Sans", "Comic Neue", cursive',
 };
 
-type ThemePaletteJson = Omit<ThemePalette, "fontScale" | "checkboxAccent" | "checkboxUnchecked" | "density" | "sidebarWidthPx"> & {
+type ThemeMiniPlayerPresetJson = Partial<Omit<ThemeMiniPlayerPreset, "layout" | "windowMode">> & {
+  layout?: string;
+  windowMode?: string;
+};
+
+type ThemePaletteJson = Omit<ThemePalette, "fontScale" | "checkboxAccent" | "checkboxUnchecked" | "density" | "sidebarWidthPx" | "miniPlayer"> & {
   fontScale?: string;
   checkboxAccent?: string;
   checkboxUnchecked?: string;
   density?: string;
   sidebarWidthPx?: number;
+  miniPlayer?: ThemeMiniPlayerPresetJson;
 };
+
+export function normalizeMiniPlayerPreset(value?: Partial<ThemeMiniPlayerPreset> | ThemeMiniPlayerPresetJson): ThemeMiniPlayerPreset {
+  const layout =
+    value?.layout === "wide" || value?.layout === "artwork" || value?.layout === "compact" || value?.layout === "classic"
+      ? value.layout
+      : defaultMiniPlayerPreset.layout;
+  return {
+    layout,
+    showArt: layout === "artwork" ? true : typeof value?.showArt === "boolean" ? value.showArt : defaultMiniPlayerPreset.showArt,
+    showLibraryButton:
+      typeof value?.showLibraryButton === "boolean" ? value.showLibraryButton : defaultMiniPlayerPreset.showLibraryButton,
+    showAlwaysOnTopButton:
+      typeof value?.showAlwaysOnTopButton === "boolean" ? value.showAlwaysOnTopButton : defaultMiniPlayerPreset.showAlwaysOnTopButton,
+    showMediaControls:
+      typeof value?.showMediaControls === "boolean" ? value.showMediaControls : defaultMiniPlayerPreset.showMediaControls,
+    showPlaybar:
+      typeof value?.showPlaybar === "boolean" ? value.showPlaybar : defaultMiniPlayerPreset.showPlaybar,
+    showPlaytimeNumbers:
+      typeof value?.showPlaytimeNumbers === "boolean" ? value.showPlaytimeNumbers : defaultMiniPlayerPreset.showPlaytimeNumbers,
+    showAlbumName: typeof value?.showAlbumName === "boolean" ? value.showAlbumName : defaultMiniPlayerPreset.showAlbumName,
+    windowMode: "native",
+    opacity:
+      typeof value?.opacity === "number" && Number.isFinite(value.opacity)
+        ? Math.min(1, Math.max(0.35, value.opacity))
+        : defaultMiniPlayerPreset.opacity,
+    showQueue: typeof value?.showQueue === "boolean" ? value.showQueue : defaultMiniPlayerPreset.showQueue,
+  };
+}
 
 function normalizeThemePalette(theme: ThemePaletteJson): ThemePalette {
   const fontScale: ThemeFontScale =
@@ -118,6 +268,7 @@ function normalizeThemePalette(theme: ThemePaletteJson): ThemePalette {
     checkboxUnchecked,
     density,
     sidebarWidthPx,
+    miniPlayer: normalizeMiniPlayerPreset(theme.miniPlayer),
   };
 }
 

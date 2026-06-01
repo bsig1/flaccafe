@@ -8,6 +8,8 @@ The File Management page groups tools into Setup, Tags, Files, Devices, Import, 
 
 Most tools remain preview-first. Filtering the page only changes what is visible; it does not reset staged previews or selected track scopes.
 
+CD ripping is intentionally outside File Management now. Use the CD sidebar target/page for disc detection, track preview, MusicBrainz disc lookup, ripping, and CD playback.
+
 ## Right-Click Tagging
 
 The Library track context menu includes a Tagging submenu for actions that affect metadata or classification. It links to the full metadata editor, MusicBrainz auto-tagging, acoustic fingerprint tagging, database-to-file tag sync, volume-tag tools, and the Mark as Audiobook/Podcast actions. Basic field edits live in the editor instead of separate one-field menu items, which keeps the right-click menu smaller.
@@ -71,7 +73,7 @@ Episode downloads are explicit. FLAC Cafe writes downloaded media into the subsc
 
 ## Web Radio
 
-The Web Radio page stores stream bookmarks in SQLite and plays them through the WebView audio element. Save the direct stream URL, not just the station homepage. When playback starts, FLAC Cafe records `last_played_at` so favorite streams bubble up naturally.
+The Web Radio page stores stream bookmarks in SQLite and plays them through the Rust player. Save the direct stream URL, not just the station homepage. When playback starts, FLAC Cafe records `last_played_at` so favorite streams bubble up naturally.
 
 ## Scrobbling
 
@@ -91,6 +93,8 @@ The MusicBrainz Auto-Tag tool searches MusicBrainz in either album/release mode 
 
 "Missing only" keeps existing non-empty fields intact. Turning it off allows MusicBrainz data to replace current SQLite metadata. Applying uses the same metadata writer as manual edits, so the Settings file-writing toggle controls whether supported audio files are updated too.
 
+The apply button uses accepted preview rows when a preview exists. That keeps Apply Accepted responsive because the backend can write the reviewed proposals directly instead of querying MusicBrainz again. The progress bar is currently coarse-grained because the backend returns a single response rather than streaming per-track progress.
+
 Artwork matching uses the Cover Art Archive front image for the matched MusicBrainz release. When "Save cover" is enabled during apply, FLAC Cafe downloads the image as a local sidecar file in the album folder and selects it for the album. Album artwork can also be embedded into supported audio files from the Albums view after review.
 
 ## CLAP Genre Tags
@@ -108,6 +112,8 @@ Manual mode lets you mark selected tracks with known gain/peak values directly, 
 ## Audio Conversion
 
 Audio conversion preview, target path generation, estimated output sizing, FFmpeg installer jobs, conversion progress, ETA, cancellation, partial-output cleanup, and embedded artwork copy are Rust-owned. FFmpeg does the actual transcoding, and Rust/Lofty handles the post-conversion artwork copy when supported by the target container.
+
+The conversion panel exposes direct Check and Install FFmpeg actions. Those actions use the same optional-dependency setup path as Volume Tags, so users do not need to leave the panel to repair a missing converter.
 
 ## File Organization
 
@@ -129,15 +135,21 @@ Preview before applying. Apply creates the target folder when needed, copies onl
 
 Saved sync profiles store the target folder, device type, music and playlist subfolders, copy/export flags, and the playlist selection for a device. Android presets default to a `Music` folder plus portable `.m3u8` playlists, while the USB preset keeps source folder structure under a `Music` folder. Windows removable-drive detection can fill the target folder for mounted USB devices; Android MTP devices still need a folder-mounted target because they do not appear as normal filesystem paths to the Python backend.
 
+To test a phone workflow, connect the phone in a mode that exposes storage as a normal folder or choose a staging folder that will later be copied to the phone. Select or create a device profile, set the target folder, choose the music/playlist subfolders, run Preview, inspect the planned copies and playlist exports, then Apply. A safe dry run is to target an empty temporary folder first and confirm the files and `.m3u8` paths look right before pointing at the real device.
+
 ## CD Ripper
 
-The CD Ripper panel on the File Management page detects local CD drives, looks up album metadata through MusicBrainz, and starts background rip jobs to FLAC, MP3, or WAV.
+The CD Ripper panel on the CD page detects local CD drives, looks up album metadata through MusicBrainz, and starts background rip jobs to FLAC, MP3, or WAV. The CD sidebar target can be hidden from Settings > Sources when disc workflows are not needed.
 
 Windows builds use Rust-owned Windows CDDA reads for live playback and ripping. Custom `cdparanoia.exe`, `cdda2wav.exe`, or `icedax.exe` paths on `PATH` are still detected for diagnostics/CD-Text capability, but app-facing setup, playback, MusicBrainz disc lookup, rip jobs, progress, cancellation, and local SHA-256 verification hashes are Rust-owned. FLAC and MP3 encoding use the same optional FFmpeg setup as Audio Conversion. If an AccurateRip-capable tool is installed, FLAC Cafe reports that capability; current rip jobs always write local SHA-256 verification hashes so a rip has an audit trail even when official AccurateRip database matching is unavailable.
 
 The Optional Dependencies page focuses on installable extras such as FFmpeg and ML runtimes. Chromaprint and the small Windows CD helper tools are bundled with the app and documented in `THIRD_PARTY_NOTICES.md` instead of being presented as user-installed dependencies. AccurateRip-capable helpers are still detected when present, but are not bundled by FLAC Cafe.
 
-CD playback prepares selected CD tracks as live WAV streams and sends them through the normal player bar. It does not add ripped tracks to the library until the output folder is scanned.
+CD playback prepares selected CD tracks for Rust playback and sends them through the normal player bar. It does not add ripped tracks to the library until the output folder is scanned.
+
+## Collection Completion Artwork
+
+The Library completion view delays activating new album covers while scrolling, but keeps already-active covers mounted until the scroll idle window has passed. A capped queue limits how many decoded cover images stay active, matching the normal album/artist browse behavior without instantly unloading everything on scroll.
 
 ## CSV Metadata Cleanup
 
@@ -174,6 +186,12 @@ Supported sources:
 - Windows Media Player WPL/XML files when media entries include path plus rating/play-count attributes.
 
 Imports match by normalized path first, then by artist/title. Ratings are normalized to FLAC Cafe's 0.5-5 star scale, including MusicBee/iTunes/WMP 0-100 style ratings. The preview shows matched rows, changed fields, and unmatched rows before anything is applied.
+
+## Artist Info Lookup
+
+The Artist page can fetch Wikipedia summaries for the current artist. For multi-artist strings, FLAC Cafe queries the combined name and the split artist names in parallel, then keeps the combined result only when its confidence is high enough. Otherwise each artist gets its own tab with local top tracks.
+
+Cached artist info is shown immediately, even when it is stale, and refreshes can run in the background. Manual Wikipedia title/URL overrides are saved as high-confidence cache entries so good matches such as common one-word artist names do not keep searching on every visit.
 
 ## Album Artwork
 

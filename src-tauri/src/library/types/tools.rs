@@ -114,6 +114,10 @@ fn default_auto_dj_mood_seed_weight() -> f64 {
     1.4
 }
 
+fn default_auto_dj_mood_avoid_weight() -> f64 {
+    1.4
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DesktopAutoDjSettings {
     pub(crate) queue_length: usize,
@@ -131,6 +135,10 @@ pub struct DesktopAutoDjSettings {
     pub(crate) mood_seeds: Vec<String>,
     #[serde(default = "default_auto_dj_mood_seed_weight")]
     pub(crate) mood_seed_weight: f64,
+    #[serde(default)]
+    pub(crate) mood_avoid_seeds: Vec<String>,
+    #[serde(default = "default_auto_dj_mood_avoid_weight")]
+    pub(crate) mood_avoid_weight: f64,
     pub(crate) similarity_weight: f64,
     pub(crate) rating_weight: f64,
     pub(crate) recency_weight: f64,

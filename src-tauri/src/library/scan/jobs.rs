@@ -28,10 +28,26 @@
                 .map(|path| normalize_folder_path(&path))
                 .collect::<Result<Vec<_>, _>>()?
         };
+        let cleanup_paths = {
+            let values = body_string_vec(body, "cleanup_folder_paths");
+            let values = if values.is_empty() {
+                paths
+                    .iter()
+                    .map(|path| path.to_string_lossy().to_string())
+                    .collect()
+            } else {
+                values
+            };
+            values
+                .into_iter()
+                .map(|path| normalize_folder_path(&path))
+                .collect::<Result<Vec<_>, _>>()?
+        };
         let (files, errors) = parse_scan_snapshot(body);
         Ok(Self {
             paths,
             save_paths,
+            cleanup_paths,
             files,
             errors,
         })

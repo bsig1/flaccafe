@@ -2,21 +2,39 @@ import { useEffect } from "react";
 
 import type { SmtcButtonPayload } from "../../lib/tauriMedia";
 import {
-  clearSmtcState,
-  listenForSmtcButtons,
-  updateSmtcState,
+clearSmtcState,
+listenForSmtcButtons,
+updateSmtcState,
 } from "../../lib/tauriMedia";
 import {
-  MiniPlayerCommand,
-  miniPlayerTrackSnapshot,
-  publishMiniPlayerSnapshot,
-  shortcutMatchesEvent,
+MiniPlayerCommand,
+miniPlayerTrackSnapshot,
+publishMiniPlayerSnapshot,
+shortcutMatchesEvent,
 } from "../shared";
+import { useTaskbarIconMenu } from "./useTaskbarIconMenu";
 
 export function usePlayerBarMediaEffects(ctx: any) {
   const {
-    hideArtworkPreview, artworkSrc, miniPlayerCommandRef, togglePlayback, playRelative, seekTo, smtcActionRef, hasPlayableSource, isPlaying, playWithFade, pauseWithFade, hasNext, currentTime, hasPrevious, canPreviousAction, handlePreviousTrack, isRadioSource, keyboardShortcuts, changeVolume, volume, muted, toggleMuted, cycleRepeatMode, toggleStopAfterCurrent, setPlaybackMode, playbackMode, currentTrack, currentRadioStation, queue, currentIndex, outputVolume, effectiveDuration, smtcPositionSecond, miniPlayerChannelRef,
+    hideArtworkPreview, artworkSrc, miniPlayerCommandRef, togglePlayback, playRelative, seekTo, smtcActionRef, hasPlayableSource, isPlaying, playWithFade, pauseWithFade, hasNext, currentTime, hasPrevious, canPreviousAction, handlePreviousTrack, isRadioSource, keyboardShortcuts, changeVolume, volume, muted, toggleMuted, cycleRepeatMode, toggleStopAfterCurrent, setPlaybackMode, playbackMode, currentTrack, currentRadioStation, queue, currentIndex, outputVolume, effectiveDuration, smtcPositionSecond, miniPlayerChannelRef, onSelectTrack,
   } = ctx;
+
+  useTaskbarIconMenu({
+    currentTrack,
+    currentRadioStation,
+    isPlaying,
+    hasPlayableSource,
+    canPreviousAction,
+    hasNext,
+    currentTime,
+    effectiveDuration,
+    queue,
+    currentIndex,
+    togglePlayback,
+    handlePreviousTrack,
+    playRelative,
+    onSelectTrack,
+  });
 
   useEffect(() => {
     hideArtworkPreview();
@@ -31,6 +49,11 @@ export function usePlayerBarMediaEffects(ctx: any) {
       playRelative(1);
     } else if (command.type === "seek") {
       seekTo(command.seconds);
+    } else if (command.type === "playQueueIndex") {
+      const track = queue[command.index];
+      if (track) {
+        onSelectTrack(track, queue, { suppressExitRecord: true });
+      }
     }
   };
 
@@ -176,6 +199,8 @@ export function usePlayerBarMediaEffects(ctx: any) {
   useEffect(() => {
     publishMiniPlayerSnapshot(miniPlayerChannelRef.current, {
       track: currentTrack ? miniPlayerTrackSnapshot(currentTrack) : null,
+      queue: queue.map(miniPlayerTrackSnapshot),
+      currentIndex,
       isPlaying,
       currentTime,
       duration: effectiveDuration,
@@ -183,7 +208,7 @@ export function usePlayerBarMediaEffects(ctx: any) {
       hasNext,
       updatedAt: new Date().toISOString(),
     });
-  }, [currentTrack, isPlaying, smtcPositionSecond, effectiveDuration, canPreviousAction, hasNext]);
+  }, [currentTrack, isPlaying, smtcPositionSecond, effectiveDuration, canPreviousAction, hasNext, queue, currentIndex]);
 
   useEffect(() => {
     return () => {

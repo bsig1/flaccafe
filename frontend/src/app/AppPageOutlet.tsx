@@ -1,10 +1,10 @@
+import {
+themeAccentValues,
+} from "../config/theme";
 import type { AppController } from "./AppController";
 import {
-  themeAccentValues,
-} from "../config/theme";
-import {
-  defaultCdRipTarget,
-  defaultLibraryTrackQueryKey,
+defaultCdRipTarget,
+defaultLibraryTrackQueryKey,
 } from "./appHelpers";
 import { AnalysisPage } from "./pages/AnalysisPage";
 import { ArtistPage } from "./pages/ArtistPage";
@@ -107,6 +107,7 @@ export function AppPageOutlet({ controller }: AppPageOutletProps) {
     handleBulkRating,
     handleCancelAudioAnalysis,
     handleCancelAudioConversion,
+    handleCancelScan,
     handleCdAutoLookupMetadata,
     handleChooseMusicFolderAndScan,
     handleClearArtistCache,
@@ -181,6 +182,7 @@ export function AppPageOutlet({ controller }: AppPageOutletProps) {
     handleRevealTrack,
     handleRevealTracksByIds,
     handleReviewInboxTracks,
+    handleRetryScan,
     handleRunAcousticFingerprintPass,
     handleSaveAudioConversionSetup,
     handleSaveChromaprintSetup,
@@ -266,6 +268,8 @@ export function AppPageOutlet({ controller }: AppPageOutletProps) {
     requestDeleteTracks,
     scanProgress,
     scanResult,
+    scanStuck,
+    scanStuckMessage,
     search,
     selectedAlbumId,
     selectedAlbumTracks,
@@ -421,10 +425,15 @@ export function AppPageOutlet({ controller }: AppPageOutletProps) {
         currentTrack={currentTrack}
         hideFilePaths={hideFilePaths}
         compactRows={effectiveDensity === "compact"}
+        displayRatingsAsNumbers={uiPreferences.displayRatingsAsNumbers}
         albumGrid={uiPreferences.albumGrid}
         writeRatingsToFiles={writeRatingsToFiles}
         libraryVisibleColumns={libraryVisibleColumns}
         setLibraryVisibleColumns={setLibraryVisibleColumns}
+        librarySavedColumnLayouts={uiPreferences.librarySavedColumnLayouts}
+        onLibrarySavedColumnLayoutsChange={(layouts) =>
+          setUiPreferences((current) => ({ ...current, librarySavedColumnLayouts: layouts }))
+        }
         onAlbumGridChange={(enabled) => setUiPreferences((current) => ({ ...current, albumGrid: enabled }))}
         setTargetPlaylistId={setTargetPlaylistId}
         setNewPlaylistName={setNewPlaylistName}
@@ -595,9 +604,13 @@ export function AppPageOutlet({ controller }: AppPageOutletProps) {
         suggestedMusicPath={settings?.suggested_music_path ?? null}
         onBrowse={handleBrowseFolder}
         onScan={handleScan}
+        onCancelScan={handleCancelScan}
+        onRetryScan={handleRetryScan}
         onRemoveSource={handleRemoveLibrarySource}
         scanResult={scanResult}
         scanProgress={scanProgress}
+        scanStuck={scanStuck}
+        scanStuckMessage={scanStuckMessage}
         isScanning={isScanning}
         folderWatchStatus={folderWatchStatus}
         onStartFolderWatch={handleStartFolderWatch}
@@ -605,6 +618,16 @@ export function AppPageOutlet({ controller }: AppPageOutletProps) {
         onRefreshFolderWatch={handleRefreshFolderWatch}
         onApplyFolderWatch={handleApplyFolderWatch}
         onAcknowledgeFolderWatchNotifications={handleAcknowledgeFolderWatchNotifications}
+        sourceScanRules={uiPreferences.sourceScanRules}
+        onSourceScanRuleChange={(path, rule) =>
+          setUiPreferences((current) => ({
+            ...current,
+            sourceScanRules: {
+              ...(current.sourceScanRules ?? {}),
+              [path.trim().toLowerCase()]: rule,
+            },
+          }))
+        }
       />
     ) : activePage === "fileManagement" ? (
       <FileManagementPage
@@ -639,11 +662,6 @@ export function AppPageOutlet({ controller }: AppPageOutletProps) {
         onSaveAudioConversionSetup={handleSaveAudioConversionSetup}
         onInstallAudioConversionFfmpeg={handleInstallAudioConversionFfmpeg}
         onBrowseAudioConversionTarget={handleBrowseAudioConversionTarget}
-        onBrowseCdRipTarget={handleBrowseCdRipTarget}
-        cdAutoLookupMetadata={cdAutoLookupMetadata}
-        currentCdPlaybackDriveId={currentCdPlaybackDriveId}
-        isCdPlaybackActive={isCdPlaybackActive}
-        onPlayCdPreviewTrack={handlePlayCdPreviewTrack}
         onPreviewAudioConversion={handlePreviewAudioConversion}
         onStartAudioConversion={handleStartAudioConversion}
         onCancelAudioConversion={handleCancelAudioConversion}
@@ -709,6 +727,8 @@ export function AppPageOutlet({ controller }: AppPageOutletProps) {
         setHideFilePaths={setHideFilePaths}
         uiPreferences={uiPreferences}
         setUiPreferences={setUiPreferences}
+        currentTrack={currentTrack}
+        playbackQueue={playbackQueue}
         writeRatingsToFiles={writeRatingsToFiles}
         onWriteRatingsToFilesChange={(value) => void handleWriteRatingsToFiles(value)}
         autoWriteFetchedLyricsSidecars={autoWriteFetchedLyricsSidecars}
@@ -725,6 +745,7 @@ export function AppPageOutlet({ controller }: AppPageOutletProps) {
         onCopySupportBundlePath={handleCopySupportBundlePath}
         onOpenSourceFolder={() => void handleOpenSourceFolder("source")}
         onOpenThemeFolder={() => void handleOpenSourceFolder("themes")}
+        onOpenLyricsFolder={() => void handleOpenSourceFolder("lyrics")}
         onClearArtistCache={handleClearArtistCache}
       />
     ) : null}

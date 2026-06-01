@@ -1,33 +1,33 @@
-import type { Dispatch, SetStateAction } from "react";
-import { useRef, useState } from "react";
+import type { Dispatch,SetStateAction } from "react";
+import { useRef,useState } from "react";
 
 import {
-  cancelClapAudioAnalysis,
-  fetchClapAudioAnalysis,
-  fetchClapCoverage,
-  fetchClapInstall,
-  fetchClapStatus,
-  fetchTrack,
-  fetchTrackPage,
-  pauseClapAudioAnalysis,
-  resumeClapAudioAnalysis,
-  startClapAudioAnalysis,
-  startClapInstall,
-  updateClapConfig,
+cancelClapAudioAnalysis,
+fetchClapAudioAnalysis,
+fetchClapCoverage,
+fetchClapInstall,
+fetchClapStatus,
+fetchTrack,
+fetchTrackPage,
+pauseClapAudioAnalysis,
+resumeClapAudioAnalysis,
+startClapAudioAnalysis,
+startClapInstall,
+updateClapConfig,
 } from "../../lib/api";
 import type {
-  AudioAnalysisCoverage,
-  AudioAnalysisProgress,
-  ClapInstallDevice,
-  ClapInstallProgress,
-  ClapStatusResponse,
-  Track,
+AudioAnalysisCoverage,
+AudioAnalysisProgress,
+ClapInstallDevice,
+ClapInstallProgress,
+ClapStatusResponse,
+Track,
 } from "../../types/api";
-import {
-  isAnalysisTerminal,
-  isClapInstallTerminal,
-} from "../shared";
 import type { Page } from "../shared";
+import {
+isAnalysisTerminal,
+isClapInstallTerminal,
+} from "../shared";
 
 const CLAP_QUICK_STATUS_TTL_MS = 60_000;
 const CLAP_DEEP_STATUS_TTL_MS = 15 * 60_000;

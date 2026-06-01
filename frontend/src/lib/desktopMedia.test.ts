@@ -1,8 +1,8 @@
 import {
-  afterEach,
-  describe,
-  expect,
-  it,
+afterEach,
+describe,
+expect,
+it,
 } from "vitest";
 
 import { desktopMediaUrl } from "./desktopMedia";
@@ -24,13 +24,13 @@ afterEach(() => {
 
 describe("desktop media URLs", () => {
   it("returns null outside the Tauri shell", () => {
-    expect(desktopMediaUrl("/track-audio/7")).toBeNull();
+    expect(desktopMediaUrl("/track-artwork/7")).toBeNull();
   });
 
   it("uses the WebView2 custom protocol origin on Windows", () => {
     setDesktopPlatform("Win32");
 
-    expect(desktopMediaUrl("/track-audio/7")).toBe("http://flaccafe-media.localhost/track-audio/7");
+    expect(desktopMediaUrl("/track-artwork/7")).toBe("http://flaccafe-media.localhost/track-artwork/7");
   });
 
   it("normalizes legacy custom-scheme URLs on Windows", () => {

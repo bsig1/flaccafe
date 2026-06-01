@@ -1,24 +1,24 @@
 import {
-  Pencil,
-  Trash2,
-  X,
+Pencil,
+Trash2,
+X,
 } from "lucide-react";
 import {
-  useEffect,
-  useRef,
-  useState,
+useEffect,
+useRef,
+useState,
 } from "react";
 
 import type {
-  Track,
-  TrackMetadataUpdate,
+Track,
+TrackMetadataUpdate,
 } from "../../types/api";
 import {
-  DeleteTrackPrompt,
-  display,
-  fileExtension,
-  fileName,
-  supportsFileTagWriting,
+DeleteTrackPrompt,
+display,
+fileExtension,
+fileName,
+supportsFileTagWriting,
 } from "../shared";
 
 export type EditableMetadataKey = keyof Omit<TrackMetadataUpdate, "write_to_file">;

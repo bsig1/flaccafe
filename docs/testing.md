@@ -7,13 +7,13 @@ checks, and package smoke checks.
 ## Common Commands
 
 ```powershell
-npm run check
-npm run check:routes
-npm run test:frontend
-npm run test:browser
-npm run test:backend
-npm run test
-npm run build
+npm.cmd run check
+npm.cmd run check:routes
+npm.cmd run test:frontend
+npm.cmd run test:browser
+npm.cmd run test:backend
+npm.cmd run test
+npm.cmd run build
 powershell -ExecutionPolicy Bypass -File scripts\installer_smoke.ps1
 ```
 
@@ -23,9 +23,8 @@ runner:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\build_backend_sidecar.ps1
-Set-Location src-tauri
-cargo check
-cargo test
+cargo check --manifest-path src-tauri\Cargo.toml --all-targets
+cargo test --manifest-path src-tauri\Cargo.toml
 ```
 
 The Rust route table also has a generated hammer test. It sends five valid and
@@ -48,19 +47,19 @@ For disposable Windows profiles or CI runners, run the full MSI round-trip after
 building an installer:
 
 ```powershell
-npm run package:msi
+npm.cmd run package:msi
 powershell -ExecutionPolicy Bypass -File scripts\ci_installer_roundtrip.ps1 -AllowAppDataCleanup
 ```
 
 ## What The Tests Cover
 
-- `npm run check` validates the React/TypeScript surface.
-- `npm run check:routes` verifies that `docs/backend-routes.md` matches the Rust route table in `src-tauri/src/python_worker/routes/table.rs`.
-- `npm run test:frontend` runs Vitest tests for shared UI helpers.
-- `npm run test:browser` builds the frontend, serves it on `127.0.0.1:1421`, mocks backend responses, and verifies that the app shell renders in Microsoft Edge through Playwright.
-- `npm run test:backend` runs Python tests for the CLAP expert boundary and verifies that removed Python HTTP-controller modules stay gone.
-- `npm run build` verifies the production Vite bundle.
-- `cargo check` and `cargo test` verify the Tauri shell, Rust controller, route handlers, playback support, and desktop command bridge.
+- `npm.cmd run check` validates the React/TypeScript surface.
+- `npm.cmd run check:routes` verifies that `docs/backend-routes.md` matches the Rust route table in `src-tauri/src/python_worker/routes/table.rs`.
+- `npm.cmd run test:frontend` runs Vitest tests for shared UI helpers.
+- `npm.cmd run test:browser` builds the frontend, serves it on `127.0.0.1:1421`, mocks backend responses, and verifies that the app shell renders in Microsoft Edge through Playwright.
+- `npm.cmd run test:backend` runs Python tests for the CLAP expert boundary and verifies that removed Python HTTP-controller modules stay gone.
+- `npm.cmd run build` verifies the production Vite bundle.
+- `cargo check --manifest-path src-tauri\Cargo.toml --all-targets` and `cargo test --manifest-path src-tauri\Cargo.toml` verify the Tauri shell, Rust controller, route handlers, playback support, and desktop command bridge.
 - `python_worker::routes::tests::hammers_every_route_with_good_and_bad_request_shapes` validates every Rust route shape without touching a real library database.
 - `library::tests::benchmark_fake_database_common_paths` seeds a disposable 12,000-track SQLite library and prints median/p95 timings for the high-traffic library and AutoDJ paths.
 - `scripts/installer_smoke.ps1` checks installer config, resources, and WiX cleanup wiring without installing.
@@ -83,7 +82,7 @@ normally started by Rust during an analysis job.
 
 After UI or playback work:
 
-1. Start `npm run desktop`.
+1. Start `npm.cmd run desktop`.
 2. Open the Tauri window.
 3. Confirm Settings loads without backend errors.
 4. Scan a small folder with at least one MP3 and one FLAC.
@@ -93,5 +92,5 @@ After UI or playback work:
 ## Current Gaps
 
 - Packaged Tauri Playwright coverage is opt-in because WebView2 availability on CI images can still be noisy.
-- Playback codec coverage is still mostly manual because it depends on WebView2 and machine-level codec behavior.
+- Playback codec coverage is still mostly manual because it depends on machine-level audio devices, output modes, and codec edge cases.
 - Handler-level fuzzing still needs deeper valid-body generators for every mutating route; the current hammer focuses on route resolution, normalization, query parsing, and malformed route rejection.

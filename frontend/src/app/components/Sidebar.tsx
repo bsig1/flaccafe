@@ -1,39 +1,39 @@
-import {
-  BarChart3,
-  BookOpen,
-  Check,
-  Clock3,
-  Coffee,
-  Disc3,
-  FileText,
-  FolderCog,
-  FolderOpen,
-  Library,
-  Plus,
-  Podcast,
-  Radio,
-  RadioTower,
-  RotateCcw,
-  Send,
-  Settings,
-  Trash2,
-  UserRound,
-} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import type { ChangeEvent, MouseEvent as ReactMouseEvent } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+BarChart3,
+BookOpen,
+Check,
+Clock3,
+Coffee,
+Disc3,
+FileText,
+FolderCog,
+FolderOpen,
+Library,
+Plus,
+Podcast,
+Radio,
+RadioTower,
+RotateCcw,
+Send,
+Settings,
+Trash2,
+UserRound,
+} from "lucide-react";
+import type { ChangeEvent,MouseEvent as ReactMouseEvent } from "react";
+import { useEffect,useMemo,useRef,useState } from "react";
 
-import { closeFloatingMenus, listenForCloseFloatingMenus } from "../menuEvents";
+import { closeFloatingMenus,listenForCloseFloatingMenus } from "../menuEvents";
 import type { Page } from "../shared";
+import {
+coffeeTapCountLabel,
+readCoffeeTapCount,
+writeCoffeeTapCount,
+} from "./sidebarCoffeeCounter";
 import { SidebarMasterSearch } from "./SidebarMasterSearch";
 import {
-  type SidebarSearchTarget,
+type SidebarSearchTarget,
 } from "./sidebarSearch";
-import {
-  coffeeTapCountLabel,
-  readCoffeeTapCount,
-  writeCoffeeTapCount,
-} from "./sidebarCoffeeCounter";
 
 type SidebarSectionKey = string;
 type SidebarDropPlacement = "before" | "after";
@@ -157,6 +157,8 @@ function normalizeSidebarConfig(candidate: unknown): SidebarConfig {
     return defaults;
   }
   const source = candidate as Partial<SidebarConfig>;
+  // Sidebar config is user-editable local storage. Normalize every stored key so
+  // stale pages, old custom labels, and hand-edited JSON cannot break rendering.
   const labels =
     source.labels && typeof source.labels === "object" && !Array.isArray(source.labels)
       ? Object.fromEntries(
@@ -517,6 +519,8 @@ export function Sidebar({
   }
 
   function resolveSectionDropTarget(clientX: number, clientY: number): SidebarSectionDropTarget | null {
+    // Section labels can drop between section headers or onto menu entries; this
+    // lets labels move downward past their current neighbors instead of only up.
     const x = Math.max(8, Math.min(clientX, window.innerWidth - 8));
     const element = document.elementFromPoint(x, clientY) as HTMLElement | null;
     const labelElement = element?.closest<HTMLElement>("[data-sidebar-section-label]");

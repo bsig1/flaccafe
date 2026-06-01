@@ -2,38 +2,42 @@
 import { useEffect } from "react";
 
 import {
-  type ThemePalette,
-  fontChoiceValues,
-  themeAccentValues,
+fontChoiceValues,
+resolveThemeColor,
+themeAccentValues,
+themeColorCssVariables,
 } from "../../config/theme";
 import {
-  fetchLyrics,
-  fetchLyricsByMetadata,
-  fetchLyricsOnline,
+fetchLyrics,
+fetchLyricsByMetadata,
+fetchLyricsOnline,
 } from "../../lib/api";
-import { listenFolderWatchEvents } from "../../lib/desktopPath";
 import { desktopBackendJson } from "../../lib/desktopLibrary";
-import {
-  defaultLibraryTrackQueryKey,
-  lyricsHaveText,
-  lyricsLookupRequestForTrack,
-  shouldLookupLyricsByMetadata,
-  writeStartupLibrarySnapshot,
-} from "../appHelpers";
-import {
-  fontScaleValues,
-  shortcutMatchesEvent,
-  storageKeys,
-  type Page,
-  type UiPreferences,
-} from "../shared";
+import { listenFolderWatchEvents } from "../../lib/desktopPath";
 import type { LyricsResponse } from "../../types/api";
 import {
-  cachedLyricsResponse,
-  hasRecentLyricsOnlineCheck,
-  lyricsLookupCacheKey,
-  lyricsTrackCacheKey,
-  rememberLyricsResponse,
+defaultLibraryTrackQueryKey,
+lyricsHaveText,
+lyricsLookupRequestForTrack,
+shouldLookupLyricsByMetadata,
+writeStartupLibrarySnapshot,
+} from "../appHelpers";
+import {
+fontScaleValues,
+readUiPreferences,
+shortcutMatchesEvent,
+storageKeys,
+uiPreferencesChannelName,
+writeUiPreferences,
+type Page,
+type UiPreferences,
+} from "../shared";
+import {
+cachedLyricsResponse,
+hasRecentLyricsOnlineCheck,
+lyricsLookupCacheKey,
+lyricsTrackCacheKey,
+rememberLyricsResponse,
 } from "./lyricsResponseCache";
 
 const BODYLESS_SHORTCUT_METHODS = new Set(["GET", "HEAD"]);
@@ -135,6 +139,7 @@ export function useAppControllerEffects(model: any) {
     setSelectedArtistTracks,
     setSearch,
     setStatus,
+    setUiPreferences,
     settings,
     showCdPage,
     startupBackgroundHydratedRef,
@@ -293,61 +298,50 @@ export function useAppControllerEffects(model: any) {
   }, [currentTrack, playbackQueue, playbackTime, restoredPlaybackPosition]);
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(storageKeys.uiPreferences, JSON.stringify(uiPreferences));
-      window.localStorage.setItem(storageKeys.hideFilePaths, String(uiPreferences.hideFilePaths));
-    } catch {
-      // Ignore private/local storage failures; the setting still works for the session.
+    if (!("BroadcastChannel" in window)) {
+      return;
     }
+    const channel = new BroadcastChannel(uiPreferencesChannelName);
+    channel.onmessage = (event: MessageEvent) => {
+      if (event.data?.type !== "uiPreferences") {
+        return;
+      }
+      const nextPreferences = readUiPreferences();
+      setUiPreferences((current: UiPreferences) =>
+        JSON.stringify(current) === JSON.stringify(nextPreferences) ? current : nextPreferences,
+      );
+    };
+    return () => channel.close();
+  }, []);
+
+  useEffect(() => {
+    writeUiPreferences(uiPreferences);
   }, [uiPreferences]);
 
   useEffect(() => {
     const accent = themeAccentValues[uiPreferences.themeAccent] ?? themeAccentValues.cafe;
-    const cssVariables: Partial<Record<keyof ThemePalette, string>> = {
-      ember: "--color-ember",
-      moss: "--color-moss",
-      ink: "--color-ink",
-      panel: "--color-panel",
-      line: "--color-line",
-      muted: "--color-muted",
-      paper: "--color-paper",
-      hoverPanel: "--color-hover-panel",
-      sidebar: "--color-sidebar",
-      strip: "--color-strip",
-      subtle: "--color-subtle",
-      popover: "--color-popover",
-      quiet: "--color-quiet",
-      mini: "--color-mini",
-      miniPanel: "--color-mini-panel",
-      surfaceGlow: "--color-surface-glow",
-      primaryHover: "--color-primary-hover",
-      softAccent: "--color-soft-accent",
-      scrollTrack: "--color-scroll-track",
-      scrollThumb: "--color-scroll-thumb",
-      scrollThumbHover: "--color-scroll-thumb-hover",
-    };
-    for (const [key, variable] of Object.entries(cssVariables) as [keyof ThemePalette, string][]) {
-      document.documentElement.style.setProperty(variable, accent[key]);
+    for (const [key, variable] of Object.entries(themeColorCssVariables)) {
+      document.documentElement.style.setProperty(variable, resolveThemeColor(accent, uiPreferences.themeColorOverrides, key));
     }
     const selectedCheckboxAccent =
       uiPreferences.checkboxAccent === "theme" ? accent.checkboxAccent : uiPreferences.checkboxAccent;
     const checkboxAccent = {
-      ember: accent.ember,
-      moss: accent.moss,
-      paper: accent.paper,
-      softAccent: accent.softAccent,
-    }[selectedCheckboxAccent] ?? accent.ember;
+      ember: resolveThemeColor(accent, uiPreferences.themeColorOverrides, "ember"),
+      moss: resolveThemeColor(accent, uiPreferences.themeColorOverrides, "moss"),
+      paper: resolveThemeColor(accent, uiPreferences.themeColorOverrides, "paper"),
+      softAccent: resolveThemeColor(accent, uiPreferences.themeColorOverrides, "softAccent"),
+    }[selectedCheckboxAccent] ?? resolveThemeColor(accent, uiPreferences.themeColorOverrides, "ember");
     document.documentElement.style.setProperty("--checkbox-accent", checkboxAccent);
     const selectedCheckboxUnchecked =
       uiPreferences.checkboxUnchecked === "theme" ? accent.checkboxUnchecked : uiPreferences.checkboxUnchecked;
     const checkboxUnchecked = {
-      line: accent.line,
-      muted: accent.muted,
-      ember: accent.ember,
-      moss: accent.moss,
-      paper: accent.paper,
-      softAccent: accent.softAccent,
-    }[selectedCheckboxUnchecked] ?? accent.line;
+      line: resolveThemeColor(accent, uiPreferences.themeColorOverrides, "line"),
+      muted: resolveThemeColor(accent, uiPreferences.themeColorOverrides, "muted"),
+      ember: resolveThemeColor(accent, uiPreferences.themeColorOverrides, "ember"),
+      moss: resolveThemeColor(accent, uiPreferences.themeColorOverrides, "moss"),
+      paper: resolveThemeColor(accent, uiPreferences.themeColorOverrides, "paper"),
+      softAccent: resolveThemeColor(accent, uiPreferences.themeColorOverrides, "softAccent"),
+    }[selectedCheckboxUnchecked] ?? resolveThemeColor(accent, uiPreferences.themeColorOverrides, "line");
     document.documentElement.style.setProperty("--checkbox-unchecked", checkboxUnchecked);
     const selectedFont =
       uiPreferences.fontChoice === "theme"
@@ -360,6 +354,7 @@ export function useAppControllerEffects(model: any) {
     document.documentElement.dataset.density = selectedDensity;
   }, [
     uiPreferences.themeAccent,
+    uiPreferences.themeColorOverrides,
     uiPreferences.checkboxAccent,
     uiPreferences.checkboxUnchecked,
     uiPreferences.fontChoice,

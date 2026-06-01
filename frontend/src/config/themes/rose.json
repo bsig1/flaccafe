@@ -25,5 +25,18 @@
   "checkboxAccent": "ember",
   "checkboxUnchecked": "line",
   "density": "comfortable",
-  "sidebarWidthPx": 224
+  "sidebarWidthPx": 224,
+  "miniPlayer": {
+    "layout": "artwork",
+    "showArt": true,
+    "showLibraryButton": true,
+    "showAlwaysOnTopButton": true,
+    "showMediaControls": true,
+    "showPlaybar": true,
+    "showPlaytimeNumbers": true,
+    "showAlbumName": false,
+    "windowMode": "native",
+    "opacity": 0.94,
+    "showQueue": true
+  }
 }

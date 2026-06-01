@@ -66,9 +66,18 @@ pub fn library_health(
             .or_default()
             .push(track);
     }
-    let duplicate_group_total = groups.values().filter(|tracks| tracks.len() > 1).count() as i64;
+    let ignored_duplicate_keys = load_ignored_duplicate_keys(&connection)?;
+    let mut duplicate_group_total = 0i64;
     let mut duplicate_groups = Vec::new();
     for (key, mut tracks) in groups.into_iter().filter(|(_, tracks)| tracks.len() > 1) {
+        let ignore_key = duplicate_ignore_key(&key);
+        if ignored_duplicate_keys.contains(&ignore_key) {
+            continue;
+        }
+        duplicate_group_total += 1;
+        if duplicate_groups.len() >= limit {
+            continue;
+        }
         tracks.sort_by(|left, right| {
             right
                 .bitrate
@@ -124,7 +133,7 @@ pub fn library_health(
             })
             .count() as i64;
         duplicate_groups.push(DesktopDuplicateGroup {
-            ignore_key: format!("duplicate:{key}"),
+            ignore_key,
             key,
             tracks,
             match_reason: "same normalized artist and title".to_string(),
@@ -139,9 +148,6 @@ pub fn library_health(
             path_roots: path_roots.into_iter().collect(),
             analyzed_tracks,
         });
-        if duplicate_groups.len() >= limit {
-            break;
-        }
     }
 
     let ignored_duplicate_group_total = connection
@@ -162,10 +168,43 @@ pub fn library_health(
     })
 }
 
+fn duplicate_ignore_key(key: &str) -> String {
+    format!("duplicate:{key}")
+}
+
+fn duplicate_group_ignore_key(key: &str, tracks: &[DesktopTrack]) -> String {
+    let normalized_key = tracks.first().and_then(|track| {
+        let title = normalize_token(track.title.as_deref());
+        let artist = normalize_token(track.artist.as_deref());
+        if title.is_empty() || artist.is_empty() {
+            None
+        } else {
+            Some(format!("{artist} - {title}"))
+        }
+    });
+    normalized_key
+        .as_deref()
+        .map(duplicate_ignore_key)
+        .unwrap_or_else(|| duplicate_ignore_key(key))
+}
+
+fn load_ignored_duplicate_keys(connection: &Connection) -> Result<HashSet<String>, String> {
+    let mut statement = connection
+        .prepare("SELECT ignore_key FROM library_health_ignores WHERE kind = 'duplicate'")
+        .map_err(|error| format!("Could not prepare ignored duplicate query: {error}"))?;
+    let keys = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| format!("Could not read ignored duplicate keys: {error}"))?
+        .collect::<rusqlite::Result<HashSet<_>>>()
+        .map_err(|error| format!("Could not decode ignored duplicate keys: {error}"))?;
+    Ok(keys)
+}
+
 fn duplicate_group_from_tracks(
     key: String,
     mut tracks: Vec<DesktopTrack>,
 ) -> DesktopDuplicateGroup {
+    let ignore_key = duplicate_group_ignore_key(&key, &tracks);
     tracks.sort_by(|left, right| {
         right
             .bitrate
@@ -239,7 +278,7 @@ fn duplicate_group_from_tracks(
         None
     };
     DesktopDuplicateGroup {
-        ignore_key: format!("duplicate:{key}"),
+        ignore_key,
         key,
         tracks,
         match_reason: "same normalized artist and title".to_string(),
@@ -294,6 +333,7 @@ pub fn duplicate_review(
 ) -> Result<DesktopDuplicateReviewResponse, String> {
     let connection = open_database()?;
     let limit = limit.unwrap_or(300).clamp(1, 2_000);
+    let ignored_duplicate_keys = load_ignored_duplicate_keys(&connection)?;
     let requested_groups = groups.unwrap_or_default();
     let mut requested_ids: Vec<i64> = track_ids.unwrap_or_default();
     for group in &requested_groups {
@@ -325,7 +365,10 @@ pub fn duplicate_review(
                         ))
                     })
                     .unwrap_or_else(|| "Selected duplicate group".to_string());
-                duplicate_groups.push(duplicate_group_from_tracks(key, group_tracks));
+                let group = duplicate_group_from_tracks(key, group_tracks);
+                if !ignored_duplicate_keys.contains(&group.ignore_key) {
+                    duplicate_groups.push(group);
+                }
             }
         }
     } else {
@@ -358,6 +401,10 @@ pub fn duplicate_review(
                 .push(track);
         }
         for (key, group_tracks) in grouped.into_iter().filter(|(_, tracks)| tracks.len() >= 2) {
+            let ignore_key = duplicate_ignore_key(&key);
+            if ignored_duplicate_keys.contains(&ignore_key) {
+                continue;
+            }
             duplicate_groups.push(duplicate_group_from_tracks(key, group_tracks));
             if duplicate_groups.len() >= limit {
                 break;

@@ -1,8 +1,8 @@
 import {
-  FolderOpen,
-  Library,
-  Settings,
-  X,
+FolderOpen,
+Library,
+Settings,
+X,
 } from "lucide-react";
 
 

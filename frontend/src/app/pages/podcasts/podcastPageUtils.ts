@@ -1,7 +1,7 @@
 import type {
-  PodcastEpisode,
-  PodcastSubscription,
-  Track,
+PodcastEpisode,
+PodcastSubscription,
+Track,
 } from "../../../types/api";
 
 export type PodcastPanelMode = "new" | "feed" | "edit";
@@ -21,7 +21,7 @@ export interface PodcastEpisodeContextMenu {
 
 export type PodcastsPageProps = {
   setStatus: (message: string) => void;
-  onPlayTrack: (track: Track, queueItems: Track[]) => void;
+  onPlayTrack: (track: Track, queueItems: Track[], options?: { resumePositionSeconds?: number | null }) => void;
   onAddToQueue: (track: Track) => void;
   showFilePaths: boolean;
 };

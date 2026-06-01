@@ -1,42 +1,42 @@
 import {
-  Bookmark,
-  BookOpen,
-  ChevronDown,
-  ChevronRight,
-  Download,
-  Play,
-  Plus,
-  RefreshCw,
-  Save,
-  Trash2,
+Bookmark,
+BookOpen,
+ChevronDown,
+ChevronRight,
+Download,
+Play,
+Plus,
+RefreshCw,
+Save,
+Trash2,
 } from "lucide-react";
-import {
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
 import type {
-  MouseEvent,
+MouseEvent,
+} from "react";
+import {
+useEffect,
+useMemo,
+useState,
 } from "react";
 
 import {
-  createAudiobookBookmark,
-  deleteAudiobookBookmark,
-  exportAudiobookSyncMetadata,
-  fetchAudiobookBookmarks,
-  fetchAudiobookChapters,
-  fetchAudiobooks,
-  saveAudiobookChapters,
-  updateAudiobookProgress,
+createAudiobookBookmark,
+deleteAudiobookBookmark,
+exportAudiobookSyncMetadata,
+fetchAudiobookBookmarks,
+fetchAudiobookChapters,
+fetchAudiobooks,
+saveAudiobookChapters,
+updateAudiobookProgress,
 } from "../../lib/api";
 import type {
-  AudiobookBookmark,
-  AudiobookChapter,
-  AudiobookTrack,
-  Track,
+AudiobookBookmark,
+AudiobookChapter,
+AudiobookTrack,
+Track,
 } from "../../types/api";
 import {
-  NumberField,
+NumberField,
 } from "../components/common";
 
 function formatTime(seconds: number | null | undefined) {
@@ -165,7 +165,7 @@ function groupAudiobooksByBook(tracks: AudiobookTrack[]): AudiobookBookGroup[] {
 
 interface AudiobooksPageProps {
   setStatus: (message: string) => void;
-  onPlayTrack: (track: Track, queueItems: Track[]) => void;
+  onPlayTrack: (track: Track, queueItems: Track[], options?: { resumePositionSeconds?: number | null }) => void;
   onAddToQueue: (track: Track) => void;
 }
 
@@ -305,7 +305,13 @@ export function AudiobooksPage({ setStatus, onPlayTrack, onAddToQueue }: Audiobo
   function playAudiobook(track: AudiobookTrack, queueSource: AudiobookTrack[] = tracks) {
     const playable = audiobookToTrack(track);
     const queueItems = queueSource.map(audiobookToTrack);
-    onPlayTrack(playable, queueItems.length ? queueItems : playableTracks.length ? playableTracks : [playable]);
+    const resumePositionSeconds =
+      track.position_seconds > 0 && (!track.duration_seconds || track.position_seconds < track.duration_seconds - 20)
+        ? track.position_seconds
+        : null;
+    onPlayTrack(playable, queueItems.length ? queueItems : playableTracks.length ? playableTracks : [playable], {
+      resumePositionSeconds,
+    });
   }
 
   function toggleBook(group: AudiobookBookGroup) {

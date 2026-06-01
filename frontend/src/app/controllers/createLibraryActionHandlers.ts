@@ -1,11 +1,11 @@
 // @ts-nocheck
 import type {
-  InboxAutoReviewRule,
-  InboxAutoReviewRuleRequest,
-  TrackMetadataUpdate,
+InboxAutoReviewRule,
+InboxAutoReviewRuleRequest,
+TrackMetadataUpdate,
 } from "../../types/api";
 import {
-  queuedFileTagWriteMessage,
+queuedFileTagWriteMessage,
 } from "./useDeferredFileTagWriter";
 
 export function createLibraryActionHandlers(model: any) {

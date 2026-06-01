@@ -1,20 +1,20 @@
+import {
+Search,
+X,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import {
-  useEffect,
-  useMemo,
-  useState,
+useEffect,
+useMemo,
+useState,
 } from "react";
-import {
-  Search,
-  X,
-} from "lucide-react";
 
 import {
-  buildStaticSidebarSearchTargets,
-  searchLibrarySidebarTargets,
-  searchSidebarTargets,
-  type ScoredSidebarSearchTarget,
-  type SidebarSearchTarget,
+buildStaticSidebarSearchTargets,
+searchLibrarySidebarTargets,
+searchSidebarTargets,
+type ScoredSidebarSearchTarget,
+type SidebarSearchTarget,
 } from "./sidebarSearch";
 
 function searchResultCategory(target: SidebarSearchTarget) {

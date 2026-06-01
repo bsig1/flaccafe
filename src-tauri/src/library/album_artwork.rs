@@ -22,6 +22,7 @@ struct AlbumRecord {
     album: Option<String>,
     album_artist: Option<String>,
     artwork_path: Option<String>,
+    artwork_locked: bool,
 }
 
 struct AlbumTrack {
@@ -42,8 +43,10 @@ pub(crate) fn update_album_artwork(
     }
 
     let connection = open_database()?;
-    album_record(&connection, album_id)?;
-    let artwork_path: Option<String>;
+    let album = album_record(&connection, album_id)?;
+    let lock_update = json_bool(&body, "artwork_locked").or_else(|| json_bool(&body, "artworkLocked"));
+    let mut artwork_path = album.artwork_path.clone();
+    let mut changed = false;
 
     if json_bool(&body, "clear").unwrap_or(false) {
         artwork_path = None;
@@ -53,6 +56,7 @@ pub(crate) fn update_album_artwork(
                 params![album_id],
             )
             .map_err(|error| format!("Could not clear album artwork: {error}"))?;
+        changed = true;
     } else if let Some(path) = json_string(&body, "artwork_path")
         .or_else(|| json_string(&body, "artworkPath"))
         .filter(|value| !value.trim().is_empty())
@@ -73,6 +77,7 @@ pub(crate) fn update_album_artwork(
                 params![artwork_path, album_id],
             )
             .map_err(|error| format!("Could not save album artwork path: {error}"))?;
+        changed = true;
     } else if let Some(url) = json_string(&body, "artwork_url")
         .or_else(|| json_string(&body, "artworkUrl"))
         .filter(|value| !value.trim().is_empty())
@@ -98,14 +103,38 @@ pub(crate) fn update_album_artwork(
                 params![artwork_path, album_id],
             )
             .map_err(|error| format!("Could not save web album artwork path: {error}"))?;
-    } else {
+        changed = true;
+    }
+
+    if let Some(locked) = lock_update {
+        connection
+            .execute(
+                "UPDATE albums SET artwork_locked = ? WHERE id = ?",
+                params![if locked { 1 } else { 0 }, album_id],
+            )
+            .map_err(|error| format!("Could not update album artwork lock: {error}"))?;
+        changed = true;
+    }
+
+    if !changed {
         return Ok(None);
     }
 
     let _ = connection.execute("DELETE FROM artwork_cache", []);
+    let _ = connection.execute("DELETE FROM library_query_cache WHERE cache_key LIKE 'ui:%'", []);
+    let _ = connection.execute(
+        r#"
+        INSERT INTO settings(key, value, updated_at)
+        VALUES('library_derived_dirty', '1', datetime('now'))
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+        "#,
+        [],
+    );
+    let artwork_locked = lock_update.unwrap_or(album.artwork_locked);
     Ok(Some(DesktopAlbumArtworkUpdateResponse {
         album_id,
         artwork_path,
+        artwork_locked,
         candidates: album_artwork_candidates(&connection, album_id)?,
         embedded_updated: 0,
         errors: Vec::new(),
@@ -204,13 +233,14 @@ fn push_candidate(
 fn album_record(connection: &Connection, album_id: i64) -> Result<AlbumRecord, String> {
     connection
         .query_row(
-            "SELECT album, album_artist, artwork_path FROM albums WHERE id = ?",
+            "SELECT album, album_artist, artwork_path, coalesce(artwork_locked, 0) AS artwork_locked FROM albums WHERE id = ?",
             params![album_id],
             |row| {
                 Ok(AlbumRecord {
                     album: row.get(0)?,
                     album_artist: row.get(1)?,
                     artwork_path: row.get(2)?,
+                    artwork_locked: row.get::<_, Option<i64>>(3)?.unwrap_or(0) != 0,
                 })
             },
         )

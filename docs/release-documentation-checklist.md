@@ -4,10 +4,10 @@ Run this before packaging or tagging a FLAC Cafe release.
 
 ## Required Checks
 
-- Run `npm run test` so TypeScript, route docs, frontend tests, and backend tests all pass.
-- Run `npm run build`.
-- Run `cargo check` from `src-tauri`.
-- Confirm `docs/backend-routes.md` is current. `npm run check:routes` is included in `npm run test`.
+- Run `npm.cmd run test` so TypeScript, route docs, frontend tests, and backend tests all pass.
+- Run `npm.cmd run build`.
+- Run `cargo check --manifest-path src-tauri\Cargo.toml --all-targets`.
+- Confirm `docs/backend-routes.md` is current. `npm.cmd run check:routes` is included in `npm.cmd run test`.
 - Read `README.md` and confirm the What Works, Development, Optional CLAP Runtime, Checks, and Packaging sections match the release.
 - Read `docs/project-structure.md` after moving files, adding new top-level folders, or changing generated output locations.
 - Read `docs/playback.md` after playback changes, especially codec support, shortcuts, SMTC, and skip tracking.

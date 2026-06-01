@@ -27,10 +27,8 @@ mod tests {
     #[test]
     fn sort_expression_uses_safe_fallback() {
         assert_eq!(sort_expression("rating"), "coalesce(rating, -1)");
-        assert_eq!(
-            sort_expression("drop table tracks"),
-            "lower(coalesce(artist, ''))"
-        );
+        assert!(sort_expression("drop table tracks").contains("coalesce(artist, '')"));
+        assert!(sort_expression("artist").contains("LIKE 'the %'"));
     }
 
     #[test]
@@ -120,6 +118,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
                 Some("any".to_string()),
                 None,
                 None,
@@ -140,6 +139,7 @@ mod tests {
                 Some(0),
                 Some("title".to_string()),
                 Some("asc".to_string()),
+                None,
                 None,
                 None,
                 None,
@@ -182,6 +182,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
                 Some("any".to_string()),
                 None,
                 None,
@@ -206,6 +207,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
                 Some("any".to_string()),
                 None,
                 None,
@@ -225,6 +227,7 @@ mod tests {
                 Some(0),
                 Some("title".to_string()),
                 Some("asc".to_string()),
+                None,
                 None,
                 None,
                 None,

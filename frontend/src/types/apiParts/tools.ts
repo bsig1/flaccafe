@@ -1,4 +1,4 @@
-﻿import type { DuplicateGroup, Track } from "./core";
+﻿import type { DuplicateGroup,Track } from "./core";
 
 export type CacheClearTarget = "artist" | "artwork" | "metadata" | "recommendation_history" | "scan_errors";
 
@@ -422,6 +422,7 @@ export interface AutoTagRequest {
   save_artwork?: boolean;
   fingerprint_only?: boolean;
   write_to_file?: boolean | null;
+  accepted_previews?: AutoTagPreview[] | null;
   apply?: boolean;
   limit?: number;
   candidate_limit?: number;

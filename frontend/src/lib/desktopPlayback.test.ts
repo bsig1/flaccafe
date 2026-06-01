@@ -1,14 +1,14 @@
 import {
-  describe,
-  expect,
-  it,
+describe,
+expect,
+it,
 } from "vitest";
 
 import type {
-  PlaybackDiagnosticsResponse,
+PlaybackDiagnosticsResponse,
 } from "./desktopPlayback";
 import {
-  summarizePlaybackDiagnostics,
+summarizePlaybackDiagnostics,
 } from "./desktopPlayback";
 
 function diagnostics(entries: PlaybackDiagnosticsResponse["entries"], streamErrors: string[] = []): PlaybackDiagnosticsResponse {
@@ -19,12 +19,14 @@ function diagnostics(entries: PlaybackDiagnosticsResponse["entries"], streamErro
     prepared_next_path: null,
     prepared_next_duration_seconds: null,
     prepared_next_at_ms: null,
+    output_backend: "cpalShared",
     device_id: null,
     device_name: null,
     buffer_frames: null,
     sample_rate: null,
     channel_count: null,
     sample_format: null,
+    dropped_frames: streamErrors.length,
   };
 }
 

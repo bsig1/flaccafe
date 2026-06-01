@@ -1,53 +1,53 @@
 // @ts-nocheck
-import { useRef, useState } from "react";
+import { useRef,useState } from "react";
 
-import {
-  DEFAULT_LIBRARY_SORT,
-  defaultLibraryTrackQueryKey,
-  indexedStartupTracks,
-  readStartupLibrarySnapshot,
-  type StartupLibrarySnapshot,
-} from "../appHelpers";
-import {
-  defaultAutoDj,
-  emptyRecommendationDrift,
-  readQuickStartDismissed,
-  readUiPreferences,
-  type AppContextMenu,
-  type BackendStatus,
-  type DeleteTrackPrompt,
-  type LibraryView,
-  type Page,
-  type PlaybackMode,
-  type SortState,
-  type UiPreferences,
-  type UndoAction,
-} from "../shared";
 import type {
-  AdvancedTrackSearchFilters,
-  AlbumSummary,
-  ArtistInfoResponse,
-  ArtistSummary,
-  AutoDjAvoidRule,
-  AutoDjSettings,
-  HistoryStatsResponse,
-  InboxResponse,
-  LibraryHealthResponse,
-  LibraryStatsResponse,
-  LogTailResponse,
-  LyricsResponse,
-  PlayEventEntry,
-  PlaylistSummary,
-  QueueTrack,
-  RadioStation,
-  RecommendationDrift,
-  RecommendationProfile,
-  RecommendationRun,
-  SettingsResponse,
-  StartupDiagnosticsResponse,
-  Track,
+AdvancedTrackSearchFilters,
+AlbumSummary,
+ArtistInfoResponse,
+ArtistSummary,
+AutoDjAvoidRule,
+AutoDjSettings,
+HistoryStatsResponse,
+InboxResponse,
+LibraryHealthResponse,
+LibraryStatsResponse,
+LogTailResponse,
+LyricsResponse,
+PlayEventEntry,
+PlaylistSummary,
+QueueTrack,
+RadioStation,
+RecommendationDrift,
+RecommendationProfile,
+RecommendationRun,
+SettingsResponse,
+StartupDiagnosticsResponse,
+Track,
 } from "../../types/api";
+import {
+DEFAULT_LIBRARY_SORT,
+defaultLibraryTrackQueryKey,
+indexedStartupTracks,
+readStartupLibrarySnapshot,
+type StartupLibrarySnapshot,
+} from "../appHelpers";
 import type { EditableMetadataKey } from "../components/modals";
+import {
+defaultAutoDj,
+emptyRecommendationDrift,
+readQuickStartDismissed,
+readUiPreferences,
+type AppContextMenu,
+type BackendStatus,
+type DeleteTrackPrompt,
+type LibraryView,
+type Page,
+type PlaybackMode,
+type SortState,
+type UiPreferences,
+type UndoAction,
+} from "../shared";
 
 export function useAppControllerState() {
   const [startupLibrarySnapshot] = useState<StartupLibrarySnapshot | null>(readStartupLibrarySnapshot);

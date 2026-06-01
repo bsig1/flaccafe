@@ -1,48 +1,45 @@
-import { FileText, ListMusic, Pause, Play, Radio, Repeat, Repeat1, Repeat2, SkipBack, SkipForward, Volume2, VolumeX } from "lucide-react";
-import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent, WheelEvent as ReactWheelEvent } from "react";
-import { useEffect, useRef, useState } from "react";
+import type { ChangeEvent,KeyboardEvent as ReactKeyboardEvent,WheelEvent as ReactWheelEvent } from "react";
+import { useEffect,useRef,useState } from "react";
 
 import { albumArtworkUrl } from "../../lib/api";
+import type { DesktopPlaybackSource,PlaybackDiagnosticsResponse,desktopDspSettings } from "../../lib/desktopPlayback";
 import {
-  desktopPrepareNextSource,
-  desktopSeek,
-  desktopStatus,
-  desktopStop,
+desktopDiagnostics,
+desktopPause,
+desktopPlaySource,
+desktopPrepareNextSource,
+desktopSeek,
+desktopSetVolume,
+desktopStatus,
+desktopStop,
 } from "../../lib/desktopPlayback";
-import type { DesktopPlaybackSource, desktopDspSettings } from "../../lib/desktopPlayback";
 import type { SmtcButtonPayload } from "../../lib/tauriMedia";
-import { clearSmtcState, listenForSmtcButtons, updateSmtcState } from "../../lib/tauriMedia";
-import type { RadioStation, Track } from "../../types/api";
+import type { RadioStation,Track } from "../../types/api";
+import {
+MiniPlayerCommand,
+VISUALIZER_FRAME_EVENT,
+VisualizerFrame,
+clampNumber,
+display,
+displayAlbumForTrack,
+normalizeEqualizerGains,
+readStoredMuted,
+readStoredVolume,
+replayGainMultiplier,
+shouldRecordTrackAsPlayed
+} from "../shared";
 import type { PlayerBarProps } from "./PlayerBarTypes";
 import { PlayerBarView } from "./PlayerBarView";
-import { createPlaybackTransitions } from "./playbackTransitions";
 import { playbackEndedEarly } from "./playbackEarlyEnd";
+import { createPlaybackTransitions } from "./playbackTransitions";
 import { usePlayerBarAudioEffects } from "./usePlayerBarAudioEffects";
 import { usePlayerBarMediaEffects } from "./usePlayerBarMediaEffects";
-import { RatingStars } from "../components/common";
-import {
-  MiniPlayerCommand,
-  VISUALIZER_FRAME_EVENT,
-  VisualizerFrame,
-  clampNumber,
-  display,
-  displayAlbumForTrack,
-  miniPlayerChannelName,
-  miniPlayerTrackSnapshot,
-  normalizeEqualizerGains,
-  publishMiniPlayerSnapshot,
-  readStoredMuted,
-  readStoredVolume,
-  replayGainMultiplier,
-  shouldRecordTrackAsPlayed,
-  shortcutMatchesEvent,
-  writeStoredAudioControls,
-} from "../shared";
 
 const CD_SKIP_SETTLE_SECONDS = 1.15;
 const INTENTIONAL_PLAYBACK_STOP_SUPPRESS_MS = 2500;
 const PLAYBACK_SEEK_END_GUARD_SECONDS = 0.25;
 const PLAYBACK_KEYBOARD_SEEK_STEP_SECONDS = 5;
+const EARLY_END_WARNING_DELAY_MS = 2500;
 
 export function PlayerBar({
   currentTrack,
@@ -58,11 +55,18 @@ export function PlayerBar({
   resumePositionSeconds,
   onResumePositionApplied,
   onRating,
+  displayRatingsAsNumbers,
   autoPlay,
   fadeMs,
+  crossfadeManualMs,
+  crossfadeNaturalMs,
+  crossfadeAlbumMs,
+  crossfadeRadioMs,
   skipThresholdPercent,
+  desktopOutputBackend,
   desktopOutputDeviceId,
   desktopBufferFrames,
+  showOutputDiagnosticsButton,
   miniPlayer,
   replayGainMode,
   replayGainTargetVolumePercent,
@@ -76,7 +80,6 @@ export function PlayerBar({
   keyboardShortcuts,
   playbackMode,
   setPlaybackMode,
-  onOpenMiniPlayer,
   onOpenLyricsView,
   onOpenQueueView,
   onOpenCurrentTrack,
@@ -93,12 +96,15 @@ export function PlayerBar({
   const desktopLoadedTrackIdRef = useRef<number | null>(null);
   const desktopEndedTrackIdRef = useRef<number | null>(null);
   const desktopEarlyEndSuppressUntilRef = useRef(0);
+  const earlyEndWarningTimerRef = useRef<number | null>(null);
   const lastPlaybackStreamErrorRef = useRef<string | null>(null);
   const handledExternalTrackRequestRef = useRef<number | null>(null);
   const preparedNextPathRef = useRef<string | null>(null);
   const prepareNextInFlightRef = useRef(false);
   const prepareNextPendingPathRef = useRef<string | null>(null);
   const activeSourceKeyRef = useRef("empty");
+  const lastOutputSettingsKeyRef = useRef<string | null>(null);
+  const outputSwitchRequestRef = useRef(0);
   const smtcActionRef = useRef<(payload: SmtcButtonPayload) => void>(() => {});
   const miniPlayerChannelRef = useRef<BroadcastChannel | null>(null);
   const miniPlayerCommandRef = useRef<(command: MiniPlayerCommand) => void>(() => {});
@@ -113,12 +119,15 @@ export function PlayerBar({
   const [artworkFailed, setArtworkFailed] = useState(false);
   const [displayedArtworkSrc, setDisplayedArtworkSrc] = useState<string | null>(null);
   const [showArtworkPreview, setShowArtworkPreview] = useState(false);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [playbackDiagnostics, setPlaybackDiagnostics] = useState<PlaybackDiagnosticsResponse | null>(null);
   const isRadioSource = Boolean(currentRadioStation);
   const isPreviewTrack = Boolean(currentTrack?.is_preview) || (currentTrack?.id ?? 0) < 0;
   const isCdPreviewTrack = Boolean(currentTrack?.path?.startsWith("cdda://"));
   const isLibraryTrack = Boolean(currentTrack && currentTrack.id > 0 && !currentTrack.is_preview);
   const hasPlayableSource = Boolean(currentTrack || currentRadioStation);
   const activeSourceKey = currentRadioStation ? `radio:${currentRadioStation.id}` : currentTrack ? `track:${currentTrack.id}` : "empty";
+  const outputSettingsKey = `${desktopOutputBackend}|${desktopOutputDeviceId}|${desktopBufferFrames}`;
   const currentIndex = currentTrack && !isRadioSource ? queue.findIndex((track) => track.id === currentTrack.id) : -1;
   const hasPrevious = currentIndex > 0;
   const hasNext = currentIndex >= 0 && currentIndex < queue.length - 1;
@@ -136,7 +145,31 @@ export function PlayerBar({
   const progressPercent = progressRatio * 100;
   const progressFill = progressRatio > 0 ? `calc(${progressPercent}% + ${7 - progressRatio * 14}px)` : "0px";
   const smtcPositionSecond = Math.floor(currentTime);
-  const trackSwitchFadeMs = Math.max(0, fadeMs);
+  const manualFadeMs = Math.max(0, crossfadeManualMs ?? fadeMs);
+  const naturalFadeMs = Math.max(0, crossfadeNaturalMs ?? fadeMs);
+  const albumFadeMs = Math.max(0, crossfadeAlbumMs ?? 0);
+  const radioFadeMs = Math.max(0, crossfadeRadioMs ?? fadeMs);
+
+  function sameAlbumForCrossfade(left: Track | null, right: Track | null) {
+    if (!left || !right) {
+      return false;
+    }
+    const leftAlbum = (left.album ?? "").trim().toLowerCase();
+    const rightAlbum = (right.album ?? "").trim().toLowerCase();
+    if (!leftAlbum || leftAlbum !== rightAlbum) {
+      return false;
+    }
+    const leftArtist = (left.album_artist ?? left.artist ?? "").trim().toLowerCase();
+    const rightArtist = (right.album_artist ?? right.artist ?? "").trim().toLowerCase();
+    return !leftArtist || !rightArtist || leftArtist === rightArtist;
+  }
+
+  function fadeMsForTrackChange(context: "manual" | "natural", nextTrack: Track | null = null) {
+    if (sameAlbumForCrossfade(currentTrack, nextTrack)) {
+      return albumFadeMs;
+    }
+    return context === "natural" ? naturalFadeMs : manualFadeMs;
+  }
   function replayGainForTrack(track: Track | null) {
     return replayGainMultiplier(
       track,
@@ -252,9 +285,31 @@ export function PlayerBar({
     );
   }
 
+  function clearEarlyEndWarningTimer() {
+    if (earlyEndWarningTimerRef.current !== null) {
+      window.clearTimeout(earlyEndWarningTimerRef.current);
+      earlyEndWarningTimerRef.current = null;
+    }
+  }
+
+  function scheduleEarlyEndWarning(trackId: number) {
+    const sourceKey = activeSourceKeyRef.current;
+    clearEarlyEndWarningTimer();
+    earlyEndWarningTimerRef.current = window.setTimeout(() => {
+      earlyEndWarningTimerRef.current = null;
+      if (activeSourceKeyRef.current !== sourceKey) {
+        return;
+      }
+      if (currentTrack?.id !== trackId) {
+        return;
+      }
+      setStatus("Track ended earlier than its saved duration; continuing the queue.");
+    }, EARLY_END_WARNING_DELAY_MS);
+  }
+
   const playbackTransitions = createPlaybackTransitions({
     crossfadeTrackRef, pendingResumePositionRef, desktopLoadedTrackIdRef, desktopEndedTrackIdRef, lastPlaybackStreamErrorRef, artworkPreviewTimerRef, desktopFadeTimerRef,
-    currentTrack, currentRadioStation, currentTime, isPlaying, isCdPreviewTrack, outputVolume, fadeMs, desktopOutputDeviceId, desktopBufferFrames, queue, getArtworkSrc: () => artworkSrc, setShowArtworkPreview, setDuration, setCurrentTime, setIsPlaying, setStatus, onPlaybackTime, onTrackEnded, onSelectTrack, playbackSourceForTrack, playbackSourceForRadio, cancelPlaybackFade, cancelCrossfade, suppressDesktopEarlyEndWarning, currentPlaybackDspSettings, desktopDspSettingsForTrack,
+    currentTrack, currentRadioStation, currentTime, isPlaying, isCdPreviewTrack, outputVolume, fadeMs: manualFadeMs, radioFadeMs, desktopOutputBackend, desktopOutputDeviceId, desktopBufferFrames, queue, getArtworkSrc: () => artworkSrc, setShowArtworkPreview, setDuration, setCurrentTime, setIsPlaying, setStatus, onPlaybackTime, onTrackEnded, onSelectTrack, playbackSourceForTrack, playbackSourceForRadio, cancelPlaybackFade, cancelCrossfade, suppressDesktopEarlyEndWarning, currentPlaybackDspSettings, desktopDspSettingsForTrack,
   });
   const {
     clearArtworkPreviewTimer, scheduleArtworkPreview, hideArtworkPreview, cdStreamIsSettling, fadePlaybackVolume, startPlaybackTrack, startPlaybackCrossfade, playWithFade, pauseWithFade,
@@ -263,6 +318,11 @@ export function PlayerBar({
   usePlayerBarAudioEffects({
     cancelPlaybackFade, cancelCrossfade, clearArtworkPreviewTimer, cancelVisualizerLoop, miniPlayerChannelRef, volume, muted, desktopFadeTimerRef, outputVolume, desktopLoadedTrackIdRef, desktopEndedTrackIdRef, miniPlayerCommandRef, equalizerEnabled, equalizerBandMode, equalizerPreampDb, equalizerGains, dspLimiterEnabled, replayGain, currentPlaybackDspSettings, emitVisualizerState, isPlaying, visualizerTrackId, visualizerLastEmitRef, emitVisualizerFrame, visualizerFrameRef,
   });
+
+  useEffect(() => {
+    clearEarlyEndWarningTimer();
+    return clearEarlyEndWarningTimer;
+  }, [activeSourceKey]);
 
   useEffect(() => {
     if (!externalTrackRequest || handledExternalTrackRequestRef.current === externalTrackRequest.id) {
@@ -275,8 +335,9 @@ export function PlayerBar({
 
     cancelCrossfade();
     crossfadeTrackRef.current = null;
+    const manualTrackSwitchFadeMs = fadeMsForTrackChange("manual", externalTrackRequest.track);
 
-    if (!hasPlayableSource || !isPlaying || trackSwitchFadeMs <= 0) {
+    if (!hasPlayableSource || !isPlaying || manualTrackSwitchFadeMs <= 0) {
       if (hasPlayableSource) {
         suppressDesktopEarlyEndWarning();
         void desktopStop().finally(commitTrackRequest);
@@ -286,21 +347,21 @@ export function PlayerBar({
       return;
     }
 
-    if (isPlaying && trackSwitchFadeMs > 0) {
+    if (isPlaying && manualTrackSwitchFadeMs > 0) {
       void recordCurrentTrackExit();
-      void startPlaybackCrossfade(externalTrackRequest.track, false, externalTrackRequest.queue, false).then((started) => {
+      void startPlaybackCrossfade(externalTrackRequest.track, false, externalTrackRequest.queue, false, manualTrackSwitchFadeMs).then((started) => {
         if (started) {
           commitTrackRequest({ suppressExitRecord: true });
           return;
         }
-        fadePlaybackVolume(0, trackSwitchFadeMs, () => {
+        fadePlaybackVolume(0, manualTrackSwitchFadeMs, () => {
           suppressDesktopEarlyEndWarning();
           void desktopStop().finally(() => commitTrackRequest({ suppressExitRecord: true }));
         });
       });
       return;
     }
-    fadePlaybackVolume(0, trackSwitchFadeMs, () => {
+    fadePlaybackVolume(0, manualTrackSwitchFadeMs, () => {
       suppressDesktopEarlyEndWarning();
       void desktopStop().finally(commitTrackRequest);
     });
@@ -308,14 +369,21 @@ export function PlayerBar({
 
   useEffect(() => {
     cancelPlaybackFade();
-    setCurrentTime(0);
-    onPlaybackTime(0);
+    const restoredStartTime =
+      currentTrack && resumePositionSeconds !== null
+        ? effectiveDuration > 0
+          ? Math.min(Math.max(0, resumePositionSeconds), Math.max(0, effectiveDuration - 1))
+          : Math.max(0, resumePositionSeconds)
+        : null;
+    const initialTime = Number.isFinite(restoredStartTime ?? 0) ? restoredStartTime ?? 0 : 0;
+    setCurrentTime(initialTime);
+    onPlaybackTime(initialTime);
     setDuration(isRadioSource ? 0 : currentTrack?.duration_seconds ?? 0);
     setArtworkFailed(false);
     setIsPlaying(false);
     crossfadeTrackRef.current = null;
     desktopEndedTrackIdRef.current = null;
-    pendingResumePositionRef.current = null;
+    pendingResumePositionRef.current = initialTime > 0 ? initialTime : null;
 
     if (!hasPlayableSource) {
       desktopLoadedTrackIdRef.current = null;
@@ -338,9 +406,109 @@ export function PlayerBar({
         setIsPlaying(true);
         return;
       }
-      void startPlaybackTrack(currentTrack);
+      void startPlaybackTrack(currentTrack, initialTime);
     }
   }, [activeSourceKey, radioPlaybackRequestId, autoPlay, hasPlayableSource]);
+
+  // Output mode/device changes should take effect immediately. Reopen the same
+  // Rust source at its current position instead of waiting for the next track.
+  useEffect(() => {
+    const previousOutputSettingsKey = lastOutputSettingsKeyRef.current;
+    lastOutputSettingsKeyRef.current = outputSettingsKey;
+    if (previousOutputSettingsKey === null || previousOutputSettingsKey === outputSettingsKey) {
+      return undefined;
+    }
+    const loadedSourceId = currentRadioStation ? -currentRadioStation.id : currentTrack?.id ?? null;
+    if (!hasPlayableSource || loadedSourceId === null || desktopLoadedTrackIdRef.current !== loadedSourceId) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    const requestId = outputSwitchRequestRef.current + 1;
+    outputSwitchRequestRef.current = requestId;
+    const source = currentRadioStation
+      ? playbackSourceForRadio(currentRadioStation)
+      : currentTrack
+        ? playbackSourceForTrack(currentTrack)
+        : null;
+    if (!source) {
+      return undefined;
+    }
+
+    const switchOutput = async () => {
+      cancelPlaybackFade();
+      cancelCrossfade();
+      suppressDesktopEarlyEndWarning(5000);
+      const statusBeforeSwitch = await desktopStatus().catch(() => null);
+      if (cancelled || outputSwitchRequestRef.current !== requestId) {
+        return;
+      }
+      const wasPlaying = statusBeforeSwitch?.is_playing ?? isPlaying;
+      const wasPaused = statusBeforeSwitch?.is_paused ?? (!isPlaying && desktopLoadedTrackIdRef.current === loadedSourceId);
+      if (!wasPlaying && !wasPaused) {
+        return;
+      }
+      const startSeconds = currentRadioStation
+        ? null
+        : clampNumber(
+            statusBeforeSwitch?.position_seconds ?? currentTime,
+            0,
+            effectiveDuration > 0 ? Math.max(0, effectiveDuration - PLAYBACK_SEEK_END_GUARD_SECONDS) : Number.MAX_SAFE_INTEGER,
+          );
+      const backendLabel = desktopOutputBackend === "wasapiExclusive" ? "exclusive mode" : "shared mode";
+      setStatus(`Switching Rust output to ${backendLabel}...`);
+      const nextStatus = await desktopPlaySource({
+        source,
+        volume: wasPlaying ? outputVolume : 0,
+        startSeconds,
+        outputBackend: desktopOutputBackend,
+        deviceId: desktopOutputDeviceId,
+        bufferFrames: desktopBufferFrames,
+        dspSettings: currentPlaybackDspSettings(),
+      });
+      if (cancelled || outputSwitchRequestRef.current !== requestId) {
+        return;
+      }
+      desktopLoadedTrackIdRef.current = loadedSourceId;
+      desktopEndedTrackIdRef.current = null;
+      lastPlaybackStreamErrorRef.current = null;
+      pendingResumePositionRef.current = null;
+      setDuration(nextStatus.duration_seconds ?? (currentRadioStation ? 0 : currentTrack?.duration_seconds ?? 0));
+      setCurrentTime(nextStatus.position_seconds);
+      onPlaybackTime(nextStatus.position_seconds);
+      if (wasPlaying) {
+        setIsPlaying(true);
+      } else {
+        await desktopPause().catch(() => {
+          // If the sink stopped during the switch, the next play action will reopen it.
+        });
+        await desktopSetVolume(outputVolume).catch(() => {
+          // Volume will be restored by the next playback command if this environment lacks Rust audio.
+        });
+        setIsPlaying(false);
+      }
+      const resolvedBackendLabel = nextStatus.output_backend === "wasapiExclusive" ? "exclusive mode" : "shared mode";
+      setStatus(
+        resolvedBackendLabel === backendLabel
+          ? `Rust output switched to ${resolvedBackendLabel}.`
+          : `Rust output fell back to ${resolvedBackendLabel}.`,
+      );
+    };
+
+    void switchOutput().catch((error) => {
+      if (cancelled || outputSwitchRequestRef.current !== requestId) {
+        return;
+      }
+      setIsPlaying(false);
+      desktopLoadedTrackIdRef.current = null;
+      pendingResumePositionRef.current = currentTime;
+      setStatus(error instanceof Error ? error.message : "Rust output could not switch modes.");
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [outputSettingsKey, activeSourceKey]);
 
   useEffect(() => {
     if (!currentTrack) {
@@ -526,11 +694,12 @@ export function PlayerBar({
       }
       cancelCrossfade();
       crossfadeTrackRef.current = null;
-      if (isPlaying && fadeMs > 0) {
-        void startPlaybackCrossfade(nextTrack, false);
+      const manualTrackSwitchFadeMs = fadeMsForTrackChange("manual", nextTrack);
+      if (isPlaying && manualTrackSwitchFadeMs > 0) {
+        void startPlaybackCrossfade(nextTrack, false, queue, true, manualTrackSwitchFadeMs);
         return;
       }
-      fadePlaybackVolume(0, trackSwitchFadeMs, () => {
+      fadePlaybackVolume(0, manualTrackSwitchFadeMs, () => {
         suppressDesktopEarlyEndWarning();
         void desktopStop().finally(() => {
           onSelectTrack(nextTrack, queue, { suppressExitRecord: true });
@@ -567,13 +736,16 @@ export function PlayerBar({
       return;
     }
     if (!isCdPreviewTrack && playbackEndedEarly(endedAt, effectiveDuration)) {
-      setIsPlaying(false);
-      setStatus("Track appears corrupted or truncated; playback stopped before the saved duration.");
-      return;
+      scheduleEarlyEndWarning(currentTrack.id);
     }
     void onTrackEnded(currentTrack.id);
     if (playbackMode === "stopAfterCurrent") {
       setIsPlaying(false);
+      desktopLoadedTrackIdRef.current = null;
+      suppressDesktopEarlyEndWarning();
+      void desktopStop().catch(() => {
+        // Rust playback may already be stopped or unavailable.
+      });
       setStatus("Stopped after current track");
       return;
     }
@@ -587,6 +759,12 @@ export function PlayerBar({
     } else if (playbackMode === "repeatQueue" && queue.length > 0) {
       onSelectTrack(queue[0], queue, { suppressExitRecord: true });
     } else {
+      setIsPlaying(false);
+      desktopLoadedTrackIdRef.current = null;
+      suppressDesktopEarlyEndWarning();
+      void desktopStop().catch(() => {
+        // Rust playback may already be stopped or unavailable.
+      });
       setStatus("Queue finished");
     }
   }
@@ -623,25 +801,37 @@ export function PlayerBar({
         const latestStreamError = status.stream_errors.length
           ? status.stream_errors[status.stream_errors.length - 1]
           : null;
+        const loadedSourceId = currentRadioStation ? -currentRadioStation.id : currentTrack?.id ?? null;
+        if (
+          loadedSourceId !== null &&
+          desktopLoadedTrackIdRef.current === loadedSourceId &&
+          (!status.available || Boolean(latestStreamError))
+        ) {
+          desktopLoadedTrackIdRef.current = null;
+          desktopEndedTrackIdRef.current = null;
+          pendingResumePositionRef.current = status.position_seconds;
+          setIsPlaying(false);
+        }
         if (latestStreamError && latestStreamError !== lastPlaybackStreamErrorRef.current) {
           lastPlaybackStreamErrorRef.current = latestStreamError;
           setStatus(latestStreamError);
         }
         const desktopDuration = status.duration_seconds ?? currentTrack?.duration_seconds ?? 0;
-        const desktopCrossfadeLeadSeconds = Math.max(0.12, fadeMs / 1000);
+        const naturalTrackSwitchFadeMs = fadeMsForTrackChange("natural", preloadedNextTrack);
+        const desktopCrossfadeLeadSeconds = Math.max(0.12, naturalTrackSwitchFadeMs / 1000);
         if (
           currentTrack &&
           preloadedNextTrack &&
           canPreloadNextTrack &&
           playbackMode !== "stopAfterCurrent" &&
           playbackMode !== "repeatOne" &&
-          fadeMs > 0 &&
+          naturalTrackSwitchFadeMs > 0 &&
           status.is_playing &&
           desktopDuration > desktopCrossfadeLeadSeconds * 2 &&
           desktopDuration - status.position_seconds <= desktopCrossfadeLeadSeconds &&
           crossfadeTrackRef.current !== currentTrack.id
         ) {
-          await startPlaybackCrossfade(preloadedNextTrack);
+          await startPlaybackCrossfade(preloadedNextTrack, true, queue, true, naturalTrackSwitchFadeMs);
           return;
         }
         if (
@@ -673,7 +863,7 @@ export function PlayerBar({
       canceled = true;
       window.clearInterval(timer);
     };
-  }, [hasPlayableSource, currentTrack?.id, playbackMode, currentIndex, queue, fadeMs, preloadedNextTrack?.id, canPreloadNextTrack, outputVolume]);
+  }, [hasPlayableSource, currentTrack?.id, playbackMode, currentIndex, queue, naturalFadeMs, albumFadeMs, preloadedNextTrack?.id, canPreloadNextTrack, outputVolume]);
 
   useEffect(() => {
     if (!hasPlayableSource || !preloadedNextTrack || !canPreloadNextTrack || playbackMode === "stopAfterCurrent") {
@@ -756,11 +946,42 @@ export function PlayerBar({
   const playerTitle = currentRadioStation ? display(currentRadioStation.name, "Radio stream") : currentTrack ? display(currentTrack.title, "Untitled") : "Nothing playing";
 
   usePlayerBarMediaEffects({
-    hideArtworkPreview, artworkSrc, miniPlayerCommandRef, togglePlayback, playRelative, seekTo, smtcActionRef, hasPlayableSource, isPlaying, playWithFade, pauseWithFade, hasNext, currentTime, hasPrevious, canPreviousAction, handlePreviousTrack, isRadioSource, keyboardShortcuts, changeVolume, volume, muted, toggleMuted, cycleRepeatMode, toggleStopAfterCurrent, setPlaybackMode, playbackMode, currentTrack, currentRadioStation, queue, currentIndex, outputVolume, effectiveDuration, smtcPositionSecond, miniPlayerChannelRef,
+    hideArtworkPreview, artworkSrc, miniPlayerCommandRef, togglePlayback, playRelative, seekTo, smtcActionRef, hasPlayableSource, isPlaying, playWithFade, pauseWithFade, hasNext, currentTime, hasPrevious, canPreviousAction, handlePreviousTrack, isRadioSource, keyboardShortcuts, changeVolume, volume, muted, toggleMuted, cycleRepeatMode, toggleStopAfterCurrent, setPlaybackMode, playbackMode, currentTrack, currentRadioStation, queue, currentIndex, outputVolume, effectiveDuration, smtcPositionSecond, miniPlayerChannelRef, onSelectTrack,
   });
 
+  useEffect(() => {
+    if (!showOutputDiagnosticsButton) {
+      setDiagnosticsOpen(false);
+      setPlaybackDiagnostics(null);
+      return undefined;
+    }
+    if (!diagnosticsOpen) {
+      return undefined;
+    }
+    let cancelled = false;
+    const refreshDiagnostics = () => {
+      void desktopDiagnostics()
+        .then((response) => {
+          if (!cancelled) {
+            setPlaybackDiagnostics(response);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setPlaybackDiagnostics(null);
+          }
+        });
+    };
+    refreshDiagnostics();
+    const timer = window.setInterval(refreshDiagnostics, 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [diagnosticsOpen, showOutputDiagnosticsButton]);
+
   const playerBarViewModel = {
-    miniPlayer, artworkSrc: displayedArtworkSrc, playerTitle, hideArtworkPreview, scheduleArtworkPreview, setArtworkFailed, isRadioSource, isPreviewTrack, isLibraryTrack, currentTrack, currentRadioStation, radioSubtitle, hasCurrentArtist, currentArtistLabel, onOpenCurrentArtist, onOpenCurrentArtistInfo, hasCurrentAlbum, currentAlbumLabel, onOpenCurrentAlbum, onOpenCurrentTrack, cdSkipIsSettling, hasPrevious, canPreviousAction, handlePreviousTrack, playRelative, isPlaying, hasPlayableSource, togglePlayback, hasNext, effectiveDuration, currentTime, progressPercent, progressFill, handleSeek, handleProgressKeyDown, playbackSeekStepSeconds: PLAYBACK_KEYBOARD_SEEK_STEP_SECONDS, playbackMode, cycleRepeatMode, onOpenLyricsView, onOpenQueueView, muted, volume, handleVolumeWheel, toggleMuted, handleVolumeChange, volumePercentDraft, commitVolumePercent, setVolumePercentDraft, handleVolumePercentChange, handleVolumePercentKeyDown, onRating, showArtworkPreview,
+    miniPlayer, artworkSrc: displayedArtworkSrc, playerTitle, hideArtworkPreview, scheduleArtworkPreview, setArtworkFailed, isRadioSource, isPreviewTrack, isLibraryTrack, currentTrack, currentRadioStation, radioSubtitle, hasCurrentArtist, currentArtistLabel, onOpenCurrentArtist, onOpenCurrentArtistInfo, hasCurrentAlbum, currentAlbumLabel, onOpenCurrentAlbum, onOpenCurrentTrack, cdSkipIsSettling, hasPrevious, canPreviousAction, handlePreviousTrack, playRelative, isPlaying, hasPlayableSource, togglePlayback, hasNext, effectiveDuration, currentTime, progressPercent, progressFill, handleSeek, handleProgressKeyDown, playbackSeekStepSeconds: PLAYBACK_KEYBOARD_SEEK_STEP_SECONDS, playbackMode, cycleRepeatMode, onOpenLyricsView, onOpenQueueView, showOutputDiagnosticsButton, diagnosticsOpen, setDiagnosticsOpen, playbackDiagnostics, muted, volume, handleVolumeWheel, toggleMuted, handleVolumeChange, volumePercentDraft, commitVolumePercent, setVolumePercentDraft, handleVolumePercentChange, handleVolumePercentKeyDown, onRating, displayRatingsAsNumbers, showArtworkPreview,
   };
 
   return <PlayerBarView model={playerBarViewModel} />;

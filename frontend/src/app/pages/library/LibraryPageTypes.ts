@@ -1,18 +1,18 @@
 import type {
-  AlbumSummary,
-  AdvancedTrackSearchFilters,
-  ArtistSummary,
-  InboxAutoReviewRule,
-  InboxAutoReviewRuleRequest,
-  InboxResponse,
-  LibraryHealthResponse,
-  LibraryStatsResponse,
-  PlaylistSummary,
-  Track,
-  TrackMetadataUpdate,
+AdvancedTrackSearchFilters,
+AlbumSummary,
+ArtistSummary,
+InboxAutoReviewRule,
+InboxAutoReviewRuleRequest,
+InboxResponse,
+LibraryHealthResponse,
+LibraryStatsResponse,
+PlaylistSummary,
+Track,
+TrackMetadataUpdate,
 } from "../../../types/api";
 import type { EditableMetadataKey } from "../../components/modals";
-import type { LibraryColumnKey, LibraryView, MetadataColumnKey, SortKey, SortState } from "../../shared";
+import type { LibraryColumnKey,LibrarySavedColumnLayout,LibraryView,SortState } from "../../shared";
 
 export type LibraryPageProps = {
   tracks: Track[];
@@ -104,10 +104,13 @@ export type LibraryPageProps = {
   currentTrack: Track | null;
   hideFilePaths: boolean;
   compactRows: boolean;
+  displayRatingsAsNumbers: boolean;
   albumGrid: boolean;
   writeRatingsToFiles: boolean;
-  libraryVisibleColumns: MetadataColumnKey[];
-  setLibraryVisibleColumns: (columns: MetadataColumnKey[]) => void;
+  libraryVisibleColumns: LibraryColumnKey[];
+  setLibraryVisibleColumns: (columns: LibraryColumnKey[]) => void;
+  librarySavedColumnLayouts: LibrarySavedColumnLayout[];
+  onLibrarySavedColumnLayoutsChange: (layouts: LibrarySavedColumnLayout[]) => void;
   onAlbumGridChange: (enabled: boolean) => void;
   setTargetPlaylistId: (playlistId: number | null) => void;
   setNewPlaylistName: (value: string) => void;

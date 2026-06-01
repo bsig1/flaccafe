@@ -1,19 +1,19 @@
 import {
-  ArrowDown,
-  ArrowUp,
-  GripVertical,
-  Play,
-  Plus,
-  RefreshCw,
-  Trash2,
-  X,
+ArrowDown,
+ArrowUp,
+GripVertical,
+Play,
+Plus,
+RefreshCw,
+Trash2,
+X,
 } from "lucide-react";
 
 import type {
-  Track,
+Track,
 } from "../../../types/api";
 import {
-  display,
+display,
 } from "../../shared";
 
 export function NowPlayingQueuePanel({ model }: { model: any }) {

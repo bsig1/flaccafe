@@ -1,14 +1,18 @@
-import { useEffect } from "react";
+import {
+useEffect,
+useState,
+} from "react";
 
+import {
+themeAccentValues,
+} from "../config/theme";
 import type { AppController } from "./AppController";
 import { AppOverlays } from "./AppOverlays";
 import { AppPageOutlet } from "./AppPageOutlet";
+import { CommandPalette } from "./components/CommandPalette";
 import { Sidebar } from "./components/Sidebar";
 import type { SidebarSearchTarget } from "./components/sidebarSearch";
-import {
-  themeAccentValues,
-} from "../config/theme";
-import { closeFloatingMenus, listenForCloseFloatingMenus } from "./menuEvents";
+import { closeFloatingMenus,listenForCloseFloatingMenus } from "./menuEvents";
 import { PlayerBar } from "./player/PlayerBar";
 
 type AppViewProps = {
@@ -44,7 +48,6 @@ export function AppView({ controller }: AppViewProps) {
     openAppContextMenu,
     playbackMode,
     playbackQueue,
-    queue,
     radioPlaybackRequestId,
     restoredPlaybackPosition,
     setActivePage,
@@ -65,10 +68,27 @@ export function AppView({ controller }: AppViewProps) {
   const sidebarWidthPx =
     uiPreferences.sidebarWidthPx === "theme" ? themeDefaults.sidebarWidthPx : uiPreferences.sidebarWidthPx;
   const sidebarPlacement = uiPreferences.sidebarPlacement;
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
 
   useEffect(() => listenForCloseFloatingMenus(() => setAppContextMenu(null)), [setAppContextMenu]);
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && (event.key.toLowerCase() === "k" || event.key.toLowerCase() === "p")) {
+        event.preventDefault();
+        setCommandPaletteOpen(true);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
   function openSidebarSearchTarget(target: SidebarSearchTarget) {
+    if (target.kind === "page") {
+      setSearch("");
+      setActivePage(target.page);
+      return;
+    }
     if (target.kind === "settings") {
       setSettingsFocusSection(target.sectionId);
       setActivePage("settings");
@@ -111,6 +131,12 @@ export function AppView({ controller }: AppViewProps) {
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-ink text-neutral-100" onContextMenuCapture={closeFloatingMenus} onContextMenu={openAppContextMenu}>
       <AppOverlays controller={controller} />
+      <CommandPalette
+        open={commandPaletteOpen}
+        showCdPage={showCdPage}
+        onClose={() => setCommandPaletteOpen(false)}
+        onOpenTarget={openSidebarSearchTarget}
+      />
       <div className={`relative flex min-h-0 flex-1 ${sidebarPlacement === "right" ? "flex-row-reverse" : ""}`}>
         <Sidebar
           activePage={activePage}
@@ -143,11 +169,18 @@ export function AppView({ controller }: AppViewProps) {
         resumePositionSeconds={restoredPlaybackPosition}
         onResumePositionApplied={() => setRestoredPlaybackPosition(null)}
         onRating={handleRating}
+        displayRatingsAsNumbers={uiPreferences.displayRatingsAsNumbers}
         autoPlay={autoPlayOnTrackChange}
         fadeMs={uiPreferences.playerFadeMs}
+        crossfadeManualMs={uiPreferences.crossfadeManualMs}
+        crossfadeNaturalMs={uiPreferences.crossfadeNaturalMs}
+        crossfadeAlbumMs={uiPreferences.crossfadeAlbumMs}
+        crossfadeRadioMs={uiPreferences.crossfadeRadioMs}
         skipThresholdPercent={uiPreferences.skipThresholdPercent}
+        desktopOutputBackend={uiPreferences.desktopOutputBackend}
         desktopOutputDeviceId={uiPreferences.desktopOutputDeviceId}
         desktopBufferFrames={uiPreferences.desktopBufferFrames}
+        showOutputDiagnosticsButton={uiPreferences.showOutputDiagnosticsButton}
         miniPlayer={false}
         replayGainMode={uiPreferences.replayGainMode}
         replayGainTargetVolumePercent={uiPreferences.replayGainTargetVolumePercent}

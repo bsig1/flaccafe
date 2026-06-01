@@ -17,9 +17,19 @@ mod folder_watch;
 mod library;
 mod path_ops;
 mod playback;
-mod process_runner;
 mod python_worker;
 mod smtc;
+
+const FLAC_CAFE_TRAY_ID: &str = "flac-cafe-tray-icon";
+
+fn restore_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_skip_taskbar(false);
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
 
 #[cfg(windows)]
 fn explorer_compatible_path(path: &std::path::Path) -> String {
@@ -247,6 +257,16 @@ fn open_source_folder(kind: Option<String>) -> Result<(), String> {
         .ok_or_else(|| "Could not resolve source folder".to_string())?;
     // Developer-facing convenience: Settings can reveal either the repo root or editable theme files.
     let target = match kind.as_deref() {
+        Some("lyrics") => {
+            let lyrics_dir = library::database_path()
+                .parent()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| library::app_storage_root().join("data"))
+                .join("lyrics");
+            std::fs::create_dir_all(&lyrics_dir)
+                .map_err(|error| format!("Could not create cached lyrics folder: {error}"))?;
+            lyrics_dir
+        }
         Some("themes") => source_root
             .join("frontend")
             .join("src")
@@ -264,6 +284,12 @@ fn backend_restart(_app: tauri::AppHandle) -> Result<String, String> {
     Ok("Legacy backend state cleared. Python expert workers start only when an expert task needs one.".to_string())
 }
 
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    folder_watch::stop_folder_watch(&app);
+    app.exit(0);
+}
+
 fn main() {
     let app = tauri::Builder::default()
         .manage(smtc::SmtcState::default())
@@ -277,13 +303,12 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             backend_restart,
+            quit_app,
             open_source_folder,
             open_external_url,
             reveal_in_file_explorer,
             python_worker::backend_json,
-            playback::play_file,
             playback::play_source,
-            playback::crossfade_to_file,
             playback::crossfade_to_source,
             playback::resume,
             playback::pause,
@@ -294,9 +319,9 @@ fn main() {
             playback::fade_volume,
             playback::status,
             playback::visualizer_frame,
+            playback::seek_waveform,
             playback::diagnostics,
             playback::clear_diagnostics,
-            playback::prepare_next_file,
             playback::prepare_next_source,
             playback::output_backends,
             playback::list_output_devices,
@@ -308,12 +333,16 @@ fn main() {
             library::settings,
             library::update_settings,
             library::clap_coverage,
+            library::clap_library_stats,
             library::tracks_page,
             library::track,
             library::tracks_batch,
             library::similar_tracks,
+            library::similar_albums,
+            library::similar_artists,
             library::audiobooks::audiobooks,
             library::audiobooks::update_audiobook_progress,
+            library::audiobooks::track_resume_progress,
             library::audiobooks::audiobook_bookmarks,
             library::audiobooks::create_audiobook_bookmark,
             library::audiobooks::delete_audiobook_bookmark,
@@ -324,7 +353,6 @@ fn main() {
             library::radio::delete_radio_station,
             library::radio::mark_radio_station_played,
             library::loved_tracks,
-            library::update_track_love,
             library::update_track_rating,
             library::mark_track_played,
             library::mark_track_skipped,
@@ -354,7 +382,6 @@ fn main() {
             library::inbox::inbox,
             library::inbox::update_inbox_note,
             library::inbox::review_inbox,
-            library::inbox::inbox_auto_review_rules,
             library::inbox::create_inbox_auto_review_rule,
             library::inbox::update_inbox_auto_review_rule,
             library::inbox::delete_inbox_auto_review_rule,
@@ -410,17 +437,11 @@ fn main() {
             library::recommendation_profiles::import_recommendation_profile_comparison,
             library::library_reconcile_preview,
             library::file_organization::file_organization_preview,
-            library::playlist_files::parse_playlist,
-            library::playlist_files::export_m3u,
             library::volume_tags::volume_tags_preview,
-            library::bulk_file_move_preview,
-            library::gapless_validate,
             library::remove_library_source,
             path_ops::path_info,
             path_ops::scan_audio_paths,
             path_ops::recycle_paths,
-            process_runner::run_tool,
-            process_runner::supervise_audio_conversion,
             smtc::smtc_update_state,
             smtc::smtc_clear
         ])
@@ -435,8 +456,29 @@ fn main() {
 
             let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png"))?;
             if let Some(window) = app.get_webview_window("main") {
-                window.set_icon(icon)?;
+                window.set_icon(icon.clone())?;
             }
+            tauri::tray::TrayIconBuilder::with_id(FLAC_CAFE_TRAY_ID)
+                .icon(icon)
+                .tooltip("FLAC Cafe")
+                .show_menu_on_left_click(false)
+                .on_tray_icon_event(|tray, event| {
+                    let should_restore = matches!(
+                        event,
+                        tauri::tray::TrayIconEvent::DoubleClick {
+                            button: tauri::tray::MouseButton::Left,
+                            ..
+                        } | tauri::tray::TrayIconEvent::Click {
+                            button: tauri::tray::MouseButton::Left,
+                            button_state: tauri::tray::MouseButtonState::Up,
+                            ..
+                        }
+                    );
+                    if should_restore {
+                        restore_main_window(tray.app_handle());
+                    }
+                })
+                .build(app)?;
             Ok(())
         })
         .build(tauri::generate_context!())

@@ -1,24 +1,24 @@
 import {
-  CheckCircle2,
-  Download,
-  FileText,
-  FolderOpen,
-  Info,
-  RefreshCw,
-  ShieldCheck,
-  Trash2,
+CheckCircle2,
+Download,
+FileText,
+FolderOpen,
+Info,
+RefreshCw,
+ShieldCheck,
+Trash2,
 } from "lucide-react";
 
 import type {
-  LogTailResponse,
-  StartupDiagnosticsResponse,
+LogTailResponse,
+StartupDiagnosticsResponse,
 } from "../../../types/api";
 import {
-  DisclosureSection,
+DisclosureSection,
 } from "../../components/common";
 import type {
-  BackendStatus,
-  UiPreferences,
+BackendStatus,
+UiPreferences,
 } from "../../shared";
 
 export function MaintenanceSection({

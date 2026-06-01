@@ -1,28 +1,27 @@
 # Contributing to FLAC Cafe
 
-FLAC Cafe is split into a React/Tauri desktop UI, a Rust app-facing controller, and a Python expert worker. Keep music-library behavior in Python when it depends on mutagen, network services, or optional ML, and keep React focused on presentation, interaction state, and typed API calls.
+FLAC Cafe is split into a React/Tauri desktop UI, a Rust app-facing controller, and a Python expert worker. Keep deterministic library, playback, metadata, route, and desktop behavior in Rust. Python is reserved for expert-library work where the Python ecosystem is still the better tool, mainly optional CLAP/Torch setup and inference. Keep React focused on presentation, interaction state, and typed API calls.
 
 ## Local Checks
 
 Run these before sending a pull request:
 
 ```powershell
-npm run check
+npm.cmd run check
 .\.venv\Scripts\python.exe -m unittest discover backend/tests
 .\.venv\Scripts\python.exe -m compileall backend
-cd src-tauri
-cargo check
+cargo check --manifest-path src-tauri\Cargo.toml --all-targets
 ```
 
 ## Scanners
 
-Scanner changes live in `backend/app/scanner.py`. Prefer `path_key()` and normalized absolute paths when matching files, because Windows path casing and duplicate files are common in real libraries. A scan should update changed files, add new files, and remove database rows for missing files only inside the scanned folder.
+Scanner changes live in `src-tauri/src/library/scan/`. Prefer normalized path keys and absolute paths when matching files, because Windows path casing and duplicate files are common in real libraries. A scan should update changed files, add new files, and remove database rows for missing files only inside the scanned folder.
 
-Use `mutagen` for metadata extraction. Messy tags are expected: multi-artist strings, missing album artists, partial dates, and malformed track numbers should degrade gracefully instead of stopping a scan.
+Use the existing Rust metadata parser and Lofty helpers for extraction/writes. Messy tags are expected: multi-artist strings, missing album artists, partial dates, and malformed track numbers should degrade gracefully instead of stopping a scan.
 
 ## Tag Writing
 
-Audio-file writes live in `backend/app/file_tags.py`. Database writes are the source of truth unless the user enables file writing in Settings.
+Audio-file writes live in Rust library metadata/tagging modules. Database writes are the source of truth unless the user enables file writing in Settings.
 
 When adding supported tag writes:
 
@@ -33,7 +32,7 @@ When adding supported tag writes:
 
 ## Recommendation Scoring
 
-Recommendation behavior lives in `backend/app/recommender.py`. Keep the MVP explainable: each score component should have a name and a visible contribution in `score_breakdown`.
+Recommendation behavior lives under `src-tauri/src/library/recommendations/`. Keep the MVP explainable: each score component should have a name and a visible contribution in `score_breakdown`.
 
 New scoring features should preserve these goals:
 

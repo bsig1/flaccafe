@@ -1,30 +1,30 @@
+import {
+ChevronDown,
+Plus,
+Trash2,
+X,
+} from "lucide-react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
-  useMemo,
-  useState,
+useMemo,
+useState,
 } from "react";
-import {
-  ChevronDown,
-  Plus,
-  Trash2,
-  X,
-} from "lucide-react";
 
 import {
-  backendRouteCatalog,
-  findBackendRouteCatalogEntry,
+backendRouteCatalog,
+findBackendRouteCatalogEntry,
 } from "../../../lib/backendRouteCatalog";
 import type {
-  AdvancedHttpShortcutBinding,
-  HttpShortcutMethod,
-  KeyboardShortcutAction,
-  UiPreferences,
+AdvancedHttpShortcutBinding,
+HttpShortcutMethod,
+KeyboardShortcutAction,
+UiPreferences,
 } from "../../shared";
 import {
-  formatShortcut,
-  keyboardShortcutLabels,
-  keyboardShortcutSignature,
-  shortcutFromEvent,
+formatShortcut,
+keyboardShortcutLabels,
+keyboardShortcutSignature,
+shortcutFromEvent,
 } from "../../shared";
 
 const httpMethods: HttpShortcutMethod[] = ["GET", "POST", "PATCH", "DELETE", "HEAD"];

@@ -103,6 +103,8 @@ src-tauri/
 |   |   |-- rows.rs            shared SQLite row decoders and common clauses
 |   |-- playback/      playback DSP, EQ, limiter, and source wrappers
 |   |   |-- mod.rs             playback module root
+|   |   |-- io.rs              source resolution, decoders, shared output, URL/radio/CD handoff
+|   |   |-- wasapi_exclusive.rs Windows-only exclusive output backend
 |   |-- python_worker.rs      Rust-to-Python expert process helpers
 |   |-- python_worker/        route table and command dispatch helpers
 |   `-- smtc.rs
@@ -114,9 +116,10 @@ src-tauri/
 ```
 
 Rust owns app routes, database compatibility, library operations, metadata I/O,
-media serving, playback integration, online matching, podcasts, scrobbling,
-imports, CD workflows, audio conversion orchestration, and optional CLAP job
-management. Python subprocesses are launched only by explicit Rust handlers.
+media serving, playback source resolution, output backends, online matching,
+podcasts, scrobbling, imports, CD page workflows, audio conversion orchestration,
+and optional CLAP job management. Python subprocesses are launched only by
+explicit Rust handlers.
 
 ## Scripts
 

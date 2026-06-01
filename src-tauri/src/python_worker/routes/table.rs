@@ -310,21 +310,6 @@
         action: "play_cd_track_route",
     },
     PythonRoute {
-        method: "HEAD",
-        template: "/library/tools/cd-rip/playback/live/audio",
-        action: "stream_cd_live_audio",
-    },
-    PythonRoute {
-        method: "GET",
-        template: "/library/tools/cd-rip/playback/live/audio",
-        action: "stream_cd_live_audio",
-    },
-    PythonRoute {
-        method: "POST",
-        template: "/library/tools/cd-rip/playback/stop",
-        action: "stop_cd_playback_route",
-    },
-    PythonRoute {
         method: "POST",
         template: "/audiobooks/sync-export",
         action: "export_audiobook_sync_metadata",
@@ -418,11 +403,6 @@
         method: "POST",
         template: "/scrobbling/import-history",
         action: "import_scrobbling_history",
-    },
-    PythonRoute {
-        method: "POST",
-        template: "/playback/gapless/validate",
-        action: "validate_gapless_playback",
     },
     PythonRoute {
         method: "GET",
@@ -675,11 +655,6 @@
         action: "update_album_artwork",
     },
     PythonRoute {
-        method: "POST",
-        template: "/library/tools/artwork-collisions",
-        action: "artwork_collision_repair",
-    },
-    PythonRoute {
         method: "GET",
         template: "/playlists",
         action: "list_playlists",
@@ -748,16 +723,6 @@
         method: "PATCH",
         template: "/tracks/{track_id}/rating",
         action: "update_rating",
-    },
-    PythonRoute {
-        method: "HEAD",
-        template: "/tracks/{track_id}/audio",
-        action: "stream_track_audio",
-    },
-    PythonRoute {
-        method: "GET",
-        template: "/tracks/{track_id}/audio",
-        action: "stream_track_audio",
     },
     PythonRoute {
         method: "GET",

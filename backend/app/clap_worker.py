@@ -10,6 +10,8 @@ from .clap_analysis import ClapAnalyzer, analysis_to_payload
 
 
 def _json_safe_text(value: str) -> str:
+    # Windows paths can arrive with lone surrogate escapes from lossy filenames.
+    # JSON-lines output must stay parseable so Rust can record a per-track error.
     return "".join("\ufffd" if 0xD800 <= ord(character) <= 0xDFFF else character for character in value)
 
 
@@ -42,8 +44,8 @@ def _single_result_payload(track_id: int, analysis: Any) -> dict[str, Any]:
 def main() -> int:
     """Persistent CLAP analysis worker used by Rust-owned analysis jobs.
 
-    The protocol is newline-delimited JSON. Rust sends one track at a time and
-    this process keeps the CLAP model warm between requests.
+    The protocol is newline-delimited JSON. Rust sends batches of track paths
+    and this process keeps the CLAP model warm between requests.
     """
     analyzer: ClapAnalyzer | None = None
     for raw_line in sys.stdin:

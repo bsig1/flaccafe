@@ -1,46 +1,48 @@
 import {
-  Album,
-  BarChart3,
-  CheckCircle2,
-  FolderOpen,
-  MoreHorizontal,
-  Pencil,
-  Play,
-  Plus,
-  Trash2,
-  X,
+Album,
+BarChart3,
+CheckCircle2,
+FolderOpen,
+MoreHorizontal,
+Pencil,
+Play,
+Plus,
+Trash2,
+X,
 } from "lucide-react";
 import {
-  type ReactNode,
-  useEffect,
-  useRef,
-  useState,
+type ReactNode,
+useEffect,
+useRef,
+useState,
 } from "react";
 
 import {
-  albumArtworkUrl,
+albumArtworkUrl,
+fetchSimilarTracks,
 } from "../../lib/api";
 import type {
-  PlaylistSummary,
-  Track,
+PlaylistSummary,
+SimilarTrack,
+Track,
 } from "../../types/api";
-import type {
-  EditableMetadataKey,
-} from "./modals";
 import {
-  analysisError,
-  analysisMoodTags,
-  analysisTags,
-  display,
-  formatDate,
-  formatBitrate,
-  formatDuration,
-  formatPercent,
-  isClapAnalyzed,
+analysisError,
+analysisMoodTags,
+analysisTags,
+display,
+formatBitrate,
+formatDate,
+formatDuration,
+formatPercent,
+isClapAnalyzed,
 } from "../shared";
 import {
-  RatingStars,
+RatingStars,
 } from "./common";
+import type {
+EditableMetadataKey,
+} from "./modals";
 
 export function TrackDetailsPanel({
   track,
@@ -49,14 +51,17 @@ export function TrackDetailsPanel({
   isAudioAnalyzing,
   onClose,
   onSelectTrack,
+  onPreviewTrack,
   isTrackSelected,
   onPlayTrack,
   onRating,
+  displayRatingsAsNumbers,
   onAnalyzeTracks,
   onAddTracksToPlaylist,
   onDeleteTrack,
   onEditTrack,
   onRevealTrack,
+  onSearchAnalysisTag,
 }: {
   track: Track | null;
   queue: Track[];
@@ -64,26 +69,61 @@ export function TrackDetailsPanel({
   isAudioAnalyzing: boolean;
   onClose: () => void;
   onSelectTrack: (track: Track) => void;
+  onPreviewTrack: (track: Track) => void;
   isTrackSelected: boolean;
   onPlayTrack: (track: Track, queue: Track[]) => void;
   onRating: (trackId: number, rating: number | null) => void;
+  displayRatingsAsNumbers?: boolean;
   onAnalyzeTracks: (trackIds: number[]) => void;
   onAddTracksToPlaylist: (trackIds: number[], playlistId?: number) => void | Promise<void>;
   onDeleteTrack: (trackId: number, deleteFile: boolean) => void;
   onEditTrack: (track: Track, field?: EditableMetadataKey | null) => void;
   onRevealTrack: (track: Track) => void;
+  onSearchAnalysisTag?: (tag: string, kind: "genre" | "mood") => void;
 }) {
   const [artworkFailed, setArtworkFailed] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
   const [playlistMenuOpen, setPlaylistMenuOpen] = useState(false);
   const [actionsPosition, setActionsPosition] = useState({ left: 0, top: 0 });
+  const [similarTracks, setSimilarTracks] = useState<SimilarTrack[]>([]);
+  const [isSimilarLoading, setIsSimilarLoading] = useState(false);
   const actionsButtonRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     setArtworkFailed(false);
     setActionsOpen(false);
     setPlaylistMenuOpen(false);
+    setSimilarTracks([]);
   }, [track?.id]);
+
+  useEffect(() => {
+    if (!track || track.id <= 0 || !isClapAnalyzed(track)) {
+      setSimilarTracks([]);
+      setIsSimilarLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setIsSimilarLoading(true);
+    fetchSimilarTracks(track.id, 8)
+      .then((rows) => {
+        if (!cancelled) {
+          setSimilarTracks(rows);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSimilarTracks([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsSimilarLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [track?.id, track?.analysis_updated_at, track?.analysis_embedding]);
 
   useEffect(() => {
     if (!actionsOpen) {
@@ -332,7 +372,7 @@ export function TrackDetailsPanel({
 
         <div className="mb-4">
           <div className="mb-2 text-xs uppercase text-muted">Rating</div>
-          <RatingStars rating={track.rating} onChange={(rating) => onRating(track.id, rating)} />
+          <RatingStars rating={track.rating} displayAsNumber={displayRatingsAsNumbers} onChange={(rating) => onRating(track.id, rating)} />
         </div>
 
         <div className="grid min-w-0 gap-3 text-sm">
@@ -410,21 +450,73 @@ export function TrackDetailsPanel({
             {tags.length > 0 && (
               <div className="mt-3 flex flex-wrap gap-1.5">
                 {tags.slice(0, 10).map(([tag, score]) => (
-                  <span key={tag} className="rounded border border-line bg-ink px-2 py-1 text-xs text-neutral-200">
+                  <button
+                    key={tag}
+                    className="rounded border border-line bg-ink px-2 py-1 text-left text-xs text-neutral-200 transition hover:border-moss/60 hover:text-white"
+                    type="button"
+                    title={`Search genre: ${tag}`}
+                    onClick={() => onSearchAnalysisTag?.(tag, "genre")}
+                  >
                     {tag} {formatPercent(score * 100)}
-                  </span>
+                  </button>
                 ))}
               </div>
             )}
             {moodTags.length > 0 && (
               <div className="mt-3 flex flex-wrap gap-1.5">
                 {moodTags.slice(0, 8).map(([tag, score]) => (
-                  <span key={tag} className="rounded border border-line bg-ink px-2 py-1 text-xs text-neutral-200">
+                  <button
+                    key={tag}
+                    className="rounded border border-line bg-ink px-2 py-1 text-left text-xs text-neutral-200 transition hover:border-moss/60 hover:text-white"
+                    type="button"
+                    title={`Search mood: ${tag}`}
+                    onClick={() => onSearchAnalysisTag?.(tag, "mood")}
+                  >
                     {tag} {formatPercent(score * 100)}
-                  </span>
+                  </button>
                 ))}
               </div>
             )}
+          </div>
+
+          <div className="min-w-0 rounded border border-line bg-panel p-3">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <div className="text-xs uppercase text-muted">Similar Tracks</div>
+              {isSimilarLoading && <div className="text-[10px] uppercase text-muted">Loading</div>}
+            </div>
+            <div className="grid gap-1.5">
+              {similarTracks.map((similar) => (
+                <div
+                  key={similar.id}
+                  className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded border border-line/60 bg-ink px-2.5 py-2 text-xs"
+                >
+                  <button
+                    className="min-w-0 text-left"
+                    type="button"
+                    title={similar.similarity_reason}
+                    onClick={() => onPreviewTrack(similar)}
+                  >
+                    <span className="block truncate font-medium text-neutral-100">{display(similar.title, "Untitled")}</span>
+                    <span className="block truncate text-muted">
+                      {display(similar.artist)} - CLAP {similar.audio_similarity !== null ? similar.audio_similarity.toFixed(2) : similar.similarity_score.toFixed(2)}
+                    </span>
+                  </button>
+                  <button
+                    className="icon-button h-7 w-7"
+                    type="button"
+                    title="Play similar track"
+                    onClick={() => onPlayTrack(similar, similarTracks)}
+                  >
+                    <Play size={13} />
+                  </button>
+                </div>
+              ))}
+              {!isSimilarLoading && similarTracks.length === 0 && (
+                <div className="rounded border border-line/60 bg-ink px-3 py-4 text-center text-xs text-muted">
+                  {isClapAnalyzed(track) ? "No close CLAP neighbors yet." : "Analyze this track with CLAP to find neighbors."}
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="min-w-0 rounded border border-line bg-panel p-3">

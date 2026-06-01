@@ -1,30 +1,10 @@
 ﻿#[tauri::command]
-pub fn play_file(
-    state: State<'_, PlaybackState>,
-    path: String,
-    volume: f32,
-    start_seconds: Option<f64>,
-    device_id: Option<String>,
-    buffer_frames: Option<u32>,
-    dsp_settings: Option<DesktopDspSettings>,
-) -> Result<PlaybackStatus, String> {
-    play_source(
-        state,
-        DesktopPlaybackSource::File { path },
-        volume,
-        start_seconds,
-        device_id,
-        buffer_frames,
-        dsp_settings,
-    )
-}
-
-#[tauri::command]
 pub fn play_source(
     state: State<'_, PlaybackState>,
     source: DesktopPlaybackSource,
     volume: f32,
     start_seconds: Option<f64>,
+    output_backend: Option<DesktopOutputBackendMode>,
     device_id: Option<String>,
     buffer_frames: Option<u32>,
     dsp_settings: Option<DesktopDspSettings>,
@@ -56,7 +36,7 @@ pub fn play_source(
         .inner
         .lock()
         .map_err(|_| "Rust playback lock poisoned".to_string())?;
-    inner.ensure_sink(device_id, buffer_frames)?;
+    inner.ensure_sink(output_backend, device_id, buffer_frames)?;
     if let Ok(mut errors) = inner.stream_errors.lock() {
         errors.clear();
     }
@@ -94,35 +74,13 @@ pub fn play_source(
 }
 
 #[tauri::command]
-pub fn crossfade_to_file(
-    state: State<'_, PlaybackState>,
-    path: String,
-    volume: f32,
-    duration_ms: u64,
-    start_seconds: Option<f64>,
-    device_id: Option<String>,
-    buffer_frames: Option<u32>,
-    dsp_settings: Option<DesktopDspSettings>,
-) -> Result<PlaybackStatus, String> {
-    crossfade_to_source(
-        state,
-        DesktopPlaybackSource::File { path },
-        volume,
-        duration_ms,
-        start_seconds,
-        device_id,
-        buffer_frames,
-        dsp_settings,
-    )
-}
-
-#[tauri::command]
 pub fn crossfade_to_source(
     state: State<'_, PlaybackState>,
     source: DesktopPlaybackSource,
     volume: f32,
     duration_ms: u64,
     start_seconds: Option<f64>,
+    output_backend: Option<DesktopOutputBackendMode>,
     device_id: Option<String>,
     buffer_frames: Option<u32>,
     dsp_settings: Option<DesktopDspSettings>,
@@ -154,7 +112,7 @@ pub fn crossfade_to_source(
         .inner
         .lock()
         .map_err(|_| "Rust playback lock poisoned".to_string())?;
-    inner.ensure_sink(device_id, buffer_frames)?;
+    inner.ensure_sink(output_backend, device_id, buffer_frames)?;
     if let Ok(mut errors) = inner.stream_errors.lock() {
         errors.clear();
     }
@@ -247,6 +205,7 @@ pub fn stop(state: State<'_, PlaybackState>) -> Result<PlaybackStatus, String> {
         .lock()
         .map_err(|_| "Rust playback lock poisoned".to_string())?;
     inner.stop();
+    inner.release_exclusive_sink_if_idle();
     Ok(inner.status(None))
 }
 
@@ -347,8 +306,9 @@ pub fn seek(state: State<'_, PlaybackState>, seconds: f64) -> Result<PlaybackSta
     }
     let device_id = inner.device_id.clone();
     let buffer_frames = inner.buffer_frames;
+    let output_backend = inner.output_backend;
     let volume = inner.volume;
-    inner.ensure_sink(device_id, buffer_frames)?;
+    inner.ensure_sink(Some(output_backend), device_id, buffer_frames)?;
     inner.stop();
 
     let mixer = inner
@@ -478,6 +438,29 @@ pub fn visualizer_frame(state: State<'_, PlaybackState>) -> Result<DesktopVisual
 }
 
 #[tauri::command]
+pub fn seek_waveform(
+    state: State<'_, PlaybackState>,
+    source: DesktopPlaybackSource,
+    points: Option<usize>,
+) -> Result<Vec<f32>, String> {
+    let diagnostics = {
+        let inner = state
+            .inner
+            .lock()
+            .map_err(|_| "Rust playback lock poisoned".to_string())?;
+        inner.diagnostics.clone()
+    };
+    match source {
+        DesktopPlaybackSource::File { path } => {
+            let path_buf = validate_file_source(&path, &diagnostics, "seek_waveform")?;
+            build_seek_waveform(&path_buf, points.unwrap_or(64), &diagnostics)
+        }
+        DesktopPlaybackSource::Url { live: true, .. } => Ok(Vec::new()),
+        DesktopPlaybackSource::Url { .. } | DesktopPlaybackSource::CdTrack { .. } => Ok(Vec::new()),
+    }
+}
+
+#[tauri::command]
 pub fn diagnostics(state: State<'_, PlaybackState>) -> Result<PlaybackDiagnosticsResponse, String> {
     let inner = state
         .inner
@@ -501,14 +484,6 @@ pub fn clear_diagnostics(
         errors.clear();
     }
     Ok(inner.diagnostics_response())
-}
-
-#[tauri::command]
-pub fn prepare_next_file(
-    state: State<'_, PlaybackState>,
-    path: String,
-) -> Result<DesktopPreparedTrack, String> {
-    prepare_next_source(state, DesktopPlaybackSource::File { path })
 }
 
 #[tauri::command]
@@ -545,29 +520,34 @@ pub fn prepare_next_source(
 
 #[tauri::command]
 pub fn output_backends() -> Result<Vec<DesktopOutputBackend>, String> {
-    Ok(vec![
-        DesktopOutputBackend {
-            id: "cpalShared".to_string(),
-            label: "CPAL / WASAPI shared".to_string(),
-            available: true,
-            exclusive: false,
-            message: "Current Rust backend; supports output-device selection and buffer tuning.".to_string(),
-        },
-        DesktopOutputBackend {
-            id: "wasapiExclusive".to_string(),
-            label: "WASAPI exclusive".to_string(),
-            available: false,
-            exclusive: true,
-            message: "Requires a dedicated Windows WASAPI engine outside the current rodio/cpal shared-mode bridge.".to_string(),
-        },
-        DesktopOutputBackend {
-            id: "asio".to_string(),
-            label: "ASIO".to_string(),
-            available: false,
-            exclusive: true,
-            message: "Requires an ASIO-specific backend and driver setup; the current app reports this as a future backend.".to_string(),
-        },
-    ])
+    let mut backends = vec![DesktopOutputBackend {
+        id: "cpalShared".to_string(),
+        label: if cfg!(windows) {
+            "CPAL / WASAPI shared"
+        } else {
+            "CPAL shared"
+        }
+        .to_string(),
+        available: true,
+        exclusive: false,
+        message: if cfg!(windows) {
+            "Standard Windows shared-mode output. Other apps can play at the same time and Windows may resample/mix the stream."
+        } else {
+            "Standard shared output. Other apps can play at the same time and the OS audio server may resample/mix the stream."
+        }
+        .to_string(),
+    }];
+
+    #[cfg(windows)]
+    backends.push(DesktopOutputBackend {
+        id: "wasapiExclusive".to_string(),
+        label: "WASAPI exclusive".to_string(),
+        available: wasapi_exclusive_enabled(),
+        exclusive: true,
+        message: "Experimental direct Windows exclusive output. FLAC Cafe owns the device while playing and bypasses the Windows shared mixer. If opening fails, shared Rust output is used.".to_string(),
+    });
+
+    Ok(backends)
 }
 
 #[tauri::command]

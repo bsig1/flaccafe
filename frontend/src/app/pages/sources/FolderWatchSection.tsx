@@ -1,22 +1,22 @@
 import {
-  Bell,
-  CheckCircle2,
-  Eye,
-  ListChecks,
-  RefreshCw,
+Bell,
+CheckCircle2,
+Eye,
+ListChecks,
+RefreshCw,
 } from "lucide-react";
 import {
-  useEffect,
-  useState,
+useEffect,
+useState,
 } from "react";
 
 import type {
-  FolderWatchChange,
-  FolderWatchStatus,
+FolderWatchChange,
+FolderWatchStatus,
 } from "../../../types/api";
 import {
-  DisclosureSection,
-  NumberField,
+DisclosureSection,
+NumberField,
 } from "../../components/common";
 
 function folderWatchTypeLabel(change: FolderWatchChange): string {

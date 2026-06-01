@@ -1,53 +1,53 @@
-import {
-  Album,
-  BarChart3,
-  BookOpen,
-  Clock3,
-  Disc3,
-  FileText,
-  FolderCog,
-  FolderOpen,
-  Gauge,
-  HardDrive,
-  HeartPulse,
-  Keyboard,
-  KeyRound,
-  Library,
-  ListMusic,
-  Mic2,
-  Music,
-  Palette,
-  Podcast,
-  Radio,
-  RadioTower,
-  Send,
-  Settings,
-  SlidersHorizontal,
-  Tags,
-  UserRound,
-  Wrench,
-} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import {
+Album,
+BarChart3,
+BookOpen,
+Clock3,
+Disc3,
+FileText,
+FolderCog,
+FolderOpen,
+Gauge,
+HardDrive,
+HeartPulse,
+Keyboard,
+KeyRound,
+Library,
+ListMusic,
+Mic2,
+Music,
+Palette,
+Podcast,
+Radio,
+RadioTower,
+Send,
+Settings,
+SlidersHorizontal,
+Tags,
+UserRound,
+Wrench,
+} from "lucide-react";
 
 import {
-  desktopFetchAlbums,
-  desktopFetchArtists,
-  desktopFetchPlaylists,
-  desktopFetchTrackPage,
+desktopFetchAlbums,
+desktopFetchArtists,
+desktopFetchPlaylists,
+desktopFetchTrackPage,
 } from "../../lib/desktopLibrary";
 import type {
-  AlbumSummary,
-  ArtistSummary,
-  PlaylistSummary,
-  Track,
+AlbumSummary,
+ArtistSummary,
+PlaylistSummary,
+Track,
 } from "../../types/api";
 import {
-  display,
-} from "../shared";
+fileManagementSections,
+} from "../pages/file-management/FileManagementNavigator";
 import type { Page } from "../shared";
 import {
-  fileManagementSections,
-} from "../pages/file-management/FileManagementNavigator";
+display,
+} from "../shared";
 
 export type SidebarSearchKind =
   | "page"
@@ -244,8 +244,17 @@ const settingsTargets: SidebarSearchTarget[] = [
     sectionId: "Playback Engine",
     label: "Playback Engine",
     description: "Rust output, devices, backend diagnostics, and codec checks",
-    keywords: ["audio", "rust", "device", "wasapi", "asio", "cpal", "codec", "gapless"],
+    keywords: ["audio", "rust", "device", "exclusive", "cpal", "codec"],
     icon: Gauge,
+  },
+  {
+    key: "settings-mini-player",
+    kind: "settings",
+    sectionId: "Mini Player",
+    label: "Mini Player",
+    description: "Detached window layout, controls, opacity, and queue accordion",
+    keywords: ["mini-player", "detached", "opacity", "artwork", "queue", "always on top"],
+    icon: ListMusic,
   },
   {
     key: "settings-lyrics",

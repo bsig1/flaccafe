@@ -3,9 +3,6 @@
         .or_else(|| json_string(&body, "driveId"))
         .and_then(|value| normalize_drive_id(&value))
         .ok_or_else(|| "Choose a CD drive first.".to_string())?;
-    if !active_playback_drive_ids().is_empty() {
-        return Err("Stop CD playback before ripping from this drive.".to_string());
-    }
     let output_folder = json_string(&body, "output_folder")
         .or_else(|| json_string(&body, "outputFolder"))
         .ok_or_else(|| "Output folder is required".to_string())?;

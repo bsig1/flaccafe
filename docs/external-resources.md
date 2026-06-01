@@ -32,6 +32,11 @@ This file lists external services, pages, and downloadable resources the app lin
 - FFmpeg essentials ZIP: <https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip>
 - PyTorch CPU wheels: <https://download.pytorch.org/whl/cpu>
 - PyTorch CUDA wheels: <https://download.pytorch.org/whl/cu128>
+
+## Bundled Third-Party Tool References
+
+These are not downloaded by normal app use, but they are linked from notices or diagnostics because bundled binaries need visible upstream/source references.
+
 - Chromaprint project: <https://github.com/acoustid/chromaprint>
 - Chromaprint releases: <https://github.com/acoustid/chromaprint/releases>
 - cdrtools Windows bundle: <https://sourceforge.net/projects/cdrtools/files/alpha/win32/cdrtools-1.11a04-win32-bin.zip/download>

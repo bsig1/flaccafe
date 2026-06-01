@@ -50,6 +50,8 @@ fn diagnostic_error(
 fn remember_stream_error(
     stream_errors: &Arc<Mutex<Vec<String>>>,
     diagnostics: &Arc<Mutex<Vec<PlaybackDiagnostic>>>,
+    category: &str,
+    operation: &str,
     message: String,
     context: DesktopDiagnosticContext,
 ) {
@@ -63,8 +65,8 @@ fn remember_stream_error(
     remember_diagnostic(
         diagnostics,
         "error",
-        "cpal",
-        "output_stream_callback",
+        category,
+        operation,
         message,
         context,
     );
@@ -157,11 +159,61 @@ fn find_output_device(
 }
 
 fn open_output_sink(
+    output_backend: DesktopOutputBackendMode,
     requested_id: Option<&str>,
     buffer_frames: Option<u32>,
     stream_errors: Arc<Mutex<Vec<String>>>,
     diagnostics: Arc<Mutex<Vec<PlaybackDiagnostic>>>,
-) -> Result<(MixerDeviceSink, ResolvedOutput), String> {
+) -> Result<(DesktopOutputSink, ResolvedOutput), String> {
+    match output_backend {
+        DesktopOutputBackendMode::CpalShared => open_shared_output_sink(
+            requested_id,
+            buffer_frames,
+            stream_errors,
+            diagnostics,
+        ),
+        // Exclusive output is a preference, not a requirement. If Windows rejects
+        // the device/format or another app owns it, keep playback alive in shared mode.
+        DesktopOutputBackendMode::WasapiExclusive => match open_wasapi_exclusive_output_sink(
+            requested_id,
+            buffer_frames,
+            stream_errors.clone(),
+            diagnostics.clone(),
+        ) {
+            Ok(output) => Ok(output),
+            Err(message) => {
+                remember_diagnostic(
+                    &diagnostics,
+                    "warning",
+                    "wasapi",
+                    "wasapi_exclusive_open_fallback",
+                    format!("WASAPI exclusive could not open cleanly; falling back to shared Rust output. {message}"),
+                    DesktopDiagnosticContext {
+                        device_id: requested_id.map(str::to_string),
+                        buffer_frames,
+                        ..DesktopDiagnosticContext::default()
+                    },
+                );
+                open_shared_output_sink(requested_id, buffer_frames, stream_errors, diagnostics)
+                    .map_err(|shared_message| {
+                        format!("{message} Shared output fallback also failed: {shared_message}")
+                    })
+            }
+        },
+    }
+}
+
+#[cfg(windows)]
+fn wasapi_exclusive_enabled() -> bool {
+    true
+}
+
+fn open_shared_output_sink(
+    requested_id: Option<&str>,
+    buffer_frames: Option<u32>,
+    stream_errors: Arc<Mutex<Vec<String>>>,
+    diagnostics: Arc<Mutex<Vec<PlaybackDiagnostic>>>,
+) -> Result<(DesktopOutputSink, ResolvedOutput), String> {
     let (device, resolved_id) = find_output_device(requested_id, &diagnostics)?;
     let name = device_name(&device);
     let mut builder = DeviceSinkBuilder::from_device(device).map_err(|error| {
@@ -197,6 +249,8 @@ fn open_output_sink(
         remember_stream_error(
             &callback_errors,
             &callback_diagnostics,
+            "cpal",
+            "output_stream_callback",
             format!("Rust output stream error: {error}"),
             callback_context.clone(),
         );
@@ -219,13 +273,50 @@ fn open_output_sink(
     })?;
     let config = sink.config();
     let resolved = ResolvedOutput {
+        output_backend: DesktopOutputBackendMode::CpalShared,
         device_id: resolved_id,
         device_name: name,
         sample_rate: config.sample_rate().get(),
         channel_count: config.channel_count().get(),
         sample_format: format!("{:?}", config.sample_format()),
     };
-    Ok((sink, resolved))
+    Ok((DesktopOutputSink::Shared(sink), resolved))
+}
+
+#[cfg(windows)]
+fn open_wasapi_exclusive_output_sink(
+    requested_id: Option<&str>,
+    buffer_frames: Option<u32>,
+    stream_errors: Arc<Mutex<Vec<String>>>,
+    diagnostics: Arc<Mutex<Vec<PlaybackDiagnostic>>>,
+) -> Result<(DesktopOutputSink, ResolvedOutput), String> {
+    let (sink, resolved) = WasapiExclusiveSink::open(
+        requested_id,
+        buffer_frames,
+        stream_errors,
+        diagnostics,
+    )?;
+    Ok((DesktopOutputSink::WasapiExclusive(sink), resolved))
+}
+
+#[cfg(not(windows))]
+fn open_wasapi_exclusive_output_sink(
+    requested_id: Option<&str>,
+    buffer_frames: Option<u32>,
+    _stream_errors: Arc<Mutex<Vec<String>>>,
+    diagnostics: Arc<Mutex<Vec<PlaybackDiagnostic>>>,
+) -> Result<(DesktopOutputSink, ResolvedOutput), String> {
+    Err(diagnostic_error(
+        &diagnostics,
+        "wasapi",
+        "open_output_sink",
+        "WASAPI exclusive output is only available on Windows.".to_string(),
+        DesktopDiagnosticContext {
+            device_id: requested_id.map(str::to_string),
+            buffer_frames,
+            ..DesktopDiagnosticContext::default()
+        },
+    ))
 }
 
 use std::fs;
@@ -236,6 +327,8 @@ use std::sync::Mutex as StdMutex;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DesktopPlaybackSource {
+    // The WebView never owns audio playback; each frontend source resolves here
+    // to a Rust decoder, a prepared temp file, or a clear unsupported-source error.
     File {
         path: String,
     },
@@ -303,6 +396,8 @@ impl Read for HttpStreamReader {
 
 impl Seek for HttpStreamReader {
     fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        // Rodio/Symphonia want a Seek implementation even for live streams.
+        // Reporting the current position is safe; actual seeking stays unsupported.
         match position {
             SeekFrom::Current(0) => Ok(self.position),
             SeekFrom::Start(target) if target == self.position => Ok(self.position),
@@ -412,6 +507,8 @@ fn resolve_playback_source(
             title,
             live,
         } => {
+            // Radio/live streams are decoded as forward-only readers. Static URL
+            // sources are downloaded to a cache file so normal duration/seek paths work.
             if *live {
                 let (decoder, duration_seconds) =
                     build_stream_decoder(url, title.as_deref(), diagnostics)?;
@@ -672,6 +769,39 @@ fn build_decoder(
     diagnostics: &Arc<Mutex<Vec<PlaybackDiagnostic>>>,
 ) -> Result<(Decoder<std::io::BufReader<File>>, Option<f64>), String> {
     build_decoder_with_seek_mode(path, diagnostics, false)
+}
+
+fn build_seek_waveform(
+    path: &PathBuf,
+    points: usize,
+    diagnostics: &Arc<Mutex<Vec<PlaybackDiagnostic>>>,
+) -> Result<Vec<f32>, String> {
+    let points = points.clamp(16, 128);
+    let (decoder, duration_seconds) = build_decoder(path, diagnostics)?;
+    let Some(duration_seconds) = duration_seconds.filter(|value| value.is_finite() && *value > 0.0)
+    else {
+        return Ok(Vec::new());
+    };
+    if duration_seconds > 20.0 * 60.0 {
+        return Ok(Vec::new());
+    }
+    let channels = decoder.channels().get() as usize;
+    let sample_rate = decoder.sample_rate().get() as f64;
+    let total_frames = (duration_seconds * sample_rate).max(1.0);
+    let mut peaks = vec![0.0_f32; points];
+    for (sample_index, sample) in decoder.enumerate() {
+        let frame_index = sample_index / channels;
+        let bucket = ((frame_index as f64 / total_frames) * points as f64).floor() as usize;
+        let bucket = bucket.min(points.saturating_sub(1));
+        peaks[bucket] = peaks[bucket].max(sample.abs().clamp(0.0, 1.0));
+    }
+    let max_peak = peaks.iter().copied().fold(0.0_f32, f32::max);
+    if max_peak > 0.0 {
+        for peak in &mut peaks {
+            *peak = (*peak / max_peak).clamp(0.0, 1.0);
+        }
+    }
+    Ok(peaks)
 }
 
 fn build_seek_fallback_decoder(

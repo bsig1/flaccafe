@@ -1,10 +1,10 @@
 import {
-  desktopCrossfadeToSource,
-  desktopFadeVolume as desktopFadeVolumeCommand,
-  desktopPause,
-  desktopPlaySource,
-  desktopResume,
-  desktopSetVolume,
+desktopCrossfadeToSource,
+desktopFadeVolume as desktopFadeVolumeCommand,
+desktopPause,
+desktopPlaySource,
+desktopResume,
+desktopSetVolume,
 } from "../../lib/desktopPlayback";
 import type { Track } from "../../types/api";
 import { clampNumber } from "../shared";
@@ -27,6 +27,8 @@ export function createPlaybackTransitions(ctx: any) {
     isCdPreviewTrack,
     outputVolume,
     fadeMs,
+    radioFadeMs,
+    desktopOutputBackend,
     desktopOutputDeviceId,
     desktopBufferFrames,
     queue,
@@ -101,15 +103,16 @@ export function createPlaybackTransitions(ctx: any) {
     }, durationMs + 25);
   }
 
-  async function startPlaybackTrack(track: Track, startSeconds = 0) {
+  async function startPlaybackTrack(track: Track, startSeconds = 0, fadeDurationMs = fadeMs) {
     cancelPlaybackFade();
     cancelCrossfade();
-    const startVolume = fadeMs > 0 ? 0 : outputVolume;
+    const startVolume = fadeDurationMs > 0 ? 0 : outputVolume;
     try {
       const status = await desktopPlaySource({
         source: playbackSourceForTrack(track),
         volume: startVolume,
         startSeconds,
+        outputBackend: desktopOutputBackend,
         deviceId: desktopOutputDeviceId,
         bufferFrames: desktopBufferFrames,
         dspSettings: currentPlaybackDspSettings(),
@@ -122,8 +125,8 @@ export function createPlaybackTransitions(ctx: any) {
       onPlaybackTime(status.position_seconds);
       pendingResumePositionRef.current = null;
       setIsPlaying(true);
-      if (fadeMs > 0) {
-        fadePlaybackVolume(outputVolume, fadeMs, undefined, 0);
+      if (fadeDurationMs > 0) {
+        fadePlaybackVolume(outputVolume, fadeDurationMs, undefined, 0);
       }
     } catch (error) {
       setIsPlaying(false);
@@ -137,6 +140,7 @@ export function createPlaybackTransitions(ctx: any) {
     recordCompletion = true,
     nextQueue: Track[] = queue,
     commitSelection = true,
+    fadeDurationMs = fadeMs,
   ): Promise<boolean> {
     if (!currentTrack || crossfadeTrackRef.current === currentTrack.id) {
       return false;
@@ -147,7 +151,8 @@ export function createPlaybackTransitions(ctx: any) {
       const status = await desktopCrossfadeToSource({
         source: playbackSourceForTrack(nextTrack),
         volume: outputVolume,
-        durationMs: Math.max(0, fadeMs),
+        durationMs: Math.max(0, fadeDurationMs),
+        outputBackend: desktopOutputBackend,
         deviceId: desktopOutputDeviceId,
         bufferFrames: desktopBufferFrames,
         dspSettings: desktopDspSettingsForTrack(nextTrack),
@@ -178,12 +183,14 @@ export function createPlaybackTransitions(ctx: any) {
       return;
     }
     if (!currentTrack && currentRadioStation) {
+      const fadeDurationMs = Math.max(0, radioFadeMs ?? fadeMs);
       cancelPlaybackFade();
       cancelCrossfade();
       try {
         const status = await desktopPlaySource({
           source: playbackSourceForRadio(currentRadioStation),
-          volume: fadeMs > 0 ? 0 : outputVolume,
+          volume: fadeDurationMs > 0 ? 0 : outputVolume,
+          outputBackend: desktopOutputBackend,
           deviceId: desktopOutputDeviceId,
           bufferFrames: desktopBufferFrames,
           dspSettings: currentPlaybackDspSettings(),
@@ -196,8 +203,8 @@ export function createPlaybackTransitions(ctx: any) {
         onPlaybackTime(status.position_seconds);
         pendingResumePositionRef.current = null;
         setIsPlaying(true);
-        if (fadeMs > 0) {
-          fadePlaybackVolume(outputVolume, fadeMs, undefined, 0);
+        if (fadeDurationMs > 0) {
+          fadePlaybackVolume(outputVolume, fadeDurationMs, undefined, 0);
         }
       } catch (error) {
         setIsPlaying(false);
@@ -212,12 +219,13 @@ export function createPlaybackTransitions(ctx: any) {
       return;
     }
     try {
+      const fadeDurationMs = Math.max(0, fadeMs);
       cancelPlaybackFade();
-      await desktopSetVolume(fadeMs > 0 ? 0 : outputVolume);
+      await desktopSetVolume(fadeDurationMs > 0 ? 0 : outputVolume);
       await desktopResume();
       setIsPlaying(true);
-      if (fadeMs > 0) {
-        fadePlaybackVolume(outputVolume, fadeMs, undefined, 0);
+      if (fadeDurationMs > 0) {
+        fadePlaybackVolume(outputVolume, fadeDurationMs, undefined, 0);
       }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Rust playback could not resume.");
@@ -229,7 +237,8 @@ export function createPlaybackTransitions(ctx: any) {
   }
 
   function pauseWithFade() {
-    fadePlaybackVolume(0, fadeMs, () => {
+    const fadeDurationMs = Math.max(0, currentRadioStation ? radioFadeMs ?? fadeMs : fadeMs);
+    fadePlaybackVolume(0, fadeDurationMs, () => {
       void desktopPause()
         .then(() => {
           setIsPlaying(false);

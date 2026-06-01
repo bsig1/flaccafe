@@ -86,6 +86,12 @@
             reasons.push(mood_seed_reason);
         }
     }
+    let (decade_seed_delta, decade_seed_reason) = decade_seed_adjustment(track, seed_track, settings);
+    if decade_seed_delta != 0.0 {
+        score += decade_seed_delta;
+        breakdown.insert("decade_seed".to_string(), round3(decade_seed_delta));
+        reasons.push(decade_seed_reason);
+    }
     let (similarity, similarity_reason) = similarity_adjustment(track, seed_track, settings);
     if similarity != 0.0 {
         let delta = similarity * settings.similarity_weight;
@@ -110,6 +116,36 @@
         reason: reasons.join(", "),
         breakdown,
     }
+}
+
+fn decade_seed_adjustment(
+    track: &DesktopTrack,
+    seed_track: Option<&DesktopTrack>,
+    settings: &DesktopAutoDjSettings,
+) -> (f64, String) {
+    let Some(seed_track) = seed_track else {
+        return (0.0, String::new());
+    };
+    if track.id == seed_track.id {
+        return (0.0, String::new());
+    }
+    let (Some(year), Some(seed_year)) = (track.year, seed_track.year) else {
+        return (0.0, String::new());
+    };
+    if year / 10 != seed_year / 10 {
+        return (0.0, String::new());
+    }
+    if settings
+        .mood_avoid_seeds
+        .iter()
+        .any(|seed| seed == "same decade")
+    {
+        return (-settings.mood_avoid_weight, "avoid same decade".to_string());
+    }
+    if settings.mood_seeds.iter().any(|seed| seed == "same decade") {
+        return (settings.mood_seed_weight, "same decade".to_string());
+    }
+    (0.0, String::new())
 }
 
 fn candidate_conflicts(

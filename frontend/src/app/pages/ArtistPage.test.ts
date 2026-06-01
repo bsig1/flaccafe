@@ -1,11 +1,11 @@
 import {
-  describe,
-  expect,
-  it,
+describe,
+expect,
+it,
 } from "vitest";
 
 import {
-  artistSummaryBlocks,
+artistSummaryBlocks,
 } from "./ArtistPage";
 
 describe("artist summary rendering", () => {

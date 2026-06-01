@@ -1,39 +1,55 @@
 import type { MouseEvent as ReactMouseEvent } from "react";
-import { useEffect, useState } from "react";
+import { useEffect,useState } from "react";
 
 import { placeFloatingMenu } from "../../../lib/uiInteractions";
-import { closeFloatingMenus, listenForCloseFloatingMenus } from "../../menuEvents";
+import { closeFloatingMenus,listenForCloseFloatingMenus } from "../../menuEvents";
 import {
-  ColumnContextMenu,
-  LibraryColumnDefinition,
-  LibraryColumnKey,
-  MENU_VIEWPORT_MARGIN,
-  MetadataColumnKey,
-  SortKey,
-  defaultLibraryColumnWidths,
-  libraryColumnDefinitions,
-  libraryColumnKeySet,
-  librarySelectionColumnWidth,
-  normalizeLibraryColumns,
+ColumnContextMenu,
+LibraryColumnDefinition,
+LibraryColumnKey,
+LibrarySavedColumnLayout,
+MENU_VIEWPORT_MARGIN,
+MetadataColumnKey,
+SortKey,
+defaultLibraryColumnWidths,
+libraryColumnDefinitions,
+libraryColumnKeySet,
+librarySelectionColumnWidth,
+libraryTrackColumnKeySet,
+normalizeLibraryColumns,
 } from "../../shared";
 import {
-  LIBRARY_ACTIONS_MENU_HEIGHT,
-  LIBRARY_ACTIONS_MENU_WIDTH,
+LIBRARY_ACTIONS_MENU_HEIGHT,
+LIBRARY_ACTIONS_MENU_WIDTH,
 } from "./libraryViewUtils";
 
 export function useLibraryColumnController(model: any) {
-  const { libraryVisibleColumns, setLibraryVisibleColumns, setSort, setContextMenu } = model;
+  const {
+    libraryView,
+    libraryVisibleColumns,
+    setLibraryVisibleColumns,
+    librarySavedColumnLayouts = [],
+    onLibrarySavedColumnLayoutsChange,
+    setSort,
+    setContextMenu,
+  } = model;
   const [columnWidths, setColumnWidths] = useState(defaultLibraryColumnWidths);
   const [columnMenu, setColumnMenu] = useState<ColumnContextMenu | null>(null);
   const [libraryActionsMenu, setLibraryActionsMenu] = useState<{ x: number; y: number } | null>(null);
-  const [draggedColumn, setDraggedColumn] = useState<MetadataColumnKey | null>(null);
-  const [dragOverColumn, setDragOverColumn] = useState<MetadataColumnKey | null>(null);
+  const [draggedColumn, setDraggedColumn] = useState<LibraryColumnKey | null>(null);
+  const [dragOverColumn, setDragOverColumn] = useState<LibraryColumnKey | null>(null);
+  const [columnLayoutName, setColumnLayoutName] = useState("");
 
   const visibleColumns = normalizeLibraryColumns(libraryVisibleColumns);
-  const visibleColumnDefs = visibleColumns
+  const visibleMetadataColumnKeys = visibleColumns.filter((column): column is MetadataColumnKey =>
+    libraryColumnKeySet.has(column as MetadataColumnKey),
+  );
+  const visibleColumnDefs = visibleMetadataColumnKeys
     .map((key) => libraryColumnDefinitions.find((column) => column.key === key))
     .filter((column): column is LibraryColumnDefinition => Boolean(column));
-  const tableWidth = librarySelectionColumnWidth + columnWidths.play + visibleColumnDefs.reduce((total, column) => total + columnWidths[column.key], 0);
+  const fixedTrackColumns: LibraryColumnKey[] = ["play", ...visibleMetadataColumnKeys];
+  const orderedTrackColumns = visibleColumns;
+  const tableWidth = librarySelectionColumnWidth + orderedTrackColumns.reduce((total, column) => total + columnWidths[column], 0);
 
   useEffect(() => {
     function closeMenu() {
@@ -116,13 +132,43 @@ export function useLibraryColumnController(model: any) {
   }
 
   function toggleVisibleColumn(column: MetadataColumnKey) {
-    if (visibleColumns.includes(column) && visibleColumns.length <= 1) {
+    if (visibleColumns.includes(column) && visibleMetadataColumnKeys.length <= 1) {
       return;
     }
     setLibraryVisibleColumns(visibleColumns.includes(column) ? visibleColumns.filter((visibleColumn) => visibleColumn !== column) : [...visibleColumns, column]);
   }
 
-  function moveVisibleColumn(source: MetadataColumnKey, target: MetadataColumnKey, placement: "before" | "after") {
+  function saveColumnLayout() {
+    const name = columnLayoutName.trim() || `${String(libraryView ?? "Library")} columns`;
+    const normalizedName = name.toLowerCase();
+    const existing = librarySavedColumnLayouts.find((layout: LibrarySavedColumnLayout) => layout.name.trim().toLowerCase() === normalizedName);
+    const nextLayout: LibrarySavedColumnLayout = {
+      id: existing?.id ?? `columns-${Date.now().toString(36)}`,
+      name,
+      columns: visibleColumns,
+      view: libraryView,
+      updatedAt: new Date().toISOString(),
+    };
+    const nextLayouts = [
+      nextLayout,
+      ...librarySavedColumnLayouts.filter((layout: LibrarySavedColumnLayout) => layout.id !== nextLayout.id),
+    ].slice(0, 24);
+    onLibrarySavedColumnLayoutsChange?.(nextLayouts);
+    setColumnLayoutName("");
+  }
+
+  function applyColumnLayout(layout: LibrarySavedColumnLayout) {
+    setLibraryVisibleColumns(layout.columns);
+    setColumnMenu(null);
+  }
+
+  function deleteColumnLayout(layoutId: string) {
+    onLibrarySavedColumnLayoutsChange?.(
+      librarySavedColumnLayouts.filter((layout: LibrarySavedColumnLayout) => layout.id !== layoutId),
+    );
+  }
+
+  function moveVisibleColumn(source: LibraryColumnKey, target: LibraryColumnKey, placement: "before" | "after") {
     if (source === target) {
       return;
     }
@@ -139,31 +185,31 @@ export function useLibraryColumnController(model: any) {
   }
 
   function handleColumnDragStart(event: any, column: string) {
-    if (!libraryColumnKeySet.has(column as MetadataColumnKey)) {
+    if (!libraryTrackColumnKeySet.has(column as LibraryColumnKey)) {
       return;
     }
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", column);
-    setDraggedColumn(column as MetadataColumnKey);
+    setDraggedColumn(column as LibraryColumnKey);
     setDragOverColumn(null);
     setColumnMenu(null);
   }
 
   function handleColumnDragOver(event: any, column: string) {
-    if (!draggedColumn || draggedColumn === column || !libraryColumnKeySet.has(column as MetadataColumnKey)) {
+    if (!draggedColumn || draggedColumn === column || !libraryTrackColumnKeySet.has(column as LibraryColumnKey)) {
       return;
     }
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
-    setDragOverColumn(column as MetadataColumnKey);
+    setDragOverColumn(column as LibraryColumnKey);
   }
 
   function handleColumnDrop(event: any, column: string) {
     event.preventDefault();
     const source = event.dataTransfer.getData("text/plain") || draggedColumn;
-    if (source && libraryColumnKeySet.has(source as MetadataColumnKey) && libraryColumnKeySet.has(column as MetadataColumnKey)) {
+    if (source && libraryTrackColumnKeySet.has(source as LibraryColumnKey) && libraryTrackColumnKeySet.has(column as LibraryColumnKey)) {
       const bounds = event.currentTarget.getBoundingClientRect();
-      moveVisibleColumn(source as MetadataColumnKey, column as MetadataColumnKey, event.clientX > bounds.left + bounds.width / 2 ? "after" : "before");
+      moveVisibleColumn(source as LibraryColumnKey, column as LibraryColumnKey, event.clientX > bounds.left + bounds.width / 2 ? "after" : "before");
     }
     setDraggedColumn(null);
     setDragOverColumn(null);
@@ -174,20 +220,20 @@ export function useLibraryColumnController(model: any) {
     setDragOverColumn(null);
   }
 
-  function columnFromPoint(x: number, y: number): MetadataColumnKey | null {
+  function columnFromPoint(x: number, y: number): LibraryColumnKey | null {
     const target = document.elementFromPoint(x, y) as HTMLElement | null;
     const header = target?.closest<HTMLElement>("[data-library-column]");
     const column = header?.dataset.libraryColumn;
-    return column && libraryColumnKeySet.has(column as MetadataColumnKey) ? (column as MetadataColumnKey) : null;
+    return column && libraryTrackColumnKeySet.has(column as LibraryColumnKey) ? (column as LibraryColumnKey) : null;
   }
 
   function handleColumnPointerDragStart(event: ReactMouseEvent<HTMLButtonElement>, column: string) {
-    if (!libraryColumnKeySet.has(column as MetadataColumnKey)) {
+    if (!libraryTrackColumnKeySet.has(column as LibraryColumnKey)) {
       return;
     }
     event.preventDefault();
     event.stopPropagation();
-    const sourceColumn = column as MetadataColumnKey;
+    const sourceColumn = column as LibraryColumnKey;
     const previousCursor = document.body.style.cursor;
     const previousUserSelect = document.body.style.userSelect;
     document.body.style.cursor = "grabbing";
@@ -218,7 +264,8 @@ export function useLibraryColumnController(model: any) {
 
   return {
     columnWidths, setColumnWidths, columnMenu, setColumnMenu, libraryActionsMenu, setLibraryActionsMenu,
-    draggedColumn, setDraggedColumn, dragOverColumn, setDragOverColumn, visibleColumns, visibleColumnDefs, tableWidth,
+    draggedColumn, setDraggedColumn, dragOverColumn, setDragOverColumn, visibleColumns, visibleMetadataColumnKeys, visibleColumnDefs, fixedTrackColumns, orderedTrackColumns, tableWidth,
+    columnLayoutName, setColumnLayoutName, saveColumnLayout, applyColumnLayout, deleteColumnLayout,
     handleSort, handleResize, openColumnContextMenu, toggleLibraryActionsMenu, toggleVisibleColumn, moveVisibleColumn,
     handleColumnDragStart, handleColumnDragOver, handleColumnDrop, handleColumnDragEnd, columnFromPoint, handleColumnPointerDragStart,
   };

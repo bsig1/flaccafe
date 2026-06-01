@@ -10,7 +10,6 @@ use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Instant;
-use tauri::http::{header, Method, Request, Response, StatusCode};
 use time::OffsetDateTime;
 
 use super::{app_storage_root, scan, tools};
@@ -45,7 +44,6 @@ const CD_MSF_OFFSET: i64 = 150;
 const CDDA_SECTOR_SIZE: usize = 2352;
 const CD_RAW_READ_OFFSET_SECTOR_SIZE: i64 = 2048;
 const RIP_READ_SECTORS: i64 = 16;
-const STREAM_READ_SECTORS: i64 = 15;
 const MUSICBRAINZ_ROOT: &str = "https://musicbrainz.org/ws/2";
 const COVER_ART_ARCHIVE_ROOT: &str = "https://coverartarchive.org";
 const USER_AGENT: &str = "FLAC Cafe/0.5 (https://github.com/bsig1/flaccafe)";
@@ -130,12 +128,7 @@ impl CdRipJob {
     }
 }
 
-static ACTIVE_STREAM_TOKENS: OnceLock<Mutex<HashMap<String, HashSet<String>>>> = OnceLock::new();
 static CD_RIP_JOBS: OnceLock<Mutex<HashMap<String, CdRipJob>>> = OnceLock::new();
-
-fn stream_tokens() -> &'static Mutex<HashMap<String, HashSet<String>>> {
-    ACTIVE_STREAM_TOKENS.get_or_init(|| Mutex::new(HashMap::new()))
-}
 
 fn rip_jobs() -> &'static Mutex<HashMap<String, CdRipJob>> {
     CD_RIP_JOBS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -252,21 +245,6 @@ fn tool_status(name: &str, purpose: &str) -> JsonValue {
     })
 }
 
-fn active_playback_drive_ids() -> Vec<String> {
-    stream_tokens()
-        .lock()
-        .map(|tokens| {
-            let mut drives = tokens
-                .iter()
-                .filter(|(_, token_set)| !token_set.is_empty())
-                .map(|(drive, _)| drive.clone())
-                .collect::<Vec<_>>();
-            drives.sort();
-            drives
-        })
-        .unwrap_or_default()
-}
-
 fn active_rip_drive_ids() -> Vec<String> {
     rip_jobs()
         .lock()
@@ -294,39 +272,6 @@ fn active_rip_for_drive(drive_id: &str) -> bool {
             })
         })
         .unwrap_or(false)
-}
-
-fn replace_stream_token(drive_id: &str, token: &str) {
-    let normalized = normalize_drive_id(drive_id).unwrap_or_else(|| drive_id.to_string());
-    if let Ok(mut tokens) = stream_tokens().lock() {
-        let mut set = HashSet::new();
-        set.insert(token.to_string());
-        tokens.insert(normalized, set);
-    }
-}
-
-fn stream_token_current(drive_id: &str, token: &str) -> bool {
-    let normalized = normalize_drive_id(drive_id).unwrap_or_else(|| drive_id.to_string());
-    stream_tokens()
-        .lock()
-        .map(|tokens| {
-            tokens
-                .get(&normalized)
-                .is_some_and(|set| set.contains(token))
-        })
-        .unwrap_or(false)
-}
-
-fn clear_stream_tokens(drive_id: Option<&str>) {
-    if let Ok(mut tokens) = stream_tokens().lock() {
-        if let Some(drive_id) = drive_id {
-            if let Some(normalized) = normalize_drive_id(drive_id) {
-                tokens.remove(&normalized);
-            }
-        } else {
-            tokens.clear();
-        }
-    }
 }
 
 fn track_entries_for_drive(drive_id: &str) -> Vec<JsonValue> {
@@ -375,9 +320,6 @@ fn track_entries_for_drive(drive_id: &str) -> Vec<JsonValue> {
 
 #[cfg(windows)]
 fn windows_cd_drives() -> Vec<JsonValue> {
-    let active = active_playback_drive_ids()
-        .into_iter()
-        .collect::<HashSet<_>>();
     let mut drives = Vec::new();
     unsafe {
         let mask = GetLogicalDrives();
@@ -392,18 +334,13 @@ fn windows_cd_drives() -> Vec<JsonValue> {
                 continue;
             }
             let drive_id = format!("{letter}:");
-            let playback_active = active.contains(&drive_id);
-            let tracks = if playback_active {
-                Vec::new()
-            } else {
-                track_entries_for_drive(&drive_id)
-            };
+            let tracks = track_entries_for_drive(&drive_id);
             drives.push(json!({
                 "id": drive_id,
                 "path": root_text,
                 "label": format!("CD Drive ({drive_id})"),
                 "volume_name": JsonValue::Null,
-                "media_loaded": playback_active || !tracks.is_empty(),
+                "media_loaded": !tracks.is_empty(),
                 "track_count": if tracks.is_empty() { JsonValue::Null } else { json!(tracks.len()) },
                 "tracks": tracks,
             }));

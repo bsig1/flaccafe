@@ -1,51 +1,52 @@
 import {
-  Download,
-  FolderOpen,
-  ListPlus,
-  Pencil,
-  Play,
-  Plus,
-  Podcast,
-  RefreshCw,
-  Save,
-  Trash2,
-  X,
+Download,
+FolderOpen,
+ListPlus,
+Pencil,
+Play,
+Plus,
+Podcast,
+RefreshCw,
+Save,
+Trash2,
+X,
 } from "lucide-react";
 import type { MouseEvent as ReactMouseEvent } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect,useMemo,useRef,useState } from "react";
 
 import {
-  deletePodcastSubscription,
-  deletePodcastEpisodeDownload,
-  downloadPodcastEpisode,
-  ensurePodcastEpisodeTrack,
-  ensurePodcastSubscriptionFolder,
-  fetchPodcastEpisodes,
-  fetchPodcastSubscriptions,
-  fetchTrack,
-  refreshPodcastSubscription,
-  savePodcastSubscription,
+deletePodcastEpisodeDownload,
+deletePodcastSubscription,
+downloadPodcastEpisode,
+ensurePodcastEpisodeTrack,
+ensurePodcastSubscriptionFolder,
+fetchPodcastEpisodes,
+fetchPodcastSubscriptions,
+fetchTrackResumeProgress,
+fetchTrack,
+refreshPodcastSubscription,
+savePodcastSubscription,
 } from "../../lib/api";
 import {
-  placeFloatingMenu,
+placeFloatingMenu,
 } from "../../lib/uiInteractions";
 import type {
-  PodcastEpisode,
-  PodcastSubscription,
-  Track,
+PodcastEpisode,
+PodcastSubscription,
+Track,
 } from "../../types/api";
+import { closeFloatingMenus,listenForCloseFloatingMenus } from "../menuEvents";
 import {
-  MENU_VIEWPORT_MARGIN,
+MENU_VIEWPORT_MARGIN,
 } from "../shared";
-import { closeFloatingMenus, listenForCloseFloatingMenus } from "../menuEvents";
 import {
-  formatDate,
-  formatDuration,
-  type PodcastEpisodeContextMenu,
-  type PodcastEpisodeView,
-  type PodcastPanelMode,
-  type PodcastSubscriptionContextMenu,
-  type PodcastsPageProps,
+formatDate,
+formatDuration,
+type PodcastEpisodeContextMenu,
+type PodcastEpisodeView,
+type PodcastPanelMode,
+type PodcastSubscriptionContextMenu,
+type PodcastsPageProps,
 } from "./podcasts/podcastPageUtils";
 
 export function PodcastsPage({
@@ -308,7 +309,12 @@ export function PodcastsPage({
       if (!track) {
         return;
       }
-      onPlayTrack(track, [track]);
+      const progress = await fetchTrackResumeProgress(track.id).catch(() => null);
+      const resumePositionSeconds =
+        progress && progress.position_seconds > 0 && (!track.duration_seconds || progress.position_seconds < track.duration_seconds - 20)
+          ? progress.position_seconds
+          : null;
+      onPlayTrack(track, [track], { resumePositionSeconds });
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not play podcast episode");
     }

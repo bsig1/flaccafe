@@ -21,17 +21,6 @@ mod tests {
     }
 
     #[test]
-    fn maps_head_requests_to_controller_action() {
-        let action = action_for_request(
-            "HEAD",
-            "/library/tools/cd-rip/playback/live/audio?drive_id=D%3A&track_number=1",
-        )
-        .unwrap();
-        assert_eq!(action.action, "stream_cd_live_audio");
-        assert_eq!(action.params["drive_id"].as_str(), Some("D:"));
-    }
-
-    #[test]
     fn hammers_every_route_with_good_and_bad_request_shapes() {
         for route in PYTHON_ROUTES {
             let path = concrete_path(route.template);

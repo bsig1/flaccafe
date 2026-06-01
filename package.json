@@ -26,6 +26,9 @@
     "test": "npm run check && npm run check:routes && npm run test:frontend && npm run test:backend",
     "desktop": "tauri dev",
     "package:msi": "powershell -ExecutionPolicy Bypass -File scripts/build_msi.ps1",
+    "package:linux": "node scripts/build_linux.mjs all",
+    "package:deb": "node scripts/build_linux.mjs deb",
+    "package:appimage": "node scripts/build_linux.mjs appimage",
     "tauri": "tauri",
     "tauri:dev": "tauri dev"
   },

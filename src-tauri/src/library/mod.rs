@@ -5,5 +5,4 @@ include!("cache_and_undo.rs");
 include!("undo_restore.rs");
 include!("settings_and_tracks.rs");
 include!("reconcile_and_file_tags.rs");
-include!("file_moves_gapless_sources.rs");
 include!("tests.rs");

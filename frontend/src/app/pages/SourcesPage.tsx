@@ -1,18 +1,26 @@
 import {
-  FolderOpen,
-  Plus,
-  RefreshCw,
-  X,
+Cog,
+FolderOpen,
+Plus,
+RefreshCw,
+X,
 } from "lucide-react";
+import {
+useState,
+} from "react";
 
 import type {
-  FolderWatchStatus,
-  ScanProgress,
-  ScanResult,
+FolderWatchStatus,
+ScanProgress,
+ScanResult,
 } from "../../types/api";
+import type {
+SourceScanRule,
+SourceScanRules,
+} from "../shared";
 import {
-  fileName,
-  formatTime,
+fileName,
+formatTime,
 } from "../shared";
 import { FolderWatchSection } from "./sources/FolderWatchSection";
 
@@ -31,6 +39,15 @@ function uniqueSourceFolders(paths: string[]) {
     });
 }
 
+const defaultSourceScanRule: SourceScanRule = {
+  enabled: true,
+  removeMissing: true,
+};
+
+function sourceScanRuleKey(path: string) {
+  return path.trim().toLowerCase();
+}
+
 export function SourcesPage({
   folderPath,
   setFolderPath,
@@ -39,9 +56,13 @@ export function SourcesPage({
   suggestedMusicPath,
   onBrowse,
   onScan,
+  onCancelScan,
+  onRetryScan,
   onRemoveSource,
   scanResult,
   scanProgress,
+  scanStuck,
+  scanStuckMessage,
   isScanning,
   folderWatchStatus,
   onStartFolderWatch,
@@ -49,6 +70,8 @@ export function SourcesPage({
   onRefreshFolderWatch,
   onApplyFolderWatch,
   onAcknowledgeFolderWatchNotifications,
+  sourceScanRules,
+  onSourceScanRuleChange,
 }: {
   folderPath: string;
   setFolderPath: (value: string) => void;
@@ -56,10 +79,14 @@ export function SourcesPage({
   setLibraryFolders: (value: string[]) => void;
   suggestedMusicPath?: string | null;
   onBrowse: () => void;
-  onScan: (pathOverride?: string | string[]) => void | Promise<void>;
+  onScan: (pathOverride?: string | string[], options?: { cleanupFolderPaths?: string[] }) => void | Promise<void>;
+  onCancelScan: () => void | Promise<void>;
+  onRetryScan: () => void | Promise<void>;
   onRemoveSource: (path: string) => void | Promise<void>;
   scanResult: ScanResult | null;
   scanProgress: ScanProgress | null;
+  scanStuck: boolean;
+  scanStuckMessage: string | null;
   isScanning: boolean;
   folderWatchStatus: FolderWatchStatus | null;
   onStartFolderWatch: (intervalSeconds: number) => void | Promise<void>;
@@ -67,8 +94,14 @@ export function SourcesPage({
   onRefreshFolderWatch: () => void | Promise<void>;
   onApplyFolderWatch: (changeIds: string[], applyAll?: boolean) => void | Promise<void>;
   onAcknowledgeFolderWatchNotifications: (notificationIds: string[], allNotifications?: boolean) => void | Promise<void>;
+  sourceScanRules: SourceScanRules;
+  onSourceScanRuleChange: (path: string, rule: SourceScanRule) => void;
 }) {
+  const [openRulePath, setOpenRulePath] = useState<string | null>(null);
   const normalizedLibraryFolders = uniqueSourceFolders(libraryFolders);
+  const scanRuleFor = (path: string) => sourceScanRules[sourceScanRuleKey(path)] ?? defaultSourceScanRule;
+  const enabledLibraryFolders = normalizedLibraryFolders.filter((path) => scanRuleFor(path).enabled);
+  const cleanupFoldersFor = (paths: string[]) => paths.filter((path) => scanRuleFor(path).removeMissing);
   const pendingFolderPath = folderPath.trim();
   const suggestedFolderAvailable = Boolean(
     suggestedMusicPath &&
@@ -95,6 +128,22 @@ export function SourcesPage({
     setFolderPath("");
   }
 
+  function runFolderScan(paths: string[]) {
+    const targetPaths = uniqueSourceFolders(paths).filter((path) => scanRuleFor(path).enabled);
+    if (targetPaths.length === 0) {
+      return;
+    }
+    return onScan(targetPaths, { cleanupFolderPaths: cleanupFoldersFor(targetPaths) });
+  }
+
+  function updateScanRule(path: string, patch: Partial<SourceScanRule>) {
+    onSourceScanRuleChange(path, {
+      ...defaultSourceScanRule,
+      ...scanRuleFor(path),
+      ...patch,
+    });
+  }
+
   return (
     <main className="flex min-w-0 flex-1 flex-col">
       <header className="flex min-h-16 flex-wrap items-center justify-between gap-3 border-b border-line px-6 py-3">
@@ -110,8 +159,8 @@ export function SourcesPage({
           <button
             className="primary-button h-10"
             type="button"
-            disabled={isScanning || normalizedLibraryFolders.length === 0}
-            onClick={() => void onScan(normalizedLibraryFolders)}
+            disabled={isScanning || enabledLibraryFolders.length === 0}
+            onClick={() => void runFolderScan(normalizedLibraryFolders)}
           >
             <RefreshCw size={17} />
             {isScanning ? "Scanning" : "Rescan All"}
@@ -166,7 +215,7 @@ export function SourcesPage({
                 className="secondary-button h-9"
                 type="button"
                 disabled={isScanning || normalizedLibraryFolders.length === 0}
-                onClick={() => void onScan(normalizedLibraryFolders)}
+                onClick={() => void runFolderScan(normalizedLibraryFolders)}
               >
                 <RefreshCw size={15} />
                 Rescan All
@@ -175,29 +224,72 @@ export function SourcesPage({
 
             <div className="grid gap-2">
               {normalizedLibraryFolders.length > 0 ? (
-                normalizedLibraryFolders.map((path) => (
-                  <div key={path} className="grid min-w-0 gap-2 rounded border border-line/70 bg-ink px-3 py-2 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <FolderOpen size={15} className="shrink-0 text-muted" />
-                      <span className="min-w-0 flex-1 truncate text-sm text-neutral-200" title={path}>{path}</span>
+                normalizedLibraryFolders.map((path) => {
+                  const rule = scanRuleFor(path);
+                  const isRulesOpen = openRulePath === path;
+                  return (
+                    <div key={path} className="grid min-w-0 gap-2 rounded border border-line/70 bg-ink px-3 py-2">
+                      <div className="grid min-w-0 gap-2 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <FolderOpen size={15} className="shrink-0 text-muted" />
+                          <span className="min-w-0 flex-1 truncate text-sm text-neutral-200" title={path}>{path}</span>
+                          {!rule.enabled && <span className="rounded border border-line px-2 py-0.5 text-[11px] uppercase text-muted">off</span>}
+                        </div>
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <button
+                            className="icon-button h-8 w-8"
+                            type="button"
+                            title="Folder scan rules"
+                            aria-expanded={isRulesOpen}
+                            onClick={() => setOpenRulePath(isRulesOpen ? null : path)}
+                          >
+                            <Cog size={14} />
+                          </button>
+                          <button
+                            className="secondary-button h-8"
+                            type="button"
+                            disabled={isScanning || !rule.enabled}
+                            onClick={() => void runFolderScan([path])}
+                          >
+                            <RefreshCw size={15} />
+                            Rescan
+                          </button>
+                          <button
+                            className="icon-button h-8 w-8"
+                            type="button"
+                            title="Remove source and its tracks from the library"
+                            disabled={isScanning}
+                            onClick={() => void onRemoveSource(path)}
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      </div>
+                      {isRulesOpen && (
+                        <div className="grid gap-2 rounded border border-line/70 bg-panel p-3 text-sm md:grid-cols-2">
+                          <label className="flex items-center justify-between gap-3 rounded border border-line/60 bg-ink px-3 py-2">
+                            <span className="text-muted">Include in Rescan All</span>
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 accent-moss"
+                              checked={rule.enabled}
+                              onChange={(event) => updateScanRule(path, { enabled: event.target.checked })}
+                            />
+                          </label>
+                          <label className="flex items-center justify-between gap-3 rounded border border-line/60 bg-ink px-3 py-2">
+                            <span className="text-muted">Remove missing tracks</span>
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 accent-ember"
+                              checked={rule.removeMissing}
+                              onChange={(event) => updateScanRule(path, { removeMissing: event.target.checked })}
+                            />
+                          </label>
+                        </div>
+                      )}
                     </div>
-                    <div className="flex flex-wrap justify-end gap-2">
-                      <button className="secondary-button h-8" type="button" disabled={isScanning} onClick={() => void onScan(path)}>
-                        <RefreshCw size={15} />
-                        Rescan
-                      </button>
-                      <button
-                        className="icon-button h-8 w-8"
-                        type="button"
-                        title="Remove source and its tracks from the library"
-                        disabled={isScanning}
-                        onClick={() => void onRemoveSource(path)}
-                      >
-                        <X size={14} />
-                      </button>
-                    </div>
-                  </div>
-                ))
+                  );
+                })
               ) : (
                 <div className="rounded border border-dashed border-line bg-ink px-3 py-10 text-center text-sm text-muted">
                   Browse for a folder or paste a path above to begin.
@@ -216,12 +308,18 @@ export function SourcesPage({
             onAcknowledgeFolderWatchNotifications={onAcknowledgeFolderWatchNotifications}
           />
 
-          {scanProgress && scanProgress.status !== "completed" && scanProgress.status !== "failed" && (
+          {scanProgress && !["completed", "failed", "cancelled"].includes(scanProgress.status) && (
             <div className="rounded border border-line bg-panel p-4">
-              <div className="mb-3 flex items-center justify-between gap-4">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-4">
                 <div>
                   <div className="font-medium text-white">
-                    {scanProgress.status === "cleaning" ? "Removing missing files" : hasScanCount ? "Scanning library" : "Finding audio files"}
+                    {scanProgress.status === "cancelling"
+                      ? "Cancelling scan"
+                      : scanProgress.status === "cleaning"
+                        ? "Removing missing files"
+                        : hasScanCount
+                          ? "Scanning library"
+                          : "Finding audio files"}
                   </div>
                   <div className="mt-1 text-xs text-muted">
                     {hasScanCount
@@ -233,7 +331,22 @@ export function SourcesPage({
                   <div>Elapsed {formatTime(scanProgress.elapsed_seconds)}</div>
                   <div>ETA {formatTime(scanProgress.eta_seconds)}</div>
                 </div>
+                <div className="flex gap-2">
+                  <button className="secondary-button h-8" type="button" disabled={scanProgress.status === "cancelling"} onClick={() => void onCancelScan()}>
+                    Cancel
+                  </button>
+                  {scanStuck && (
+                    <button className="primary-button h-8" type="button" onClick={() => void onRetryScan()}>
+                      Retry
+                    </button>
+                  )}
+                </div>
               </div>
+              {scanStuck && (
+                <div className="mb-3 rounded border border-ember/40 bg-ember/10 px-3 py-2 text-xs text-ember">
+                  {scanStuckMessage ?? "This scan has stopped reporting progress. You can cancel or retry it."}
+                </div>
+              )}
 
               <div className="h-2 overflow-hidden rounded bg-ink">
                 <div
@@ -274,8 +387,20 @@ export function SourcesPage({
           )}
 
           {scanProgress?.status === "failed" && (
-            <div className="rounded border border-red-400/40 bg-red-950/20 p-4 text-red-200">
-              {scanProgress.error ?? "Scan failed"}
+            <div className="grid gap-3 rounded border border-red-400/40 bg-red-950/20 p-4 text-red-200">
+              <div>{scanProgress.error ?? "Scan failed"}</div>
+              <button className="secondary-button h-8 w-fit" type="button" onClick={() => void onRetryScan()}>
+                Retry Scan
+              </button>
+            </div>
+          )}
+
+          {scanProgress?.status === "cancelled" && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded border border-line bg-panel p-4 text-sm text-muted">
+              <span>Scan cancelled.</span>
+              <button className="secondary-button h-8" type="button" onClick={() => void onRetryScan()}>
+                Retry Scan
+              </button>
             </div>
           )}
 

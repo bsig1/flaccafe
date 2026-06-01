@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { InboxAutoReviewField, InboxAutoReviewMatchType } from "../../../types/api";
+import { useCallback,useEffect,useMemo,useRef,useState } from "react";
+import type { InboxAutoReviewField,InboxAutoReviewMatchType } from "../../../types/api";
 import { LibraryCompletionView } from "./LibraryCompletionView";
 
 type ArtworkPane = "artists" | "albums";
@@ -8,7 +8,11 @@ const ARTWORK_SCROLL_IDLE_MS = 180;
 const MAX_ACTIVE_COLLECTION_ARTWORK = 96;
 
 export function LibraryCollectionBranches({ model }: { model: any }) {
-  const { Album, ArrowDown, ArrowUp, BarChart3, BookOpen, CheckCircle2, Download, Fingerprint, FolderOpen, LayoutGrid, List, MoreHorizontal, Pencil, Play, Podcast, Plus, RefreshCw, Save, Search, ShieldCheck, Shuffle, SkipForward, SlidersHorizontal, Star, Tag, Trash2, Upload, UserRound, Volume2, Wand2, X, RatingStars, ResizableHeader, BulkMetadataModal, QuickStartPanel, TrackDetailsPanel, LibraryViewTabs, albumArtworkUrl, albumCoverUrl, defaultLibraryVisibleColumns, libraryColumnDefinitions, librarySelectionColumnWidth, display, fileName, formatBitrate, formatDuration, formatFingerprint, formatPercent, formatRating, formatShortDate, formatTime, trackGenre, albumMetaLabel, artistMetaLabel, missingMetadataFields, missingMetadataFilters, ALBUM_GRID_ROW_HEIGHT, ALBUM_LIST_ROW_HEIGHT, ARTIST_ROW_HEIGHT, COMPLETION_COLLAPSED_ROW_HEIGHT, COMPLETION_EXPANDED_ROW_ESTIMATE, LIBRARY_ACTIONS_MENU_HEIGHT, LIBRARY_ACTIONS_MENU_WIDTH, MENU_VIEWPORT_MARGIN, PLAYLIST_ROW_HEIGHT, PLAYLIST_TOOLBAR_HEIGHT, TRACK_AVOID_SUBMENU_HEIGHT, TRACK_AVOID_SUBMENU_WIDTH, TRACK_CONTEXT_DIVIDER_HEIGHT, TRACK_CONTEXT_HEADER_HEIGHT, TRACK_CONTEXT_MENU_HEIGHT, TRACK_CONTEXT_MENU_WIDTH, TRACK_CONTEXT_ROW_HEIGHT, TRACK_CONTEXT_SUBMENU_WIDTH, TRACK_PLAYLIST_SUBMENU_WIDTH, TRACK_RATING_SUBMENU_HEIGHT, TRACK_RATING_SUBMENU_WIDTH, TRACK_SUBMENU_CLOSE_DELAY_MS, TRACK_TAGGING_SUBMENU_HEIGHT, TRACK_VIRTUALIZATION_OVERSCAN, TRACK_VIRTUALIZATION_THRESHOLD, tracks, trackIndexCache, totalTracks, albums, artists, playlists, selectedAlbumId, selectedAlbumTracks, selectedArtistName, selectedArtistTracks, selectedPlaylistId, selectedPlaylistTracks, libraryStats, libraryHealth, inbox, targetPlaylistId, newPlaylistName, importPlaylistPath, libraryView, setLibraryView, search, setSearch, advancedTrackSearch, setAdvancedTrackSearch, refreshTracks, refreshAlbums, loadMoreTracks, loadTrackWindow, isLoading, hasMoreTracks, sort, setSort, scrollTop, setScrollTop, artistScrollTop, setArtistScrollTop, albumScrollTop, setAlbumScrollTop, completionScrollTop, setCompletionScrollTop, playlistScrollTop, setPlaylistScrollTop, onRating, onBulkRating, onPlayTrack, onPlayNext, onAddToQueue, onSelectAlbum, onSelectArtist, onPlayAlbum, onPlayArtist, onSelectPlaylist, onCreatePlaylist, onDeletePlaylist, onAddTracksToPlaylist, onDeleteTrack, onEditTrack, onBulkMetadata, onAutoTagTracks, onSyncFileMetadata, onFingerprintTagTracks, onClapGenreTagTracks, onVolumeTagTracks, onOpenFileManagementTracks, onRequestDeleteTracks, onRemoveTrackFromPlaylist, onRemoveTracksFromPlaylist, onMovePlaylistTrack, onExportTracks, onExportPlaylist, onImportPlaylist, onReviewInboxTracks, onUpdateInboxNote, onSaveInboxAutoReviewRule, onDeleteInboxAutoReviewRule, onShuffleTracks, onQuickAutoDj, onAvoidAutoDj, onRevealTrack, detailTrack, setDetailTrack, onAnalyzeTracks, onIgnoreDuplicateGroup, onClearIgnoredDuplicateGroups, isAudioAnalyzing, currentTrackId, currentTrack, hideFilePaths, compactRows, albumGrid, writeRatingsToFiles, libraryVisibleColumns, setLibraryVisibleColumns, onAlbumGridChange, setTargetPlaylistId, setNewPlaylistName, setImportPlaylistPath, showQuickStart, isScanning, suggestedMusicPath, onChooseMusicFolder, onUseSuggestedFolder, onDismissQuickStart, onOpenSettings, columnWidths, setColumnWidths, contextMenu, setContextMenu, columnMenu, setColumnMenu, libraryActionsMenu, setLibraryActionsMenu, activeContextSubmenu, setActiveContextSubmenu, selectedTrackIds, setSelectedTrackIds, selectedTrackCache, setSelectedTrackCache, isSelectingAllTracks, setIsSelectingAllTracks, showAllDuplicateGroups, setShowAllDuplicateGroups, showAllMissingMetadata, setShowAllMissingMetadata, missingMetadataFilter, setMissingMetadataFilter, bulkMetadataOpen, setBulkMetadataOpen, draggedColumn, setDraggedColumn, dragOverColumn, setDragOverColumn, albumArtworkCandidates, setAlbumArtworkCandidates, isAlbumArtworkOpen, setIsAlbumArtworkOpen, isSearchingAlbumArtwork, setIsSearchingAlbumArtwork, albumArtworkStatus, setAlbumArtworkStatus, inboxNoteDraft, setInboxNoteDraft, editingInboxRuleId, setEditingInboxRuleId, inboxRuleName, setInboxRuleName, inboxRuleEnabled, setInboxRuleEnabled, inboxRuleField, setInboxRuleField, inboxRuleMatchType, setInboxRuleMatchType, inboxRuleValue, setInboxRuleValue, inboxRuleNote, setInboxRuleNote, inboxRuleApplyExisting, setInboxRuleApplyExisting, albumMode, setAlbumMode, artistPaneHeight, setArtistPaneHeight, albumPaneHeight, setAlbumPaneHeight, playlistPaneHeight, setPlaylistPaneHeight, completionFilter, setCompletionFilter, completionHeightVersion, setCompletionHeightVersion, completionOpenAlbumId, setCompletionOpenAlbumId, completionLoadingAlbumId, setCompletionLoadingAlbumId, completionLookupAlbumId, setCompletionLookupAlbumId, completionLookupMessages, setCompletionLookupMessages, completionLookupAllActive, setCompletionLookupAllActive, completionLookupAllProgress, setCompletionLookupAllProgress, showAdvancedSearch, setShowAdvancedSearch, virtualScrollTop, setVirtualScrollTop, trackViewportHeight, setTrackViewportHeight, scrollRef, artistListRef, albumListRef, completionListRef, playlistListRef, contextMenuRef, searchInputRef, selectionAnchorId, completionLookupCancelRef, visibleColumns, visibleColumnDefs, advancedSearchActiveCount, trackSearchActive, libraryHasAnyTracks, tableWidth, rowPadding, trackRowHeight, loadedTrackCount, shouldVirtualizeTrackRows, maxVirtualScrollTop, effectiveVirtualScrollTop, virtualTrackStartIndex, virtualTrackVisibleCount, virtualTrackEndIndex, renderedTrackList, virtualTopSpacerHeight, virtualBottomSpacerHeight, advancedSearchInputClass, activeAlbum, activeArtist, activePlaylist, missingMetadataRows, filteredMissingMetadataRows, visibleMissingMetadataRows, visibleDuplicateGroups, completionQuery, completionSearchTerms, completionMatchesSearch, albumCompletionExpected, albumCompletionMissing, completionAlbums, visibleCompletionAlbums, completionListScrollTop, completionWindow, renderedCompletionAlbums, artistWindow, renderedArtists, albumGridColumns, albumBrowseRowHeight, albumWindow, renderedBrowseAlbums, playlistWindow, renderedPlaylists, completeAlbumCount, missingTrackEstimate, advancedSelectionKey, completionLookupEta, librarySummaryText, viewTracks, viewTrackLookup, selectedIds, selectedTracks, selectableTrackCount, allViewSelected, inboxNotesByTrackId, selectedInboxTrack, selectedInboxNote, getReachableScrollTop, applyScrollRestore, cancelScrollRestoreForUserInput, scrollCollectionPaneToTop, saveTrackPaneScrollTop, renderPaneTopButton, renderActiveTopButton, updateCompletionRowHeight, setCompletionRowElement, scheduleVirtualScrollUpdate, flushScrollPositionSave, scheduleScrollPositionSave, resetInboxRuleForm, editInboxRule, saveInboxRule, handleSort, handleResize, toggleTrackSelection, selectSingleTrack, selectTrackLikeWindows, setSelectionForList, selectAllCurrentScope, handleHeaderSelectionChange, suppressCheckboxContextMenu, clearSelection, loadAlbumArtworkCandidates, openAlbumArtworkManager, albumArtworkActionStatus, chooseSidecarArtwork, embedSidecarArtwork, saveEmbeddedArtwork, embedEmbeddedArtwork, searchWebArtwork, saveWebArtwork, clearSelectedAlbumArtwork, handleScroll, openTrackContextMenu, openColumnContextMenu, toggleLibraryActionsMenu, toggleVisibleColumn, moveVisibleColumn, handleColumnDragStart, handleColumnDragOver, handleColumnDrop, handleColumnDragEnd, columnFromPoint, handleColumnPointerDragStart, columnTextClass, renderMetadataCell, renderTableHeader, isInteractiveTrackCellTarget, handleLibrarySurfaceClick, renderTrackRow, renderTrackPlaceholderRow, renderVirtualTrackRows, renderTrackRows, toggleCompletionAlbum, handleCompletionLengthLookup, handleCompletionLookupAll, cancelCompletionLookupAll, updateAdvancedTrackSearch, clearAdvancedTrackSearch, contextSelectionTracks, contextSelectionIds, contextBulk, contextLabel, contextPlaylistSubmenuHeight, contextSubmenuStyle, openContextSubmenu, scheduleContextSubmenuClose, contextSubmenuClass } = model;
+  const { Album, CheckCircle2, Download, Pencil, Plus, RefreshCw, Save, Search, ShieldCheck, Shuffle, Trash2, Upload, UserRound, X, albumArtworkUrl, albumCoverUrl, librarySelectionColumnWidth, display, formatDuration, albumMetaLabel, artistMetaLabel, ALBUM_GRID_ROW_HEIGHT, ALBUM_LIST_ROW_HEIGHT, ARTIST_ROW_HEIGHT, PLAYLIST_ROW_HEIGHT, PLAYLIST_TOOLBAR_HEIGHT, albums, artists, playlists, selectedAlbumId, selectedAlbumTracks, selectedArtistName, selectedArtistTracks, selectedPlaylistId, selectedPlaylistTracks, inbox, newPlaylistName, importPlaylistPath, libraryView, search, artistScrollTop, setArtistScrollTop, albumScrollTop, setAlbumScrollTop, playlistScrollTop, setPlaylistScrollTop, onSelectAlbum, onSelectArtist, onPlayAlbum, onPlayArtist, onSelectPlaylist, onCreatePlaylist, onDeletePlaylist, onAddTracksToPlaylist, onExportTracks, onExportPlaylist, onImportPlaylist, onReviewInboxTracks, onUpdateInboxNote, onDeleteInboxAutoReviewRule, onShuffleTracks, albumGrid, setNewPlaylistName, setImportPlaylistPath, columnWidths, albumArtworkCandidates, isAlbumArtworkOpen, setIsAlbumArtworkOpen, isSearchingAlbumArtwork, albumArtworkStatus, inboxNoteDraft, setInboxNoteDraft, editingInboxRuleId, inboxRuleName, setInboxRuleName, inboxRuleEnabled, setInboxRuleEnabled, inboxRuleField, setInboxRuleField, inboxRuleMatchType, setInboxRuleMatchType, inboxRuleValue, setInboxRuleValue, inboxRuleNote, setInboxRuleNote, inboxRuleApplyExisting, setInboxRuleApplyExisting, albumMode, artistListRef, albumListRef, playlistListRef, visibleColumnDefs, tableWidth, activeAlbum, activeArtist, activePlaylist, artistWindow, renderedArtists, albumWindow, renderedBrowseAlbums, playlistWindow, renderedPlaylists, viewTracks, selectedIds, selectedInboxTrack, renderPaneTopButton, resetInboxRuleForm, editInboxRule, saveInboxRule, loadAlbumArtworkCandidates, chooseSidecarArtwork, embedSidecarArtwork, saveEmbeddedArtwork, embedEmbeddedArtwork, searchWebArtwork, saveWebArtwork, clearSelectedAlbumArtwork, toggleAlbumArtworkLock, renderTableHeader, renderTrackRows } = model;
+  const similarAlbums = (model.similarAlbums ?? []) as any[];
+  const similarArtists = (model.similarArtists ?? []) as any[];
+  const similarAlbumsLoading = Boolean(model.similarAlbumsLoading);
+  const similarArtistsLoading = Boolean(model.similarArtistsLoading);
   const [artworkPaused, setArtworkPaused] = useState<Record<ArtworkPane, boolean>>({
     artists: false,
     albums: false,
@@ -55,6 +59,8 @@ export function LibraryCollectionBranches({ model }: { model: any }) {
   }, []);
 
   const activateArtworkUrls = useCallback((urls: Array<string | null>) => {
+    // Album/artist lists render through virtualization; this small LRU-like set
+    // limits active image decoding without blanking covers already on screen.
     const requestedUrls = [...new Set(urls.filter((url): url is string => Boolean(url)))];
     if (requestedUrls.length === 0) {
       return;
@@ -122,6 +128,104 @@ export function LibraryCollectionBranches({ model }: { model: any }) {
     [activeArtworkUrls],
   );
 
+  function renderSimilarScore(score: number) {
+    if (!Number.isFinite(score)) {
+      return "--";
+    }
+    return `${Math.round(score * 100)}%`;
+  }
+
+  function renderSimilarArtistsPanel() {
+    if (!activeArtist) {
+      return null;
+    }
+    return (
+      <div className="border-b border-line bg-panel px-4 py-3">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="text-sm font-semibold text-white">Similar Artists</div>
+            <div className="text-xs text-muted">CLAP vector neighbors from locally analyzed tracks.</div>
+          </div>
+          {similarArtistsLoading && <span className="text-xs uppercase text-muted">Loading</span>}
+        </div>
+        {similarArtists.length > 0 ? (
+          <div className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(100%,10.5rem),1fr))]">
+            {similarArtists.slice(0, 6).map((item) => (
+              <button
+                key={item.artist.name}
+                className="grid min-w-0 gap-1 rounded border border-line/70 bg-ink px-3 py-2 text-left transition hover:border-moss/50 hover:bg-white/[0.035]"
+                type="button"
+                title={`${display(item.artist.name, "Unknown artist")} - ${renderSimilarScore(item.similarity_score)}`}
+                onClick={() => onSelectArtist(item.artist.name)}
+                onDoubleClick={() => void onPlayArtist(item.artist.name)}
+              >
+                <span className="truncate text-sm font-medium text-white">{display(item.artist.name, "Unknown artist")}</span>
+                <span className="truncate text-xs text-muted">{item.artist.track_count.toLocaleString()} tracks - {item.analyzed_tracks.toLocaleString()} analyzed</span>
+                <span className="text-xs tabular-nums text-moss">{renderSimilarScore(item.similarity_score)}</span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded border border-line/70 bg-ink px-3 py-4 text-center text-xs text-muted">
+            {similarArtistsLoading ? "Finding CLAP neighbors..." : "No similar artists yet. Analyze more tracks to fill this in."}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function renderSimilarAlbumsPanel() {
+    if (!activeAlbum) {
+      return null;
+    }
+    return (
+      <div className="border-b border-line bg-panel px-4 py-3">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="text-sm font-semibold text-white">Similar Albums</div>
+            <div className="text-xs text-muted">Averaged CLAP vectors across analyzed album tracks.</div>
+          </div>
+          {similarAlbumsLoading && <span className="text-xs uppercase text-muted">Loading</span>}
+        </div>
+        {similarAlbums.length > 0 ? (
+          <div className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(100%,11rem),1fr))]">
+            {similarAlbums.slice(0, 5).map((item) => {
+              const artwork = item.album.artwork_path || item.album.artwork_track_id ? albumCoverUrl(item.album.id) : null;
+              return (
+                <button
+                  key={item.album.id}
+                  className="grid min-w-0 grid-cols-[42px_minmax(0,1fr)] items-center gap-2 rounded border border-line/70 bg-ink px-2.5 py-2 text-left transition hover:border-moss/50 hover:bg-white/[0.035]"
+                  type="button"
+                  title={`${display(item.album.album, "Unknown album")} - ${renderSimilarScore(item.similarity_score)}`}
+                  onClick={() => onSelectAlbum(item.album.id)}
+                  onDoubleClick={() => void onPlayAlbum(item.album.id)}
+                >
+                  <div className="h-10 w-10 overflow-hidden rounded border border-line bg-panel">
+                    {artwork ? (
+                      <img alt="" className="h-full w-full object-cover" src={artwork} loading="lazy" decoding="async" />
+                    ) : (
+                      <div className="grid h-full w-full place-items-center text-moss">
+                        <Album size={18} />
+                      </div>
+                    )}
+                  </div>
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-medium text-white">{display(item.album.album, "Unknown album")}</span>
+                    <span className="block truncate text-xs text-muted">{display(item.album.album_artist)} - {renderSimilarScore(item.similarity_score)}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="rounded border border-line/70 bg-ink px-3 py-4 text-center text-xs text-muted">
+            {similarAlbumsLoading ? "Finding CLAP neighbors..." : "No similar albums yet. Analyze more album tracks to fill this in."}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <>
               {libraryView === "artists" && (
@@ -186,6 +290,7 @@ export function LibraryCollectionBranches({ model }: { model: any }) {
                     {renderPaneTopButton(artistScrollTop > 120, "Back to top", artistListRef, setArtistScrollTop)}
                   </div>
                   <section className="min-h-0 min-w-0 overflow-auto">
+                    {renderSimilarArtistsPanel()}
                     <table className="w-full table-fixed text-left text-sm" style={{ minWidth: tableWidth }}>
                       <colgroup>
                         <col style={{ width: librarySelectionColumnWidth }} />
@@ -315,10 +420,20 @@ export function LibraryCollectionBranches({ model }: { model: any }) {
                       <div className="border-b border-line bg-panel px-4 py-3">
                         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                           <div>
-                            <div className="text-sm font-semibold text-white">Album Artwork</div>
-                            <div className="text-xs text-muted">{albumArtworkStatus || "Choose a sidecar image or save embedded artwork as cover art."}</div>
+                            <div className="text-sm font-semibold text-white">Album Artwork Versions</div>
+                            <div className="text-xs text-muted">
+                              {albumArtworkStatus || (activeAlbum.artwork_locked ? "Artwork is locked; scans and lookups will keep this cover." : "Choose a sidecar image or save embedded artwork as cover art.")}
+                            </div>
                           </div>
                           <div className="flex flex-wrap gap-2">
+                            <button
+                              className={`secondary-button h-8 ${activeAlbum.artwork_locked ? "border-moss/50 text-moss" : ""}`}
+                              type="button"
+                              onClick={() => void toggleAlbumArtworkLock(activeAlbum.id, !activeAlbum.artwork_locked)}
+                            >
+                              <ShieldCheck size={14} />
+                              {activeAlbum.artwork_locked ? "Locked" : "Lock"}
+                            </button>
                             <button className="secondary-button h-8" type="button" onClick={() => void loadAlbumArtworkCandidates(activeAlbum.id)}>
                               <RefreshCw size={14} />
                               Rescan
@@ -408,6 +523,7 @@ export function LibraryCollectionBranches({ model }: { model: any }) {
                         </div>
                       </div>
                     )}
+                    {renderSimilarAlbumsPanel()}
                     <table className="w-full table-fixed text-left text-sm" style={{ minWidth: tableWidth }}>
                     <colgroup>
                         <col style={{ width: librarySelectionColumnWidth }} />

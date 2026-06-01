@@ -1,15 +1,15 @@
 import { useEffect } from "react";
 
 import {
-  desktopSetDsp,
-  desktopSetVolume,
-  desktopStop,
-  desktopVisualizerFrame,
+desktopSetDsp,
+desktopSetVolume,
+desktopStop,
+desktopVisualizerFrame,
 } from "../../lib/desktopPlayback";
 import {
-  MiniPlayerCommand,
-  miniPlayerChannelName,
-  writeStoredAudioControls,
+MiniPlayerCommand,
+miniPlayerChannelName,
+writeStoredAudioControls,
 } from "../shared";
 
 export function usePlayerBarAudioEffects(ctx: any) {

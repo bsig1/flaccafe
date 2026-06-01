@@ -1,26 +1,35 @@
-import type { FontChoice, ThemeAccent } from "../../config/theme";
 import type {
-  AudioAnalysisCoverage,
-  AudioAnalysisProgress,
-  AutoDjSettings,
-  ClapInstallProgress,
-  QueueTrack,
-  RecommendationDrift,
-  Track,
+AutoDjSettings,
+RecommendationDrift
 } from "../../types/api";
 import type {
-  EqualizerBandMode,
-  FontScale,
-  HistoryColumnKey,
-  KeyboardShortcut,
-  KeyboardShortcutAction,
-  LibraryColumnDefinition,
-  LibraryColumnKey,
-  MetadataColumnKey,
+CrossfadeProfile,
+FontScale,
+HistoryColumnKey,
+KeyboardShortcut,
+KeyboardShortcutAction,
+LibraryColumnDefinition,
+LibraryColumnKey,
+MetadataColumnKey
 } from "./types";
 
 export const LIBRARY_PAGE_SIZE = 150;
 export const DEFAULT_FADE_MS = 500;
+export const crossfadeProfileDurations: Record<Exclude<CrossfadeProfile, "custom">, number> = {
+  off: 0,
+  quick: 250,
+  balanced: DEFAULT_FADE_MS,
+  smooth: 1500,
+  long: 3000,
+};
+export const crossfadeProfileLabels: Record<CrossfadeProfile, string> = {
+  off: "Off",
+  quick: "Quick",
+  balanced: "Balanced",
+  smooth: "Smooth",
+  long: "Long Blend",
+  custom: "Custom",
+};
 export const END_FADE_SECONDS = 1;
 export const QUEUE_HISTORY_LIMIT = 12;
 export const TRACK_CONTEXT_MENU_WIDTH = 256;
@@ -113,7 +122,8 @@ export const legacyStorageKeys = {
   lastSession: "local-autodj-last-session",
 } as const;
 
-export const defaultLibraryVisibleColumns: MetadataColumnKey[] = [
+export const defaultLibraryVisibleColumns: LibraryColumnKey[] = [
+  "play",
   "title",
   "artist",
   "album",
@@ -301,14 +311,15 @@ export const libraryColumnDefinitions: LibraryColumnDefinition[] = [
 
 export const libraryColumnKeys = libraryColumnDefinitions.map((column) => column.key);
 export const libraryColumnKeySet = new Set<MetadataColumnKey>(libraryColumnKeys);
+export const libraryTrackColumnKeySet = new Set<LibraryColumnKey>(["play", ...libraryColumnKeys]);
 export const librarySelectionColumnWidth = 44;
 export const miniPlayerChannelName = "flac-cafe-mini-player";
+export const uiPreferencesChannelName = "flac-cafe-ui-preferences-channel";
 export const autoDjMoodSeedOptions = [
   "energetic",
   "calm",
   "happy",
   "sad",
-  "uplifting",
   "melancholic",
   "dark",
   "bright",
@@ -322,6 +333,7 @@ export const autoDjMoodSeedOptions = [
   "dramatic",
   "danceable",
   "acoustic",
+  "same decade",
 ] as const;
 
 export const defaultLibraryColumnWidths: Record<LibraryColumnKey, number> = {
@@ -379,6 +391,8 @@ export const defaultAutoDj: AutoDjSettings = {
   seed_track_id: null,
   mood_seeds: [],
   mood_seed_weight: 1.4,
+  mood_avoid_seeds: [],
+  mood_avoid_weight: 1.4,
   similarity_weight: 0,
   rating_weight: 1,
   recency_weight: 1,

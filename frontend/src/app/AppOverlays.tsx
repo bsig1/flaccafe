@@ -1,19 +1,19 @@
 import {
-  Clock3,
-  Coffee,
-  ExternalLink,
-  FileText,
-  Library,
-  RadioTower,
-  Settings,
-  UserRound,
-  X,
+Clock3,
+Coffee,
+ExternalLink,
+FileText,
+Library,
+RadioTower,
+Settings,
+UserRound,
+X,
 } from "lucide-react";
 
 import type { AppController } from "./AppController";
 import {
-  DeleteTrackDialog,
-  MetadataEditorModal,
+DeleteTrackDialog,
+MetadataEditorModal,
 } from "./components/modals";
 
 type AppOverlaysProps = {

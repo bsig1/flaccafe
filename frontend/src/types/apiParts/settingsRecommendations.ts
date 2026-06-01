@@ -302,6 +302,8 @@ export interface AutoDjSettings {
   seed_track_id?: number | null;
   mood_seeds?: string[];
   mood_seed_weight?: number;
+  mood_avoid_seeds?: string[];
+  mood_avoid_weight?: number;
   similarity_weight?: number;
   rating_weight?: number;
   recency_weight?: number;

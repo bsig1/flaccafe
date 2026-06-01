@@ -1,6 +1,7 @@
 export interface PlaybackStatus {
   available: boolean;
   current_path: string | null;
+  output_backend: string;
   device_id: string | null;
   device_name: string | null;
   is_playing: boolean;
@@ -49,12 +50,14 @@ export interface PlaybackDiagnosticsResponse {
   prepared_next_path: string | null;
   prepared_next_duration_seconds: number | null;
   prepared_next_at_ms: number | null;
+  output_backend: string;
   device_id: string | null;
   device_name: string | null;
   buffer_frames: number | null;
   sample_rate: number | null;
   channel_count: number | null;
   sample_format: string | null;
+  dropped_frames: number;
 }
 
 export interface desktopAudioDevice {
@@ -89,47 +92,25 @@ export type DesktopPlaybackSource =
   | { kind: "cd_track"; drive_id: string; track_number: number; title?: string | null };
 
 export interface desktopOutputBackend {
-  id: "cpalShared" | "wasapiExclusive" | "asio" | string;
+  id: "cpalShared" | "wasapiExclusive" | string;
   label: string;
   available: boolean;
   exclusive: boolean;
   message: string;
 }
 
+export type DesktopOutputBackendMode = "cpalShared" | "wasapiExclusive";
+
 async function invokeDesktop<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<T>(command, args);
-}
-
-export function desktopPlayFile({
-  path,
-  volume,
-  startSeconds,
-  deviceId,
-  bufferFrames,
-  dspSettings,
-}: {
-  path: string;
-  volume: number;
-  startSeconds?: number | null;
-  deviceId?: string | null;
-  bufferFrames?: number | null;
-  dspSettings?: desktopDspSettings | null;
-}): Promise<PlaybackStatus> {
-  return invokeDesktop<PlaybackStatus>("play_file", {
-    path,
-    volume,
-    startSeconds: startSeconds ?? null,
-    deviceId: deviceId ?? null,
-    bufferFrames: bufferFrames || null,
-    dspSettings: dspSettings ?? null,
-  });
 }
 
 export function desktopPlaySource({
   source,
   volume,
   startSeconds,
+  outputBackend,
   deviceId,
   bufferFrames,
   dspSettings,
@@ -137,6 +118,7 @@ export function desktopPlaySource({
   source: DesktopPlaybackSource;
   volume: number;
   startSeconds?: number | null;
+  outputBackend?: DesktopOutputBackendMode | null;
   deviceId?: string | null;
   bufferFrames?: number | null;
   dspSettings?: desktopDspSettings | null;
@@ -145,34 +127,7 @@ export function desktopPlaySource({
     source,
     volume,
     startSeconds: startSeconds ?? null,
-    deviceId: deviceId ?? null,
-    bufferFrames: bufferFrames || null,
-    dspSettings: dspSettings ?? null,
-  });
-}
-
-export function desktopCrossfadeToFile({
-  path,
-  volume,
-  durationMs,
-  startSeconds,
-  deviceId,
-  bufferFrames,
-  dspSettings,
-}: {
-  path: string;
-  volume: number;
-  durationMs: number;
-  startSeconds?: number | null;
-  deviceId?: string | null;
-  bufferFrames?: number | null;
-  dspSettings?: desktopDspSettings | null;
-}): Promise<PlaybackStatus> {
-  return invokeDesktop<PlaybackStatus>("crossfade_to_file", {
-    path,
-    volume,
-    durationMs,
-    startSeconds: startSeconds ?? null,
+    outputBackend: outputBackend ?? null,
     deviceId: deviceId ?? null,
     bufferFrames: bufferFrames || null,
     dspSettings: dspSettings ?? null,
@@ -184,6 +139,7 @@ export function desktopCrossfadeToSource({
   volume,
   durationMs,
   startSeconds,
+  outputBackend,
   deviceId,
   bufferFrames,
   dspSettings,
@@ -192,6 +148,7 @@ export function desktopCrossfadeToSource({
   volume: number;
   durationMs: number;
   startSeconds?: number | null;
+  outputBackend?: DesktopOutputBackendMode | null;
   deviceId?: string | null;
   bufferFrames?: number | null;
   dspSettings?: desktopDspSettings | null;
@@ -201,6 +158,7 @@ export function desktopCrossfadeToSource({
     volume,
     durationMs,
     startSeconds: startSeconds ?? null,
+    outputBackend: outputBackend ?? null,
     deviceId: deviceId ?? null,
     bufferFrames: bufferFrames || null,
     dspSettings: dspSettings ?? null,
@@ -243,16 +201,16 @@ export function desktopVisualizerFrame(): Promise<desktopVisualizerFrame> {
   return invokeDesktop<desktopVisualizerFrame>("visualizer_frame");
 }
 
+export function desktopSeekWaveform(source: DesktopPlaybackSource, points = 64): Promise<number[]> {
+  return invokeDesktop<number[]>("seek_waveform", { source, points });
+}
+
 export function desktopDiagnostics(): Promise<PlaybackDiagnosticsResponse> {
   return invokeDesktop<PlaybackDiagnosticsResponse>("diagnostics");
 }
 
 export function desktopClearDiagnostics(): Promise<PlaybackDiagnosticsResponse> {
   return invokeDesktop<PlaybackDiagnosticsResponse>("clear_diagnostics");
-}
-
-export function desktopPrepareNextFile(path: string): Promise<desktopPreparedTrack> {
-  return invokeDesktop<desktopPreparedTrack>("prepare_next_file", { path });
 }
 
 export function desktopPrepareNextSource(source: DesktopPlaybackSource): Promise<desktopPreparedTrack> {

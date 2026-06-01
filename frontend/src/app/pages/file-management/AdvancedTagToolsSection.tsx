@@ -1,47 +1,47 @@
 import {
-  Copy,
-  DatabaseBackup,
-  Eye,
-  RotateCcw,
-  Save,
-  Sparkles,
-  Tags,
-  Trash2,
+Copy,
+DatabaseBackup,
+Eye,
+RotateCcw,
+Save,
+Sparkles,
+Tags,
+Trash2,
 } from "lucide-react";
 import {
-  useEffect,
-  useMemo,
-  useState,
+useEffect,
+useMemo,
+useState,
 } from "react";
 
 import {
-  batchCustomTags,
-  copyOrSwapTags,
-  createTagBackup,
-  deleteRegexTagPreset,
-  deleteVirtualTag,
-  fetchRegexTagPresets,
-  fetchTagBackups,
-  fetchVirtualTags,
-  previewVirtualTag,
-  replaceTagsWithRegex,
-  restoreTagBackup,
-  saveRegexTagPreset,
-  saveVirtualTag,
+batchCustomTags,
+copyOrSwapTags,
+createTagBackup,
+deleteRegexTagPreset,
+deleteVirtualTag,
+fetchRegexTagPresets,
+fetchTagBackups,
+fetchVirtualTags,
+previewVirtualTag,
+replaceTagsWithRegex,
+restoreTagBackup,
+saveRegexTagPreset,
+saveVirtualTag,
 } from "../../../lib/api";
 import type {
-  CustomTagBatchResponse,
-  RegexTagPreset,
-  TagBackupResponse,
-  TagBackupRestoreResponse,
-  TagBackupSummary,
-  TagFieldCopySwapResponse,
-  TagRegexReplaceResponse,
-  VirtualTagDefinition,
-  VirtualTagPreviewResponse,
+CustomTagBatchResponse,
+RegexTagPreset,
+TagBackupResponse,
+TagBackupRestoreResponse,
+TagBackupSummary,
+TagFieldCopySwapResponse,
+TagRegexReplaceResponse,
+VirtualTagDefinition,
+VirtualTagPreviewResponse,
 } from "../../../types/api";
 import { DisclosureSection } from "../../components/common";
-import { currentScope, previewLabel } from "./fileManagementUtils";
+import { currentScope,previewLabel } from "./fileManagementUtils";
 
 const CORE_TAG_FIELDS = ["title", "artist", "album", "album_artist", "track_number", "disc_number", "genre", "year", "rating"];
 const REGEX_FIELDS = ["title", "artist", "album", "album_artist", "genre"] as const;

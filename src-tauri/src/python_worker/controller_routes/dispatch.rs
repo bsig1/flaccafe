@@ -321,13 +321,7 @@ pub(super) fn try_handle_json(
         "cancel_cd_rip" => Some(to_json(library::cd::cancel_cd_rip(
             required_param_string(params, "job_id")?,
         )?)?),
-        "play_cd_track_route" => Some(to_json(library::cd::prepare_cd_live_track(body.clone())?)?),
-        "stop_cd_playback_route" => Some(to_json(library::cd::stop_cd_playback())?),
-        "stream_cd_live_audio" => {
-            return Err(
-                "CD live audio is served by flaccafe-media:// cd-live-audio routes.".to_string(),
-            );
-        }
+        "play_cd_track_route" => Some(to_json(library::cd::prepare_cd_playback_track(body.clone())?)?),
         "start_audio_conversion_ffmpeg_install" => Some(to_json(
             library::audio_conversion::start_ffmpeg_install(body.clone())?,
         )?),
@@ -560,12 +554,6 @@ pub(super) fn try_handle_json(
                 body_bool(&body, "delete_files").or_else(|| body_bool(&body, "deleteFiles")),
             )?)?)
         }
-        "validate_gapless_playback" => Some(to_json(library::gapless_validate(
-            state,
-            body_i64_vec(&body, "track_ids"),
-            body_i64(&body, "album_id"),
-            body_usize(&body, "limit"),
-        )?)?),
         "list_albums" => Some(to_json(library::albums(
             state,
             param_string(params, "search"),
@@ -597,9 +585,6 @@ pub(super) fn try_handle_json(
         "search_album_artwork" => Some(to_json(library::online_matching::search_album_artwork(
             required_param_i64(params, "album_id")?,
         )?)?),
-        "artwork_collision_repair" => Some(to_json(
-            library::online_matching::artwork_collision_repair(body.clone())?,
-        )?),
         "list_artists" => Some(to_json(library::artists(
             state,
             param_string(params, "search"),

@@ -30,56 +30,6 @@ pub struct DesktopVolumeTagResponse {
 }
 
 #[derive(Serialize)]
-pub struct DesktopBulkFileMove {
-    pub(crate) source_path: String,
-    pub(crate) target_path: String,
-    pub(crate) changed: bool,
-    pub(crate) applied: bool,
-    pub(crate) error: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct DesktopBulkFileMoveResponse {
-    pub(crate) total: i64,
-    pub(crate) changed: i64,
-    pub(crate) applied: i64,
-    pub(crate) moves: Vec<DesktopBulkFileMove>,
-}
-
-#[derive(Serialize)]
-pub struct DesktopGaplessAudioShape {
-    pub(crate) codec: Option<String>,
-    pub(crate) sample_rate: Option<i64>,
-    pub(crate) channels: Option<i64>,
-    pub(crate) bits_per_sample: Option<i64>,
-    pub(crate) duration_seconds: Option<f64>,
-    pub(crate) estimated_samples: Option<i64>,
-    pub(crate) error: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct DesktopGaplessPairValidation {
-    pub(crate) left_track_id: i64,
-    pub(crate) right_track_id: i64,
-    pub(crate) left_title: Option<String>,
-    pub(crate) right_title: Option<String>,
-    pub(crate) left_shape: DesktopGaplessAudioShape,
-    pub(crate) right_shape: DesktopGaplessAudioShape,
-    pub(crate) metadata_compatible: bool,
-    pub(crate) sample_accurate_ready: bool,
-    pub(crate) warnings: Vec<String>,
-}
-
-#[derive(Serialize)]
-pub struct DesktopGaplessValidationResponse {
-    pub(crate) track_count: i64,
-    pub(crate) pair_count: i64,
-    pub(crate) sample_accurate_ready_count: i64,
-    pub(crate) pairs: Vec<DesktopGaplessPairValidation>,
-    pub(crate) message: String,
-}
-
-#[derive(Serialize)]
 pub struct DesktopPodcastSubscription {
     pub(crate) id: i64,
     pub(crate) title: String,

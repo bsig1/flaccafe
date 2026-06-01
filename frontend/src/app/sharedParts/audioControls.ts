@@ -1,36 +1,28 @@
 import { useEffect } from "react";
-import type { FontChoice, ThemeAccent } from "../../config/theme";
-import type {
-  AudioAnalysisCoverage,
-  AudioAnalysisProgress,
-  AutoDjSettings,
-  ClapInstallProgress,
-  QueueTrack,
-  RecommendationDrift,
-  Track,
-} from "../../types/api";
-import type {
-  EqualizerBandMode,
-  RememberedDeleteChoice,
-  ReplayGainMode,
-} from "./types";
 import {
-  END_FADE_SECONDS,
-  EQ_FREQUENCIES_10,
-  EQ_FREQUENCIES_15,
-  EQUALIZER_GAIN_MAX_DB,
-  EQUALIZER_GAIN_MIN_DB,
-  REPLAYGAIN_TARGET_DEFAULT_PERCENT,
-  REPLAYGAIN_TARGET_LOUD_OFFSET_DB,
-  REPLAYGAIN_TARGET_MAX_PERCENT,
-  REPLAYGAIN_TARGET_MIN_PERCENT,
-  REPLAYGAIN_TARGET_QUIET_OFFSET_DB,
-  storageKeys,
-} from "./constants";
-import {
-  readBooleanFlag,
-  writeBooleanFlag,
+readBooleanFlag,
+writeBooleanFlag,
 } from "../../lib/uiInteractions";
+import type {
+Track
+} from "../../types/api";
+import {
+EQ_FREQUENCIES_10,
+EQ_FREQUENCIES_15,
+EQUALIZER_GAIN_MAX_DB,
+EQUALIZER_GAIN_MIN_DB,
+REPLAYGAIN_TARGET_DEFAULT_PERCENT,
+REPLAYGAIN_TARGET_LOUD_OFFSET_DB,
+REPLAYGAIN_TARGET_MAX_PERCENT,
+REPLAYGAIN_TARGET_MIN_PERCENT,
+REPLAYGAIN_TARGET_QUIET_OFFSET_DB,
+storageKeys
+} from "./constants";
+import type {
+EqualizerBandMode,
+RememberedDeleteChoice,
+ReplayGainMode,
+} from "./types";
 
 export function replayGainMultiplier(
   track: Track | null,
@@ -63,20 +55,28 @@ export function replayGainMultiplier(
 }
 
 export function readMiniPlayerAlwaysOnTop(): boolean {
-  const stored = window.localStorage.getItem(storageKeys.miniPlayerAlwaysOnTop);
-  if (stored !== null) {
-    return readBooleanFlag(window.localStorage, storageKeys.miniPlayerAlwaysOnTop, false);
-  }
   try {
     const prefs = JSON.parse(window.localStorage.getItem(storageKeys.uiPreferences) ?? "{}");
-    return Boolean(prefs.miniPlayerAlwaysOnTop);
+    if (typeof prefs.miniPlayerAlwaysOnTop === "boolean") {
+      return prefs.miniPlayerAlwaysOnTop;
+    }
   } catch {
-    return false;
+    // Fall through to the legacy standalone preference.
   }
+  return readBooleanFlag(window.localStorage, storageKeys.miniPlayerAlwaysOnTop, false);
 }
 
 export function writeMiniPlayerAlwaysOnTop(value: boolean) {
   writeBooleanFlag(window.localStorage, storageKeys.miniPlayerAlwaysOnTop, value);
+  try {
+    const prefs = JSON.parse(window.localStorage.getItem(storageKeys.uiPreferences) ?? "{}");
+    window.localStorage.setItem(
+      storageKeys.uiPreferences,
+      JSON.stringify({ ...prefs, miniPlayerAlwaysOnTop: value }),
+    );
+  } catch {
+    // The standalone flag above is enough for the detached window.
+  }
 }
 
 export function readMiniPlayerSize(): { width: number; height: number } {
@@ -91,9 +91,9 @@ export function readMiniPlayerSize(): { width: number; height: number } {
           : 420;
     const height =
       typeof parsed.height === "number"
-        ? clampNumber(parsed.height, 96, 220)
+        ? clampNumber(parsed.height, 92, 420)
         : typeof prefs.miniPlayerHeight === "number"
-          ? clampNumber(prefs.miniPlayerHeight, 96, 220)
+          ? clampNumber(prefs.miniPlayerHeight, 92, 420)
           : 118;
     return { width, height };
   } catch {
@@ -105,7 +105,7 @@ export function writeMiniPlayerSize(width: number, height: number) {
   try {
     window.localStorage.setItem(
       storageKeys.miniPlayerSize,
-      JSON.stringify({ width: clampNumber(width, 360, 900), height: clampNumber(height, 96, 220) }),
+      JSON.stringify({ width: clampNumber(width, 360, 900), height: clampNumber(height, 92, 420) }),
     );
   } catch {
     // Mini-player size is a convenience preference.

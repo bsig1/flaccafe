@@ -1,24 +1,27 @@
-import type {
-  AdvancedHttpShortcutBinding,
-  HttpShortcutMethod,
-  KeyboardShortcut,
-  KeyboardShortcutAction,
-  MetadataColumnKey,
-} from "./types";
 import {
-  defaultKeyboardShortcuts,
-  defaultLibraryVisibleColumns,
-  libraryColumnKeySet,
+defaultKeyboardShortcuts,
+defaultLibraryVisibleColumns,
+libraryColumnKeySet,
+libraryTrackColumnKeySet,
 } from "./constants";
+import type {
+AdvancedHttpShortcutBinding,
+HttpShortcutMethod,
+KeyboardShortcut,
+KeyboardShortcutAction,
+LibraryColumnKey,
+MetadataColumnKey,
+} from "./types";
 
-export function normalizeLibraryColumns(value: unknown): MetadataColumnKey[] {
-  if (!Array.isArray(value)) {
+export function normalizeLibraryColumns(value: unknown): LibraryColumnKey[] {
+  const source = Array.isArray(value) ? value : defaultLibraryVisibleColumns;
+  const cleaned = source.filter((column): column is LibraryColumnKey => libraryTrackColumnKeySet.has(column as LibraryColumnKey));
+  const unique = Array.from(new Set(cleaned));
+  const metadataColumns = unique.filter((column): column is MetadataColumnKey => libraryColumnKeySet.has(column as MetadataColumnKey));
+  if (metadataColumns.length === 0) {
     return defaultLibraryVisibleColumns;
   }
-
-  const cleaned = value.filter((column): column is MetadataColumnKey => libraryColumnKeySet.has(column as MetadataColumnKey));
-  const unique = Array.from(new Set(cleaned));
-  return unique.length > 0 ? unique : defaultLibraryVisibleColumns;
+  return unique.includes("play") ? unique : ["play", ...unique];
 }
 
 export function normalizeKeyboardShortcuts(value: unknown): Record<KeyboardShortcutAction, KeyboardShortcut> {

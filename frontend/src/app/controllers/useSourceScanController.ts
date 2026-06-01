@@ -1,40 +1,45 @@
-import type { Dispatch, MutableRefObject, SetStateAction } from "react";
-import { useState } from "react";
+import type { Dispatch,MutableRefObject,SetStateAction } from "react";
+import { useRef,useState } from "react";
 
 import {
-  acknowledgeFolderWatchNotifications,
-  applyFolderWatchChanges,
-  fetchFolderWatchStatus,
-  fetchScanProgress,
-  refreshFolderWatch,
-  removeLibrarySource,
-  startFolderWatch,
-  startScanLibrary,
-  stopFolderWatch,
+acknowledgeFolderWatchNotifications,
+applyFolderWatchChanges,
+cancelScanLibrary,
+fetchFolderWatchStatus,
+fetchScanProgress,
+refreshFolderWatch,
+removeLibrarySource,
+startFolderWatch,
+startScanLibrary,
+stopFolderWatch,
 } from "../../lib/api";
 import { desktopRemoveLibrarySource } from "../../lib/desktopLibrary";
 import {
-  FolderWatchMarkEvent,
-  FolderWatchStart,
-  FolderWatchStop,
-  PathInfo,
-  desktopScanAudioPaths,
-  isDesktopBridgeUnavailable,
+FolderWatchMarkEvent,
+FolderWatchStart,
+FolderWatchStop,
+PathInfo,
+desktopScanAudioPaths,
+isDesktopBridgeUnavailable,
 } from "../../lib/desktopPath";
 import type {
-  FolderWatchApplyResponse,
-  FolderWatchStatus,
-  LibrarySourceRemoveResponse,
-  ScanProgress,
-  ScanResult,
-  SettingsResponse,
-  desktopScanSnapshot,
+FolderWatchApplyResponse,
+FolderWatchStatus,
+LibrarySourceRemoveResponse,
+ScanProgress,
+ScanResult,
+SettingsResponse,
+desktopScanSnapshot,
 } from "../../types/api";
 import {
-  sourceFolderKey,
-  uniqueFolderPaths,
+sourceFolderKey,
+uniqueFolderPaths,
 } from "../appHelpers";
 import { formatTime } from "../shared";
+
+export interface SourceScanOptions {
+  cleanupFolderPaths?: string[];
+}
 
 type SourceScanControllerDeps = {
   FolderWatchRefreshTimerRef: MutableRefObject<number | null>;
@@ -71,8 +76,14 @@ export function useSourceScanController({
   const [libraryFolders, setLibraryFolders] = useState<string[]>([]);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
+  const [scanStuck, setScanStuck] = useState(false);
+  const [scanStuckMessage, setScanStuckMessage] = useState<string | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [folderWatchStatus, setFolderWatchStatus] = useState<FolderWatchStatus | null>(null);
+  const activeScanJobIdRef = useRef<string | null>(null);
+  const lastScanRequestRef = useRef<{ paths: string[]; options: SourceScanOptions } | null>(null);
+  const scanCancelRequestedRef = useRef(false);
+  const scanStuckRef = useRef(false);
   async function validateMusicFoldersWithDesktop(paths: string[]) {
     try {
       const infos = await Promise.all(paths.map((path) => PathInfo(path)));
@@ -141,7 +152,7 @@ export function useSourceScanController({
     }
   }
 
-  async function handleScan(pathOverride?: string | string[]) {
+  async function handleScan(pathOverride?: string | string[], options: SourceScanOptions = {}) {
     const targetPaths = uniqueFolderPaths(
       Array.isArray(pathOverride)
         ? pathOverride
@@ -149,10 +160,16 @@ export function useSourceScanController({
           ? [pathOverride]
           : [...libraryFolders, folderPath],
     );
+    const cleanupFolderPaths = uniqueFolderPaths(options.cleanupFolderPaths ?? targetPaths);
     if (targetPaths.length === 0) {
       setStatus("Add at least one music folder path");
       return;
     }
+    lastScanRequestRef.current = { paths: targetPaths, options };
+    scanCancelRequestedRef.current = false;
+    scanStuckRef.current = false;
+    setScanStuck(false);
+    setScanStuckMessage(null);
     setStatus(targetPaths.length === 1 ? "Starting library scan" : `Starting scan of ${targetPaths.length} folders`);
     setIsScanning(true);
     setScanResult(null);
@@ -161,16 +178,51 @@ export function useSourceScanController({
       await validateMusicFoldersWithDesktop(targetPaths);
       const savePaths = pathOverride ? uniqueFolderPaths([...libraryFolders, ...targetPaths]) : targetPaths;
       const desktopSnapshot = await buildDesktopScanSnapshot(targetPaths);
-      const started = await startScanLibrary(targetPaths, savePaths, desktopSnapshot);
+      if (scanCancelRequestedRef.current) {
+        setStatus("Scan cancelled");
+        return;
+      }
+      const started = await startScanLibrary(targetPaths, savePaths, desktopSnapshot, { cleanupFolderPaths });
+      activeScanJobIdRef.current = started.job_id;
       let latest: ScanProgress | null = null;
+      let lastProgressSignature = "";
+      let lastProgressChangedAt = Date.now();
 
       while (true) {
         await new Promise((resolve) => window.setTimeout(resolve, 450));
         latest = await fetchScanProgress(started.job_id);
         setScanProgress(latest);
+        const progressSignature = [
+          latest.status,
+          latest.processed_files,
+          latest.inserted,
+          latest.updated,
+          latest.removed,
+          latest.skipped,
+          latest.current_path ?? "",
+        ].join("|");
+        if (progressSignature !== lastProgressSignature) {
+          lastProgressSignature = progressSignature;
+          lastProgressChangedAt = Date.now();
+          if (scanStuckRef.current) {
+            scanStuckRef.current = false;
+            setScanStuck(false);
+            setScanStuckMessage(null);
+          }
+        } else if (
+          !scanStuckRef.current &&
+          ["counting", "scanning", "cleaning"].includes(latest.status) &&
+          Date.now() - lastProgressChangedAt > 20_000
+        ) {
+          scanStuckRef.current = true;
+          setScanStuck(true);
+          setScanStuckMessage("This scan has not reported new progress for about 20 seconds.");
+        }
 
         if (latest.status === "cleaning") {
           setStatus(`Removing missing tracks (${latest.removed} found)`);
+        } else if (latest.status === "cancelling") {
+          setStatus("Cancelling library scan");
         } else if (latest.total_files > 0) {
           setStatus(
             `Scanning ${latest.processed_files}/${latest.total_files} files - ETA ${formatTime(
@@ -181,13 +233,17 @@ export function useSourceScanController({
           setStatus("Finding audio files");
         }
 
-        if (latest.status === "completed" || latest.status === "failed") {
+        if (latest.status === "completed" || latest.status === "failed" || latest.status === "cancelled") {
           break;
         }
       }
 
       if (latest.status === "failed") {
         setStatus(latest.error ?? "Scan failed");
+        return;
+      }
+      if (latest.status === "cancelled") {
+        setStatus("Scan cancelled");
         return;
       }
 
@@ -228,8 +284,43 @@ export function useSourceScanController({
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Scan failed");
     } finally {
+      activeScanJobIdRef.current = null;
+      scanCancelRequestedRef.current = false;
+      scanStuckRef.current = false;
+      setScanStuck(false);
       setIsScanning(false);
     }
+  }
+
+  async function handleCancelScan() {
+    scanCancelRequestedRef.current = true;
+    scanStuckRef.current = false;
+    setScanStuck(false);
+    setScanStuckMessage(null);
+    const jobId = activeScanJobIdRef.current;
+    if (!jobId) {
+      setIsScanning(false);
+      setStatus("Scan cancelled");
+      return;
+    }
+    try {
+      setStatus("Cancelling library scan");
+      setScanProgress(await cancelScanLibrary(jobId));
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not cancel scan");
+    }
+  }
+
+  async function handleRetryScan() {
+    const request = lastScanRequestRef.current;
+    if (!request) {
+      setStatus("No scan request to retry");
+      return;
+    }
+    await handleCancelScan();
+    window.setTimeout(() => {
+      void handleScan(request.paths, request.options);
+    }, 800);
   }
 
   async function handleRemoveLibrarySource(path: string) {
@@ -511,6 +602,8 @@ export function useSourceScanController({
     setScanResult,
     scanProgress,
     setScanProgress,
+    scanStuck,
+    scanStuckMessage,
     isScanning,
     setIsScanning,
     folderWatchStatus,
@@ -520,6 +613,8 @@ export function useSourceScanController({
     applyFolderWatchStatus,
     loadFolderWatchStatus,
     handleScan,
+    handleCancelScan,
+    handleRetryScan,
     handleRemoveLibrarySource,
     handleStartFolderWatch,
     handleStopFolderWatch,

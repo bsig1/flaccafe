@@ -63,6 +63,7 @@ export interface AdvancedTrackSearchFilters {
   artist?: string;
   album?: string;
   genre?: string;
+  mood?: string;
   path?: string;
   extension?: string;
   rating_state?: AdvancedTrackRatingState;
@@ -96,6 +97,7 @@ export interface AlbumSummary {
   album_ids?: number[];
   edition_count?: number;
   artwork_path?: string | null;
+  artwork_locked?: boolean;
   track_count: number;
   expected_track_count?: number | null;
   missing_track_count?: number;
@@ -162,29 +164,9 @@ export interface AlbumArtworkSearchResponse {
 export interface AlbumArtworkUpdateResponse {
   album_id: number;
   artwork_path: string | null;
+  artwork_locked: boolean;
   candidates: AlbumArtworkCandidate[];
   embedded_updated: number;
-  errors: string[];
-}
-
-export interface AlbumArtworkCollisionIssue {
-  album_id: number;
-  album: string | null;
-  album_artist: string | null;
-  folder: string;
-  shared_artwork_path: string | null;
-  proposed_path: string;
-  source: "embedded" | "selected" | "sidecar";
-  track_count: number;
-  reason: string;
-  repaired: boolean;
-  error: string | null;
-}
-
-export interface AlbumArtworkCollisionResponse {
-  total: number;
-  repaired: number;
-  issues: AlbumArtworkCollisionIssue[];
   errors: string[];
 }
 
@@ -213,6 +195,43 @@ export interface HistoryTrackStat {
   listened_seconds: number;
 }
 
+export interface HistoryAlbumCompletionStat {
+  album: string;
+  album_artist: string | null;
+  track_count: number;
+  played_track_count: number;
+  unplayed_track_count: number;
+  completion_percent: number;
+  duration_seconds: number;
+  last_played_at: string | null;
+  next_track: Track | null;
+}
+
+export interface HistoryRatingStat {
+  rating: number;
+  count: number;
+}
+
+export interface HistoryPeriodStat {
+  period: string;
+  plays: number;
+  skips: number;
+  ratings: number;
+  listened_seconds: number;
+}
+
+export interface HistoryDensityStat {
+  weekday: number;
+  hour: number;
+  plays: number;
+}
+
+export interface LibraryTimelineStat {
+  period: string;
+  tracks: number;
+  duration_seconds: number;
+}
+
 export interface HistoryStatsResponse {
   total_play_count: number;
   total_skip_count: number;
@@ -222,8 +241,21 @@ export interface HistoryStatsResponse {
   unique_played_tracks: number;
   unique_skipped_tracks: number;
   total_listened_seconds: number;
+  albums_completed?: number;
+  albums_tracked?: number;
+  album_completion_percent?: number;
+  completed_albums?: HistoryAlbumCompletionStat[];
+  next_albums?: HistoryAlbumCompletionStat[];
   top_played: HistoryTrackStat[];
   top_skipped: HistoryTrackStat[];
+  rating_distribution?: HistoryRatingStat[];
+  events_by_day?: HistoryPeriodStat[];
+  events_by_week?: HistoryPeriodStat[];
+  events_by_month?: HistoryPeriodStat[];
+  listening_density?: HistoryDensityStat[];
+  library_added_by_day?: LibraryTimelineStat[];
+  library_added_by_week?: LibraryTimelineStat[];
+  library_added_by_month?: LibraryTimelineStat[];
 }
 
 export interface DuplicateGroup {
@@ -246,6 +278,18 @@ export interface SimilarTrack extends Track {
   similarity_score: number;
   similarity_reason: string;
   audio_similarity: number | null;
+}
+
+export interface SimilarAlbum {
+  album: AlbumSummary;
+  similarity_score: number;
+  analyzed_tracks: number;
+}
+
+export interface SimilarArtist {
+  artist: ArtistSummary;
+  similarity_score: number;
+  analyzed_tracks: number;
 }
 
 export interface LibraryHealthResponse {

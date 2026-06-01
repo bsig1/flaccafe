@@ -24,6 +24,23 @@ export interface AudioAnalysisCoverage {
   provider: string;
 }
 
+export interface ClapLabelStat {
+  label: string;
+  count: number;
+  average_confidence: number;
+  max_confidence: number;
+}
+
+export interface ClapLibraryStats {
+  total_tracks: number;
+  analyzed_tracks: number;
+  failed_tracks: number;
+  average_genre_confidence: number | null;
+  average_mood_confidence: number | null;
+  top_genres: ClapLabelStat[];
+  top_moods: ClapLabelStat[];
+}
+
 export interface LyricsResponse {
   track_id: number;
   lyrics: string | null;
@@ -122,7 +139,7 @@ export interface ScanProgress {
   job_id: string;
   folder_path: string;
   folder_paths: string[];
-  status: "pending" | "counting" | "scanning" | "cleaning" | "completed" | "failed";
+  status: "pending" | "counting" | "scanning" | "cleaning" | "cancelling" | "cancelled" | "completed" | "failed";
   total_files: number;
   processed_files: number;
   inserted: number;
@@ -343,7 +360,6 @@ export interface CdRipSetupResponse {
   secure_ripping_available: boolean;
   cd_text_available: boolean;
   accuraterip_available: boolean;
-  active_playback_drive_ids: string[];
   active_rip_drive_ids: string[];
   message: string;
   warnings: string[];
@@ -684,41 +700,5 @@ export interface ScrobbleHistoryImportResponse {
     changes: Record<string, unknown>;
     error?: string | null;
   }>;
-}
-
-export interface GaplessValidationRequest {
-  track_ids?: number[] | null;
-  album_id?: number | null;
-  limit?: number;
-}
-
-export interface GaplessAudioShape {
-  codec: string | null;
-  sample_rate: number | null;
-  channels: number | null;
-  bits_per_sample: number | null;
-  duration_seconds: number | null;
-  estimated_samples: number | null;
-  error: string | null;
-}
-
-export interface GaplessPairValidation {
-  left_track_id: number;
-  right_track_id: number;
-  left_title: string | null;
-  right_title: string | null;
-  left_shape: GaplessAudioShape;
-  right_shape: GaplessAudioShape;
-  metadata_compatible: boolean;
-  sample_accurate_ready: boolean;
-  warnings: string[];
-}
-
-export interface GaplessValidationResponse {
-  track_count: number;
-  pair_count: number;
-  sample_accurate_ready_count: number;
-  pairs: GaplessPairValidation[];
-  message: string;
 }
 

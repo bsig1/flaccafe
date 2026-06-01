@@ -63,9 +63,11 @@ backend/tools/ffmpeg/
 
 # Packaging and installer output
 build-backend/
+build-backend-linux/
 build-backend-console/
 dist-backend/
 dist-backend-console/
+.tmp-linux-package/
 .tmp-*/
 *.msi
 *.wixpdb

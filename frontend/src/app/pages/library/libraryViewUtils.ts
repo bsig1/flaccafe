@@ -1,12 +1,12 @@
 import type {
-  AlbumSummary,
-  ArtistSummary,
-  Track,
+AlbumSummary,
+ArtistSummary,
+Track,
 } from "../../../types/api";
 import {
-  display,
-  formatDuration,
-  trackGenre,
+display,
+formatDuration,
+trackGenre,
 } from "../../shared";
 
 export const COLLECTION_VIRTUAL_OVERSCAN = 8;
@@ -65,8 +65,8 @@ export function artistMetaLabel(artist: ArtistSummary): string {
   return [
     `${artist.track_count} track${artist.track_count === 1 ? "" : "s"}`,
     `${artist.album_count} album${artist.album_count === 1 ? "" : "s"}`,
-    formatDuration(artist.duration_seconds),
     artistYearsLabel(artist),
+    formatDuration(artist.duration_seconds),
   ]
     .filter(Boolean)
     .join(" - ");

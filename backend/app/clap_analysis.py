@@ -3,7 +3,6 @@ from __future__ import annotations
 import importlib
 from importlib.machinery import PathFinder
 import importlib.util
-import json
 import math
 import re
 import unicodedata
@@ -13,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import MODEL_DIR
-from .database import connect, get_setting, invalidate_library_query_cache, set_setting
+from .database import connect, get_setting, set_setting
 from .ml_runtime import activate_ml_runtime, ml_runtime_site_packages, runtime_status, use_managed_ml_runtime
 
 
@@ -61,7 +60,6 @@ MOOD_LABELS = [
     "calm",
     "happy",
     "sad",
-    "uplifting",
     "melancholic",
     "dark",
     "bright",
@@ -76,6 +74,7 @@ MOOD_LABELS = [
     "danceable",
     "acoustic",
 ]
+MOOD_LABEL_BIAS = {}
 DEPENDENCY_NAMES = ("torch", "transformers", "librosa", "soundfile", "soxr")
 
 
@@ -382,10 +381,6 @@ def _mojibake_repair_candidates(value: str) -> list[str]:
     return unique
 
 
-def _path_lookup_key(path: Path) -> str:
-    return _normalized_path_text(path.name).casefold()
-
-
 def _lossy_name_pattern(name: str) -> re.Pattern[str] | None:
     if "?" not in name and "\ufffd" not in name:
         return None
@@ -442,6 +437,8 @@ def sample_offsets(
     samples_per_track: int,
     window_seconds: float = CLAP_SAMPLE_WINDOW_SECONDS,
 ) -> list[float]:
+    # CLAP was trained around short windows, so spread fixed-size samples across
+    # the song instead of feeding one long excerpt that can bias toward a section.
     count = _bounded_samples_per_track(samples_per_track)
     if duration_seconds is None or duration_seconds <= 0:
         return [0.0]
@@ -469,6 +466,19 @@ def _average_rows(rows: list[list[float]]) -> list[float]:
         sum(float(row[index]) for row in rows) / len(rows)
         for index in range(width)
     ]
+
+
+def _apply_label_bias(probabilities: list[float], labels: list[str], bias: dict[str, float]) -> list[float]:
+    if not probabilities:
+        return probabilities
+    adjusted = [
+        max(0.0, value * bias.get(label, 1.0))
+        for value, label in zip(probabilities, labels, strict=False)
+    ]
+    total = sum(adjusted)
+    if total <= 0:
+        return probabilities
+    return [value / total for value in adjusted]
 
 
 def _normalized_average_embedding(rows: list[list[float]]) -> list[float]:
@@ -561,6 +571,8 @@ class ClapAnalyzer:
             audio_batch.extend(audio_samples)
             sample_ranges.append((index, track_id, start, len(audio_batch)))
 
+        # Flatten all windows into one model call, then slice the probability
+        # rows back to each track. This is where CPU/GPU batching pays off.
         genre_probability_rows, mood_probability_rows, embeddings = self._analyze_audio_features(audio_batch)
         updated_at = utc_now()
         for index, track_id, start, end in sample_ranges:
@@ -613,6 +625,8 @@ class ClapAnalyzer:
         )
         audio_samples = []
         errors = []
+        # Keep usable windows even if one offset fails; bad files should not
+        # poison the whole batch when a later section can still decode.
         for offset in offsets:
             try:
                 audio, _sample_rate = self.librosa.load(
@@ -632,25 +646,6 @@ class ClapAnalyzer:
                 raise RuntimeError(f"Audio decoder returned no samples. Decoder errors: {detail}")
             raise RuntimeError("Audio decoder returned no samples.")
         return audio_samples
-
-    def _analyze_audio_batch(self, audio_batch: list[Any], top_n: int) -> list[AudioAnalysis]:
-        genre_probability_rows, mood_probability_rows, embeddings = self._analyze_audio_features(audio_batch)
-        updated_at = utc_now()
-        return [
-            self._analysis_from_features(
-                [genre_probabilities],
-                [mood_probabilities],
-                [embedding],
-                top_n,
-                updated_at,
-            )
-            for genre_probabilities, mood_probabilities, embedding in zip(
-                genre_probability_rows,
-                mood_probability_rows,
-                embeddings,
-                strict=True,
-            )
-        ]
 
     def _analyze_track_samples(self, audio_samples: list[Any], top_n: int) -> AudioAnalysis:
         genre_probability_rows, mood_probability_rows, embeddings = self._analyze_audio_features(audio_samples)
@@ -689,7 +684,11 @@ class ClapAnalyzer:
         updated_at: str,
     ) -> AudioAnalysis:
         genre_probabilities = _average_rows(genre_probability_rows)
-        mood_probabilities = _average_rows(mood_probability_rows)
+        mood_probabilities = _apply_label_bias(
+            _average_rows(mood_probability_rows),
+            MOOD_LABELS,
+            MOOD_LABEL_BIAS,
+        )
         embedding = _normalized_average_embedding(embeddings)
         tags = self._top_tags(genre_probabilities, GENRE_LABELS, top_n)
         genre, confidence = next(iter(tags.items()), (None, None))
@@ -730,39 +729,3 @@ def analysis_to_payload(analysis: AudioAnalysis) -> dict[str, Any]:
         "model": analysis.model,
         "updated_at": analysis.updated_at,
     }
-
-
-def save_track_analysis(track_id: int, analysis: AudioAnalysis) -> None:
-    with connect() as conn:
-        conn.execute(
-            """
-            UPDATE tracks
-            SET analysis_provider = ?,
-                analysis_model = ?,
-                analysis_genre = ?,
-                analysis_genre_confidence = ?,
-                analysis_genre_tags = ?,
-                analysis_mood = ?,
-                analysis_mood_confidence = ?,
-                analysis_mood_tags = ?,
-                analysis_embedding = ?,
-                analysis_updated_at = ?,
-                updated_at = datetime('now')
-            WHERE id = ?
-            """,
-            (
-                analysis.provider,
-                analysis.model,
-                analysis.genre,
-                analysis.confidence,
-                json.dumps(analysis.tags, ensure_ascii=True, sort_keys=True),
-                analysis.mood,
-                analysis.mood_confidence,
-                json.dumps(analysis.mood_tags, ensure_ascii=True, sort_keys=True),
-                json.dumps(analysis.embedding, ensure_ascii=True),
-                analysis.updated_at,
-                track_id,
-            ),
-        )
-        invalidate_library_query_cache(conn)
-        conn.commit()

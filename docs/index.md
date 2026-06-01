@@ -8,7 +8,7 @@ Start here when you need the maintainer or user docs without hunting through the
 - [Troubleshooting](troubleshooting.md): Python runtime startup, codec support, installer, and optional ML runtime checks.
 - [Themes](themes.md): JSON theme files, fonts, and where local theme folders live.
 - [Extensions And Skins](extensions.md): manifest package shape for skins and future plugins.
-- [Playback](playback.md): WebView playback, experimental Rust playback, fades, queue behavior, and diagnostics.
+- [Playback](playback.md): Rust playback, fades, queue behavior, output modes, and diagnostics.
 - [CLAP Analysis](clap-analysis.md): optional audio analysis runtime, CPU/CUDA choices, and validation.
 - [Library Tools](library-tools.md): duplicate review, filename-to-tag inference, file organization, and undo.
 - [CSV Metadata Cleanup](csv-metadata-cleanup.md): spreadsheet export/import workflow for metadata fixes.
@@ -21,7 +21,7 @@ Start here when you need the maintainer or user docs without hunting through the
 - [Rust Route Migration Checklist](rust-route-migration-checklist.md): parity and cleanup checklist for moving deterministic work into Rust.
 - [Database Maintenance](database-maintenance.md): SQLite storage, backups, cleanup, and generated data.
 - [Testing](testing.md): frontend, backend, browser, and package-oriented checks.
-- [Release Checklist](release-checklist.md): MSI release validation.
+- [Release Checklist](release-checklist.md): Windows and Linux package validation.
 - [Release Documentation Checklist](release-documentation-checklist.md): docs updates before publishing.
 - [Third-Party Notices](../THIRD_PARTY_NOTICES.md): bundled binary disclosures and source links.
 - [Security Policy](../SECURITY.md): vulnerability reporting and security-sensitive areas.

@@ -16,6 +16,7 @@ pub(super) fn try_handle_track_json(
             param_string(params, "artist"),
             param_string(params, "album"),
             param_string(params, "genre"),
+            param_string(params, "mood"),
             param_string(params, "path"),
             param_string(params, "extension"),
             param_string(params, "rating_state").or_else(|| param_string(params, "ratingState")),
@@ -40,6 +41,7 @@ pub(super) fn try_handle_track_json(
                 param_string(params, "artist"),
                 param_string(params, "album"),
                 param_string(params, "genre"),
+                param_string(params, "mood"),
                 param_string(params, "path"),
                 param_string(params, "extension"),
                 param_string(params, "rating_state")

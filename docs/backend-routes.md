@@ -64,7 +64,6 @@ Rust owns the app-facing API shape in `src-tauri/src/python_worker/routes/table.
 - `POST /library/tools/clap-genre-tags` previews or applies CLAP genre predictions to editable track Genre tags.
 - `POST /library/tools/volume-tags` previews or applies FFmpeg-analyzed ReplayGain-style volume tags.
 - `POST /library/tools/write-metadata-to-files` previews or applies SQLite metadata/rating values back into supported audio files.
-- `POST /library/tools/artwork-collisions` previews or repairs folders where multiple albums share one folder-level cover.
 - `POST /library/tools/organize-files` previews or applies tag-based file moves.
 - `POST /library/tools/organize-files/report` writes a JSON file-organization preview report.
 - `POST /library/tools/device-sync` previews or applies folder/device copy jobs and playlist exports.
@@ -87,11 +86,7 @@ Rust owns the app-facing API shape in `src-tauri/src/python_worker/routes/table.
 - `POST /library/tools/cd-rip/jobs` starts a background CD ripping job to FLAC, MP3, or WAV.
 - `GET /library/tools/cd-rip/jobs/{job_id}` returns CD ripping progress and verification hashes.
 - `POST /library/tools/cd-rip/jobs/{job_id}/cancel` cancels a CD ripping job after the current track finishes.
-- `POST /library/tools/cd-rip/playback/play` prepares selected CD tracks for playback through the main player.
-- `HEAD /library/tools/cd-rip/playback/live/audio` is the legacy HTTP-shaped CD stream header route; desktop playback now uses the Rust media URL returned by `play`.
-- `GET /library/tools/cd-rip/playback/live/audio` is the legacy HTTP-shaped CD stream route; desktop playback now uses the Rust media URL returned by `play`.
-- `flaccafe-media://localhost/cd-live-audio/{drive}/{track}/{token}` streams the selected CD track as live WAV audio through Rust's local media protocol.
-- `POST /library/tools/cd-rip/playback/stop` stops Windows CD audio playback.
+- `POST /library/tools/cd-rip/playback/play` prepares selected CD tracks for Rust playback through the main player.
 - `POST /library/tools/export-metadata-csv` exports track metadata for spreadsheet cleanup.
 - `POST /library/tools/import-metadata-csv` previews or applies spreadsheet metadata changes.
 - `POST /library/tools/import-metadata-csv/report` writes a JSON dry-run import report.
@@ -113,7 +108,6 @@ Rust owns the app-facing API shape in `src-tauri/src/python_worker/routes/table.
 
 ## Playback Assets And Context
 
-- `HEAD /tracks/{track_id}/audio` and `GET /tracks/{track_id}/audio` stream local audio through WebView2.
 - `GET /tracks/{track_id}/artwork` returns embedded or cached artwork.
 - `GET /tracks/{track_id}/lyrics` returns embedded/database lyrics.
 - `POST /tracks/{track_id}/lyrics/fetch` attempts online lyric lookup.
@@ -146,8 +140,6 @@ Rust owns the app-facing API shape in `src-tauri/src/python_worker/routes/table.
 - `POST /scrobbling/outbox/queue-history` queues local played events for a service.
 - `POST /scrobbling/outbox/submit` submits queued scrobbles to ListenBrainz or Last.fm.
 - `POST /scrobbling/import-history` previews or applies a CSV import of historical play counts, ratings, and loved tracks.
-- `POST /playback/gapless/validate` inspects adjacent tracks for codec/output metadata compatibility before gapless playback claims.
-
 ## Albums, Playlists, And Legacy Smart Rules
 
 - `GET /albums` lists album summaries.

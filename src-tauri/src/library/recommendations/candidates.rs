@@ -259,6 +259,8 @@ fn score_vector_target_similarity(value: Option<&str>, targets: &[String]) -> Op
     if target_count == 0 {
         return None;
     }
+    // Mood tags are a probability vector, not a single label. Compare the target
+    // mood set against the whole vector so mixed moods still get partial credit.
     let score_norm = scores.values().map(|value| value * value).sum::<f64>().sqrt();
     if score_norm <= 0.0 {
         return None;
@@ -274,24 +276,46 @@ pub(super) fn mood_seed_adjustment(
     track: &DesktopTrack,
     settings: &DesktopAutoDjSettings,
 ) -> (f64, String) {
-    if settings.mood_seeds.is_empty() || settings.mood_seed_weight <= 0.0 {
+    let mood_seeds = settings
+        .mood_seeds
+        .iter()
+        .filter(|seed| seed.as_str() != "same decade")
+        .cloned()
+        .collect::<Vec<_>>();
+    let mood_avoid_seeds = settings
+        .mood_avoid_seeds
+        .iter()
+        .filter(|seed| seed.as_str() != "same decade")
+        .cloned()
+        .collect::<Vec<_>>();
+    if (mood_seeds.is_empty() || settings.mood_seed_weight <= 0.0)
+        && (mood_avoid_seeds.is_empty() || settings.mood_avoid_weight <= 0.0)
+    {
         return (0.0, String::new());
     }
-    let Some(similarity) =
-        score_vector_target_similarity(track.analysis_mood_tags.as_deref(), &settings.mood_seeds)
-    else {
-        return (0.0, String::new());
-    };
-    if similarity <= 0.0 {
-        return (0.0, String::new());
+    let mut score = 0.0;
+    let mut reasons = Vec::new();
+    if !mood_seeds.is_empty() && settings.mood_seed_weight > 0.0 {
+        if let Some(similarity) =
+            score_vector_target_similarity(track.analysis_mood_tags.as_deref(), &mood_seeds)
+        {
+            if similarity > 0.0 {
+                score += similarity * settings.mood_seed_weight;
+                reasons.push(format!("mood seed {} {similarity:.2}", mood_seeds.join("/")));
+            }
+        }
     }
-    (
-        similarity * settings.mood_seed_weight,
-        format!(
-            "mood seed {} {similarity:.2}",
-            settings.mood_seeds.join("/")
-        ),
-    )
+    if !mood_avoid_seeds.is_empty() && settings.mood_avoid_weight > 0.0 {
+        if let Some(similarity) =
+            score_vector_target_similarity(track.analysis_mood_tags.as_deref(), &mood_avoid_seeds)
+        {
+            if similarity > 0.0 {
+                score -= similarity * settings.mood_avoid_weight;
+                reasons.push(format!("avoid mood {} {similarity:.2}", mood_avoid_seeds.join("/")));
+            }
+        }
+    }
+    (score, reasons.join("/"))
 }
 
 pub(super) fn similarity_adjustment(

@@ -1,90 +1,96 @@
-import {
-  useEffect,
-  useState,
-} from "react";
 import type {
-  CSSProperties,
+CSSProperties,
+} from "react";
+import {
+useEffect,
+useState,
 } from "react";
 
 import {
-  Disc3,
-  EyeOff,
-  ExternalLink,
-  Fingerprint,
-  FolderOpen,
-  KeyRound,
-  Podcast,
-  Search,
-  Star,
-  X,
+Disc3,
+ExternalLink,
+EyeOff,
+Fingerprint,
+FolderOpen,
+KeyRound,
+Podcast,
+RotateCcw,
+Search,
+Star,
+X,
 } from "lucide-react";
 
 import type {
-  FontChoice,
-  ThemeAccent,
+FontChoice,
+ThemeAccent,
+ThemeColorKey,
+ThemeColorOverrideValue,
+ThemePalette,
 } from "../../config/theme";
 import {
-  fontChoiceLabels,
-  sidebarWidthDefaultPx,
-  sidebarWidthMaxPx,
-  sidebarWidthMinPx,
-  sidebarWidthStepPx,
-  themeAccentLabels,
-  themeOrder,
-  themeAccentValues,
+fontChoiceLabels,
+resolveThemeColor,
+sidebarWidthDefaultPx,
+sidebarWidthMaxPx,
+sidebarWidthMinPx,
+sidebarWidthStepPx,
+themeAccentLabels,
+themeAccentValues,
+themeColorCssVariables,
+themeColorKeys,
+themeColorLabels,
+themeOrder,
 } from "../../config/theme";
 import {
-  desktopClearDiagnostics,
-  desktopDiagnostics,
-  desktopListOutputDevices,
-  desktopOutputBackends,
-} from "../../lib/desktopPlayback";
+cancelBulkLyricsLookup,
+fetchBulkLyricsLookupProgress,
+startBulkLyricsLookup,
+} from "../../lib/api";
 import type {
-  desktopAudioDevice,
-  desktopOutputBackend,
-  PlaybackDiagnosticsResponse,
+PlaybackDiagnosticsResponse,
+desktopAudioDevice,
+desktopOutputBackend,
 } from "../../lib/desktopPlayback";
+import {
+desktopClearDiagnostics,
+desktopDiagnostics,
+desktopListOutputDevices,
+desktopOutputBackends,
+} from "../../lib/desktopPlayback";
+import {
+openExternalUrl,
+} from "../../lib/externalLinks";
 import type {
-  BulkLyricsProgress,
-  BulkLyricsSaveLocation,
-  LogTailResponse,
-  SettingsResponse,
-  StartupDiagnosticsResponse,
+BulkLyricsProgress,
+BulkLyricsSaveLocation,
+LogTailResponse,
+SettingsResponse,
+StartupDiagnosticsResponse,
+Track,
 } from "../../types/api";
 import {
-  cancelBulkLyricsLookup,
-  fetchBulkLyricsLookupProgress,
-  startBulkLyricsLookup,
-} from "../../lib/api";
-import {
-  openExternalUrl,
-} from "../../lib/externalLinks";
-import {
-  DisclosureAccordionProvider,
-  DisclosureSection,
+DisclosureAccordionProvider,
+DisclosureSection,
 } from "../components/common";
 import {
-  BackendStatus,
-  CheckboxAccentPreference,
-  CheckboxUncheckedPreference,
-  FontScalePreference,
-  Page,
-  RememberedDeleteChoice,
-  SidebarPlacement,
-  SidebarWidthPreference,
-  UiDensityPreference,
-  UiPreferences,
-  clearRememberedDeleteChoice,
-  readRememberedDeleteChoice,
-  writeRememberedDeleteChoice,
+BackendStatus,
+CheckboxAccentPreference,
+CheckboxUncheckedPreference,
+FontScalePreference,
+Page,
+RememberedDeleteChoice,
+SidebarPlacement,
+SidebarWidthPreference,
+UiDensityPreference,
+UiPreferences,
+clearRememberedDeleteChoice,
+readRememberedDeleteChoice,
+writeRememberedDeleteChoice,
 } from "../shared";
-import { KeyboardShortcutsSection } from "./settings/KeyboardShortcutsSection";
 import { ExtensionsSection } from "./settings/ExtensionsSection";
+import { KeyboardShortcutsSection } from "./settings/KeyboardShortcutsSection";
 import { MaintenanceSection } from "./settings/MaintenanceSection";
-import {
-  PlayerSettingsSection,
-  detectCodecSupport,
-} from "./settings/PlayerSettingsSection";
+import { PlayerSettingsSection } from "./settings/PlayerSettingsSection";
 
 const LASTFM_API_URL = "https://www.last.fm/api";
 const ACOUSTID_API_KEY_URL = "https://acoustid.org/api-key";
@@ -122,6 +128,105 @@ const sidebarWidthSliderValues: SidebarWidthPreference[] = [
     (_, index) => sidebarWidthMinPx + index * sidebarWidthStepPx,
   ),
 ];
+const libraryPreviewRows = [
+  { title: "Midnight Roast", artist: "The Cups", album: "Night Shift", checked: true },
+  { title: "Window Seat", artist: "Cafe Sketch", album: "Soft Light", checked: false },
+];
+
+function themeColorSelectValue(preferences: UiPreferences, key: ThemeColorKey): ThemeColorOverrideValue {
+  return preferences.themeColorOverrides[key] ?? "theme";
+}
+
+function setThemeColorOverride(
+  preferences: UiPreferences,
+  key: ThemeColorKey,
+  value: ThemeColorOverrideValue,
+): UiPreferences {
+  const nextOverrides = { ...preferences.themeColorOverrides };
+  if (value === "theme") {
+    delete nextOverrides[key];
+  } else {
+    nextOverrides[key] = value;
+  }
+  return { ...preferences, themeColorOverrides: nextOverrides };
+}
+
+function rgbTripletToHex(value: string): string {
+  const channels = value
+    .split(/\s+/)
+    .map((part) => Number.parseInt(part, 10))
+    .filter((channel) => Number.isFinite(channel))
+    .slice(0, 3);
+  if (channels.length !== 3) {
+    return `rgb(${value})`;
+  }
+  return `#${channels.map((channel) => Math.max(0, Math.min(255, channel)).toString(16).padStart(2, "0")).join("").toUpperCase()}`;
+}
+
+function themeColorOptionLabel(themeDefaults: ThemePalette, key: ThemeColorKey): string {
+  return `${rgbTripletToHex(themeDefaults[key])} - ${themeColorLabels[key]}`;
+}
+
+function libraryPreviewStyle(
+  preferences: UiPreferences,
+  themeDefaults: ThemePalette,
+): CSSProperties {
+  const style: Record<string, string> = {};
+  for (const key of themeColorKeys) {
+    style[themeColorCssVariables[key]] = resolveThemeColor(themeDefaults, preferences.themeColorOverrides, key);
+  }
+  const selectedCheckboxAccent =
+    preferences.checkboxAccent === "theme" ? themeDefaults.checkboxAccent : preferences.checkboxAccent;
+  const selectedCheckboxUnchecked =
+    preferences.checkboxUnchecked === "theme" ? themeDefaults.checkboxUnchecked : preferences.checkboxUnchecked;
+  style["--checkbox-accent"] = resolveThemeColor(themeDefaults, preferences.themeColorOverrides, selectedCheckboxAccent);
+  style["--checkbox-unchecked"] = resolveThemeColor(themeDefaults, preferences.themeColorOverrides, selectedCheckboxUnchecked);
+  return style as CSSProperties;
+}
+
+function LibraryCustomizationPreview({
+  uiPreferences,
+  themeDefaults,
+}: {
+  uiPreferences: UiPreferences;
+  themeDefaults: ThemePalette;
+}) {
+  const density = uiPreferences.density === "theme" ? themeDefaults.density : uiPreferences.density;
+  const compact = density === "compact";
+  return (
+    <div className="grid gap-2 rounded border border-line/70 bg-[rgb(var(--color-quiet))] p-3" style={libraryPreviewStyle(uiPreferences, themeDefaults)}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-xs font-medium uppercase text-muted">Library Preview</div>
+        <div className="rounded border border-line bg-[rgb(var(--color-panel))] px-2 py-1 text-[11px] text-muted">
+          {compact ? "Compact" : "Comfortable"}
+        </div>
+      </div>
+      <div className="overflow-hidden rounded border border-line bg-[rgb(var(--color-panel))]">
+        <div className="grid grid-cols-[2rem_minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)_4rem] border-b border-line bg-[rgb(var(--color-strip))] px-2 py-2 text-[11px] uppercase text-muted">
+          <span />
+          <span>Title</span>
+          <span>Artist</span>
+          <span>Album</span>
+          <span className="text-right">Rating</span>
+        </div>
+        {libraryPreviewRows.map((row, index) => (
+          <div
+            key={row.title}
+            className={`grid grid-cols-[2rem_minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)_4rem] items-center gap-0 border-b border-line/60 px-2 text-sm last:border-b-0 ${
+              index === 0 ? "bg-[rgb(var(--color-hover-panel))]" : "bg-[rgb(var(--color-subtle))]"
+            } ${compact ? "h-9" : "h-12"}`}
+          >
+            <input aria-label={`Select ${row.title}`} checked={row.checked} readOnly tabIndex={-1} type="checkbox" />
+            <span className="truncate font-medium text-white">{row.title}</span>
+            <span className="truncate text-muted">{row.artist}</span>
+            <span className="truncate text-muted">{row.album}</span>
+            <span className="text-right text-ember">{index === 0 ? "4.5" : "3.0"}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function bulkLyricsStatusText(progress: BulkLyricsProgress) {
   if (progress.status === "completed") {
@@ -154,6 +259,8 @@ export function SettingsPage({
   setHideFilePaths,
   uiPreferences,
   setUiPreferences,
+  currentTrack,
+  playbackQueue,
   writeRatingsToFiles,
   onWriteRatingsToFilesChange,
   autoWriteFetchedLyricsSidecars,
@@ -170,6 +277,7 @@ export function SettingsPage({
   onCopySupportBundlePath,
   onOpenSourceFolder,
   onOpenThemeFolder,
+  onOpenLyricsFolder,
   onClearArtistCache,
 }: {
   settings: SettingsResponse | null;
@@ -188,6 +296,8 @@ export function SettingsPage({
   setHideFilePaths: (value: boolean) => void;
   uiPreferences: UiPreferences;
   setUiPreferences: (updater: (current: UiPreferences) => UiPreferences) => void;
+  currentTrack: Track | null;
+  playbackQueue: Track[];
   writeRatingsToFiles: boolean;
   onWriteRatingsToFilesChange: (value: boolean) => void;
   autoWriteFetchedLyricsSidecars: boolean;
@@ -204,9 +314,9 @@ export function SettingsPage({
   onCopySupportBundlePath: () => void;
   onOpenSourceFolder: () => void;
   onOpenThemeFolder: () => void;
+  onOpenLyricsFolder: () => void;
   onClearArtistCache: () => void;
 }) {
-  const [codecSupport, setCodecSupport] = useState(detectCodecSupport);
   const [desktopDevices, setDesktopDevices] = useState<desktopAudioDevice[]>([]);
   const [desktopBackends, setDesktopBackends] = useState<desktopOutputBackend[]>([]);
   const [desktopDeviceMessage, setDesktopDeviceMessage] = useState<string | null>(null);
@@ -244,10 +354,10 @@ export function SettingsPage({
   const showSettingsSection = (...keywords: string[]) =>
     !settingsQuery || keywords.join(" ").toLowerCase().includes(settingsQuery);
   const visibleSettingsGroups = [
-    showSettingsSection("library preferences display ratings metadata startup theme font density sidebar width position alignment checkbox color checked unchecked accent podcasts file paths delete recycle remember"),
+    showSettingsSection("library preferences display ratings stars numbers metadata startup theme font density sidebar width position alignment checkbox color colors roles preview checked unchecked accent podcasts file paths delete recycle remember"),
     showSettingsSection("api keys online metadata lastfm last.fm scrobbling acoustid acoustic fingerprint musicbrainz lookup autotag"),
     showSettingsSection("keyboard shortcuts hotkeys local playback controls media keys"),
-    showSettingsSection("player playback audio output lyrics lyric bulk lookup preload autofetch lrc sidecar cache follow equalizer replaygain fade skip codec rust"),
+    showSettingsSection("player playback audio output mini player mini-player detached opacity layout window queue lyrics lyric bulk lookup preload autofetch lrc sidecar cache follow equalizer replaygain fade skip codec rust"),
     showSettingsSection("maintenance backend diagnostics database support bundle source folder logs cache reset local data"),
     showSettingsSection("extensions skins plugins themes manifest customization"),
   ].filter(Boolean).length;
@@ -305,7 +415,7 @@ export function SettingsPage({
       setDesktopBackends([
         {
           id: "cpalShared",
-          label: "CPAL / WASAPI shared",
+          label: "CPAL shared",
           available: false,
           exclusive: false,
           message: "Rust audio backend information is only available in the desktop app.",
@@ -503,7 +613,7 @@ export function SettingsPage({
             </div>
           )}
 
-          {showSettingsSection("library preferences display ratings metadata startup theme font density sidebar width position alignment checkbox color checked unchecked accent podcasts file paths delete recycle remember") && (
+          {showSettingsSection("library preferences display ratings metadata startup theme font density sidebar width position alignment checkbox color colors roles preview checked unchecked accent podcasts file paths delete recycle remember") && (
           <DisclosureSection title="Library Preferences" description="Display, rating storage, and startup behavior">
             <div className="grid gap-3 text-sm text-neutral-200">
               <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-ink p-3">
@@ -653,7 +763,7 @@ export function SettingsPage({
               </div>
 
               <div className="grid gap-3 rounded border border-line/70 bg-ink p-3">
-                <div className="font-medium text-white">Theme</div>
+                <div className="font-medium text-white">Library Customization</div>
                 <label className="grid gap-2">
                   <span className="text-xs uppercase text-muted">Accent</span>
                   <select
@@ -674,6 +784,24 @@ export function SettingsPage({
                   <FolderOpen size={15} />
                   Show Theme Folder
                 </button>
+                <LibraryCustomizationPreview uiPreferences={uiPreferences} themeDefaults={themeDefaults} />
+                <label className="flex items-center justify-between gap-4 rounded border border-line/70 bg-ink p-3">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <Star className="shrink-0 text-ember" size={18} />
+                    <div className="min-w-0">
+                      <div className="font-medium text-white">Display ratings as numbers</div>
+                      <div className="text-xs text-muted">Shows ratings as 4.5 instead of star icons in the library and player.</div>
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 shrink-0 accent-ember"
+                    checked={uiPreferences.displayRatingsAsNumbers}
+                    onChange={(event) =>
+                      setUiPreferences((current) => ({ ...current, displayRatingsAsNumbers: event.target.checked }))
+                    }
+                  />
+                </label>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <label className="grid gap-2">
                     <span className="text-xs uppercase text-muted">Checkbox Color</span>
@@ -802,6 +930,56 @@ export function SettingsPage({
                       ))}
                     </select>
                   </label>
+                </div>
+                <div className="grid gap-3 rounded border border-line/70 bg-panel p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="font-medium text-white">Color Roles</div>
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => setUiPreferences((current) => ({ ...current, themeColorOverrides: {} }))}
+                    >
+                      <RotateCcw size={14} />
+                      Reset Colors
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(100%,16rem),1fr))]">
+                    {themeColorKeys.map((colorKey) => {
+                      const currentValue = themeColorSelectValue(uiPreferences, colorKey);
+                      const previewColor = resolveThemeColor(themeDefaults, uiPreferences.themeColorOverrides, colorKey);
+                      return (
+                        <label key={colorKey} className="grid min-w-0 gap-2">
+                          <span className="flex items-center justify-between gap-3 text-xs uppercase text-muted">
+                            <span>{themeColorLabels[colorKey]}</span>
+                            <span
+                              className="h-4 w-4 rounded border border-white/20"
+                              style={{ backgroundColor: `rgb(${previewColor})` }}
+                            />
+                          </span>
+                          <select
+                            className="h-9 w-full min-w-0 rounded border border-line bg-ink px-3 text-white outline-none ring-moss/40 focus:ring-2"
+                            value={currentValue}
+                            onChange={(event) =>
+                              setUiPreferences((current) =>
+                                setThemeColorOverride(
+                                  current,
+                                  colorKey,
+                                  event.target.value as ThemeColorOverrideValue,
+                                ),
+                              )
+                            }
+                          >
+                            <option value="theme">Theme Default ({rgbTripletToHex(themeDefaults[colorKey])})</option>
+                            {themeColorKeys.map((optionKey) => (
+                              <option key={optionKey} value={optionKey}>
+                                {themeColorOptionLabel(themeDefaults, optionKey)}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
             </div>
@@ -937,7 +1115,7 @@ export function SettingsPage({
           />
           )}
 
-          {showSettingsSection("player playback audio output lyrics lyric bulk lookup preload autofetch lrc sidecar cache follow equalizer replaygain fade skip codec rust") && (
+          {showSettingsSection("player playback audio output mini player mini-player detached opacity layout window queue lyrics lyric bulk lookup preload autofetch lrc sidecar cache follow equalizer replaygain fade skip codec rust") && (
           <PlayerSettingsSection
             uiPreferences={uiPreferences}
             setUiPreferences={setUiPreferences}
@@ -949,8 +1127,8 @@ export function SettingsPage({
             desktopDiagnosticsMessage={desktopDiagnosticsMessage}
             onRefreshDesktopDiagnostics={refreshPlaybackDiagnostics}
             onClearDesktopDiagnostics={clearPlaybackDiagnostics}
-            codecSupport={codecSupport}
-            onRefreshCodecSupport={() => setCodecSupport(detectCodecSupport())}
+            currentTrack={currentTrack}
+            playbackQueue={playbackQueue}
             autoWriteFetchedLyricsSidecars={autoWriteFetchedLyricsSidecars}
             onAutoWriteFetchedLyricsSidecarsChange={onAutoWriteFetchedLyricsSidecarsChange}
             bulkLyricsProgress={bulkLyricsProgress}
@@ -958,6 +1136,7 @@ export function SettingsPage({
             bulkLyricsLimit={bulkLyricsLimit}
             bulkLyricsSaveLocation={bulkLyricsSaveLocation}
             isStartingBulkLyrics={isStartingBulkLyrics}
+            onOpenLyricsFolder={onOpenLyricsFolder}
             onBulkLyricsOnlyMissingChange={setBulkLyricsOnlyMissing}
             onBulkLyricsLimitChange={setBulkLyricsLimit}
             onBulkLyricsSaveLocationChange={setBulkLyricsSaveLocation}

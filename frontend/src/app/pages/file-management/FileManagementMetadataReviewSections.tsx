@@ -1,59 +1,43 @@
 import {
-  CheckCircle2,
-  Download,
-  Eye,
-  EyeOff,
-  ExternalLink,
-  FileText,
-  Fingerprint,
-  FolderOpen,
-  ListChecks,
-  RefreshCw,
-  Save,
-  Trash2,
-  Upload,
-  Wand2,
+CheckCircle2,
+Download,
+ExternalLink,
+EyeOff,
+FileText,
+Fingerprint,
+FolderOpen,
+RefreshCw,
+Save,
+Trash2,
+Upload,
+Wand2
 } from "lucide-react";
 
+import {
+openExternalUrl,
+} from "../../../lib/externalLinks";
 import type {
-  AcousticFingerprintResponse,
-  AutoTagResponse,
-  ChromaprintStatusResponse,
-  ClapGenreTagResponse,
-  CsvMetadataExportResponse,
-  CsvMetadataImportReportResponse,
-  CsvMetadataImportResponse,
-  DeviceSyncDetectedDevice,
-  DeviceSyncProfile,
-  DeviceSyncProfilePayload,
-  DeviceSyncResponse,
-  DuplicateActionResponse,
-  DuplicateReviewResponse,
-  FileOrganizationReportResponse,
-  FileOrganizationResponse,
-  FilenameTagInferenceResponse,
-  PlaylistSummary,
-  TagRegexReplaceResponse,
-  TrackFileMetadataWriteResponse,
+AcousticFingerprintResponse,
+AutoTagResponse,
+ChromaprintStatusResponse,
+CsvMetadataExportResponse,
+CsvMetadataImportReportResponse,
+CsvMetadataImportResponse,
+DuplicateActionResponse
 } from "../../../types/api";
 import {
-  DisclosureSection,
-  NumberField,
+DisclosureSection,
+NumberField,
 } from "../../components/common";
 import { AdvancedTagToolsSection } from "./AdvancedTagToolsSection";
-import {
-  CSV_IMPORT_FIELDS,
-  currentScope,
-  formatJson,
-  previewLabel,
-} from "./fileManagementUtils";
 import type {
-  CsvImportOptions,
-  CsvImportProfile,
+CsvImportOptions,
+CsvImportProfile,
 } from "./fileManagementUtils";
 import {
-  openExternalUrl,
-} from "../../../lib/externalLinks";
+currentScope,
+previewLabel
+} from "./fileManagementUtils";
 
 const ACOUSTID_API_KEY_URL = "https://acoustid.org/api-key";
 
@@ -62,10 +46,8 @@ export function FileManagementMetadataReviewSections({ model }: { model: any }) 
   const metadataCsvImportPreview = model.metadataCsvImportPreview as CsvMetadataImportResponse | null;
   const metadataCsvImportReport = model.metadataCsvImportReport as CsvMetadataImportReportResponse | null;
   const duplicateActionResult = model.duplicateActionResult as DuplicateActionResponse | null;
-  const duplicateReview = model.duplicateReview as DuplicateReviewResponse | null;
   const chromaprintSetup = model.chromaprintSetup as ChromaprintStatusResponse | null;
   const acousticFingerprintResult = model.acousticFingerprintResult as AcousticFingerprintResponse | null;
-  const duplicateTrackIds = model.duplicateTrackIds as number[];
   const duplicateGroups = model.duplicateGroups as number[][];
   const scopedTrackIds = model.scopedTrackIds as number[];
   const csvProfiles = model.csvProfiles as CsvImportProfile[];
@@ -75,7 +57,7 @@ export function FileManagementMetadataReviewSections({ model }: { model: any }) 
   const withCsvOptions = model.withCsvOptions as (action: (options: CsvImportOptions) => void | Promise<void>) => void;
   const {
     showTool, openSignalFor, initialFocusToolId, metadataCsvPath, setMetadataCsvPath, metadataCsvMissingOnly, setMetadataCsvMissingOnly, metadataCsvClearBlankFields, setMetadataCsvClearBlankFields, csvColumnMapText, setCsvColumnMapText, csvProfileName, setCsvProfileName, csvProfileMessage, saveCsvProfile, loadCsvProfile, deleteCsvProfile, onExportMetadataCsv, onPreviewMetadataCsv, onApplyMetadataCsv, onExportMetadataCsvReport, onAdvancedTagLibraryChanged,
-    duplicateTrackIdsText, setDuplicateTrackIdsText, duplicateGroupsText, setDuplicateGroupsText, duplicateDeleteFiles, setDuplicateDeleteFiles, duplicateScopeForAction, onDuplicateAction, onLoadDuplicateReview, onRevealTracksByIds,
+    duplicateTrackIdsText, setDuplicateTrackIdsText, duplicateGroupsText, setDuplicateGroupsText, duplicateDeleteFiles, setDuplicateDeleteFiles, duplicateScopeForAction, onDuplicateAction, onRevealTracksByIds,
     fpcalcPath, setFpcalcPath, onRefreshChromaprintSetup, onSaveChromaprintSetup, acousticOverwrite, setAcousticOverwrite, acousticLimit, setAcousticLimit, analyzeAcousticFingerprints, setStatus, onOpenApiKeysSettings,
     fingerprintTagMissingOnly, setFingerprintTagMissingOnly, fingerprintTagSaveArtwork, setFingerprintTagSaveArtwork, fingerprintTagWriteToFiles, setFingerprintTagWriteToFiles, previewAcousticFingerprintTags, applyAcousticFingerprintTags,
     autoTagPreviewSource, toggleAutoTagTrack,

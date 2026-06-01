@@ -1,4 +1,4 @@
-import type { LyricsLookupRequest, LyricsResponse } from "../../types/api";
+import type { LyricsLookupRequest,LyricsResponse } from "../../types/api";
 
 const LYRICS_RESPONSE_CACHE_LIMIT = 300;
 const EMPTY_LYRICS_TTL_MS = 10 * 60 * 1000;

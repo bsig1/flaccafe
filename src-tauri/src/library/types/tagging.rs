@@ -11,7 +11,7 @@ pub struct DesktopAlbumCompletionLookupResponse {
     pub(crate) error: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct DesktopAutoTagPreview {
     pub(crate) track_id: i64,
     pub(crate) path: String,

@@ -124,8 +124,14 @@ fn run_scan(
             .map_err(|error| format!("Could not start scan cleanup transaction: {error}"))?;
         for plan in &plans {
             check_cancelled(registry_job_id)?;
-            stats.removed +=
-                remove_missing_tracks(&transaction, &plan.folder, &plan.current_path_keys)?;
+            if request
+                .cleanup_paths
+                .iter()
+                .any(|cleanup_path| cleanup_path == &plan.folder)
+            {
+                stats.removed +=
+                    remove_missing_tracks(&transaction, &plan.folder, &plan.current_path_keys)?;
+            }
         }
         cleanup_orphan_albums(&transaction)?;
         save_library_paths(&transaction, &request.save_paths)?;

@@ -46,6 +46,15 @@ Recommended checklist for a risky database change:
 
 Cache tables are disposable. `POST /library/maintenance/clear` can remove artist lookup cache, artwork cache, metadata cache, recommendation history, and scan error samples without touching tracks, ratings, playlists, or audio files.
 
+Hot library views also use derived read models:
+
+- `tracks_fts` is a SQLite FTS5 index for non-empty track searches.
+- `album_summaries`, `artist_summaries`, and `playlist_summaries` materialize browse rows.
+- `library_stats_cache` stores expensive library counters.
+- `library_query_cache` stores small UI page responses.
+
+Triggers clear the small page cache and mark derived summaries dirty when metadata/search/summary fields change. Play/skip history only refreshes stats, so normal playback does not force an album/artist summary rebuild. Scans refresh derived data once at the end when inserted, updated, or removed counts are non-zero.
+
 When adding a new derived-data table, decide whether it needs:
 
 - a clear-cache target,

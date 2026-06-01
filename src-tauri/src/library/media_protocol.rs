@@ -1,5 +1,3 @@
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use rusqlite::params;
@@ -9,7 +7,6 @@ use time::OffsetDateTime;
 
 use super::{metadata, normalized_path_key, open_database};
 
-const AUDIO_RANGE_CHUNK_BYTES: u64 = 1024 * 1024;
 const ARTWORK_CACHE_KEY_VERSION: &str = "v2";
 
 fn response_with_status(status: StatusCode, message: &str) -> Response<Vec<u8>> {
@@ -18,20 +15,6 @@ fn response_with_status(status: StatusCode, message: &str) -> Response<Vec<u8>> 
         .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
         .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .body(message.as_bytes().to_vec())
-        .unwrap_or_else(|_| Response::new(Vec::new()))
-}
-
-fn range_not_satisfiable(file_len: u64) -> Response<Vec<u8>> {
-    Response::builder()
-        .status(StatusCode::RANGE_NOT_SATISFIABLE)
-        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-        .header(header::CONTENT_RANGE, format!("bytes */{file_len}"))
-        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-        .header(
-            header::ACCESS_CONTROL_EXPOSE_HEADERS,
-            "Accept-Ranges, Content-Length, Content-Range",
-        )
-        .body(b"Requested range is not satisfiable".to_vec())
         .unwrap_or_else(|_| Response::new(Vec::new()))
 }
 
@@ -44,24 +27,6 @@ fn preflight_response() -> Response<Vec<u8>> {
         .header(header::ACCESS_CONTROL_MAX_AGE, "86400")
         .body(Vec::new())
         .unwrap_or_else(|_| Response::new(Vec::new()))
-}
-
-fn media_type_for_path(path: &Path) -> &'static str {
-    match path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "flac" => "audio/flac",
-        "mp3" => "audio/mpeg",
-        "m4a" => "audio/mp4",
-        "ogg" | "opus" => "audio/ogg",
-        "wav" => "audio/wav",
-        "aiff" | "aif" => "audio/aiff",
-        _ => "application/octet-stream",
-    }
 }
 
 fn image_media_type(path: &Path) -> Option<&'static str> {
@@ -112,141 +77,6 @@ fn track_path(track_id: i64) -> Result<PathBuf, String> {
         return Err("Audio file not found on disk".to_string());
     }
     Ok(path)
-}
-
-fn parse_range_header(value: Option<&str>, file_len: u64) -> Option<(u64, u64)> {
-    let raw = value?.trim();
-    let range = raw.strip_prefix("bytes=")?;
-    let (start_text, end_text) = range.split_once('-')?;
-    if start_text.is_empty() {
-        let suffix_len = end_text.parse::<u64>().ok()?;
-        if suffix_len == 0 {
-            return None;
-        }
-        let start = file_len.saturating_sub(suffix_len);
-        return Some((start, file_len.saturating_sub(1)));
-    }
-    let start = start_text.parse::<u64>().ok()?;
-    if start >= file_len {
-        return None;
-    }
-    let end = if end_text.trim().is_empty() {
-        file_len.saturating_sub(1)
-    } else {
-        end_text
-            .parse::<u64>()
-            .ok()?
-            .min(file_len.saturating_sub(1))
-    };
-    if end < start {
-        return None;
-    }
-    Some((start, end))
-}
-
-fn capped_audio_range_end(start: u64, requested_end: u64) -> u64 {
-    requested_end.min(start.saturating_add(AUDIO_RANGE_CHUNK_BYTES - 1))
-}
-
-fn serve_audio_file(request: &Request<Vec<u8>>, track_id: i64) -> Response<Vec<u8>> {
-    let path = match track_path(track_id) {
-        Ok(path) => path,
-        Err(error) => return response_with_status(StatusCode::NOT_FOUND, &error),
-    };
-    let metadata = match path.metadata() {
-        Ok(metadata) => metadata,
-        Err(error) => {
-            return response_with_status(
-                StatusCode::NOT_FOUND,
-                &format!("Could not read audio file metadata: {error}"),
-            )
-        }
-    };
-    let file_len = metadata.len();
-    let range_header = request
-        .headers()
-        .get(header::RANGE)
-        .and_then(|value| value.to_str().ok());
-    let range = if range_header.is_some() {
-        match parse_range_header(range_header, file_len) {
-            Some(range) => Some(range),
-            None => return range_not_satisfiable(file_len),
-        }
-    } else {
-        None
-    };
-    if request.method() == Method::HEAD {
-        let mut builder = Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, media_type_for_path(&path))
-            .header(header::ACCEPT_RANGES, "bytes")
-            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-            .header(
-                header::ACCESS_CONTROL_EXPOSE_HEADERS,
-                "Accept-Ranges, Content-Length, Content-Range",
-            )
-            .header(header::CONTENT_LENGTH, file_len.to_string());
-        if let Some(headers) = builder.headers_mut() {
-            headers.insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
-        }
-        return builder
-            .body(Vec::new())
-            .unwrap_or_else(|_| Response::new(Vec::new()));
-    }
-
-    let mut file = match File::open(&path) {
-        Ok(file) => file,
-        Err(error) => {
-            return response_with_status(
-                StatusCode::NOT_FOUND,
-                &format!("Could not open audio file: {error}"),
-            )
-        }
-    };
-    let (start, end, status) = match range {
-        Some((start, end)) => (start, capped_audio_range_end(start, end), StatusCode::PARTIAL_CONTENT),
-        None => (0, file_len.saturating_sub(1), StatusCode::OK),
-    };
-    let read_len = if file_len == 0 {
-        0
-    } else {
-        end.saturating_sub(start).saturating_add(1)
-    };
-    let mut body = Vec::with_capacity(read_len as usize);
-    if read_len > 0 {
-        if let Err(error) = file.seek(SeekFrom::Start(start)) {
-            return response_with_status(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("Could not seek audio file: {error}"),
-            );
-        }
-        if let Err(error) = file.take(read_len).read_to_end(&mut body) {
-            return response_with_status(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("Could not read audio file: {error}"),
-            );
-        }
-    }
-    let mut builder = Response::builder()
-        .status(status)
-        .header(header::CONTENT_TYPE, media_type_for_path(&path))
-        .header(header::ACCEPT_RANGES, "bytes")
-        .header(header::CACHE_CONTROL, "no-store")
-        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-        .header(
-            header::ACCESS_CONTROL_EXPOSE_HEADERS,
-            "Accept-Ranges, Content-Length, Content-Range",
-        )
-        .header(header::CONTENT_LENGTH, body.len().to_string());
-    if status == StatusCode::PARTIAL_CONTENT {
-        builder = builder.header(
-            header::CONTENT_RANGE,
-            format!("bytes {start}-{end}/{file_len}"),
-        );
-    }
-    builder
-        .body(body)
-        .unwrap_or_else(|_| Response::new(Vec::new()))
 }
 
 fn artwork_response(
@@ -521,15 +351,6 @@ pub fn handle_media_protocol<R: tauri::Runtime>(
     }
     let path = request.uri().path().trim_matches('/');
     let parts = path.split('/').collect::<Vec<_>>();
-    if parts.first() == Some(&"cd-live-audio") && parts.len() == 4 {
-        let track_number = match parts[2].parse::<i64>() {
-            Ok(value) => value,
-            Err(_) => {
-                return response_with_status(StatusCode::BAD_REQUEST, "Invalid CD track number")
-            }
-        };
-        return super::cd::serve_cd_live_audio(&request, parts[1], track_number, parts[3]);
-    }
     if parts.len() != 2 {
         return response_with_status(StatusCode::NOT_FOUND, "Unknown FLAC Cafe media path");
     }
@@ -539,30 +360,7 @@ pub fn handle_media_protocol<R: tauri::Runtime>(
     };
     match parts[0] {
         "album-artwork" => serve_album_artwork(&request, track_id),
-        "track-audio" => serve_audio_file(&request, track_id),
         "track-artwork" => serve_track_artwork(&request, track_id),
         _ => response_with_status(StatusCode::NOT_FOUND, "Unknown FLAC Cafe media path"),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{capped_audio_range_end, parse_range_header, AUDIO_RANGE_CHUNK_BYTES};
-
-    #[test]
-    fn open_ended_ranges_parse_to_the_file_end() {
-        assert_eq!(parse_range_header(Some("bytes=0-"), 5_000_000), Some((0, 4_999_999)));
-    }
-
-    #[test]
-    fn audio_range_responses_are_capped_for_webview_streaming() {
-        assert_eq!(
-            capped_audio_range_end(0, 5_000_000),
-            AUDIO_RANGE_CHUNK_BYTES - 1
-        );
-        assert_eq!(
-            capped_audio_range_end(2_000_000, 5_000_000),
-            2_000_000 + AUDIO_RANGE_CHUNK_BYTES - 1
-        );
     }
 }

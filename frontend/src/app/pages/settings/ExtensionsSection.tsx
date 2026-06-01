@@ -1,23 +1,23 @@
 import {
-  ExternalLink,
-  FolderOpen,
-  RefreshCw,
+ExternalLink,
+FolderOpen,
+RefreshCw,
 } from "lucide-react";
 import {
-  useEffect,
-  useState,
+useEffect,
+useState,
 } from "react";
 
 import {
-  fetchExtensions,
-  reloadExtensions,
+fetchExtensions,
+reloadExtensions,
 } from "../../../lib/api";
 import type {
-  ExtensionListResponse,
-  ExtensionManifest,
+ExtensionListResponse,
+ExtensionManifest,
 } from "../../../types/api";
 import {
-  DisclosureSection,
+DisclosureSection,
 } from "../../components/common";
 
 function statusClass(extension: ExtensionManifest) {

@@ -28,6 +28,48 @@ pub struct DesktopHistoryTrackStat {
 }
 
 #[derive(Serialize)]
+pub struct DesktopHistoryAlbumCompletionStat {
+    pub(crate) album: String,
+    pub(crate) album_artist: Option<String>,
+    pub(crate) track_count: i64,
+    pub(crate) played_track_count: i64,
+    pub(crate) unplayed_track_count: i64,
+    pub(crate) completion_percent: f64,
+    pub(crate) duration_seconds: f64,
+    pub(crate) last_played_at: Option<String>,
+    pub(crate) next_track: Option<DesktopTrack>,
+}
+
+#[derive(Serialize)]
+pub struct DesktopHistoryRatingStat {
+    pub(crate) rating: f64,
+    pub(crate) count: i64,
+}
+
+#[derive(Serialize)]
+pub struct DesktopHistoryPeriodStat {
+    pub(crate) period: String,
+    pub(crate) plays: i64,
+    pub(crate) skips: i64,
+    pub(crate) ratings: i64,
+    pub(crate) listened_seconds: f64,
+}
+
+#[derive(Serialize)]
+pub struct DesktopHistoryDensityStat {
+    pub(crate) weekday: i64,
+    pub(crate) hour: i64,
+    pub(crate) plays: i64,
+}
+
+#[derive(Serialize)]
+pub struct DesktopLibraryTimelineStat {
+    pub(crate) period: String,
+    pub(crate) tracks: i64,
+    pub(crate) duration_seconds: f64,
+}
+
+#[derive(Serialize)]
 pub struct DesktopHistoryStatsResponse {
     pub(crate) total_play_count: i64,
     pub(crate) total_skip_count: i64,
@@ -37,8 +79,21 @@ pub struct DesktopHistoryStatsResponse {
     pub(crate) unique_played_tracks: i64,
     pub(crate) unique_skipped_tracks: i64,
     pub(crate) total_listened_seconds: f64,
+    pub(crate) albums_completed: i64,
+    pub(crate) albums_tracked: i64,
+    pub(crate) album_completion_percent: f64,
+    pub(crate) completed_albums: Vec<DesktopHistoryAlbumCompletionStat>,
+    pub(crate) next_albums: Vec<DesktopHistoryAlbumCompletionStat>,
     pub(crate) top_played: Vec<DesktopHistoryTrackStat>,
     pub(crate) top_skipped: Vec<DesktopHistoryTrackStat>,
+    pub(crate) rating_distribution: Vec<DesktopHistoryRatingStat>,
+    pub(crate) events_by_day: Vec<DesktopHistoryPeriodStat>,
+    pub(crate) events_by_week: Vec<DesktopHistoryPeriodStat>,
+    pub(crate) events_by_month: Vec<DesktopHistoryPeriodStat>,
+    pub(crate) listening_density: Vec<DesktopHistoryDensityStat>,
+    pub(crate) library_added_by_day: Vec<DesktopLibraryTimelineStat>,
+    pub(crate) library_added_by_week: Vec<DesktopLibraryTimelineStat>,
+    pub(crate) library_added_by_month: Vec<DesktopLibraryTimelineStat>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

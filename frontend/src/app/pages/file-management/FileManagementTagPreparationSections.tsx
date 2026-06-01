@@ -1,52 +1,29 @@
 import {
-  CheckCircle2,
-  Download,
-  Eye,
-  ExternalLink,
-  FileText,
-  Fingerprint,
-  ListChecks,
-  RefreshCw,
-  Save,
-  Trash2,
-  Upload,
-  Wand2,
+Download,
+Eye,
+FileText,
+ListChecks,
+Save,
+Trash2,
+Upload,
+Wand2
 } from "lucide-react";
 
 import type {
-  AcousticFingerprintResponse,
-  AutoTagResponse,
-  ChromaprintStatusResponse,
-  ClapGenreTagResponse,
-  CsvMetadataExportResponse,
-  CsvMetadataImportReportResponse,
-  CsvMetadataImportResponse,
-  DeviceSyncDetectedDevice,
-  DeviceSyncProfile,
-  DeviceSyncProfilePayload,
-  DeviceSyncResponse,
-  DuplicateActionResponse,
-  DuplicateReviewResponse,
-  FileOrganizationReportResponse,
-  FileOrganizationResponse,
-  FilenameTagInferenceResponse,
-  PlaylistSummary,
-  TagRegexReplaceResponse,
-  TrackFileMetadataWriteResponse,
+AutoTagResponse,
+ClapGenreTagResponse,
+DuplicateReviewResponse,
+FilenameTagInferenceResponse,
+TagRegexReplaceResponse,
+TrackFileMetadataWriteResponse
 } from "../../../types/api";
 import {
-  DisclosureSection,
+DisclosureSection,
 } from "../../components/common";
 import {
-  currentScope,
-  formatJson,
-  previewLabel,
+currentScope
 } from "./fileManagementUtils";
-import {
-  openExternalUrl,
-} from "../../../lib/externalLinks";
 
-const ACOUSTID_API_KEY_URL = "https://acoustid.org/api-key";
 
 export function FileManagementTagPreparationSections({ model }: { model: any }) {
   const filenameTagPreview = model.filenameTagPreview as FilenameTagInferenceResponse | null;
@@ -58,19 +35,22 @@ export function FileManagementTagPreparationSections({ model }: { model: any }) 
   const duplicateGroups = model.duplicateGroups as number[][];
   const scopedTrackIds = model.scopedTrackIds as number[];
   const allFilenameTagPresets = model.allFilenameTagPresets as string[];
-  const filenameTagPresets = model.filenameTagPresets as string[];
   const acceptedFilenameTrackIds = model.acceptedFilenameTrackIds as Set<number>;
   const acceptedChangedFilenameIds = model.acceptedChangedFilenameIds as number[];
   const acceptedAutoTagTrackIds = model.acceptedAutoTagTrackIds as Set<number>;
   const autoTagChangedIds = model.autoTagChangedIds as number[];
   const autoTagArtworkIds = model.autoTagArtworkIds as number[];
-  const fingerprintAutoTagIds = model.fingerprintAutoTagIds as number[];
+  const autoTagBusy = Boolean(model.autoTagBusy);
+  const autoTagProgress = model.autoTagProgress as { label: string; completed: number; total: number } | null;
+  const autoTagProgressPercent = autoTagProgress
+    ? Math.max(6, Math.min(100, (autoTagProgress.completed / Math.max(1, autoTagProgress.total)) * 100))
+    : 0;
   const {
     showTool, openSignalFor, initialFocusToolId, filenameTagPattern, setFilenameTagPattern, filenameTagMissingOnly, setFilenameTagMissingOnly, isCustomFilenameTagPreset, filenamePresetMessage, filenamePresetJson, setFilenamePresetJson, saveCurrentFilenameTagPreset, deleteCurrentFilenameTagPreset, exportFilenamePresets, importFilenamePresets, onPreviewFilenameTags, onApplyFilenameTags, toggleAcceptedFilenameTrack, onLoadDuplicateReview, duplicateScopeForAction,
     tagRegexField, setTagRegexField, tagRegexPattern, setTagRegexPattern, tagRegexReplacement, setTagRegexReplacement, tagRegexCaseSensitive, setTagRegexCaseSensitive, onPreviewTagRegex, onApplyTagRegex,
     fileWriteIncludeMetadata, setFileWriteIncludeMetadata, fileWriteIncludeRatings, setFileWriteIncludeRatings, fileWriteBusy, pendingFileWriteIds, previewDatabaseFileWrites,
-    autoTagMode, setAutoTagMode, autoTagMissingOnly, setAutoTagMissingOnly, autoTagIncludeArtwork, setAutoTagIncludeArtwork, autoTagSaveArtwork, setAutoTagSaveArtwork, autoTagWriteToFiles, setAutoTagWriteToFiles, autoTagPreviewSource, previewMusicBrainzAutoTags, applyMusicBrainzAutoTags, toggleAutoTagTrack, autoTagFieldSummary,
-    fingerprintTagMissingOnly, setFingerprintTagMissingOnly, fingerprintTagSaveArtwork, setFingerprintTagSaveArtwork, fingerprintTagWriteToFiles, setFingerprintTagWriteToFiles, previewAcousticFingerprintTags, applyAcousticFingerprintTags,
+    autoTagMode, setAutoTagMode, autoTagMissingOnly, setAutoTagMissingOnly, autoTagIncludeArtwork, setAutoTagIncludeArtwork, autoTagSaveArtwork, setAutoTagSaveArtwork, autoTagWriteToFiles, setAutoTagWriteToFiles, previewMusicBrainzAutoTags, applyMusicBrainzAutoTags, toggleAutoTagTrack, autoTagFieldSummary,
+    
     clapGenreMissingOnly, setClapGenreMissingOnly, clapGenreMinConfidence, setClapGenreMinConfidence, clapGenreBusy, previewClapGenreTags,
   } = model;
   const fileWriteChangeDetails = model.fileWriteChangeDetails as (preview: TrackFileMetadataWriteResponse["previews"][number]) => string[];
@@ -614,6 +594,7 @@ export function FileManagementTagPreparationSections({ model }: { model: any }) 
                   <button
                     className="secondary-button"
                     type="button"
+                    disabled={autoTagBusy}
                     onClick={() => void previewMusicBrainzAutoTags()}
                   >
                     <Eye size={15} />
@@ -622,14 +603,31 @@ export function FileManagementTagPreparationSections({ model }: { model: any }) 
                   <button
                     className="primary-button"
                     type="button"
-                    disabled={Boolean(autoTagPreview) && autoTagChangedIds.length === 0 && (!autoTagSaveArtwork || autoTagArtworkIds.length === 0)}
+                    disabled={autoTagBusy || (Boolean(autoTagPreview) && autoTagChangedIds.length === 0 && (!autoTagSaveArtwork || autoTagArtworkIds.length === 0))}
                     onClick={() => void applyMusicBrainzAutoTags()}
                   >
                     <Wand2 size={15} />
-                    {autoTagPreview ? "Apply Accepted" : "Apply Auto-Tags"}
+                    {autoTagBusy ? "Working..." : autoTagPreview ? "Apply Accepted" : "Apply Auto-Tags"}
                   </button>
                 </div>
               </div>
+
+              {autoTagProgress && (
+                <div className="rounded border border-line/70 bg-ink px-3 py-2 text-xs">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <span className="min-w-0 truncate text-neutral-200">{autoTagProgress.label}</span>
+                    <span className="shrink-0 text-muted">
+                      {Math.min(autoTagProgress.completed, autoTagProgress.total).toLocaleString()} / {autoTagProgress.total.toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-panel">
+                    <div
+                      className="h-full rounded-full bg-moss transition-all duration-500"
+                      style={{ width: `${autoTagProgressPercent}%` }}
+                    />
+                  </div>
+                </div>
+              )}
 
               {autoTagPreview && (
                 <div className="rounded border border-line bg-ink p-3 text-xs">

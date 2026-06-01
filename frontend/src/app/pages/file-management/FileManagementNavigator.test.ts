@@ -1,12 +1,12 @@
 import {
-  describe,
-  expect,
-  it,
+describe,
+expect,
+it,
 } from "vitest";
 
 import {
-  fileManagementSections,
-  filterFileManagementSections,
+fileManagementSections,
+filterFileManagementSections,
 } from "./FileManagementNavigator";
 
 describe("file management navigator", () => {

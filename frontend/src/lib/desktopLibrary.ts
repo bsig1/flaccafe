@@ -1,99 +1,97 @@
 import type {
-  AlbumSummary,
-  ArtistSummary,
-  AdvancedTrackSearchFilters,
-  AudiobookBookmark,
-  AudiobookBookmarkRequest,
-  AudiobookChapter,
-  AudiobookListResponse,
-  AudiobookProgressRequest,
-  AudiobookProgressResponse,
-  AutoDjAvoidRule,
-  AutoDjResponse,
-  AutoDjSettings,
-  AudioAnalysisCoverage,
-  AudioConversionSetupRequest,
-  AudioConversionSetupResponse,
-  BulkLyricsProgress,
-  BulkLyricsSaveLocation,
-  BulkLyricsStartResponse,
-  BulkUndoBatchEntry,
-  BulkUndoLogEntry,
-  BulkUndoRestoreResponse,
-  CacheClearResponse,
-  CacheClearTarget,
-  ChromaprintConfigRequest,
-  ChromaprintStatusResponse,
-  CustomTagBatchRequest,
-  CustomTagBatchResponse,
-  DeviceSyncProfile,
-  DeviceSyncProfilePayload,
-  DeviceSyncProfilesResponse,
-  DuplicateReviewRequest,
-  DuplicateReviewResponse,
-  ExportResponse,
-  FileOrganizationRequest,
-  FileOrganizationResponse,
-  FilenameTagInferenceRequest,
-  FilenameTagInferenceResponse,
-  GaplessValidationRequest,
-  GaplessValidationResponse,
-  HistoryStatsResponse,
-  InboxResponse,
-  InboxAutoReviewRule,
-  InboxAutoReviewRuleApplyResponse,
-  InboxAutoReviewRuleDeleteResponse,
-  InboxAutoReviewRuleRequest,
-  InboxReviewResponse,
-  InboxTrackNote,
-  LibraryHealthResponse,
-  LibrarySourceRemoveResponse,
-  LibraryStatsResponse,
-  LyricsLookupRequest,
-  LyricsResponse,
-  LyricsUpdateRequest,
-  PlayEventEntry,
-  PlaylistSummary,
-  PodcastEpisode,
-  PodcastFolderResponse,
-  PodcastSubscription,
-  PodcastSubscriptionDeleteResponse,
-  PodcastSubscriptionPayload,
-  RadioStation,
-  RadioStationPayload,
-  ArtistInfoResponse,
-  RecommendationAbChoiceResponse,
-  RecommendationAbTestResponse,
-  RecommendationProfile,
-  RecommendationProfileComparison,
-  RecommendationProfileComparisonExportResponse,
-  RecommendationProfileComparisonImportResponse,
-  RecommendationRun,
-  RegexTagPreset,
-  RegexTagPresetRequest,
-  ScrobbleAccount,
-  ScrobbleAccountRequest,
-  ScrobbleOutboxEntry,
-  ScrobbleQueueHistoryResponse,
-  ScrobbleService,
-  SettingsResponse,
-  SettingsUpdateRequest,
-  SimilarTrack,
-  TagFieldCopySwapRequest,
-  TagFieldCopySwapResponse,
-  TagRegexReplaceRequest,
-  TagRegexReplaceResponse,
-  Track,
-  TrackBatchResponse,
-  TrackLoveResponse,
-  TrackPage,
-  VirtualTagDefinition,
-  VirtualTagDefinitionRequest,
-  VirtualTagPreviewRequest,
-  VirtualTagPreviewResponse,
-  VolumeTagRequest,
-  VolumeTagResponse,
-  LovedTrack,
+AdvancedTrackSearchFilters,
+AlbumSummary,
+ArtistInfoResponse,
+ArtistSummary,
+AudioAnalysisCoverage,
+ClapLibraryStats,
+AudioConversionSetupRequest,
+AudioConversionSetupResponse,
+AudiobookBookmark,
+AudiobookBookmarkRequest,
+AudiobookChapter,
+AudiobookListResponse,
+AudiobookProgressRequest,
+AudiobookProgressResponse,
+AutoDjAvoidRule,
+AutoDjResponse,
+AutoDjSettings,
+BulkLyricsProgress,
+BulkLyricsSaveLocation,
+BulkLyricsStartResponse,
+BulkUndoBatchEntry,
+BulkUndoLogEntry,
+BulkUndoRestoreResponse,
+CacheClearResponse,
+CacheClearTarget,
+ChromaprintConfigRequest,
+ChromaprintStatusResponse,
+CustomTagBatchRequest,
+CustomTagBatchResponse,
+DeviceSyncProfile,
+DeviceSyncProfilePayload,
+DeviceSyncProfilesResponse,
+DuplicateReviewRequest,
+DuplicateReviewResponse,
+FileOrganizationRequest,
+FileOrganizationResponse,
+FilenameTagInferenceRequest,
+FilenameTagInferenceResponse,
+HistoryStatsResponse,
+InboxAutoReviewRuleApplyResponse,
+InboxAutoReviewRuleDeleteResponse,
+InboxAutoReviewRuleRequest,
+InboxResponse,
+InboxReviewResponse,
+InboxTrackNote,
+LibraryHealthResponse,
+LibrarySourceRemoveResponse,
+LibraryStatsResponse,
+LovedTrack,
+LyricsLookupRequest,
+LyricsResponse,
+LyricsUpdateRequest,
+PlayEventEntry,
+PlaylistSummary,
+PodcastEpisode,
+PodcastFolderResponse,
+PodcastSubscription,
+PodcastSubscriptionDeleteResponse,
+PodcastSubscriptionPayload,
+RadioStation,
+RadioStationPayload,
+RecommendationAbChoiceResponse,
+RecommendationAbTestResponse,
+RecommendationProfile,
+RecommendationProfileComparison,
+RecommendationProfileComparisonExportResponse,
+RecommendationProfileComparisonImportResponse,
+RecommendationRun,
+RegexTagPreset,
+RegexTagPresetRequest,
+ScrobbleAccount,
+ScrobbleAccountRequest,
+ScrobbleOutboxEntry,
+ScrobbleQueueHistoryResponse,
+ScrobbleService,
+SettingsResponse,
+SettingsUpdateRequest,
+SimilarAlbum,
+SimilarArtist,
+SimilarTrack,
+TagFieldCopySwapRequest,
+TagFieldCopySwapResponse,
+TagRegexReplaceRequest,
+TagRegexReplaceResponse,
+Track,
+TrackBatchResponse,
+TrackPage,
+VirtualTagDefinition,
+VirtualTagDefinitionRequest,
+VirtualTagPreviewRequest,
+VirtualTagPreviewResponse,
+VolumeTagRequest,
+VolumeTagResponse
 } from "../types/api";
 
 async function invokeDesktop<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -117,29 +115,6 @@ export interface desktopLibraryReconcilePreview {
   sample_modified_tracks: string[];
   elapsed_ms: number;
   errors: string[];
-}
-
-export interface desktopPlaylistParseResponse {
-  playlist_path: string;
-  base_folder: string;
-  entries: string[];
-  local_paths: string[];
-  errors: string[];
-}
-
-export interface desktopBulkFileMove {
-  source_path: string;
-  target_path: string;
-  changed: boolean;
-  applied: boolean;
-  error: string | null;
-}
-
-export interface desktopBulkFileMoveResponse {
-  total: number;
-  changed: number;
-  applied: number;
-  moves: desktopBulkFileMove[];
 }
 
 export function desktopFetchTrackPage({
@@ -166,6 +141,7 @@ export function desktopFetchTrackPage({
     artist: advancedFilters?.artist?.trim() || null,
     album: advancedFilters?.album?.trim() || null,
     genre: advancedFilters?.genre?.trim() || null,
+    mood: advancedFilters?.mood?.trim() || null,
     path: advancedFilters?.path?.trim() || null,
     extension: advancedFilters?.extension?.trim() || null,
     ratingState: advancedFilters?.rating_state ?? "any",
@@ -194,6 +170,10 @@ function integerFilterValue(value?: string | null): number | null {
 
 export function desktopFetchClapCoverage(): Promise<AudioAnalysisCoverage> {
   return invokeDesktop<AudioAnalysisCoverage>("clap_coverage");
+}
+
+export function desktopFetchClapLibraryStats(): Promise<ClapLibraryStats> {
+  return invokeDesktop<ClapLibraryStats>("clap_library_stats");
 }
 
 export function desktopFetchBackendHealth(): Promise<{ status: string }> {
@@ -233,6 +213,14 @@ export function desktopFetchSimilarTracks(trackId: number, limit = 12): Promise<
   return invokeDesktop<SimilarTrack[]>("similar_tracks", { trackId, limit });
 }
 
+export function desktopFetchSimilarAlbums(albumId: number, limit = 8): Promise<SimilarAlbum[]> {
+  return invokeDesktop<SimilarAlbum[]>("similar_albums", { albumId, limit });
+}
+
+export function desktopFetchSimilarArtists(artistName: string, limit = 8): Promise<SimilarArtist[]> {
+  return invokeDesktop<SimilarArtist[]>("similar_artists", { artistName, limit });
+}
+
 export function desktopFetchAudiobooks(limit = 200, offset = 0): Promise<AudiobookListResponse> {
   return invokeDesktop<AudiobookListResponse>("audiobooks", { limit, offset });
 }
@@ -246,6 +234,10 @@ export function desktopUpdateAudiobookProgress(
     positionSeconds: requestBody.position_seconds,
     durationSeconds: requestBody.duration_seconds ?? null,
   });
+}
+
+export function desktopFetchTrackResumeProgress(trackId: number): Promise<AudiobookProgressResponse | null> {
+  return invokeDesktop<AudiobookProgressResponse | null>("track_resume_progress", { trackId });
 }
 
 export function desktopFetchAudiobookBookmarks(trackId: number): Promise<AudiobookBookmark[]> {
@@ -304,10 +296,6 @@ export function desktopMarkRadioStationPlayed(stationId: number): Promise<RadioS
 
 export function desktopFetchLovedTracks(limit = 100): Promise<LovedTrack[]> {
   return invokeDesktop<LovedTrack[]>("loved_tracks", { limit });
-}
-
-export function desktopUpdateTrackLove(trackId: number, loved: boolean, source = "local"): Promise<TrackLoveResponse> {
-  return invokeDesktop<TrackLoveResponse>("update_track_love", { trackId, loved, source });
 }
 
 export function desktopUpdateTrackRating(trackId: number, rating: number | null): Promise<Track> {
@@ -391,10 +379,6 @@ export function desktopReviewInbox(trackIds: number[] | null, allNew = false): P
     trackIds,
     allNew,
   });
-}
-
-export function desktopFetchInboxAutoReviewRules(): Promise<InboxAutoReviewRule[]> {
-  return invokeDesktop<InboxAutoReviewRule[]>("inbox_auto_review_rules");
 }
 
 export function desktopCreateInboxAutoReviewRule(
@@ -726,14 +710,6 @@ export function desktopFileOrganizationPreview(requestBody: FileOrganizationRequ
   });
 }
 
-export function desktopParsePlaylist(playlistPath: string): Promise<desktopPlaylistParseResponse> {
-  return invokeDesktop<desktopPlaylistParseResponse>("parse_playlist", { playlistPath });
-}
-
-export function desktopExportM3u(playlistPath: string, trackPaths: string[]): Promise<ExportResponse> {
-  return invokeDesktop<ExportResponse>("export_m3u", { playlistPath, trackPaths });
-}
-
 export function desktopVolumeTagsPreview(requestBody: VolumeTagRequest): Promise<VolumeTagResponse> {
   return invokeDesktop<VolumeTagResponse>("volume_tags_preview", {
     trackIds: requestBody.track_ids ?? null,
@@ -744,21 +720,6 @@ export function desktopVolumeTagsPreview(requestBody: VolumeTagRequest): Promise
     manualAlbumGainDb: requestBody.manual_album_gain_db ?? null,
     manualAlbumPeak: requestBody.manual_album_peak ?? null,
     apply: requestBody.apply ?? false,
-    limit: requestBody.limit ?? null,
-  });
-}
-
-export function desktopBulkFileMovePreview(
-  moves: Array<[string, string]>,
-  apply = false,
-): Promise<desktopBulkFileMoveResponse> {
-  return invokeDesktop<desktopBulkFileMoveResponse>("bulk_file_move_preview", { moves, apply });
-}
-
-export function desktopGaplessValidate(requestBody: GaplessValidationRequest): Promise<GaplessValidationResponse> {
-  return invokeDesktop<GaplessValidationResponse>("gapless_validate", {
-    trackIds: requestBody.track_ids ?? null,
-    albumId: requestBody.album_id ?? null,
     limit: requestBody.limit ?? null,
   });
 }

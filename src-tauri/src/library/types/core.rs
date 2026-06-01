@@ -63,6 +63,25 @@ pub struct DesktopAudioAnalysisCoverage {
     pub(crate) provider: String,
 }
 
+#[derive(Serialize)]
+pub struct DesktopClapLabelStat {
+    pub(crate) label: String,
+    pub(crate) count: i64,
+    pub(crate) average_confidence: f64,
+    pub(crate) max_confidence: f64,
+}
+
+#[derive(Serialize)]
+pub struct DesktopClapLibraryStats {
+    pub(crate) total_tracks: i64,
+    pub(crate) analyzed_tracks: i64,
+    pub(crate) failed_tracks: i64,
+    pub(crate) average_genre_confidence: Option<f64>,
+    pub(crate) average_mood_confidence: Option<f64>,
+    pub(crate) top_genres: Vec<DesktopClapLabelStat>,
+    pub(crate) top_moods: Vec<DesktopClapLabelStat>,
+}
+
 #[derive(Clone, Serialize)]
 pub struct DesktopAudioAnalysisError {
     pub(crate) track_id: Option<i64>,
@@ -155,6 +174,20 @@ pub struct DesktopSimilarTrack {
     pub(crate) similarity_score: f64,
     pub(crate) similarity_reason: String,
     pub(crate) audio_similarity: Option<f64>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct DesktopSimilarAlbum {
+    pub(crate) album: DesktopAlbumSummary,
+    pub(crate) similarity_score: f64,
+    pub(crate) analyzed_tracks: i64,
+}
+
+#[derive(Clone, Serialize)]
+pub struct DesktopSimilarArtist {
+    pub(crate) artist: DesktopArtistSummary,
+    pub(crate) similarity_score: f64,
+    pub(crate) analyzed_tracks: i64,
 }
 
 #[derive(Clone, Serialize)]
@@ -266,14 +299,6 @@ pub struct DesktopLovedTrack {
 }
 
 #[derive(Serialize)]
-pub struct DesktopTrackLoveResponse {
-    pub(crate) track_id: i64,
-    pub(crate) loved: bool,
-    pub(crate) source: String,
-    pub(crate) updated_at: String,
-}
-
-#[derive(Serialize)]
 pub struct DesktopLibrarySourceRemoveResponse {
     pub(crate) path: String,
     pub(crate) library_paths: Vec<String>,
@@ -293,6 +318,7 @@ pub struct DesktopAlbumSummary {
     pub(crate) album_ids: Vec<i64>,
     pub(crate) edition_count: i64,
     pub(crate) artwork_path: Option<String>,
+    pub(crate) artwork_locked: bool,
     pub(crate) track_count: i64,
     pub(crate) expected_track_count: Option<i64>,
     pub(crate) missing_track_count: i64,
@@ -355,6 +381,7 @@ pub struct DesktopAlbumArtworkCandidate {
 pub struct DesktopAlbumArtworkUpdateResponse {
     pub(crate) album_id: i64,
     pub(crate) artwork_path: Option<String>,
+    pub(crate) artwork_locked: bool,
     pub(crate) candidates: Vec<DesktopAlbumArtworkCandidate>,
     pub(crate) embedded_updated: i64,
     pub(crate) errors: Vec<String>,

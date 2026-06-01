@@ -1,5 +1,5 @@
 export function createLibraryTrackRenderers(model: any) {
-  const { Album, ArrowDown, ArrowUp, BarChart3, BookOpen, CheckCircle2, Download, Fingerprint, FolderOpen, LayoutGrid, List, MoreHorizontal, Pencil, Play, Podcast, Plus, RefreshCw, Save, Search, ShieldCheck, Shuffle, SkipForward, SlidersHorizontal, Star, Tag, Trash2, Upload, UserRound, Volume2, Wand2, X, RatingStars, ResizableHeader, BulkMetadataModal, QuickStartPanel, TrackDetailsPanel, LibraryViewTabs, albumArtworkUrl, albumCoverUrl, defaultLibraryVisibleColumns, libraryColumnDefinitions, librarySelectionColumnWidth, display, fileName, formatBitrate, formatDuration, formatFingerprint, formatPercent, formatRating, formatShortDate, formatTime, trackGenre, albumMetaLabel, artistMetaLabel, missingMetadataFields, missingMetadataFilters, ALBUM_GRID_ROW_HEIGHT, ALBUM_LIST_ROW_HEIGHT, ARTIST_ROW_HEIGHT, COMPLETION_COLLAPSED_ROW_HEIGHT, COMPLETION_EXPANDED_ROW_ESTIMATE, LIBRARY_ACTIONS_MENU_HEIGHT, LIBRARY_ACTIONS_MENU_WIDTH, MENU_VIEWPORT_MARGIN, PLAYLIST_ROW_HEIGHT, PLAYLIST_TOOLBAR_HEIGHT, TRACK_AVOID_SUBMENU_HEIGHT, TRACK_AVOID_SUBMENU_WIDTH, TRACK_CONTEXT_DIVIDER_HEIGHT, TRACK_CONTEXT_HEADER_HEIGHT, TRACK_CONTEXT_MENU_HEIGHT, TRACK_CONTEXT_MENU_WIDTH, TRACK_CONTEXT_ROW_HEIGHT, TRACK_CONTEXT_SUBMENU_WIDTH, TRACK_PLAYLIST_SUBMENU_WIDTH, TRACK_RATING_SUBMENU_HEIGHT, TRACK_RATING_SUBMENU_WIDTH, TRACK_SUBMENU_CLOSE_DELAY_MS, TRACK_TAGGING_SUBMENU_HEIGHT, TRACK_VIRTUALIZATION_OVERSCAN, TRACK_VIRTUALIZATION_THRESHOLD, tracks, trackIndexCache, totalTracks, albums, artists, playlists, selectedAlbumId, selectedAlbumTracks, selectedArtistName, selectedArtistTracks, selectedPlaylistId, selectedPlaylistTracks, libraryStats, libraryHealth, inbox, targetPlaylistId, newPlaylistName, importPlaylistPath, libraryView, setLibraryView, search, setSearch, advancedTrackSearch, setAdvancedTrackSearch, refreshTracks, refreshAlbums, loadMoreTracks, loadTrackWindow, isLoading, hasMoreTracks, sort, setSort, scrollTop, setScrollTop, artistScrollTop, setArtistScrollTop, albumScrollTop, setAlbumScrollTop, completionScrollTop, setCompletionScrollTop, playlistScrollTop, setPlaylistScrollTop, onRating, onBulkRating, onPlayTrack, onPlayNext, onAddToQueue, onSelectAlbum, onSelectArtist, onPlayAlbum, onPlayArtist, onSelectPlaylist, onCreatePlaylist, onDeletePlaylist, onAddTracksToPlaylist, onDeleteTrack, onEditTrack, onBulkMetadata, onAutoTagTracks, onSyncFileMetadata, onFingerprintTagTracks, onClapGenreTagTracks, onVolumeTagTracks, onOpenFileManagementTracks, onRequestDeleteTracks, onRemoveTrackFromPlaylist, onRemoveTracksFromPlaylist, onMovePlaylistTrack, onExportTracks, onExportPlaylist, onImportPlaylist, onReviewInboxTracks, onUpdateInboxNote, onSaveInboxAutoReviewRule, onDeleteInboxAutoReviewRule, onShuffleTracks, onQuickAutoDj, onAvoidAutoDj, onRevealTrack, detailTrack, setDetailTrack, onAnalyzeTracks, onIgnoreDuplicateGroup, onClearIgnoredDuplicateGroups, isAudioAnalyzing, currentTrackId, currentTrack, hideFilePaths, compactRows, albumGrid, writeRatingsToFiles, libraryVisibleColumns, setLibraryVisibleColumns, onAlbumGridChange, setTargetPlaylistId, setNewPlaylistName, setImportPlaylistPath, showQuickStart, isScanning, suggestedMusicPath, onChooseMusicFolder, onUseSuggestedFolder, onDismissQuickStart, onOpenSettings, columnWidths, setColumnWidths, contextMenu, setContextMenu, columnMenu, setColumnMenu, libraryActionsMenu, setLibraryActionsMenu, activeContextSubmenu, setActiveContextSubmenu, selectedTrackIds, setSelectedTrackIds, selectedTrackCache, setSelectedTrackCache, isSelectingAllTracks, setIsSelectingAllTracks, showAllDuplicateGroups, setShowAllDuplicateGroups, showAllMissingMetadata, setShowAllMissingMetadata, missingMetadataFilter, setMissingMetadataFilter, bulkMetadataOpen, setBulkMetadataOpen, draggedColumn, setDraggedColumn, dragOverColumn, setDragOverColumn, albumArtworkCandidates, setAlbumArtworkCandidates, isAlbumArtworkOpen, setIsAlbumArtworkOpen, isSearchingAlbumArtwork, setIsSearchingAlbumArtwork, albumArtworkStatus, setAlbumArtworkStatus, inboxNoteDraft, setInboxNoteDraft, editingInboxRuleId, setEditingInboxRuleId, inboxRuleName, setInboxRuleName, inboxRuleEnabled, setInboxRuleEnabled, inboxRuleField, setInboxRuleField, inboxRuleMatchType, setInboxRuleMatchType, inboxRuleValue, setInboxRuleValue, inboxRuleNote, setInboxRuleNote, inboxRuleApplyExisting, setInboxRuleApplyExisting, albumMode, setAlbumMode, artistPaneHeight, setArtistPaneHeight, albumPaneHeight, setAlbumPaneHeight, playlistPaneHeight, setPlaylistPaneHeight, completionFilter, setCompletionFilter, completionHeightVersion, setCompletionHeightVersion, completionOpenAlbumId, setCompletionOpenAlbumId, completionLoadingAlbumId, setCompletionLoadingAlbumId, completionLookupAlbumId, setCompletionLookupAlbumId, completionLookupMessages, setCompletionLookupMessages, completionLookupAllActive, setCompletionLookupAllActive, completionLookupAllProgress, setCompletionLookupAllProgress, showAdvancedSearch, setShowAdvancedSearch, virtualScrollTop, setVirtualScrollTop, trackViewportHeight, setTrackViewportHeight, scrollRef, artistListRef, albumListRef, completionListRef, playlistListRef, contextMenuRef, searchInputRef, selectionAnchorId, completionLookupCancelRef, visibleColumns, visibleColumnDefs, advancedSearchActiveCount, trackSearchActive, libraryHasAnyTracks, tableWidth, rowPadding, trackRowHeight, loadedTrackCount, shouldVirtualizeTrackRows, maxVirtualScrollTop, effectiveVirtualScrollTop, virtualTrackStartIndex, virtualTrackVisibleCount, virtualTrackEndIndex, renderedTrackList, virtualTopSpacerHeight, virtualBottomSpacerHeight, advancedSearchInputClass, activeAlbum, activeArtist, activePlaylist, missingMetadataRows, filteredMissingMetadataRows, visibleMissingMetadataRows, visibleDuplicateGroups, completionQuery, completionSearchTerms, completionMatchesSearch, albumCompletionExpected, albumCompletionMissing, completionAlbums, visibleCompletionAlbums, completionListScrollTop, completionWindow, renderedCompletionAlbums, artistWindow, renderedArtists, albumGridColumns, albumBrowseRowHeight, albumWindow, renderedBrowseAlbums, playlistWindow, renderedPlaylists, completeAlbumCount, missingTrackEstimate, advancedSelectionKey, completionLookupEta, librarySummaryText, viewTracks, viewTrackLookup, selectedIds, selectedTracks, selectableTrackCount, allViewSelected, inboxNotesByTrackId, selectedInboxTrack, selectedInboxNote, getReachableScrollTop, applyScrollRestore, cancelScrollRestoreForUserInput, scrollCollectionPaneToTop, saveTrackPaneScrollTop, renderPaneTopButton, renderActiveTopButton, updateCompletionRowHeight, setCompletionRowElement, scheduleVirtualScrollUpdate, flushScrollPositionSave, scheduleScrollPositionSave, resetInboxRuleForm, editInboxRule, saveInboxRule, handleSort, handleResize, toggleTrackSelection, selectSingleTrack, selectTrackLikeWindows, setSelectionForList, selectAllCurrentScope, handleHeaderSelectionChange, suppressCheckboxContextMenu, clearSelection, loadAlbumArtworkCandidates, openAlbumArtworkManager, albumArtworkActionStatus, chooseSidecarArtwork, embedSidecarArtwork, saveEmbeddedArtwork, embedEmbeddedArtwork, searchWebArtwork, saveWebArtwork, clearSelectedAlbumArtwork, handleScroll, openTrackContextMenu, openColumnContextMenu, toggleLibraryActionsMenu, toggleVisibleColumn, moveVisibleColumn, handleColumnDragStart, handleColumnDragOver, handleColumnDrop, handleColumnDragEnd, columnFromPoint, handleColumnPointerDragStart, toggleCompletionAlbum, handleCompletionLengthLookup, handleCompletionLookupAll, cancelCompletionLookupAll, updateAdvancedTrackSearch, clearAdvancedTrackSearch, contextSelectionTracks, contextSelectionIds, contextBulk, contextLabel, contextPlaylistSubmenuHeight, contextSubmenuStyle, openContextSubmenu, scheduleContextSubmenuClose, contextSubmenuClass } = model;
+  const { Play, Volume2, RatingStars, ResizableHeader, display, fileName, formatBitrate, formatDuration, formatFingerprint, formatPercent, formatShortDate, trackGenre, tracks, trackIndexCache, libraryView, sort, onRating, onPlayTrack, detailTrack, currentTrackId, hideFilePaths, displayRatingsAsNumbers, columnWidths, selectedTrackIds, isSelectingAllTracks, draggedColumn, dragOverColumn, visibleColumns, visibleColumnDefs, fixedTrackColumns, orderedTrackColumns, rowPadding, trackRowHeight, virtualTrackStartIndex, virtualTrackEndIndex, selectableTrackCount, allViewSelected, handleSort, handleResize, selectTrackLikeWindows, handleHeaderSelectionChange, suppressCheckboxContextMenu, clearSelection, openTrackContextMenu, openColumnContextMenu, handleColumnDragStart, handleColumnDragOver, handleColumnDrop, handleColumnDragEnd, handleColumnPointerDragStart } = model;
   function columnTextClass(column: any) {
     return `${column.align === "right" ? "text-right tabular-nums" : "truncate"} ${
       column.key === "artist" ? "text-neutral-200" : column.key === "album" ? "text-neutral-300" : "text-muted"
@@ -64,7 +64,7 @@ export function createLibraryTrackRenderers(model: any) {
       case "year":
         return display(track.year, "-");
       case "rating":
-        return <RatingStars rating={track.rating} onChange={(rating: any) => onRating(track.id, rating)} />;
+        return <RatingStars rating={track.rating} displayAsNumber={displayRatingsAsNumbers} onChange={(rating: any) => onRating(track.id, rating)} />;
       case "duration_seconds":
         return formatDuration(track.duration_seconds);
       case "play_count":
@@ -90,7 +90,71 @@ export function createLibraryTrackRenderers(model: any) {
     }
   }
 
+  function metadataColumnForKey(columnKey: string) {
+    return visibleColumnDefs.find((column: any) => column.key === columnKey) ?? null;
+  }
+
+  function renderPlayButtonCell(track: any, interactionList: any[]) {
+    return (
+      <td key="play" className={rowPadding}>
+        <div className="flex items-center justify-center">
+          <button
+            className={`icon-button h-8 w-8 ${currentTrackId === track.id ? "border-moss text-moss" : ""}`}
+            title={`Play ${display(track.title, "track")}`}
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              model.cancelPendingTrackDetailOpen?.();
+              onPlayTrack(track, interactionList);
+            }}
+          >
+            {currentTrackId === track.id ? <Volume2 size={15} /> : <Play size={15} />}
+          </button>
+        </div>
+      </td>
+    );
+  }
+
+  function renderTrackDataCell(track: any, interactionList: any[], columnKey: string) {
+    if (columnKey === "play") {
+      return renderPlayButtonCell(track, interactionList);
+    }
+    const column = metadataColumnForKey(columnKey);
+    if (!column) {
+      return null;
+    }
+    return (
+      <td key={column.key} className={`${rowPadding} ${columnTextClass(column)}`} title={column.key === "path" ? track.path : undefined}>
+        {renderMetadataCell(track, column)}
+      </td>
+    );
+  }
+
+  function renderPlaceholderDataCell(columnKey: string, columnIndex: number) {
+    if (columnKey === "play") {
+      return (
+        <td key="play" className={rowPadding}>
+          <div className="mx-auto h-8 w-8 rounded border border-line/70 bg-white/[0.025]" />
+        </td>
+      );
+    }
+    const column = metadataColumnForKey(columnKey);
+    if (!column) {
+      return null;
+    }
+    return (
+      <td key={column.key} className={rowPadding}>
+        <div
+          className="h-3 rounded bg-white/[0.045]"
+          style={{ width: columnIndex === 0 ? "72%" : column.align === "right" ? "44%" : "56%" }}
+        />
+      </td>
+    );
+  }
+
   function renderTableHeader(sortable: boolean) {
+    const allowPlayReorder = sortable && libraryView === "tracks";
+    const headerColumns = allowPlayReorder ? orderedTrackColumns : fixedTrackColumns;
     return (
       <tr onContextMenu={openColumnContextMenu}>
         <th className="px-3 py-3">
@@ -105,28 +169,54 @@ export function createLibraryTrackRenderers(model: any) {
             onContextMenu={suppressCheckboxContextMenu}
           />
         </th>
-        <ResizableHeader label="" column="play" width={columnWidths.play} sort={sort} onSort={handleSort} onResize={handleResize} />
-        {visibleColumnDefs.map((column: any) => (
-          <ResizableHeader
-            key={column.key}
-            label={column.label}
-            column={column.key}
-            width={columnWidths[column.key]}
-            sortKey={sortable ? column.sortKey : undefined}
-            sort={sort}
-            onSort={handleSort}
-            onResize={handleResize}
-            align={column.align}
-            draggableColumn={column.key}
-            isDragging={draggedColumn === column.key}
-            isDragOver={dragOverColumn === column.key}
-            onColumnDragStart={handleColumnDragStart}
-            onColumnDragOver={handleColumnDragOver}
-            onColumnDrop={handleColumnDrop}
-            onColumnDragEnd={handleColumnDragEnd}
-            onColumnPointerDragStart={handleColumnPointerDragStart}
-          />
-        ))}
+        {headerColumns.map((columnKey: any) => {
+          if (columnKey === "play") {
+            return (
+              <ResizableHeader
+                key="play"
+                label=""
+                column="play"
+                width={columnWidths.play}
+                sort={sort}
+                onSort={handleSort}
+                onResize={handleResize}
+                draggableColumn={allowPlayReorder ? "play" : undefined}
+                isDragging={draggedColumn === "play"}
+                isDragOver={dragOverColumn === "play"}
+                onColumnDragStart={handleColumnDragStart}
+                onColumnDragOver={handleColumnDragOver}
+                onColumnDrop={handleColumnDrop}
+                onColumnDragEnd={handleColumnDragEnd}
+                onColumnPointerDragStart={handleColumnPointerDragStart}
+              />
+            );
+          }
+          const column = metadataColumnForKey(columnKey);
+          if (!column) {
+            return null;
+          }
+          return (
+            <ResizableHeader
+              key={column.key}
+              label={column.label}
+              column={column.key}
+              width={columnWidths[column.key]}
+              sortKey={sortable ? column.sortKey : undefined}
+              sort={sort}
+              onSort={handleSort}
+              onResize={handleResize}
+              align={column.align}
+              draggableColumn={column.key}
+              isDragging={draggedColumn === column.key}
+              isDragOver={dragOverColumn === column.key}
+              onColumnDragStart={handleColumnDragStart}
+              onColumnDragOver={handleColumnDragOver}
+              onColumnDrop={handleColumnDrop}
+              onColumnDragEnd={handleColumnDragEnd}
+              onColumnPointerDragStart={handleColumnPointerDragStart}
+            />
+          );
+        })}
       </tr>
     );
   }
@@ -145,7 +235,8 @@ export function createLibraryTrackRenderers(model: any) {
     }
   }
 
-  function renderTrackRow(track: any, interactionList: any[], removable = false) {
+  function renderTrackRow(track: any, interactionList: any[], removable = false, reorderPlay = false) {
+    const rowColumns = reorderPlay ? orderedTrackColumns : fixedTrackColumns;
     return (
       <tr
         key={track.id}
@@ -182,48 +273,19 @@ export function createLibraryTrackRenderers(model: any) {
             tabIndex={-1}
           />
         </td>
-        <td className={rowPadding}>
-          <div className="flex items-center justify-center">
-            <button
-              className={`icon-button h-8 w-8 ${currentTrackId === track.id ? "border-moss text-moss" : ""}`}
-              title={`Play ${display(track.title, "track")}`}
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                model.cancelPendingTrackDetailOpen?.();
-                onPlayTrack(track, interactionList);
-              }}
-            >
-              {currentTrackId === track.id ? <Volume2 size={15} /> : <Play size={15} />}
-            </button>
-          </div>
-        </td>
-        {visibleColumnDefs.map((column: any) => (
-          <td key={column.key} className={`${rowPadding} ${columnTextClass(column)}`} title={column.key === "path" ? track.path : undefined}>
-            {renderMetadataCell(track, column)}
-          </td>
-        ))}
+        {rowColumns.map((columnKey: any) => renderTrackDataCell(track, interactionList, columnKey))}
       </tr>
     );
   }
 
-  function renderTrackPlaceholderRow(index: number) {
+  function renderTrackPlaceholderRow(index: number, reorderPlay = false) {
+    const rowColumns = reorderPlay ? orderedTrackColumns : fixedTrackColumns;
     return (
       <tr key={`track-placeholder-${index}`} aria-hidden="true" style={{ height: trackRowHeight }} className="border-b border-line/40">
         <td className={rowPadding}>
           <div className="h-4 w-4 rounded border border-line/70 bg-white/[0.025]" />
         </td>
-        <td className={rowPadding}>
-          <div className="mx-auto h-8 w-8 rounded border border-line/70 bg-white/[0.025]" />
-        </td>
-        {visibleColumnDefs.map((column: any, columnIndex: number) => (
-          <td key={column.key} className={rowPadding}>
-            <div
-              className="h-3 rounded bg-white/[0.045]"
-              style={{ width: columnIndex === 0 ? "72%" : column.align === "right" ? "44%" : "56%" }}
-            />
-          </td>
-        ))}
+        {rowColumns.map((columnKey: any, columnIndex: number) => renderPlaceholderDataCell(columnKey, columnIndex))}
       </tr>
     );
   }
@@ -232,14 +294,14 @@ export function createLibraryTrackRenderers(model: any) {
     const rows = [];
     for (let index = virtualTrackStartIndex; index < virtualTrackEndIndex; index += 1) {
       const track = trackIndexCache.get(index);
-      rows.push(track ? renderTrackRow(track, tracks) : renderTrackPlaceholderRow(index));
+      rows.push(track ? renderTrackRow(track, tracks, false, true) : renderTrackPlaceholderRow(index, true));
     }
     return rows;
   }
 
-  function renderTrackRows(list: any[], options: { removable?: boolean; interactionList?: any[] } = {}) {
+  function renderTrackRows(list: any[], options: { removable?: boolean; interactionList?: any[]; reorderPlay?: boolean } = {}) {
     const interactionList = options.interactionList ?? list;
-    return list.map((track) => renderTrackRow(track, interactionList, Boolean(options.removable)));
+    return list.map((track) => renderTrackRow(track, interactionList, Boolean(options.removable), Boolean(options.reorderPlay)));
   }
 
   return {

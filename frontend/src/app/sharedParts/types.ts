@@ -1,28 +1,28 @@
 import type {
-  FontChoice,
-  ThemeAccent,
-  ThemeCheckboxAccent,
-  ThemeCheckboxUnchecked,
-  ThemeDensity,
-  ThemeFontScale,
+FontChoice,
+ThemeAccent,
+ThemeColorKey,
+ThemeColorOverrideValue,
+ThemeColorOverrides,
+ThemeCheckboxAccent,
+ThemeCheckboxUnchecked,
+ThemeDensity,
+ThemeFontScale,
+MiniPlayerLayoutPreset,
+MiniPlayerWindowMode,
 } from "../../config/theme";
 import type {
-  AudioAnalysisCoverage,
-  AudioAnalysisProgress,
-  AutoDjSettings,
-  ClapInstallProgress,
-  QueueTrack,
-  RecommendationDrift,
-  Track,
+AutoDjSettings,
+Track
 } from "../../types/api";
-import type { PointerEvent as ReactPointerEvent } from "react";
 
 export type Page = "library" | "analysis" | "nowPlaying" | "artist" | "history" | "autodj" | "audiobooks" | "podcasts" | "radio" | "scrobbling" | "cd" | "sources" | "fileManagement" | "settings";
 export type LibraryView = "tracks" | "artists" | "albums" | "playlists" | "completion" | "inbox" | "smart" | "health";
 export type BackendStatus = "unknown" | "starting" | "ok" | "down" | "restarting";
 export type PlaybackMode = "normal" | "repeatOne" | "repeatQueue" | "stopAfterCurrent";
 export type PlaybackEngine = "rust";
-export type desktopOutputBackendMode = "cpalShared" | "wasapiExclusive" | "asio";
+export type desktopOutputBackendMode = "cpalShared" | "wasapiExclusive";
+export type CrossfadeProfile = "off" | "quick" | "balanced" | "smooth" | "long" | "custom";
 export type SortDirection = "asc" | "desc";
 export type UiDensity = ThemeDensity;
 export type UiDensityPreference = "theme" | UiDensity;
@@ -32,6 +32,9 @@ export type CheckboxAccent = ThemeCheckboxAccent;
 export type CheckboxAccentPreference = "theme" | CheckboxAccent;
 export type CheckboxUnchecked = ThemeCheckboxUnchecked;
 export type CheckboxUncheckedPreference = "theme" | CheckboxUnchecked;
+export type ThemeColorPreferenceKey = ThemeColorKey;
+export type ThemeColorPreferenceValue = ThemeColorOverrideValue;
+export type ThemeColorPreferences = ThemeColorOverrides;
 export type SidebarWidthPreference = "theme" | number;
 export type AutoDjExperience = "simple" | "advanced";
 export type ReplayGainMode = "off" | "track" | "album";
@@ -39,6 +42,8 @@ export type EqualizerBandMode = "10" | "15";
 export type NowPlayingLayout = "queue" | "lyrics" | "party";
 export type NowPlayingVisualizerStyle = "bars" | "wave" | "radial" | "off";
 export type NowPlayingLyricSize = "small" | "medium" | "large";
+export type MiniPlayerLayout = MiniPlayerLayoutPreset;
+export type MiniPlayerWindowChromeMode = MiniPlayerWindowMode;
 export type KeyboardShortcutAction =
   | "page.library"
   | "page.analysis"
@@ -147,6 +152,14 @@ export interface LibraryColumnDefinition {
   align?: "left" | "right";
 }
 
+export interface LibrarySavedColumnLayout {
+  id: string;
+  name: string;
+  columns: LibraryColumnKey[];
+  view?: LibraryView;
+  updatedAt: string;
+}
+
 export interface SortState {
   key: SortKey;
   direction: SortDirection;
@@ -201,6 +214,8 @@ export interface MiniPlayerTrackSnapshot {
 
 export interface MiniPlayerSnapshot {
   track: MiniPlayerTrackSnapshot | null;
+  queue: MiniPlayerTrackSnapshot[];
+  currentIndex: number;
   isPlaying: boolean;
   currentTime: number;
   duration: number;
@@ -213,7 +228,8 @@ export type MiniPlayerCommand =
   | { type: "playPause" }
   | { type: "previous" }
   | { type: "next" }
-  | { type: "seek"; seconds: number };
+  | { type: "seek"; seconds: number }
+  | { type: "playQueueIndex"; index: number };
 
 export interface DeleteTrackPrompt {
   trackIds: number[];
@@ -225,20 +241,38 @@ export type RememberedDeleteChoice = "library" | "file";
 export type CdSidebarMode = "never" | "drive" | "always";
 export type SidebarPlacement = "left" | "right";
 
+export interface SourceScanRule {
+  enabled: boolean;
+  removeMissing: boolean;
+}
+
+export type SourceScanRules = Record<string, SourceScanRule>;
+
 export interface UiPreferences {
   hideFilePaths: boolean;
   showPodcastFilePaths: boolean;
   cdSidebarMode: CdSidebarMode;
   compactLibraryRows: boolean;
+  displayRatingsAsNumbers: boolean;
   defaultQueueLength: number;
   defaultTemperature: number;
   similarityWeight: number;
+  crossfadeProfile: CrossfadeProfile;
   playerFadeMs: number;
+  crossfadeManualProfile: CrossfadeProfile;
+  crossfadeManualMs: number;
+  crossfadeNaturalProfile: CrossfadeProfile;
+  crossfadeNaturalMs: number;
+  crossfadeAlbumProfile: CrossfadeProfile;
+  crossfadeAlbumMs: number;
+  crossfadeRadioProfile: CrossfadeProfile;
+  crossfadeRadioMs: number;
   skipThresholdPercent: number;
   playbackEngine: PlaybackEngine;
   desktopOutputBackend: desktopOutputBackendMode;
   desktopOutputDeviceId: string;
   desktopBufferFrames: number;
+  showOutputDiagnosticsButton: boolean;
   startupPage: Page;
   albumGrid: boolean;
   showToasts: boolean;
@@ -246,6 +280,17 @@ export interface UiPreferences {
   miniPlayerAlwaysOnTop: boolean;
   miniPlayerWidth: number;
   miniPlayerHeight: number;
+  miniPlayerLayout: MiniPlayerLayout;
+  miniPlayerShowArt: boolean;
+  miniPlayerShowLibraryButton: boolean;
+  miniPlayerShowAlwaysOnTopButton: boolean;
+  miniPlayerShowMediaControls: boolean;
+  miniPlayerShowPlaybar: boolean;
+  miniPlayerShowPlaytimeNumbers: boolean;
+  miniPlayerShowAlbumName: boolean;
+  miniPlayerWindowMode: MiniPlayerWindowChromeMode;
+  miniPlayerOpacity: number;
+  miniPlayerShowQueue: boolean;
   replayGainMode: ReplayGainMode;
   replayGainTargetVolumePercent: number;
   replayGainPreampDb: number;
@@ -265,6 +310,7 @@ export interface UiPreferences {
   autoFetchLyrics: boolean;
   autoFetchLrcWhenPlainPresent: boolean;
   themeAccent: ThemeAccent;
+  themeColorOverrides: ThemeColorPreferences;
   checkboxAccent: CheckboxAccentPreference;
   checkboxUnchecked: CheckboxUncheckedPreference;
   density: UiDensityPreference;
@@ -273,7 +319,10 @@ export interface UiPreferences {
   fontScale: FontScalePreference;
   fontChoice: FontChoice;
   enableArtistLookup: boolean;
-  libraryVisibleColumns: MetadataColumnKey[];
+  libraryVisibleColumns: LibraryColumnKey[];
+  libraryColumnLayouts: Partial<Record<LibraryView, LibraryColumnKey[]>>;
+  librarySavedColumnLayouts: LibrarySavedColumnLayout[];
+  sourceScanRules: SourceScanRules;
   keyboardShortcuts: Record<KeyboardShortcutAction, KeyboardShortcut>;
   advancedHttpShortcuts: AdvancedHttpShortcutBinding[];
 }

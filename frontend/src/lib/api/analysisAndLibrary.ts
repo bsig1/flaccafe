@@ -1,290 +1,81 @@
 ﻿import type {
-  AlbumCompletionLookupResponse,
-  AlbumSummary,
-  AlbumArtworkCandidatesResponse,
-  AlbumArtworkCollisionResponse,
-  AlbumArtworkSearchResponse,
-  AlbumArtworkUpdateResponse,
-  ArtistInfoResponse,
-  ArtistSummary,
-  AudioAnalysisCoverage,
-  AudioAnalysisProgress,
-  AudioAnalysisStartRequest,
-  AudioAnalysisStartResponse,
-  AudioConversionInstallProgress,
-  AudioConversionInstallRequest,
-  AudioConversionInstallStartResponse,
-  AudioConversionPreviewResponse,
-  AudioConversionProgress,
-  AudioConversionRequest,
-  AudioConversionSetupRequest,
-  AudioConversionSetupResponse,
-  AudioConversionStartResponse,
-  AudiobookBookmark,
-  AudiobookBookmarkRequest,
-  AudiobookChapter,
-  AudiobookListResponse,
-  AudiobookProgressRequest,
-  AudiobookProgressResponse,
-  AudiobookSyncExportResponse,
-  AutoDjAvoidRule,
-  AutoDjResponse,
-  AutoDjSettings,
-  AutoTagRequest,
-  AutoTagResponse,
-  AcousticFingerprintRequest,
-  AcousticFingerprintResponse,
-  AdvancedTrackSearchFilters,
-  BackupResponse,
-  BulkLyricsProgress,
-  BulkLyricsSaveLocation,
-  BulkLyricsStartResponse,
-  BulkUndoBatchEntry,
-  BulkUndoLogEntry,
-  BulkUndoRestoreResponse,
-  CacheClearResponse,
-  CacheClearTarget,
-  ChromaprintConfigRequest,
-  ChromaprintStatusResponse,
-  CdPlaybackResponse,
-  CdRipMetadataRequest,
-  CdRipMetadataResponse,
-  CdRipProgress,
-  CdRipSetupResponse,
-  CdRipStartRequest,
-  CdRipStartResponse,
-  CdRipTrackMetadata,
-  ClapConfigRequest,
-  ClapGenreTagRequest,
-  ClapGenreTagResponse,
-  ClapInstallProgress,
-  ClapInstallRequest,
-  ClapInstallStartResponse,
-  ClapStatusResponse,
-  CsvMetadataExportRequest,
-  CsvMetadataExportResponse,
-  CsvMetadataImportReportRequest,
-  CsvMetadataImportReportResponse,
-  CsvMetadataImportRequest,
-  CsvMetadataImportResponse,
-  CustomTagBatchRequest,
-  CustomTagBatchResponse,
-  ExportResponse,
-  ExtensionListResponse,
-  DuplicateActionRequest,
-  DuplicateActionResponse,
-  DeviceSyncDevicesResponse,
-  DeviceSyncProfile,
-  DeviceSyncProfilePayload,
-  DeviceSyncProfilesResponse,
-  DeviceSyncRequest,
-  DeviceSyncResponse,
-  DuplicateReviewRequest,
-  DuplicateReviewResponse,
-  FileOrganizationRequest,
-  FileOrganizationReportRequest,
-  FileOrganizationReportResponse,
-  FileOrganizationResponse,
-  GaplessValidationRequest,
-  GaplessValidationResponse,
-  FolderWatchApplyResponse,
-  FolderWatchStatus,
-  FilenameTagInferenceRequest,
-  FilenameTagInferenceResponse,
-  LibraryHealthResponse,
-  LibrarySourceRemoveResponse,
-  LocalDataResetResponse,
-  LibraryStatsImportRequest,
-  LibraryStatsImportResponse,
-  InboxAutoReviewRuleApplyResponse,
-  InboxAutoReviewRuleDeleteResponse,
-  InboxAutoReviewRuleRequest,
-  InboxResponse,
-  InboxReviewResponse,
-  InboxTrackNote,
-  HistoryStatsResponse,
-  LastFmLoginCompleteResponse,
-  LastFmLoginStartResponse,
-  LibraryStatsResponse,
-  LogTailResponse,
-  LyricsLookupRequest,
-  LyricsResponse,
-  LyricsUpdateRequest,
-  PlayEventEntry,
-  PlaylistSummary,
-  PodcastEpisode,
-  PodcastDeleteDownloadResponse,
-  PodcastFolderResponse,
-  PodcastRefreshResponse,
-  PodcastSubscription,
-  PodcastSubscriptionDeleteResponse,
-  PodcastSubscriptionPayload,
-  RadioStation,
-  RadioStationPayload,
-  RecommendationProfile,
-  LovedTrack,
-  ScrobbleAccount,
-  ScrobbleAccountRequest,
-  ScrobbleHistoryImportResponse,
-  ScrobbleOutboxEntry,
-  ScrobbleQueueHistoryResponse,
-  ScrobbleService,
-  ScrobbleSubmitResponse,
-  TrackLoveResponse,
-  RecommendationAbChoiceResponse,
-  RecommendationAbTestResponse,
-  RecommendationProfileComparison,
-  RecommendationProfileComparisonExportResponse,
-  RecommendationProfileComparisonImportResponse,
-  RecommendationRun,
-  RegexTagPreset,
-  RegexTagPresetRequest,
-  ReportFileRequest,
-  ReportFileResponse,
-  desktopScanSnapshot,
-  ScanProgress,
-  ScanResult,
-  ScanStartResponse,
-  SettingsResponse,
-  SettingsUpdateRequest,
-  SimilarTrack,
-  StartupDiagnosticsResponse,
-  SupportBundleResponse,
-  TagRegexReplaceRequest,
-  TagRegexReplaceResponse,
-  TagBackupRequest,
-  TagBackupResponse,
-  TagBackupRestoreRequest,
-  TagBackupRestoreResponse,
-  TagBackupSummary,
-  TagFieldCopySwapRequest,
-  TagFieldCopySwapResponse,
-  Track,
-  TrackBatchResponse,
-  TrackDeleteResponse,
-  TrackFileMetadataWriteRequest,
-  TrackFileMetadataWriteResponse,
-  TrackMetadataSyncResponse,
-  TracksDeleteResponse,
-  TrackMetadataUpdate,
-  TrackPage,
-  TrackRestoreRequest,
-  VirtualTagDefinition,
-  VirtualTagDefinitionRequest,
-  VirtualTagPreviewRequest,
-  VirtualTagPreviewResponse,
-  VolumeTagRequest,
-  VolumeTagResponse,
+AdvancedTrackSearchFilters,
+AlbumArtworkCandidatesResponse,
+AlbumArtworkSearchResponse,
+AlbumArtworkUpdateResponse,
+AlbumCompletionLookupResponse,
+AlbumSummary,
+ArtistInfoResponse,
+ArtistSummary,
+AudioAnalysisCoverage,
+AudioAnalysisProgress,
+AudioAnalysisStartRequest,
+AudioAnalysisStartResponse,
+BulkLyricsProgress,
+BulkLyricsSaveLocation,
+BulkLyricsStartResponse,
+ClapConfigRequest,
+ClapInstallProgress,
+ClapInstallRequest,
+ClapInstallStartResponse,
+ClapLibraryStats,
+ClapStatusResponse,
+ExportResponse,
+LyricsLookupRequest,
+LyricsResponse,
+LyricsUpdateRequest,
+PlaylistSummary,
+ScanProgress,
+ScanStartResponse,
+SimilarAlbum,
+SimilarArtist,
+SimilarTrack,
+Track,
+TrackBatchResponse,
+TrackDeleteResponse,
+TrackFileMetadataWriteRequest,
+TrackFileMetadataWriteResponse,
+TrackMetadataSyncResponse,
+TrackMetadataUpdate,
+TrackPage,
+TrackRestoreRequest,
+TracksDeleteResponse,
+desktopScanSnapshot
 } from "../../types/api";
 import {
-  desktopFetchAlbumTracks,
-  desktopFetchAlbums,
-  desktopFetchArtists,
-  desktopFetchAudiobookBookmarks,
-  desktopFetchAudiobookChapters,
-  desktopFetchAudiobooks,
-  desktopFetchBackendHealth,
-  desktopFetchClapCoverage,
-  desktopFetchHistory,
-  desktopFetchHistoryStats,
-  desktopFetchLibraryInbox,
-  desktopFetchLibraryHealth,
-  desktopFetchLibraryStats,
-  desktopFetchLyrics,
-  desktopFetchLyricsByMetadata,
-  desktopFetchLyricsOnline,
-  desktopFetchLovedTracks,
-  desktopFetchPlaylistTracks,
-  desktopFetchPlaylists,
-  desktopFetchRecommendationHistory,
-  desktopFetchRecommendationProfiles,
-  desktopFetchRadioStations,
-  desktopFetchSimilarTracks,
-  desktopFetchSettings,
-  desktopFetchTrack,
-  desktopFetchTrackPage,
-  desktopFetchTracksBatch,
-  desktopFileOrganizationPreview,
-  desktopGaplessValidate,
-  desktopGenerateAutoDj,
-  desktopAddTracksToPlaylist,
-  desktopCreateAudiobookBookmark,
-  desktopCreatePlaylist,
-  desktopDeletePlaylist,
-  desktopCreateAutoDjAvoidRule,
-  desktopDeleteAutoDjAvoidRule,
-  desktopDeleteAudiobookBookmark,
-  desktopDeleteDeviceSyncProfile,
-  desktopDeleteRadioStation,
-  desktopDeleteRegexTagPreset,
-  desktopDeleteVirtualTag,
-  desktopFetchAutoDjAvoidRules,
-  desktopClearLibraryCaches,
-  desktopFetchBulkUndoBatches,
-  desktopFetchBulkUndoLog,
-  desktopFetchDeviceSyncProfiles,
-  desktopMarkTrackPlayed,
-  desktopMarkTrackSkipped,
-  desktopMarkRadioStationPlayed,
-  desktopMoveTrackInPlaylist,
-  desktopRecordRecommendationFeedback,
-  desktopRemoveTrackFromPlaylist,
-  desktopRemoveLibrarySource,
-  desktopReviewInbox,
-  desktopSaveAudiobookChapters,
-  desktopSaveDeviceSyncProfile,
-  desktopSaveRadioStation,
-  desktopSaveRegexTagPreset,
-  desktopSaveRecommendationProfile,
-  desktopSaveVirtualTag,
-  desktopSetDefaultRecommendationProfile,
-  desktopDeleteRecommendationProfile,
-  desktopUpdateAudiobookProgress,
-  desktopUpdateInboxNote,
-  desktopUpdateSettings,
-  desktopUpdateTrackLove,
-  desktopUpdateTrackRating,
-  desktopUpdateLyrics,
-  desktopStartBulkLyricsLookup,
-  desktopFetchBulkLyricsLookupProgress,
-  desktopCancelBulkLyricsLookup,
-  desktopVolumeTagsPreview,
-  desktopFetchRegexTagPresets,
-  desktopFetchVirtualTags,
-  desktopCreateInboxAutoReviewRule,
-  desktopUpdateInboxAutoReviewRule,
-  desktopDeleteInboxAutoReviewRule,
-  desktopCustomTags,
-  desktopVirtualTagPreview,
-  desktopCopySwapTags,
-  desktopRegexTags,
-  desktopFetchPodcastSubscriptions,
-  desktopSavePodcastSubscription,
-  desktopDeletePodcastSubscription,
-  desktopEnsurePodcastSubscriptionFolder,
-  desktopFetchPodcastEpisodes,
-  desktopFetchScrobbleAccounts,
-  desktopSaveScrobbleAccount,
-  desktopFetchScrobbleOutbox,
-  desktopFetchDuplicateReview,
-  desktopFetchArtistLocalTracks,
-  desktopClearArtistCache,
-  desktopChooseRecommendationAbTest,
-  desktopCompareRecommendationProfiles,
-  desktopCreateRecommendationAbTest,
-  desktopExportRecommendationProfileComparison,
-  desktopFetchArtistInfo,
-  desktopSaveArtistInfoOverride,
-  desktopFetchAudioConversionSetup,
-  desktopFetchChromaprintSetup,
-  desktopImportRecommendationProfileComparison,
-  desktopInferFilenameTags,
-  desktopQueueScrobbleHistory,
-  desktopRestoreBulkUndoBatch,
-  desktopRestoreBulkUndoEntry,
-  desktopSaveAudioConversionSetup,
-  desktopBackendJson,
-  desktopSaveChromaprintSetup,
+desktopAddTracksToPlaylist,
+desktopBackendJson,
+desktopCancelBulkLyricsLookup,
+desktopClearArtistCache,
+desktopCreatePlaylist,
+desktopDeletePlaylist,
+desktopFetchAlbumTracks,
+desktopFetchAlbums,
+desktopFetchArtistInfo,
+desktopFetchArtistLocalTracks,
+desktopFetchArtists,
+desktopFetchBulkLyricsLookupProgress,
+desktopFetchClapCoverage,
+desktopFetchClapLibraryStats,
+desktopFetchLyrics,
+desktopFetchLyricsByMetadata,
+desktopFetchLyricsOnline,
+desktopFetchPlaylistTracks,
+desktopFetchPlaylists,
+desktopFetchSimilarAlbums,
+desktopFetchSimilarArtists,
+desktopFetchSimilarTracks,
+desktopFetchTrack,
+desktopFetchTrackPage,
+desktopFetchTracksBatch,
+desktopMarkTrackPlayed,
+desktopMarkTrackSkipped,
+desktopMoveTrackInPlaylist,
+desktopRemoveTrackFromPlaylist,
+desktopSaveArtistInfoOverride,
+desktopStartBulkLyricsLookup,
+desktopUpdateLyrics,
+desktopUpdateTrackRating
 } from "../desktopLibrary";
 import { desktopMediaUrl } from "../desktopMedia";
 
@@ -321,6 +112,10 @@ export function fetchClapStatus(deep = false): Promise<ClapStatusResponse> {
 
 export function fetchClapCoverage(): Promise<AudioAnalysisCoverage> {
   return desktopFetchClapCoverage().catch(() => request<AudioAnalysisCoverage>("/analysis/clap/coverage"));
+}
+
+export function fetchClapLibraryStats(): Promise<ClapLibraryStats> {
+  return desktopFetchClapLibraryStats();
 }
 
 export function startClapInstall(requestBody: ClapInstallRequest): Promise<ClapInstallStartResponse> {
@@ -410,7 +205,7 @@ function appendAdvancedTrackSearchFilters(params: URLSearchParams, filters?: Adv
   if (!filters) {
     return;
   }
-  (["artist", "album", "genre", "path", "extension"] as const).forEach((key) => {
+  (["artist", "album", "genre", "mood", "path", "extension"] as const).forEach((key) => {
     const value = filters[key]?.trim();
     if (value) {
       params.set(key, value);
@@ -449,6 +244,14 @@ export function fetchTracksBatch(trackIds: number[]): Promise<TrackBatchResponse
 
 export function fetchSimilarTracks(trackId: number, limit = 12): Promise<SimilarTrack[]> {
   return desktopFetchSimilarTracks(trackId, limit);
+}
+
+export function fetchSimilarAlbums(albumId: number, limit = 8): Promise<SimilarAlbum[]> {
+  return desktopFetchSimilarAlbums(albumId, limit);
+}
+
+export function fetchSimilarArtists(artistName: string, limit = 8): Promise<SimilarArtist[]> {
+  return desktopFetchSimilarArtists(artistName, limit);
 }
 
 export function deleteTrack(trackId: number, deleteFile = false): Promise<TrackDeleteResponse> {
@@ -608,6 +411,13 @@ export function clearAlbumArtwork(albumId: number): Promise<AlbumArtworkUpdateRe
   });
 }
 
+export function setAlbumArtworkLocked(albumId: number, locked: boolean): Promise<AlbumArtworkUpdateResponse> {
+  return request<AlbumArtworkUpdateResponse>(`/albums/${albumId}/artwork`, {
+    method: "PATCH",
+    body: JSON.stringify({ artwork_locked: locked }),
+  });
+}
+
 function artworkVersionQuery(version?: string | number | null): string {
   return `?v=${encodeURIComponent(String(version ?? ARTWORK_URL_SESSION_VERSION))}`;
 }
@@ -615,20 +425,6 @@ function artworkVersionQuery(version?: string | number | null): string {
 export function albumCoverUrl(albumId: number, version?: string | number | null): string {
   const query = artworkVersionQuery(version);
   return desktopMediaUrl(`/album-artwork/${albumId}${query}`) ?? "";
-}
-
-export function previewArtworkCollisions(limit = 200): Promise<AlbumArtworkCollisionResponse> {
-  return request<AlbumArtworkCollisionResponse>("/library/tools/artwork-collisions", {
-    method: "POST",
-    body: JSON.stringify({ apply: false, limit }),
-  });
-}
-
-export function applyArtworkCollisionRepair(limit = 200): Promise<AlbumArtworkCollisionResponse> {
-  return request<AlbumArtworkCollisionResponse>("/library/tools/artwork-collisions", {
-    method: "POST",
-    body: JSON.stringify({ apply: true, limit }),
-  });
 }
 
 export function fetchPlaylists(): Promise<PlaylistSummary[]> {
@@ -706,33 +502,42 @@ export function importPlaylist(playlistPath: string, name?: string): Promise<Pla
   );
 }
 
-function scanRequestBody(folderPaths: string | string[], saveLibraryPaths?: string[], desktopSnapshot?: desktopScanSnapshot | null) {
+function scanRequestBody(
+  folderPaths: string | string[],
+  saveLibraryPaths?: string[],
+  desktopSnapshot?: desktopScanSnapshot | null,
+  options: { cleanupFolderPaths?: string[] } = {},
+) {
   const paths = (Array.isArray(folderPaths) ? folderPaths : [folderPaths]).map((path) => path.trim()).filter(Boolean);
   const savedPaths = (saveLibraryPaths ?? paths).map((path) => path.trim()).filter(Boolean);
+  const cleanupPaths = (options.cleanupFolderPaths ?? paths).map((path) => path.trim()).filter(Boolean);
   return {
     folder_path: paths[0] ?? "",
     folder_paths: paths,
     save_library_paths: savedPaths,
+    cleanup_folder_paths: cleanupPaths,
     snapshot: desktopSnapshot ?? null,
   };
 }
 
-export function scanLibrary(folderPath: string | string[], saveLibraryPaths?: string[], desktopSnapshot?: desktopScanSnapshot | null): Promise<ScanResult> {
-  return request<ScanResult>("/scan", {
-    method: "POST",
-    body: JSON.stringify(scanRequestBody(folderPath, saveLibraryPaths, desktopSnapshot)),
-  });
-}
-
-export function startScanLibrary(folderPath: string | string[], saveLibraryPaths?: string[], desktopSnapshot?: desktopScanSnapshot | null): Promise<ScanStartResponse> {
+export function startScanLibrary(
+  folderPath: string | string[],
+  saveLibraryPaths?: string[],
+  desktopSnapshot?: desktopScanSnapshot | null,
+  options: { cleanupFolderPaths?: string[] } = {},
+): Promise<ScanStartResponse> {
   return request<ScanStartResponse>("/scan/start", {
     method: "POST",
-    body: JSON.stringify(scanRequestBody(folderPath, saveLibraryPaths, desktopSnapshot)),
+    body: JSON.stringify(scanRequestBody(folderPath, saveLibraryPaths, desktopSnapshot, options)),
   });
 }
 
 export function fetchScanProgress(jobId: string): Promise<ScanProgress> {
   return request<ScanProgress>(`/scan/jobs/${jobId}`);
+}
+
+export function cancelScanLibrary(jobId: string): Promise<ScanProgress> {
+  return request<ScanProgress>(`/scan/jobs/${jobId}/cancel`, { method: "POST" });
 }
 
 export function updateTrackRating(trackId: number, rating: number | null): Promise<Track> {
@@ -742,10 +547,6 @@ export function updateTrackRating(trackId: number, rating: number | null): Promi
       body: JSON.stringify({ rating }),
     }),
   );
-}
-
-export function audioUrl(trackId: number): string {
-  return desktopMediaUrl(`/track-audio/${trackId}`) ?? "";
 }
 
 export function albumArtworkUrl(trackId: number, version?: string | number | null): string {

@@ -1,44 +1,44 @@
 import {
-  AlertTriangle,
-  Ban,
-  CheckCircle2,
-  Disc3,
-  Download,
-  FolderOpen,
-  ListChecks,
-  Music2,
-  Play,
-  RefreshCw,
-  Search,
-  ShieldCheck,
-  Wrench,
+AlertTriangle,
+Ban,
+CheckCircle2,
+Disc3,
+Download,
+FolderOpen,
+ListChecks,
+Music2,
+Play,
+RefreshCw,
+Search,
+ShieldCheck,
+Wrench,
 } from "lucide-react";
 import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
+useEffect,
+useMemo,
+useRef,
+useState,
 } from "react";
 
 import {
-  cancelCdRip,
-  fetchCdRipProgress,
-  fetchCdRipSetup,
-  lookupCdRipMetadata,
-  playCdTrack,
-  startCdRip,
+cancelCdRip,
+fetchCdRipProgress,
+fetchCdRipSetup,
+lookupCdRipMetadata,
+playCdTrack,
+startCdRip,
 } from "../../../lib/api";
 import type {
-  CdRipOutputFormat,
-  CdRipProgress,
-  CdRipReleaseCandidate,
-  CdRipSetupResponse,
-  CdRipTrackMetadata,
-  Track,
+CdRipOutputFormat,
+CdRipProgress,
+CdRipReleaseCandidate,
+CdRipSetupResponse,
+CdRipTrackMetadata,
+Track,
 } from "../../../types/api";
 import {
-  DisclosureSection,
-  NumberField,
+DisclosureSection,
+NumberField,
 } from "../../components/common";
 
 function formatDuration(seconds: number | null | undefined) {
@@ -185,9 +185,7 @@ export function CdRipperSection({
   const ripBlockedByFfmpeg = ffmpegMissing && selectedFormatNeedsFfmpeg;
   const selectedNormalizedDriveId = normalizeCdDriveId(selectedDriveId);
   const currentNormalizedPlaybackDriveId = normalizeCdDriveId(currentCdPlaybackDriveId);
-  const setupPlaybackDriveIds = setup?.active_playback_drive_ids ?? [];
   const setupRipDriveIds = setup?.active_rip_drive_ids ?? [];
-  const setupPlaybackOnSelectedDrive = setupPlaybackDriveIds.some((driveId) => normalizeCdDriveId(driveId) === selectedNormalizedDriveId);
   const setupRipOnSelectedDrive = setupRipDriveIds.some((driveId) => normalizeCdDriveId(driveId) === selectedNormalizedDriveId);
   const currentPlaybackOnSelectedDrive = Boolean(
     isCdPlaybackActive &&
@@ -195,7 +193,7 @@ export function CdRipperSection({
         !selectedNormalizedDriveId ||
         currentNormalizedPlaybackDriveId === selectedNormalizedDriveId),
   );
-  const ripBlockedByPlayback = preparingPlayback || currentPlaybackOnSelectedDrive || setupPlaybackOnSelectedDrive;
+  const ripBlockedByPlayback = preparingPlayback || currentPlaybackOnSelectedDrive;
   const playBlockedByRip = activeJob || setupRipOnSelectedDrive;
   const visibleSetupWarnings = setupWarnings.filter(
     (warning) =>

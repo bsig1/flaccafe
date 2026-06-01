@@ -84,6 +84,8 @@ fn primary_artist_sql(alias: &str) -> String {
 }
 
 pub(crate) fn ensure_performance_schema(connection: &Connection) -> Result<(), String> {
+    // These tables are materialized read models for the hot library views. The
+    // triggers below mark them dirty, and browse/search calls refresh lazily.
     connection
         .execute_batch(
             r#"
@@ -96,6 +98,7 @@ pub(crate) fn ensure_performance_schema(connection: &Connection) -> Result<(), S
               album_ids_csv TEXT,
               edition_count INTEGER NOT NULL DEFAULT 1,
               artwork_path TEXT,
+              artwork_locked INTEGER NOT NULL DEFAULT 0,
               track_count INTEGER NOT NULL DEFAULT 0,
               expected_track_count INTEGER,
               missing_track_count INTEGER NOT NULL DEFAULT 0,
@@ -253,6 +256,19 @@ pub(crate) fn ensure_performance_schema(connection: &Connection) -> Result<(), S
         .map_err(|error| format!("Could not create library performance schema: {error}"))?;
 
     ensure_tracks_fts(connection)?;
+    if !table_has_column(connection, "album_summaries", "artwork_locked") {
+        connection
+            .execute(
+                "ALTER TABLE album_summaries ADD COLUMN artwork_locked INTEGER NOT NULL DEFAULT 0",
+                [],
+            )
+            .map_err(|error| format!("Could not add album artwork lock summary column: {error}"))?;
+    }
+    if get_setting(connection, "library_article_sort_normalized").as_deref() != Some("1") {
+        let _ = set_setting(connection, "library_article_sort_normalized", Some("1"));
+        let _ = set_setting(connection, "library_derived_dirty", Some("1"));
+        let _ = connection.execute("DELETE FROM library_query_cache WHERE cache_key LIKE 'ui:%'", []);
+    }
     let dirty_exists = get_setting(connection, "library_derived_dirty").is_some();
     if !dirty_exists {
         let _ = set_setting(connection, "library_derived_dirty", Some("1"));
@@ -411,6 +427,8 @@ fn ensure_library_derived_data_current(connection: &Connection) -> Result<(), St
 }
 
 fn refresh_library_derived_data(connection: &Connection) -> Result<(), String> {
+    // Rebuild the read models in one transaction so the UI either sees the old
+    // summaries or the complete refreshed set, never a half-populated mix.
     let transaction = connection
         .unchecked_transaction()
         .map_err(|error| format!("Could not start derived library refresh: {error}"))?;
@@ -429,13 +447,15 @@ fn refresh_library_derived_data(connection: &Connection) -> Result<(), String> {
 
     let album_key = "lower(trim(coalesce(albums.album, '')))";
     let artist_key = "lower(trim(coalesce(albums.album_artist, '')))";
+    let sort_album_artist = article_sort_expression("album_artist");
+    let sort_album = article_sort_expression("album");
     transaction
         .execute(
             &format!(
                 r#"
                 INSERT INTO album_summaries(
                     id, album, album_artist, year, years_csv, album_ids_csv, edition_count,
-                    artwork_path, track_count, expected_track_count, missing_track_count,
+                    artwork_path, artwork_locked, track_count, expected_track_count, missing_track_count,
                     duration_seconds, average_rating, artwork_track_id,
                     completion_expected_track_count, completion_source, completion_release_id,
                     completion_release_title, completion_checked_at, sort_album_artist,
@@ -468,6 +488,7 @@ fn refresh_library_derived_data(connection: &Connection) -> Result<(), String> {
                         group_concat(DISTINCT albums.id) AS album_ids_csv,
                         count(DISTINCT albums.id) AS edition_count,
                         max(albums.artwork_path) AS artwork_path,
+                        max(coalesce(albums.artwork_locked, 0)) AS artwork_locked,
                         count(tracks.id) AS track_count,
                         sum(tracks.duration_seconds) AS duration_seconds,
                         avg(tracks.rating) AS average_rating,
@@ -495,6 +516,7 @@ fn refresh_library_derived_data(connection: &Connection) -> Result<(), String> {
                     album_ids_csv,
                     edition_count,
                     artwork_path,
+                    artwork_locked,
                     track_count,
                     CASE
                       WHEN completion_expected_track_count IS NOT NULL
@@ -519,19 +541,22 @@ fn refresh_library_derived_data(connection: &Connection) -> Result<(), String> {
                     completion_release_id,
                     completion_release_title,
                     completion_checked_at,
-                    lower(coalesce(album_artist, '')) AS sort_album_artist,
-                    lower(coalesce(album, '')) AS sort_album,
+                    {sort_album_artist} AS sort_album_artist,
+                    {sort_album} AS sort_album,
                     coalesce(year, 9999) AS sort_year,
                     coalesce(album, '') || ' ' || coalesce(album_artist, '') || ' ' || coalesce(year, '') AS search_text
                 FROM raw_groups
                 "#,
-                music_filter = music_only_clause()
+                music_filter = music_only_clause(),
+                sort_album_artist = sort_album_artist,
+                sort_album = sort_album
             ),
             [],
         )
         .map_err(|error| format!("Could not refresh album summaries: {error}"))?;
 
     let artist_expr = primary_artist_sql("tracks");
+    let sort_artist_name = article_sort_expression("artist_name");
     transaction
         .execute(
             &format!(
@@ -575,11 +600,12 @@ fn refresh_library_derived_data(connection: &Connection) -> Result<(), String> {
                     first_year,
                     last_year,
                     artwork_track_id,
-                    lower(artist_name) AS sort_name,
+                    {sort_artist_name} AS sort_name,
                     artist_name || ' ' || coalesce(first_album, '') || ' ' || coalesce(first_genre, '') || ' ' || coalesce(first_year, '') || ' ' || coalesce(last_year, '') AS search_text
                 FROM grouped
                 "#,
-                music_filter = music_only_clause()
+                music_filter = music_only_clause(),
+                sort_artist_name = sort_artist_name
             ),
             [],
         )
@@ -587,7 +613,8 @@ fn refresh_library_derived_data(connection: &Connection) -> Result<(), String> {
 
     transaction
         .execute(
-            r#"
+            &format!(
+                r#"
             INSERT INTO playlist_summaries(
                 id, name, track_count, duration_seconds, created_at, updated_at, sort_name
             )
@@ -598,12 +625,14 @@ fn refresh_library_derived_data(connection: &Connection) -> Result<(), String> {
                 sum(tracks.duration_seconds) AS duration_seconds,
                 playlists.created_at,
                 playlists.updated_at,
-                lower(playlists.name) AS sort_name
+                {sort_playlist_name} AS sort_name
             FROM playlists
             LEFT JOIN playlist_tracks ON playlist_tracks.playlist_id = playlists.id
             LEFT JOIN tracks ON tracks.id = playlist_tracks.track_id
             GROUP BY playlists.id
             "#,
+                sort_playlist_name = article_sort_expression("playlists.name")
+            ),
             [],
         )
         .map_err(|error| format!("Could not refresh playlist summaries: {error}"))?;

@@ -1,67 +1,163 @@
-import type { FontChoice, ThemeAccent } from "../../config/theme";
+import type { FontChoice,ThemeAccent,ThemeColorOverrideValue } from "../../config/theme";
 import {
-  sidebarWidthMaxPx,
-  sidebarWidthMinPx,
-  sidebarWidthStepPx,
+defaultMiniPlayerPreset,
+fontChoiceLabels,
+normalizeMiniPlayerPreset,
+sidebarWidthMaxPx,
+sidebarWidthMinPx,
+sidebarWidthStepPx,
+themeColorKeys,
 } from "../../config/theme";
-import { fontChoiceLabels } from "../../config/theme";
-import type {
-  AudioAnalysisCoverage,
-  AudioAnalysisProgress,
-  AutoDjSettings,
-  ClapInstallProgress,
-  QueueTrack,
-  RecommendationDrift,
-  Track,
-} from "../../types/api";
-import type {
-  AutoDjTemplate,
-  CdSidebarMode,
-  CheckboxAccentPreference,
-  CheckboxUncheckedPreference,
-  desktopOutputBackendMode,
-  EqualizerBandMode,
-  FontScalePreference,
-  NowPlayingLayout,
-  NowPlayingLyricSize,
-  NowPlayingVisualizerStyle,
-  Page,
-  PlaybackEngine,
-  ReplayGainMode,
-  SidebarPlacement,
-  SidebarWidthPreference,
-  UiDensityPreference,
-  UiPreferences,
-} from "./types";
 import {
-  defaultAutoDj,
-  defaultKeyboardShortcuts,
-  defaultLibraryVisibleColumns,
-  DEFAULT_FADE_MS,
-  EQUALIZER_GAIN_MIN_DB,
-  EQUALIZER_PREAMP_MAX_DB,
-  EQUALIZER_PREAMP_MIN_DB,
-  legacyStorageKeys,
-  REPLAYGAIN_TARGET_DEFAULT_PERCENT,
-  REPLAYGAIN_TARGET_MAX_PERCENT,
-  REPLAYGAIN_TARGET_MIN_PERCENT,
-  storageKeys,
-} from "./constants";
+limitRecentItems,
+} from "../../lib/uiInteractions";
 import {
-  clampNumber,
-  normalizeEqualizerGains,
-  replayGainTargetPercentFromLegacyLufs,
+clampNumber,
+normalizeEqualizerGains,
+replayGainTargetPercentFromLegacyLufs,
 } from "./audioControls";
 import {
-  normalizeAdvancedHttpShortcuts,
-  normalizeKeyboardShortcuts,
-  normalizeLibraryColumns,
-} from "./keyboard";
+DEFAULT_FADE_MS,
+crossfadeProfileDurations,
+defaultKeyboardShortcuts,
+defaultLibraryVisibleColumns,
+EQUALIZER_PREAMP_MAX_DB,
+EQUALIZER_PREAMP_MIN_DB,
+legacyStorageKeys,
+REPLAYGAIN_TARGET_DEFAULT_PERCENT,
+REPLAYGAIN_TARGET_MAX_PERCENT,
+REPLAYGAIN_TARGET_MIN_PERCENT,
+storageKeys,
+uiPreferencesChannelName,
+} from "./constants";
 import {
-  limitRecentItems,
-} from "../../lib/uiInteractions";
+normalizeAdvancedHttpShortcuts,
+normalizeKeyboardShortcuts,
+normalizeLibraryColumns,
+} from "./keyboard";
+import type {
+AutoDjTemplate,
+CdSidebarMode,
+CheckboxAccentPreference,
+CheckboxUncheckedPreference,
+CrossfadeProfile,
+desktopOutputBackendMode,
+EqualizerBandMode,
+FontScalePreference,
+LibraryColumnKey,
+LibraryView,
+LibrarySavedColumnLayout,
+NowPlayingLayout,
+NowPlayingLyricSize,
+NowPlayingVisualizerStyle,
+Page,
+ReplayGainMode,
+SidebarPlacement,
+SourceScanRules,
+UiDensityPreference,
+UiPreferences
+} from "./types";
 
 const RUST_PLAYBACK_DEFAULT_MIGRATION_VALUE = "done";
+
+function normalizeThemeColorOverrides(value: unknown): UiPreferences["themeColorOverrides"] {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+  const source = value as Record<string, unknown>;
+  const validValues = new Set<string>(["theme", ...themeColorKeys]);
+  const normalized: UiPreferences["themeColorOverrides"] = {};
+  for (const key of themeColorKeys) {
+    const override = source[key];
+    if (typeof override === "string" && override !== "theme" && validValues.has(override)) {
+      normalized[key] = override as ThemeColorOverrideValue;
+    }
+  }
+  return normalized;
+}
+
+const libraryViews: LibraryView[] = ["tracks", "artists", "albums", "playlists", "completion", "inbox", "smart", "health"];
+
+function normalizeLibraryColumnLayouts(value: unknown): UiPreferences["libraryColumnLayouts"] {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+  const source = value as Partial<Record<LibraryView, unknown>>;
+  const normalized: Partial<Record<LibraryView, LibraryColumnKey[]>> = {};
+  for (const view of libraryViews) {
+    if (Array.isArray(source[view])) {
+      const columns = normalizeLibraryColumns(source[view]);
+      normalized[view] = columns;
+    }
+  }
+  return normalized;
+}
+
+function crossfadeProfileForFadeMs(fadeMs: number): CrossfadeProfile {
+  for (const [profile, duration] of Object.entries(crossfadeProfileDurations) as Array<[Exclude<CrossfadeProfile, "custom">, number]>) {
+    if (duration === fadeMs) {
+      return profile;
+    }
+  }
+  return "custom";
+}
+
+function normalizeCrossfadeProfile(value: unknown, fallback: CrossfadeProfile): CrossfadeProfile {
+  return ["off", "quick", "balanced", "smooth", "long", "custom"].includes(value as CrossfadeProfile)
+    ? (value as CrossfadeProfile)
+    : fallback;
+}
+
+function normalizeCrossfadeMs(value: unknown, fallback: number): number {
+  return typeof value === "number" ? clampNumber(value, 0, 5000) : fallback;
+}
+
+function normalizeLibrarySavedColumnLayouts(value: unknown): LibrarySavedColumnLayout[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((layout): LibrarySavedColumnLayout | null => {
+      if (!layout || typeof layout !== "object") {
+        return null;
+      }
+      const source = layout as Partial<LibrarySavedColumnLayout>;
+      const name = typeof source.name === "string" ? source.name.trim() : "";
+      const columns = normalizeLibraryColumns(source.columns);
+      if (!name || columns.length === 0) {
+        return null;
+      }
+      const view = source.view && libraryViews.includes(source.view) ? source.view : undefined;
+      return {
+        id: typeof source.id === "string" && source.id.trim() ? source.id : `layout-${name.toLowerCase().replace(/\s+/g, "-")}`,
+        name,
+        columns,
+        view,
+        updatedAt: typeof source.updatedAt === "string" ? source.updatedAt : new Date().toISOString(),
+      };
+    })
+    .filter((layout): layout is LibrarySavedColumnLayout => Boolean(layout))
+    .slice(0, 24);
+}
+
+function normalizeSourceScanRules(value: unknown): SourceScanRules {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+  const normalized: SourceScanRules = {};
+  for (const [rawKey, rawRule] of Object.entries(value as Record<string, unknown>)) {
+    const key = rawKey.trim().toLowerCase();
+    if (!key || !rawRule || typeof rawRule !== "object") {
+      continue;
+    }
+    const rule = rawRule as Partial<SourceScanRules[string]>;
+    normalized[key] = {
+      enabled: typeof rule.enabled === "boolean" ? rule.enabled : true,
+      removeMissing: typeof rule.removeMissing === "boolean" ? rule.removeMissing : true,
+    };
+  }
+  return normalized;
+}
 
 function completeRustPlaybackDefaultMigration(parsedPreferences?: Record<string, unknown>) {
   try {
@@ -77,21 +173,55 @@ function completeRustPlaybackDefaultMigration(parsedPreferences?: Record<string,
   }
 }
 
+export function publishUiPreferences(preferences: UiPreferences) {
+  if (!("BroadcastChannel" in window)) {
+    return;
+  }
+  try {
+    const channel = new BroadcastChannel(uiPreferencesChannelName);
+    channel.postMessage({ type: "uiPreferences", preferences });
+    channel.close();
+  } catch {
+    // Cross-window sync is a convenience; storage still holds the latest value.
+  }
+}
+
+export function writeUiPreferences(preferences: UiPreferences) {
+  try {
+    window.localStorage.setItem(storageKeys.uiPreferences, JSON.stringify(preferences));
+    window.localStorage.setItem(storageKeys.hideFilePaths, String(preferences.hideFilePaths));
+  } catch {
+    // Ignore private/local storage failures; the setting still works for the session.
+  }
+  publishUiPreferences(preferences);
+}
+
 export function readUiPreferences(): UiPreferences {
   const defaults: UiPreferences = {
     hideFilePaths: true,
     showPodcastFilePaths: false,
     cdSidebarMode: "drive",
     compactLibraryRows: false,
+    displayRatingsAsNumbers: false,
     defaultQueueLength: 25,
     defaultTemperature: 0.8,
     similarityWeight: 1.4,
+    crossfadeProfile: "balanced",
     playerFadeMs: DEFAULT_FADE_MS,
+    crossfadeManualProfile: "balanced",
+    crossfadeManualMs: DEFAULT_FADE_MS,
+    crossfadeNaturalProfile: "smooth",
+    crossfadeNaturalMs: crossfadeProfileDurations.smooth,
+    crossfadeAlbumProfile: "off",
+    crossfadeAlbumMs: crossfadeProfileDurations.off,
+    crossfadeRadioProfile: "quick",
+    crossfadeRadioMs: crossfadeProfileDurations.quick,
     skipThresholdPercent: 35,
     playbackEngine: "rust",
     desktopOutputBackend: "cpalShared",
     desktopOutputDeviceId: "",
     desktopBufferFrames: 0,
+    showOutputDiagnosticsButton: false,
     startupPage: "library",
     albumGrid: true,
     showToasts: true,
@@ -99,6 +229,17 @@ export function readUiPreferences(): UiPreferences {
     miniPlayerAlwaysOnTop: false,
     miniPlayerWidth: 420,
     miniPlayerHeight: 118,
+    miniPlayerLayout: defaultMiniPlayerPreset.layout,
+    miniPlayerShowArt: defaultMiniPlayerPreset.showArt,
+    miniPlayerShowLibraryButton: defaultMiniPlayerPreset.showLibraryButton,
+    miniPlayerShowAlwaysOnTopButton: defaultMiniPlayerPreset.showAlwaysOnTopButton,
+    miniPlayerShowMediaControls: defaultMiniPlayerPreset.showMediaControls,
+    miniPlayerShowPlaybar: defaultMiniPlayerPreset.showPlaybar,
+    miniPlayerShowPlaytimeNumbers: defaultMiniPlayerPreset.showPlaytimeNumbers,
+    miniPlayerShowAlbumName: defaultMiniPlayerPreset.showAlbumName,
+    miniPlayerWindowMode: defaultMiniPlayerPreset.windowMode,
+    miniPlayerOpacity: defaultMiniPlayerPreset.opacity,
+    miniPlayerShowQueue: defaultMiniPlayerPreset.showQueue,
     replayGainMode: "off",
     replayGainTargetVolumePercent: REPLAYGAIN_TARGET_DEFAULT_PERCENT,
     replayGainPreampDb: 0,
@@ -118,6 +259,7 @@ export function readUiPreferences(): UiPreferences {
     autoFetchLyrics: true,
     autoFetchLrcWhenPlainPresent: true,
     themeAccent: "cafe",
+    themeColorOverrides: {},
     checkboxAccent: "theme",
     checkboxUnchecked: "theme",
     density: "theme",
@@ -127,6 +269,9 @@ export function readUiPreferences(): UiPreferences {
     fontChoice: "theme",
     enableArtistLookup: true,
     libraryVisibleColumns: defaultLibraryVisibleColumns,
+    libraryColumnLayouts: {},
+    librarySavedColumnLayouts: [],
+    sourceScanRules: {},
     keyboardShortcuts: defaultKeyboardShortcuts,
     advancedHttpShortcuts: [],
   };
@@ -143,6 +288,19 @@ export function readUiPreferences(): UiPreferences {
       );
       // Older builds stored a compact bottom-player mode; the main player now stays full-width.
       const validPages: Page[] = ["library", "analysis", "nowPlaying", "artist", "audiobooks", "podcasts", "radio", "scrobbling", "cd", "history", "autodj", "sources", "fileManagement", "settings"];
+      const miniPlayerPreset = normalizeMiniPlayerPreset({
+        layout: parsed.miniPlayerLayout,
+        showArt: parsed.miniPlayerShowArt,
+        showLibraryButton: parsed.miniPlayerShowLibraryButton,
+        showAlwaysOnTopButton: parsed.miniPlayerShowAlwaysOnTopButton,
+        showMediaControls: parsed.miniPlayerShowMediaControls,
+        showPlaybar: parsed.miniPlayerShowPlaybar,
+        showPlaytimeNumbers: parsed.miniPlayerShowPlaytimeNumbers,
+        showAlbumName: parsed.miniPlayerShowAlbumName,
+        windowMode: parsed.miniPlayerWindowMode,
+        opacity: parsed.miniPlayerOpacity,
+        showQueue: parsed.miniPlayerShowQueue,
+      });
       return {
         ...defaults,
         ...parsed,
@@ -150,7 +308,18 @@ export function readUiPreferences(): UiPreferences {
         miniPlayerAlwaysOnTop:
           typeof parsed.miniPlayerAlwaysOnTop === "boolean" ? parsed.miniPlayerAlwaysOnTop : defaults.miniPlayerAlwaysOnTop,
         miniPlayerWidth: typeof parsed.miniPlayerWidth === "number" ? clampNumber(parsed.miniPlayerWidth, 360, 900) : defaults.miniPlayerWidth,
-        miniPlayerHeight: typeof parsed.miniPlayerHeight === "number" ? clampNumber(parsed.miniPlayerHeight, 96, 220) : defaults.miniPlayerHeight,
+        miniPlayerHeight: typeof parsed.miniPlayerHeight === "number" ? clampNumber(parsed.miniPlayerHeight, 92, 420) : defaults.miniPlayerHeight,
+        miniPlayerLayout: miniPlayerPreset.layout,
+        miniPlayerShowArt: miniPlayerPreset.showArt,
+        miniPlayerShowLibraryButton: miniPlayerPreset.showLibraryButton,
+        miniPlayerShowAlwaysOnTopButton: miniPlayerPreset.showAlwaysOnTopButton,
+        miniPlayerShowMediaControls: miniPlayerPreset.showMediaControls,
+        miniPlayerShowPlaybar: miniPlayerPreset.showPlaybar,
+        miniPlayerShowPlaytimeNumbers: miniPlayerPreset.showPlaytimeNumbers,
+        miniPlayerShowAlbumName: miniPlayerPreset.showAlbumName,
+        miniPlayerWindowMode: miniPlayerPreset.windowMode,
+        miniPlayerOpacity: miniPlayerPreset.opacity,
+        miniPlayerShowQueue: miniPlayerPreset.showQueue,
         replayGainMode: ["off", "track", "album"].includes(parsed.replayGainMode as ReplayGainMode)
           ? (parsed.replayGainMode as ReplayGainMode)
           : defaults.replayGainMode,
@@ -165,7 +334,7 @@ export function readUiPreferences(): UiPreferences {
               ? replayGainTargetPercentFromLegacyLufs((parsed as { replayGainTargetLufs: number }).replayGainTargetLufs)
               : defaults.replayGainTargetVolumePercent,
         playbackEngine: defaults.playbackEngine,
-        desktopOutputBackend: ["cpalShared", "wasapiExclusive", "asio"].includes(parsed.desktopOutputBackend as desktopOutputBackendMode)
+        desktopOutputBackend: ["cpalShared", "wasapiExclusive"].includes(parsed.desktopOutputBackend as desktopOutputBackendMode)
           ? (parsed.desktopOutputBackend as desktopOutputBackendMode)
           : defaults.desktopOutputBackend,
         desktopOutputDeviceId:
@@ -174,6 +343,10 @@ export function readUiPreferences(): UiPreferences {
           typeof parsed.desktopBufferFrames === "number"
             ? clampNumber(parsed.desktopBufferFrames, 0, 16_384)
             : defaults.desktopBufferFrames,
+        showOutputDiagnosticsButton:
+          typeof parsed.showOutputDiagnosticsButton === "boolean"
+            ? parsed.showOutputDiagnosticsButton
+            : defaults.showOutputDiagnosticsButton,
         replayGainPreventClipping:
           typeof parsed.replayGainPreventClipping === "boolean"
             ? parsed.replayGainPreventClipping
@@ -231,6 +404,10 @@ export function readUiPreferences(): UiPreferences {
           typeof parsed.showPodcastFilePaths === "boolean"
             ? parsed.showPodcastFilePaths
             : defaults.showPodcastFilePaths,
+        displayRatingsAsNumbers:
+          typeof parsed.displayRatingsAsNumbers === "boolean"
+            ? parsed.displayRatingsAsNumbers
+            : defaults.displayRatingsAsNumbers,
         cdSidebarMode:
           ["never", "drive", "always"].includes(parsed.cdSidebarMode as CdSidebarMode)
             ? (parsed.cdSidebarMode as CdSidebarMode)
@@ -243,6 +420,7 @@ export function readUiPreferences(): UiPreferences {
         themeAccent: ["cafe", "mint", "rose", "blue", "comic"].includes(parsed.themeAccent as ThemeAccent)
           ? (parsed.themeAccent as ThemeAccent)
           : defaults.themeAccent,
+        themeColorOverrides: normalizeThemeColorOverrides(parsed.themeColorOverrides),
         checkboxAccent: ["theme", "ember", "moss", "paper", "softAccent"].includes(parsed.checkboxAccent as CheckboxAccentPreference)
           ? (parsed.checkboxAccent as CheckboxAccentPreference)
           : defaults.checkboxAccent,
@@ -277,11 +455,41 @@ export function readUiPreferences(): UiPreferences {
           typeof parsed.playerFadeMs === "number"
             ? clampNumber(parsed.playerFadeMs === 150 ? defaults.playerFadeMs : parsed.playerFadeMs, 0, 5000)
             : defaults.playerFadeMs,
+        crossfadeProfile:
+          normalizeCrossfadeProfile(parsed.crossfadeProfile, crossfadeProfileForFadeMs(
+            typeof parsed.playerFadeMs === "number"
+              ? clampNumber(parsed.playerFadeMs === 150 ? defaults.playerFadeMs : parsed.playerFadeMs, 0, 5000)
+              : defaults.playerFadeMs,
+          )),
+        crossfadeManualProfile:
+          normalizeCrossfadeProfile(parsed.crossfadeManualProfile, normalizeCrossfadeProfile(parsed.crossfadeProfile, defaults.crossfadeManualProfile)),
+        crossfadeManualMs:
+          normalizeCrossfadeMs(
+            parsed.crossfadeManualMs,
+            typeof parsed.playerFadeMs === "number"
+              ? clampNumber(parsed.playerFadeMs === 150 ? defaults.playerFadeMs : parsed.playerFadeMs, 0, 5000)
+              : defaults.crossfadeManualMs,
+          ),
+        crossfadeNaturalProfile:
+          normalizeCrossfadeProfile(parsed.crossfadeNaturalProfile, defaults.crossfadeNaturalProfile),
+        crossfadeNaturalMs:
+          normalizeCrossfadeMs(parsed.crossfadeNaturalMs, defaults.crossfadeNaturalMs),
+        crossfadeAlbumProfile:
+          normalizeCrossfadeProfile(parsed.crossfadeAlbumProfile, defaults.crossfadeAlbumProfile),
+        crossfadeAlbumMs:
+          normalizeCrossfadeMs(parsed.crossfadeAlbumMs, defaults.crossfadeAlbumMs),
+        crossfadeRadioProfile:
+          normalizeCrossfadeProfile(parsed.crossfadeRadioProfile, defaults.crossfadeRadioProfile),
+        crossfadeRadioMs:
+          normalizeCrossfadeMs(parsed.crossfadeRadioMs, defaults.crossfadeRadioMs),
         skipThresholdPercent:
           typeof parsed.skipThresholdPercent === "number"
             ? clampNumber(parsed.skipThresholdPercent, 0, 95)
             : defaults.skipThresholdPercent,
         libraryVisibleColumns: normalizeLibraryColumns(parsed.libraryVisibleColumns),
+        libraryColumnLayouts: normalizeLibraryColumnLayouts(parsed.libraryColumnLayouts),
+        librarySavedColumnLayouts: normalizeLibrarySavedColumnLayouts(parsed.librarySavedColumnLayouts),
+        sourceScanRules: normalizeSourceScanRules(parsed.sourceScanRules),
         keyboardShortcuts: normalizeKeyboardShortcuts(parsed.keyboardShortcuts),
         advancedHttpShortcuts: normalizeAdvancedHttpShortcuts(parsed.advancedHttpShortcuts),
       };

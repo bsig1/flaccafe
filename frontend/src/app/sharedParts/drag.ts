@@ -1,5 +1,4 @@
 import type { PointerEvent as ReactPointerEvent } from "react";
-import type { DragGhost } from "./types";
 
 export function beginPointerReorderDrag({
   event,

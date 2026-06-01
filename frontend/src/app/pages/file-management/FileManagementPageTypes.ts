@@ -1,46 +1,41 @@
 import type {
-  AcousticFingerprintResponse,
-  AudioConversionInstallProgress,
-  AudioConversionPreviewResponse,
-  AudioConversionProgress,
-  AudioConversionSetupResponse,
-  AutoTagResponse,
-  BulkUndoBatchEntry,
-  BulkUndoLogEntry,
-  BulkUndoRestoreResponse,
-  CacheClearTarget,
-  ChromaprintStatusResponse,
-  ClapInstallDevice,
-  ClapInstallProgress,
-  ClapGenreTagResponse,
-  ClapStatusResponse,
-  CsvMetadataExportResponse,
-  CsvMetadataImportReportResponse,
-  CsvMetadataImportResponse,
-  DeviceSyncDetectedDevice,
-  DeviceSyncProfile,
-  DeviceSyncProfilePayload,
-  DeviceSyncResponse,
-  DuplicateActionRequest,
-  DuplicateActionResponse,
-  DuplicateReviewResponse,
-  FileOrganizationReportResponse,
-  FileOrganizationResponse,
-  FilenameTagInferenceResponse,
-  PlaylistSummary,
-  ReportFileResponse,
-  TagRegexReplaceResponse,
-  Track,
-  TrackFileMetadataWriteResponse,
+AcousticFingerprintResponse,
+AudioConversionInstallProgress,
+AudioConversionPreviewResponse,
+AudioConversionProgress,
+AudioConversionSetupResponse,
+AutoTagResponse,
+BulkUndoBatchEntry,
+BulkUndoLogEntry,
+BulkUndoRestoreResponse,
+CacheClearTarget,
+ChromaprintStatusResponse,
+ClapInstallDevice,
+ClapInstallProgress,
+ClapStatusResponse,
+CsvMetadataExportResponse,
+CsvMetadataImportReportResponse,
+CsvMetadataImportResponse,
+DeviceSyncResponse,
+DuplicateActionRequest,
+DuplicateActionResponse,
+DuplicateReviewResponse,
+FileOrganizationReportResponse,
+FileOrganizationResponse,
+FilenameTagInferenceResponse,
+PlaylistSummary,
+ReportFileResponse,
+TagRegexReplaceResponse,
 } from "../../../types/api";
-import type {
-  CsvImportOptions,
-  FileOrganizationOptions,
-} from "./fileManagementUtils";
 import type { AudioConversionOptions } from "./AudioConversionSection";
+import type {
+CsvImportOptions,
+FileOrganizationOptions,
+} from "./fileManagementUtils";
 
 export type AutoTagRequestOptions = {
   fingerprintOnly?: boolean;
+  acceptedPreviews?: AutoTagResponse["previews"];
 };
 
 export type FileManagementPageProps = {
@@ -113,11 +108,6 @@ export type FileManagementPageProps = {
   onSaveAudioConversionSetup: (ffmpegPath: string | null) => void | Promise<void>;
   onInstallAudioConversionFfmpeg: () => void | Promise<void>;
   onBrowseAudioConversionTarget: () => Promise<string | null>;
-  onBrowseCdRipTarget: () => Promise<string | null>;
-  cdAutoLookupMetadata: boolean;
-  currentCdPlaybackDriveId?: string | null;
-  isCdPlaybackActive?: boolean;
-  onPlayCdPreviewTrack: (track: Track, queue?: Track[]) => void;
   onPreviewAudioConversion: (targetFolder: string, options: AudioConversionOptions) => void | Promise<void>;
   onStartAudioConversion: (targetFolder: string, options: AudioConversionOptions) => void | Promise<void>;
   onCancelAudioConversion: () => void | Promise<void>;

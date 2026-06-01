@@ -47,7 +47,6 @@ pub(super) const AUTO_DJ_MOOD_SEED_LABELS: &[&str] = &[
     "calm",
     "happy",
     "sad",
-    "uplifting",
     "melancholic",
     "dark",
     "bright",
@@ -61,6 +60,7 @@ pub(super) const AUTO_DJ_MOOD_SEED_LABELS: &[&str] = &[
     "dramatic",
     "danceable",
     "acoustic",
+    "same decade",
 ];
 
 fn normalize_mood_seed_label(value: &str) -> Option<String> {
@@ -138,6 +138,8 @@ pub(crate) fn autodj_settings(settings: serde_json::Value) -> DesktopAutoDjSetti
         seed_track_id: optional_int_setting(&settings, "seed_track_id"),
         mood_seeds: string_list_setting(&settings, "mood_seeds", 8),
         mood_seed_weight: number_setting(&settings, "mood_seed_weight", 1.4, 0.0, 5.0),
+        mood_avoid_seeds: string_list_setting(&settings, "mood_avoid_seeds", 8),
+        mood_avoid_weight: number_setting(&settings, "mood_avoid_weight", 1.4, 0.0, 5.0),
         similarity_weight: number_setting(&settings, "similarity_weight", 0.0, 0.0, 5.0),
         rating_weight: number_setting(&settings, "rating_weight", 1.0, 0.0, 5.0),
         recency_weight: number_setting(&settings, "recency_weight", 1.0, 0.0, 5.0),

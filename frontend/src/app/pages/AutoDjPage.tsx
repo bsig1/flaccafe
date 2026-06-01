@@ -1,83 +1,61 @@
-import {
-  ArrowDown,
-  ArrowUp,
-  FolderOpen,
-  GripVertical,
-  Info,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Play,
-  Plus,
-  SkipForward,
-  SlidersHorizontal,
-  Trash2,
-  Volume2,
-  X,
-} from "lucide-react";
 import type {
-  MouseEvent as ReactMouseEvent,
-  PointerEvent as ReactPointerEvent,
+MouseEvent as ReactMouseEvent,
+PointerEvent as ReactPointerEvent,
 } from "react";
 import {
-  Fragment,
-  useEffect,
-  useRef,
-  useState,
+useEffect,
+useRef,
+useState
 } from "react";
 
 import {
-  compareRecommendationProfiles,
-  chooseRecommendationAbTest,
-  createRecommendationAbTest,
-  exportRecommendationProfileComparison,
-  exportQueue,
-  fetchSimilarTracks,
-  generateAutoDj,
-  importRecommendationProfileComparison,
+chooseRecommendationAbTest,
+compareRecommendationProfiles,
+createRecommendationAbTest,
+exportQueue,
+exportRecommendationProfileComparison,
+fetchSimilarTracks,
+generateAutoDj,
+importRecommendationProfileComparison,
 } from "../../lib/api";
 import {
-  placeFloatingMenu,
+placeFloatingMenu,
 } from "../../lib/uiInteractions";
 import type {
-  AutoDjAvoidRule,
-  AutoDjSettings,
-  QueueTrack,
-  RecommendationAbTestResponse,
-  RecommendationDrift,
-  RecommendationProfile,
-  RecommendationProfileComparison,
-  RecommendationRun,
-  SimilarTrack,
-  Track,
+AutoDjAvoidRule,
+AutoDjSettings,
+QueueTrack,
+RecommendationAbTestResponse,
+RecommendationDrift,
+RecommendationProfile,
+RecommendationProfileComparison,
+RecommendationRun,
+SimilarTrack,
+Track,
 } from "../../types/api";
-import { closeFloatingMenus, listenForCloseFloatingMenus } from "../menuEvents";
+import {
+DragGhostPreview
+} from "../components/common";
+import { closeFloatingMenus,listenForCloseFloatingMenus } from "../menuEvents";
+import {
+AutoDjExperience,
+AutoDjTemplate,
+DragGhost,
+MENU_VIEWPORT_MARGIN,
+UiPreferences,
+beginPointerReorderDrag,
+breakdownEntries,
+defaultAutoDj,
+display,
+isClapAnalyzed,
+readAutoDjTemplates,
+reasonChips,
+trackGenre,
+writeAutoDjTemplates
+} from "../shared";
 import { AutoDjHeader } from "./autodj/AutoDjHeader";
 import { AutoDjQueuePanel } from "./autodj/AutoDjQueuePanel";
 import { AutoDjSettingsPanel } from "./autodj/AutoDjSettingsPanel";
-import {
-  DragGhostPreview,
-  NumberField,
-} from "../components/common";
-import {
-  AutoDjExperience,
-  AutoDjTemplate,
-  DragGhost,
-  MENU_VIEWPORT_MARGIN,
-  UiPreferences,
-  beginPointerReorderDrag,
-  breakdownEntries,
-  defaultAutoDj,
-  display,
-  formatDuration,
-  formatPercent,
-  formatShortDate,
-  isClapAnalyzed,
-  readAutoDjTemplates,
-  reasonChipClass,
-  reasonChips,
-  trackGenre,
-  writeAutoDjTemplates,
-} from "../shared";
 
 export function AutoDjPage({
   queue,

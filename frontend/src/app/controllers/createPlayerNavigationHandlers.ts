@@ -199,6 +199,8 @@ export function createPlayerNavigationHandlers(model: any) {
   async function resolveArtistInfoResponses(rawArtistName: string, artistNames: string[], refresh: boolean) {
     const boundedNames = artistNames.slice(0, MAX_ARTIST_LOOKUP_TABS);
     if (shouldTryCombinedArtistLookup(rawArtistName, artistNames)) {
+      // Query the combined artist string and split artists together. If the
+      // combined page scores well, keep it; otherwise show one tab per artist.
       const [combined, ...splitResponses] = await Promise.all([
         fetchArtistInfoSafely(rawArtistName, refresh),
         ...boundedNames.map((name) => fetchArtistInfoSafely(name, refresh)),
@@ -290,6 +292,8 @@ export function createPlayerNavigationHandlers(model: any) {
     if (existing) {
       return existing;
     }
+    // Track skips can revisit the same multi-artist lookup quickly; coalesce
+    // identical in-flight requests so clicking around does not spawn duplicates.
     const promise = resolveArtistInfoResult(rawArtistName, artistNames, refresh, cacheKey)
       .finally(() => {
         artistInfoLookupPromises.delete(promiseKey);

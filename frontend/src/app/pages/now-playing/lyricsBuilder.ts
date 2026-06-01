@@ -1,6 +1,6 @@
 import {
-  parseLyricTimestamp,
-  stripLyricTimestamp,
+parseLyricTimestamp,
+stripLyricTimestamp,
 } from "../../shared";
 
 export type LyricsEditMode = "text" | "sync";

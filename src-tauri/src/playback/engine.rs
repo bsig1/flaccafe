@@ -1,12 +1,26 @@
 ﻿impl PlaybackInner {
     fn ensure_sink(
         &mut self,
+        output_backend: Option<DesktopOutputBackendMode>,
         device_id: Option<String>,
         buffer_frames: Option<u32>,
     ) -> Result<(), String> {
+        let requested_backend = output_backend.unwrap_or_default();
         let requested_device_id = normalize_device_id(device_id);
         let requested_buffer_frames = normalize_buffer_frames(buffer_frames);
-        if self.sink.is_some()
+        let has_stream_errors = self
+            .stream_errors
+            .lock()
+            .map(|errors| !errors.is_empty())
+            .unwrap_or(true);
+        let sink_is_usable = self
+            .sink
+            .as_ref()
+            .map(|sink| sink.is_usable())
+            .unwrap_or(false)
+            && !has_stream_errors;
+        if sink_is_usable
+            && self.output_backend == requested_backend
             && self.device_id == requested_device_id
             && self.buffer_frames == requested_buffer_frames
         {
@@ -14,10 +28,18 @@
         }
 
         self.stop();
+        self.sink = None;
+        self.output_backend = DesktopOutputBackendMode::default();
+        self.device_id = None;
+        self.device_name = None;
+        self.sample_rate = None;
+        self.channel_count = None;
+        self.sample_format = None;
         if let Ok(mut errors) = self.stream_errors.lock() {
             errors.clear();
         }
         let (mut sink, resolved) = open_output_sink(
+            requested_backend,
             requested_device_id.as_deref(),
             requested_buffer_frames,
             self.stream_errors.clone(),
@@ -25,6 +47,7 @@
         )?;
         sink.log_on_drop(false);
         self.sink = Some(sink);
+        self.output_backend = resolved.output_backend;
         self.device_id = resolved.device_id;
         self.device_name = Some(resolved.device_name);
         self.buffer_frames = requested_buffer_frames;
@@ -35,6 +58,17 @@
     }
 
     fn status(&self, message: Option<String>) -> PlaybackStatus {
+        let has_stream_errors = self
+            .stream_errors
+            .lock()
+            .map(|errors| !errors.is_empty())
+            .unwrap_or(true);
+        let output_available = self
+            .sink
+            .as_ref()
+            .map(|sink| sink.is_usable())
+            .unwrap_or(false)
+            && !has_stream_errors;
         let position_seconds = self
             .player
             .as_ref()
@@ -51,11 +85,12 @@
             .map(|handle| handle.player.empty() && self.current_path.is_some())
             .unwrap_or(false);
         PlaybackStatus {
-            available: self.sink.is_some(),
+            available: output_available,
             current_path: self.current_path.clone(),
+            output_backend: self.output_backend.id().to_string(),
             device_id: self.device_id.clone(),
             device_name: self.device_name.clone(),
-            is_playing: self.player.is_some() && !is_paused && !ended,
+            is_playing: self.player.is_some() && output_available && !is_paused && !ended,
             is_paused,
             ended,
             position_seconds,
@@ -90,12 +125,18 @@
             prepared_next_path: self.prepared_next_path.clone(),
             prepared_next_duration_seconds: self.prepared_next_duration_seconds,
             prepared_next_at_ms: self.prepared_next_at_ms,
+            output_backend: self.output_backend.id().to_string(),
             device_id: self.device_id.clone(),
             device_name: self.device_name.clone(),
             buffer_frames: self.buffer_frames,
             sample_rate: self.sample_rate,
             channel_count: self.channel_count,
             sample_format: self.sample_format.clone(),
+            dropped_frames: self
+                .stream_errors
+                .lock()
+                .map(|errors| errors.len() as u64)
+                .unwrap_or(0),
         }
     }
 
@@ -136,9 +177,31 @@
             visualizer.reset();
         }
     }
+
+    fn release_exclusive_sink_if_idle(&mut self) {
+        if self.player.is_some() || self.fading_player.is_some() {
+            return;
+        }
+        if self
+            .sink
+            .as_ref()
+            .map(|sink| sink.is_exclusive())
+            .unwrap_or(false)
+        {
+            self.sink = None;
+            self.output_backend = DesktopOutputBackendMode::default();
+            self.device_id = None;
+            self.device_name = None;
+            self.buffer_frames = None;
+            self.sample_rate = None;
+            self.channel_count = None;
+            self.sample_format = None;
+        }
+    }
 }
 
 struct ResolvedOutput {
+    output_backend: DesktopOutputBackendMode,
     device_id: Option<String>,
     device_name: String,
     sample_rate: u32,

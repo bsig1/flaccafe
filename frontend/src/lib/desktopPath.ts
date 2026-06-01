@@ -44,32 +44,6 @@ export interface FolderWatchStatus {
   last_error: string | null;
 }
 
-export interface desktopToolRunResponse {
-  executable: string;
-  args: string[];
-  exit_code: number | null;
-  stdout: string;
-  stderr: string;
-  elapsed_ms: number;
-  timed_out: boolean;
-}
-
-export interface desktopAudioConversionSupervisionResponse {
-  executable: string;
-  args: string[];
-  exit_code: number | null;
-  elapsed_ms: number;
-  timed_out: boolean;
-  succeeded: boolean;
-  input_path: string | null;
-  output_path: string | null;
-  input_size_bytes: number | null;
-  output_size_bytes: number | null;
-  output_to_input_ratio: number | null;
-  stdout: string;
-  stderr_tail: string;
-}
-
 async function invokeDesktop<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<T>(command, args);
@@ -117,36 +91,6 @@ export function FolderWatchMarkEvent(eventCount: number, error?: string | null):
   return invokeDesktop<FolderWatchStatus>("folder_watch_mark_event", {
     eventCount,
     error: error ?? null,
-  });
-}
-
-export function desktopRunTool(executable: string, args: string[] = [], timeoutMs = 15000): Promise<desktopToolRunResponse> {
-  return invokeDesktop<desktopToolRunResponse>("run_tool", {
-    executable,
-    args,
-    timeoutMs,
-  });
-}
-
-export function desktopSuperviseAudioConversion({
-  executable,
-  args = [],
-  inputPath,
-  outputPath,
-  timeoutMs = 10 * 60 * 1000,
-}: {
-  executable: string;
-  args?: string[];
-  inputPath?: string | null;
-  outputPath?: string | null;
-  timeoutMs?: number;
-}): Promise<desktopAudioConversionSupervisionResponse> {
-  return invokeDesktop<desktopAudioConversionSupervisionResponse>("supervise_audio_conversion", {
-    executable,
-    args,
-    inputPath: inputPath ?? null,
-    outputPath: outputPath ?? null,
-    timeoutMs,
   });
 }
 

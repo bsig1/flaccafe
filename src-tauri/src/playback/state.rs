@@ -2,7 +2,7 @@
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicU32, AtomicU64, Ordering},
     Arc, Mutex,
 };
 use std::thread;
@@ -21,6 +21,8 @@ use tauri::State;
 mod dsp;
 
 use self::dsp::{append_dsp_source, DesktopDspSettings};
+#[cfg(windows)]
+use self::wasapi_exclusive::WasapiExclusiveSink;
 #[cfg(test)]
 use self::dsp::{biquad_coefficients, soft_limit, DesktopDspSource, DesktopEqBandKind};
 
@@ -30,13 +32,14 @@ pub struct PlaybackState {
 }
 
 struct PlaybackInner {
-    sink: Option<MixerDeviceSink>,
+    sink: Option<DesktopOutputSink>,
     player: Option<PlaybackHandle>,
     fading_player: Option<PlaybackHandle>,
     current_path: Option<String>,
     current_reload_path: Option<String>,
     duration_seconds: Option<f64>,
     volume: f32,
+    output_backend: DesktopOutputBackendMode,
     device_id: Option<String>,
     device_name: Option<String>,
     buffer_frames: Option<u32>,
@@ -51,6 +54,46 @@ struct PlaybackInner {
     diagnostics: Arc<Mutex<Vec<PlaybackDiagnostic>>>,
     dsp_settings: Arc<Mutex<DesktopDspSettings>>,
     visualizer: Arc<Mutex<DesktopVisualizerState>>,
+}
+
+enum DesktopOutputSink {
+    Shared(MixerDeviceSink),
+    #[cfg(windows)]
+    WasapiExclusive(WasapiExclusiveSink),
+}
+
+impl DesktopOutputSink {
+    fn mixer(&self) -> &rodio::mixer::Mixer {
+        match self {
+            DesktopOutputSink::Shared(sink) => sink.mixer(),
+            #[cfg(windows)]
+            DesktopOutputSink::WasapiExclusive(sink) => sink.mixer(),
+        }
+    }
+
+    fn log_on_drop(&mut self, enabled: bool) {
+        match self {
+            DesktopOutputSink::Shared(sink) => sink.log_on_drop(enabled),
+            #[cfg(windows)]
+            DesktopOutputSink::WasapiExclusive(sink) => sink.log_on_drop(enabled),
+        }
+    }
+
+    fn is_exclusive(&self) -> bool {
+        match self {
+            DesktopOutputSink::Shared(_) => false,
+            #[cfg(windows)]
+            DesktopOutputSink::WasapiExclusive(_) => true,
+        }
+    }
+
+    fn is_usable(&self) -> bool {
+        match self {
+            DesktopOutputSink::Shared(_) => true,
+            #[cfg(windows)]
+            DesktopOutputSink::WasapiExclusive(sink) => !sink.is_finished(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -70,79 +113,83 @@ struct DesktopPreparedAudio {
 
 #[derive(Clone)]
 struct DesktopGainControl {
-    state: Arc<Mutex<DesktopGainState>>,
+    state: Arc<DesktopGainState>,
 }
 
 struct DesktopGainState {
-    current_gain: f32,
-    start_gain: f32,
-    target_gain: f32,
-    fade_total_frames: u64,
-    fade_elapsed_frames: u64,
+    current_gain: AtomicU32,
+    start_gain: AtomicU32,
+    target_gain: AtomicU32,
+    fade_total_frames: AtomicU64,
+    fade_elapsed_frames: AtomicU64,
 }
 
 impl DesktopGainControl {
     fn new(volume: f32) -> Self {
         let bounded = clamp_volume(volume);
+        let bits = bounded.to_bits();
         Self {
-            state: Arc::new(Mutex::new(DesktopGainState {
-                current_gain: bounded,
-                start_gain: bounded,
-                target_gain: bounded,
-                fade_total_frames: 0,
-                fade_elapsed_frames: 0,
-            })),
+            state: Arc::new(DesktopGainState {
+                current_gain: AtomicU32::new(bits),
+                start_gain: AtomicU32::new(bits),
+                target_gain: AtomicU32::new(bits),
+                fade_total_frames: AtomicU64::new(0),
+                fade_elapsed_frames: AtomicU64::new(0),
+            }),
         }
     }
 
     fn set_immediate(&self, volume: f32) {
         let bounded = clamp_volume(volume);
-        if let Ok(mut state) = self.state.lock() {
-            state.current_gain = bounded;
-            state.start_gain = bounded;
-            state.target_gain = bounded;
-            state.fade_total_frames = 0;
-            state.fade_elapsed_frames = 0;
-        }
+        let bits = bounded.to_bits();
+        self.state.current_gain.store(bits, Ordering::Release);
+        self.state.start_gain.store(bits, Ordering::Release);
+        self.state.target_gain.store(bits, Ordering::Release);
+        self.state.fade_elapsed_frames.store(0, Ordering::Release);
+        self.state.fade_total_frames.store(0, Ordering::Release);
     }
 
     fn fade_to(&self, volume: f32, duration: Duration, sample_rate: u32) {
         let bounded = clamp_volume(volume);
         let frames = fade_frame_count(duration, sample_rate);
-        if let Ok(mut state) = self.state.lock() {
-            if frames == 0 {
-                state.current_gain = bounded;
-                state.start_gain = bounded;
-                state.target_gain = bounded;
-                state.fade_total_frames = 0;
-                state.fade_elapsed_frames = 0;
-                return;
-            }
-            state.start_gain = state.current_gain;
-            state.target_gain = bounded;
-            state.fade_total_frames = frames;
-            state.fade_elapsed_frames = 0;
+        if frames == 0 {
+            self.set_immediate(bounded);
+            return;
         }
+        let current = self.state.current_gain.load(Ordering::Acquire);
+        self.state.start_gain.store(current, Ordering::Release);
+        self.state
+            .target_gain
+            .store(bounded.to_bits(), Ordering::Release);
+        self.state.fade_elapsed_frames.store(0, Ordering::Release);
+        self.state.fade_total_frames.store(frames, Ordering::Release);
     }
 
     fn next_frame_gain(&self) -> f32 {
-        let Ok(mut state) = self.state.lock() else {
-            return 1.0;
-        };
-        if state.fade_total_frames == 0 {
-            return state.current_gain;
+        let total = self.state.fade_total_frames.load(Ordering::Acquire);
+        if total == 0 {
+            return f32::from_bits(self.state.current_gain.load(Ordering::Acquire));
         }
-        let progress = ((state.fade_elapsed_frames + 1) as f32 / state.fade_total_frames as f32)
-            .clamp(0.0, 1.0);
+        let elapsed = self
+            .state
+            .fade_elapsed_frames
+            .fetch_add(1, Ordering::AcqRel)
+            .saturating_add(1);
+        let progress = (elapsed as f32 / total as f32).clamp(0.0, 1.0);
         let eased = smooth_fade_progress(progress);
-        let gain = state.start_gain + (state.target_gain - state.start_gain) * eased;
-        state.current_gain = gain;
-        state.fade_elapsed_frames += 1;
-        if state.fade_elapsed_frames >= state.fade_total_frames {
-            state.current_gain = state.target_gain;
-            state.start_gain = state.target_gain;
-            state.fade_total_frames = 0;
-            state.fade_elapsed_frames = 0;
+        let start = f32::from_bits(self.state.start_gain.load(Ordering::Acquire));
+        let target = f32::from_bits(self.state.target_gain.load(Ordering::Acquire));
+        let gain = start + (target - start) * eased;
+        self.state
+            .current_gain
+            .store(clamp_volume(gain).to_bits(), Ordering::Release);
+        if elapsed >= total {
+            let target_bits = target.to_bits();
+            self.state.current_gain.store(target_bits, Ordering::Release);
+            self.state.start_gain.store(target_bits, Ordering::Release);
+            self.state.fade_elapsed_frames.store(0, Ordering::Release);
+            self.state.fade_total_frames.store(0, Ordering::Release);
+            return target;
         }
         gain
     }
@@ -158,6 +205,7 @@ impl Default for PlaybackInner {
             current_reload_path: None,
             duration_seconds: None,
             volume: 1.0,
+            output_backend: DesktopOutputBackendMode::default(),
             device_id: None,
             device_name: None,
             buffer_frames: None,
@@ -222,6 +270,7 @@ static NEXT_DIAGNOSTIC_ID: AtomicU64 = AtomicU64::new(1);
 pub struct PlaybackStatus {
     available: bool,
     current_path: Option<String>,
+    output_backend: String,
     device_id: Option<String>,
     device_name: Option<String>,
     is_playing: bool,
@@ -249,6 +298,28 @@ struct DesktopDiagnosticContext {
     sample_format: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum DesktopOutputBackendMode {
+    CpalShared,
+    WasapiExclusive,
+}
+
+impl Default for DesktopOutputBackendMode {
+    fn default() -> Self {
+        Self::CpalShared
+    }
+}
+
+impl DesktopOutputBackendMode {
+    fn id(self) -> &'static str {
+        match self {
+            DesktopOutputBackendMode::CpalShared => "cpalShared",
+            DesktopOutputBackendMode::WasapiExclusive => "wasapiExclusive",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct PlaybackDiagnostic {
     id: u64,
@@ -274,12 +345,14 @@ pub struct PlaybackDiagnosticsResponse {
     prepared_next_path: Option<String>,
     prepared_next_duration_seconds: Option<f64>,
     prepared_next_at_ms: Option<u64>,
+    output_backend: String,
     device_id: Option<String>,
     device_name: Option<String>,
     buffer_frames: Option<u32>,
     sample_rate: Option<u32>,
     channel_count: Option<u16>,
     sample_format: Option<String>,
+    dropped_frames: u64,
 }
 
 #[derive(Serialize)]

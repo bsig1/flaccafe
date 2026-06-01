@@ -1,26 +1,28 @@
 import {
-  Ban,
-  CheckCircle2,
-  Eye,
-  FolderOpen,
-  SlidersHorizontal,
-  Wand2,
+Ban,
+CheckCircle2,
+Download,
+Eye,
+FolderOpen,
+RefreshCw,
+SlidersHorizontal,
+Wand2,
 } from "lucide-react";
 import {
-  useEffect,
-  useMemo,
-  useState,
+useEffect,
+useMemo,
+useState,
 } from "react";
 
 import type {
-  AudioConversionFormat,
-  AudioConversionPreviewResponse,
-  AudioConversionProgress,
-  AudioConversionSetupResponse,
+AudioConversionFormat,
+AudioConversionPreviewResponse,
+AudioConversionProgress,
+AudioConversionSetupResponse,
 } from "../../../types/api";
 import {
-  DisclosureSection,
-  NumberField,
+DisclosureSection,
+NumberField,
 } from "../../components/common";
 import { currentScope } from "./fileManagementUtils";
 
@@ -104,7 +106,8 @@ export function AudioConversionSection({
   progress,
   defaultTargetFolder,
   onBrowseTarget,
-  onOpenOptionalDependencies,
+  onRefreshFfmpeg,
+  onInstallFfmpeg,
   onPreview,
   onStart,
   onCancel,
@@ -115,7 +118,8 @@ export function AudioConversionSection({
   progress: AudioConversionProgress | null;
   defaultTargetFolder: string;
   onBrowseTarget: () => Promise<string | null>;
-  onOpenOptionalDependencies: () => void;
+  onRefreshFfmpeg: () => void | Promise<void>;
+  onInstallFfmpeg: () => void | Promise<void>;
   onPreview: (targetFolder: string, options: AudioConversionOptions) => void | Promise<void>;
   onStart: (targetFolder: string, options: AudioConversionOptions) => void | Promise<void>;
   onCancel: () => void | Promise<void>;
@@ -197,10 +201,18 @@ export function AudioConversionSection({
             <div className={setupReady ? "min-w-0 truncate font-medium text-moss" : "min-w-0 truncate font-medium text-ember"}>
               {setupReady ? "FFmpeg ready" : "FFmpeg required for conversion"}
             </div>
-            <button className="secondary-button h-8" type="button" onClick={onOpenOptionalDependencies}>
-              <SlidersHorizontal size={14} />
-              Optional Dependencies
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button className="secondary-button h-8" type="button" onClick={() => void onRefreshFfmpeg()}>
+                <RefreshCw size={14} />
+                Check
+              </button>
+              {!setupReady && (
+                <button className="primary-button h-8" type="button" onClick={() => void onInstallFfmpeg()}>
+                  <Download size={14} />
+                  Install FFmpeg
+                </button>
+              )}
+            </div>
           </div>
         </div>
 

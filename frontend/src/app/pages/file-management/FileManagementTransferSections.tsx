@@ -1,43 +1,26 @@
 import {
-  Download,
-  Eye,
-  FolderOpen,
-  RefreshCw,
-  Save,
-  Trash2,
+Download,
+Eye,
+FolderOpen,
+RefreshCw,
+Save,
+Trash2,
 } from "lucide-react";
 
 import type {
-  AcousticFingerprintResponse,
-  AutoTagResponse,
-  ChromaprintStatusResponse,
-  ClapGenreTagResponse,
-  CsvMetadataExportResponse,
-  CsvMetadataImportReportResponse,
-  CsvMetadataImportResponse,
-  DeviceSyncDetectedDevice,
-  DeviceSyncProfile,
-  DeviceSyncProfilePayload,
-  DeviceSyncResponse,
-  DuplicateActionResponse,
-  DuplicateReviewResponse,
-  FileOrganizationReportResponse,
-  FileOrganizationResponse,
-  FilenameTagInferenceResponse,
-  PlaylistSummary,
-  TagRegexReplaceResponse,
-  TrackFileMetadataWriteResponse,
+DeviceSyncDetectedDevice,
+DeviceSyncProfile,
+DeviceSyncProfilePayload,
+DeviceSyncResponse,
+FileOrganizationReportResponse,
+FileOrganizationResponse,
+PlaylistSummary
 } from "../../../types/api";
 import {
-  DisclosureSection,
+DisclosureSection,
 } from "../../components/common";
 import { AudioConversionSection } from "./AudioConversionSection";
-import { CdRipperSection } from "./CdRipperSection";
 import { LibraryImportersSection } from "./LibraryImportersSection";
-import {
-  currentScope,
-  formatJson,
-} from "./fileManagementUtils";
 
 function defaultToolTarget(folderPath: string, folderName: string): string {
   const trimmed = folderPath.trim().replace(/[\\/]+$/, "");
@@ -52,10 +35,6 @@ function defaultAudioConversionTarget(folderPath: string): string {
   return defaultToolTarget(folderPath, "FLAC Cafe Converted");
 }
 
-function defaultCdRipTarget(folderPath: string): string {
-  return defaultToolTarget(folderPath, "FLAC Cafe CD Rips");
-}
-
 export function FileManagementTransferSections({ model }: { model: any }) {
   const fileOrganizationPreview = model.fileOrganizationPreview as FileOrganizationResponse | null;
   const fileOrganizationReport = model.fileOrganizationReport as FileOrganizationReportResponse | null;
@@ -67,9 +46,9 @@ export function FileManagementTransferSections({ model }: { model: any }) {
   const playlists = model.playlists as PlaylistSummary[];
   const scopedTrackIds = model.scopedTrackIds as number[];
   const {
-    showTool, openSignalFor, initialFocusToolId, organizeTemplate, setOrganizeTemplate, organizeBaseFolder, setOrganizeBaseFolder, organizeCollisionStrategy, setOrganizeCollisionStrategy, organizeCleanupEmptyFolders, setOrganizeCleanupEmptyFolders, onPreviewFileOrganization, onExportFileOrganizationReport, applyFileOrganization, organizationOptions, folderPath, setToolTarget,
+    showTool, organizeTemplate, setOrganizeTemplate, organizeBaseFolder, setOrganizeBaseFolder, organizeCollisionStrategy, setOrganizeCollisionStrategy, organizeCleanupEmptyFolders, setOrganizeCleanupEmptyFolders, onPreviewFileOrganization, onExportFileOrganizationReport, applyFileOrganization, organizationOptions, folderPath, 
     deviceSyncTarget, setDeviceSyncTarget, deviceSyncProfileId, setDeviceSyncProfileId, deviceSyncProfileName, setDeviceSyncProfileName, deviceSyncDeviceKind, setDeviceSyncDeviceKind, deviceSyncMusicSubfolder, setDeviceSyncMusicSubfolder, deviceSyncPlaylistSubfolder, setDeviceSyncPlaylistSubfolder, setDeviceSyncPlaylistIds, deviceSyncCopyFiles, setDeviceSyncCopyFiles, deviceSyncExportPlaylists, setDeviceSyncExportPlaylists, deviceSyncPreserveStructure, setDeviceSyncPreserveStructure, applyDeviceSyncProfile, saveCurrentDeviceSyncProfile, deleteCurrentDeviceSyncProfile, useDetectedDevice, toggleDeviceSyncPlaylist, deviceSyncOptions, onDeviceSync, loadDeviceSyncSupport,
-    audioConversionSetup, audioConversionPreview, audioConversionProgress, onBrowseAudioConversionTarget, onPreviewAudioConversion, onStartAudioConversion, onCancelAudioConversion, onBrowseCdRipTarget, cdAutoLookupMetadata, currentCdPlaybackDriveId, isCdPlaybackActive, onPlayCdPreviewTrack, setStatus, openOptionalDependenciesSection,
+    audioConversionSetup, audioConversionPreview, audioConversionProgress, onRefreshAudioConversionSetup, onInstallAudioConversionFfmpeg, onBrowseAudioConversionTarget, onPreviewAudioConversion, onStartAudioConversion, onCancelAudioConversion, setStatus,
   } = model;
 
   return (
@@ -405,19 +384,6 @@ export function FileManagementTransferSections({ model }: { model: any }) {
           </DisclosureSection>
           )}
 
-          {showTool("cdRipper") && (
-          <CdRipperSection
-            cdAutoLookupMetadata={cdAutoLookupMetadata}
-            currentCdPlaybackDriveId={currentCdPlaybackDriveId}
-            defaultTargetFolder={defaultCdRipTarget(folderPath)}
-            isCdPlaybackActive={isCdPlaybackActive}
-            onBrowseTarget={onBrowseCdRipTarget}
-            onOpenOptionalDependencies={openOptionalDependenciesSection}
-            onPlayPreviewTrack={onPlayCdPreviewTrack}
-            setStatus={setStatus}
-          />
-          )}
-
           {showTool("audioConversion") && (
           <AudioConversionSection
             scopedTrackIds={scopedTrackIds}
@@ -426,7 +392,8 @@ export function FileManagementTransferSections({ model }: { model: any }) {
             progress={audioConversionProgress}
             defaultTargetFolder={defaultAudioConversionTarget(folderPath)}
             onBrowseTarget={onBrowseAudioConversionTarget}
-            onOpenOptionalDependencies={openOptionalDependenciesSection}
+            onRefreshFfmpeg={onRefreshAudioConversionSetup}
+            onInstallFfmpeg={onInstallAudioConversionFfmpeg}
             onPreview={onPreviewAudioConversion}
             onStart={onStartAudioConversion}
             onCancel={onCancelAudioConversion}

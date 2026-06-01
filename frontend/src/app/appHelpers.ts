@@ -1,17 +1,17 @@
 import type {
-  AlbumSummary,
-  AdvancedTrackSearchFilters,
-  ArtistSummary,
-  LyricsLookupRequest,
-  LyricsResponse,
-  Track,
+AdvancedTrackSearchFilters,
+AlbumSummary,
+ArtistSummary,
+LyricsLookupRequest,
+LyricsResponse,
+Track,
 } from "../types/api";
 import {
-  LIBRARY_PAGE_SIZE,
-  SortState,
-  display,
-  primaryArtistName,
-  storageKeys,
+LIBRARY_PAGE_SIZE,
+SortState,
+display,
+primaryArtistName,
+storageKeys,
 } from "./shared";
 
 export const BACKEND_STARTUP_GRACE_MS = 18_000;
@@ -73,22 +73,11 @@ export function cdDriveIdFromTrack(track: Track | null | undefined) {
     return null;
   }
   const pathMatch = track.path?.match(/^cdda:\/\/([^/]+)/);
-  if (pathMatch?.[1]) {
-    return decodeURIComponent(pathMatch[1]);
-  }
-  if (!track.audio_url?.includes("/library/tools/cd-rip/playback/")) {
-    return null;
-  }
-  try {
-    const parsed = new URL(track.audio_url);
-    return parsed.searchParams.get("drive_id");
-  } catch {
-    return null;
-  }
+  return pathMatch?.[1] ? decodeURIComponent(pathMatch[1]) : null;
 }
 
 export function cdTrackLooksActive(track: Track | null | undefined) {
-  return Boolean(track?.path?.startsWith("cdda://") || track?.audio_url?.includes("/library/tools/cd-rip/playback/"));
+  return Boolean(track?.path?.startsWith("cdda://"));
 }
 
 export function cdTrackNumberFromTrack(track: Track) {

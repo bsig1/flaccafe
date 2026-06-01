@@ -11,6 +11,8 @@ const DEFAULT_CLAP_GENRE_COPY_CONFIDENCE: f64 = 0.45;
 const DEFAULT_CLAP_GENRE_COPY_MARGIN: f64 = 0.08;
 const BIAS_PRONE_CLAP_GENRE_COPY_CONFIDENCE: f64 = 0.55;
 const BIAS_PRONE_CLAP_GENRE_COPY_MARGIN: f64 = 0.14;
+// These broad labels showed up too often in local testing, so copying them into
+// editable genre tags requires a stronger lead over the runner-up.
 const BIAS_PRONE_CLAP_GENRES: &[&str] = &["r&b", "latin", "house"];
 
 struct ClapGenreTagRequest {

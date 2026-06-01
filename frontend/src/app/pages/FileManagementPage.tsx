@@ -1,136 +1,77 @@
 import {
-  CheckCircle2,
-  Download,
-  Eye,
-  EyeOff,
-  ExternalLink,
-  FileText,
-  Fingerprint,
-  FolderOpen,
-  ListChecks,
-  RefreshCw,
-  RotateCcw,
-  Save,
-  Trash2,
-  Upload,
-  Wand2,
-} from "lucide-react";
-import {
-  useEffect,
-  useMemo,
-  useState,
+useEffect,
+useMemo,
+useRef,
+useState,
 } from "react";
 
-import type {
-  AcousticFingerprintResponse,
-  AudioConversionInstallProgress,
-  AudioConversionPreviewResponse,
-  AudioConversionProgress,
-  AudioConversionSetupResponse,
-  AutoTagResponse,
-  BulkUndoBatchEntry,
-  BulkUndoLogEntry,
-  BulkUndoRestoreResponse,
-  CacheClearTarget,
-  ChromaprintStatusResponse,
-  ClapInstallDevice,
-  ClapInstallProgress,
-  ClapGenreTagResponse,
-  ClapStatusResponse,
-  CsvMetadataExportResponse,
-  CsvMetadataImportReportResponse,
-  CsvMetadataImportResponse,
-  DeviceSyncDetectedDevice,
-  DeviceSyncProfile,
-  DeviceSyncProfilePayload,
-  DeviceSyncResponse,
-  DuplicateActionRequest,
-  DuplicateActionResponse,
-  DuplicateReviewResponse,
-  FileOrganizationReportResponse,
-  FileOrganizationResponse,
-  FilenameTagInferenceResponse,
-  PlaylistSummary,
-  ReportFileResponse,
-  TagRegexReplaceResponse,
-  Track,
-  TrackFileMetadataWriteResponse,
-} from "../../types/api";
 import {
-  deleteDeviceSyncProfile,
-  fetchDeviceSyncDevices,
-  fetchDeviceSyncProfiles,
-  clapGenreTags,
-  saveDeviceSyncProfile,
-  writeTrackMetadataToFiles,
+clapGenreTags,
+deleteDeviceSyncProfile,
+fetchAlbumTracks,
+fetchAlbums,
+fetchArtistLocalTracks,
+fetchArtists,
+fetchDeviceSyncDevices,
+fetchDeviceSyncProfiles,
+fetchTracks,
+saveDeviceSyncProfile,
+writeTrackMetadataToFiles,
 } from "../../lib/api";
-import {
-  openExternalUrl,
-} from "../../lib/externalLinks";
-import {
-  DisclosureAccordionProvider,
-  DisclosureSection,
-  NumberField,
-} from "../components/common";
-import { AdvancedTagToolsSection } from "./file-management/AdvancedTagToolsSection";
-import {
-  AudioConversionSection,
-  type AudioConversionOptions,
-} from "./file-management/AudioConversionSection";
-import { CacheUndoLogSection } from "./file-management/CacheUndoLogSection";
-import { CdRipperSection } from "./file-management/CdRipperSection";
-import {
-  FileManagementNavigator,
-  filterFileManagementSections,
-  fileManagementSections,
-} from "./file-management/FileManagementNavigator";
 import type {
-  FileManagementCategory,
-} from "./file-management/FileManagementNavigator";
-import { LibraryImportersSection } from "./file-management/LibraryImportersSection";
-import { OptionalDependenciesSection } from "./file-management/OptionalDependenciesSection";
-import { ReportViewerSection } from "./file-management/ReportViewerSection";
-import { VolumeTagsSection } from "./file-management/VolumeTagsSection";
-import { FileManagementPageView } from "./file-management/FileManagementPageView";
-import {
-  CSV_IMPORT_FIELDS,
-  DEFAULT_FILENAME_TAG_PATTERNS,
-  currentScope,
-  formatJson,
-  parseDuplicateGroups,
-  parseTrackIds,
-  previewLabel,
-  readCsvProfiles,
-  readFilenameTagPresets,
-  writeCsvProfiles,
-  writeFilenameTagPresets,
-} from "./file-management/fileManagementUtils";
+AlbumSummary,
+ArtistSummary,
+ClapGenreTagResponse,
+DeviceSyncDetectedDevice,
+DeviceSyncProfile,
+DeviceSyncProfilePayload,
+Track,
+TrackFileMetadataWriteResponse
+} from "../../types/api";
 import type {
-  CsvImportOptions,
-  CsvImportProfile,
-  FileOrganizationOptions,
-} from "./file-management/fileManagementUtils";
+FileManagementCategory,
+} from "./file-management/FileManagementNavigator";
+import {
+fileManagementSections,
+filterFileManagementSections
+} from "./file-management/FileManagementNavigator";
 import type { FileManagementPageProps } from "./file-management/FileManagementPageTypes";
+import { FileManagementPageView } from "./file-management/FileManagementPageView";
+import type {
+CsvImportOptions,
+CsvImportProfile,
+FileOrganizationOptions,
+} from "./file-management/fileManagementUtils";
+import {
+CSV_IMPORT_FIELDS,
+DEFAULT_FILENAME_TAG_PATTERNS,
+currentScope,
+formatJson,
+parseDuplicateGroups,
+parseTrackIds,
+previewLabel,
+readCsvProfiles,
+readFilenameTagPresets,
+writeCsvProfiles,
+writeFilenameTagPresets,
+} from "./file-management/fileManagementUtils";
 
-const ACOUSTID_API_KEY_URL = "https://acoustid.org/api-key";
 const FILE_WRITE_PREVIEW_LIMIT = 100_000;
 
-function defaultToolTarget(folderPath: string, folderName: string): string {
-  const trimmed = folderPath.trim().replace(/[\\/]+$/, "");
-  if (!trimmed) {
-    return "";
-  }
-  const separator = trimmed.includes("\\") ? "\\" : "/";
-  return `${trimmed}${separator}${folderName}`;
-}
+type AutoTagProgressState = {
+  phase: "preview" | "apply";
+  label: string;
+  completed: number;
+  total: number;
+};
 
-function defaultAudioConversionTarget(folderPath: string): string {
-  return defaultToolTarget(folderPath, "FLAC Cafe Converted");
-}
+type LibraryTargetSearchResult =
+  | { kind: "track"; key: string; label: string; description: string; track: Track }
+  | { kind: "album"; key: string; label: string; description: string; album: AlbumSummary }
+  | { kind: "artist"; key: string; label: string; description: string; artist: ArtistSummary };
 
-function defaultCdRipTarget(folderPath: string): string {
-  return defaultToolTarget(folderPath, "FLAC Cafe CD Rips");
-}
+
+
 
 export function FileManagementPage({
   initialFocusToolId,
@@ -164,11 +105,6 @@ export function FileManagementPage({
   onSaveAudioConversionSetup,
   onInstallAudioConversionFfmpeg,
   onBrowseAudioConversionTarget,
-  onBrowseCdRipTarget,
-  cdAutoLookupMetadata,
-  currentCdPlaybackDriveId,
-  isCdPlaybackActive,
-  onPlayCdPreviewTrack,
   onPreviewAudioConversion,
   onStartAudioConversion,
   onCancelAudioConversion,
@@ -230,6 +166,10 @@ export function FileManagementPage({
   const [autoTagWriteToFiles, setAutoTagWriteToFiles] = useState(false);
   const [acceptedAutoTagTrackIds, setAcceptedAutoTagTrackIds] = useState<Set<number>>(() => new Set());
   const [autoTagPreviewSource, setAutoTagPreviewSource] = useState<"musicbrainz" | "fingerprint" | null>(null);
+  const [autoTagBusy, setAutoTagBusy] = useState(false);
+  const [autoTagProgress, setAutoTagProgress] = useState<AutoTagProgressState | null>(null);
+  const autoTagProgressTimerRef = useRef<number | null>(null);
+  const autoTagProgressClearTimerRef = useRef<number | null>(null);
   const [fingerprintTagMissingOnly, setFingerprintTagMissingOnly] = useState(false);
   const [fingerprintTagSaveArtwork, setFingerprintTagSaveArtwork] = useState(false);
   const [fingerprintTagWriteToFiles, setFingerprintTagWriteToFiles] = useState(false);
@@ -271,6 +211,9 @@ export function FileManagementPage({
   const [toolSearch, setToolSearch] = useState("");
   const [toolCategory, setToolCategory] = useState<FileManagementCategory>("All");
   const [openFileManagementSection, setOpenFileManagementSection] = useState<string | null>(null);
+  const [targetSearch, setTargetSearch] = useState("");
+  const [targetSearchBusy, setTargetSearchBusy] = useState(false);
+  const [targetSearchResults, setTargetSearchResults] = useState<LibraryTargetSearchResult[]>([]);
 
   const initialScopeKey = (initialTrackScopeIds ?? []).join(",");
   const incomingTrackScopeIds = useMemo(() => Array.from(new Set(initialTrackScopeIds ?? [])), [initialScopeKey, initialTrackScopeIds]);
@@ -331,6 +274,55 @@ export function FileManagementPage({
     setOpenFileManagementSection("Optional Dependencies");
     void onRefreshAudioConversionSetup();
   }
+
+  function clearAutoTagProgressTimers() {
+    if (autoTagProgressTimerRef.current !== null) {
+      window.clearInterval(autoTagProgressTimerRef.current);
+      autoTagProgressTimerRef.current = null;
+    }
+    if (autoTagProgressClearTimerRef.current !== null) {
+      window.clearTimeout(autoTagProgressClearTimerRef.current);
+      autoTagProgressClearTimerRef.current = null;
+    }
+  }
+
+  function beginAutoTagProgress(phase: AutoTagProgressState["phase"], total: number, label: string) {
+    clearAutoTagProgressTimers();
+    const safeTotal = Math.max(1, total);
+    const step = Math.max(1, Math.ceil(safeTotal / 18));
+    setAutoTagBusy(true);
+    setAutoTagProgress({ phase, label, completed: 0, total: safeTotal });
+    // The backend returns MusicBrainz work as one response today; this gives the
+    // panel useful motion without pretending we have exact per-track callbacks.
+    autoTagProgressTimerRef.current = window.setInterval(() => {
+      setAutoTagProgress((current) => {
+        if (!current) {
+          return current;
+        }
+        return {
+          ...current,
+          completed: Math.min(current.total - 1, current.completed + step),
+        };
+      });
+    }, 700);
+  }
+
+  function finishAutoTagProgress(label?: string) {
+    if (autoTagProgressTimerRef.current !== null) {
+      window.clearInterval(autoTagProgressTimerRef.current);
+      autoTagProgressTimerRef.current = null;
+    }
+    setAutoTagBusy(false);
+    setAutoTagProgress((current) =>
+      current ? { ...current, label: label ?? current.label, completed: current.total } : current,
+    );
+    autoTagProgressClearTimerRef.current = window.setTimeout(() => {
+      autoTagProgressClearTimerRef.current = null;
+      setAutoTagProgress(null);
+    }, 900);
+  }
+
+  useEffect(() => () => clearAutoTagProgressTimers(), []);
 
   useEffect(() => {
     if (incomingTrackScopeIds.length) {
@@ -706,6 +698,81 @@ export function FileManagementPage({
     setStatus("Using each tool's default target");
   }
 
+  function appendTargetTrackIds(trackIds: number[], sourceLabel: string) {
+    const next = Array.from(new Set([...scopedTrackIds, ...trackIds])).filter((id) => Number.isFinite(id) && id > 0);
+    setTrackScopeText(next.join(", "));
+    setStatus(`Added ${trackIds.length.toLocaleString()} track${trackIds.length === 1 ? "" : "s"} from ${sourceLabel}`);
+  }
+
+  function removeScopedTrackId(trackId: number) {
+    const next = scopedTrackIds.filter((id) => id !== trackId);
+    setTrackScopeText(next.join(", "));
+    setStatus(next.length ? `${next.length.toLocaleString()} track${next.length === 1 ? "" : "s"} still targeted` : "Using each tool's default target");
+  }
+
+  async function searchLibraryTargets() {
+    const query = targetSearch.trim();
+    if (!query) {
+      setTargetSearchResults([]);
+      return;
+    }
+    setTargetSearchBusy(true);
+    try {
+      const [trackResult, albumResult, artistResult] = await Promise.allSettled([
+        fetchTracks(query, { limit: 8, sortBy: "artist", sortDirection: "asc" }),
+        fetchAlbums(query),
+        fetchArtists(query),
+      ]);
+      const results: LibraryTargetSearchResult[] = [];
+      if (trackResult.status === "fulfilled") {
+        results.push(...trackResult.value.slice(0, 8).map((track) => ({
+          kind: "track" as const,
+          key: `track-${track.id}`,
+          label: track.title || "Untitled track",
+          description: `${track.artist || "Unknown artist"} - ${track.album || "Unknown album"}`,
+          track,
+        })));
+      }
+      if (albumResult.status === "fulfilled") {
+        results.push(...albumResult.value.slice(0, 6).map((album) => ({
+          kind: "album" as const,
+          key: `album-${album.id}`,
+          label: album.album || "Untitled album",
+          description: `${album.album_artist || "Unknown artist"} - ${album.track_count.toLocaleString()} tracks`,
+          album,
+        })));
+      }
+      if (artistResult.status === "fulfilled") {
+        results.push(...artistResult.value.slice(0, 6).map((artist) => ({
+          kind: "artist" as const,
+          key: `artist-${artist.name}`,
+          label: artist.name || "Unknown artist",
+          description: `${artist.track_count.toLocaleString()} tracks - ${artist.album_count.toLocaleString()} albums`,
+          artist,
+        })));
+      }
+      setTargetSearchResults(results.slice(0, 18));
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not search library targets");
+    } finally {
+      setTargetSearchBusy(false);
+    }
+  }
+
+  async function appendLibraryTarget(result: LibraryTargetSearchResult) {
+    if (result.kind === "track") {
+      appendTargetTrackIds([result.track.id], result.label);
+      return;
+    }
+    if (result.kind === "album") {
+      const tracks = await fetchAlbumTracks(result.album.id);
+      appendTargetTrackIds(tracks.map((track) => track.id), result.label);
+      return;
+    }
+    const tracks = await fetchArtistLocalTracks(result.artist.name, 20000);
+    appendTargetTrackIds(tracks.map((track) => track.id), result.label);
+  }
+
   function pendingFileWriteIds() {
     return (
       fileWritePreview?.previews
@@ -776,25 +843,69 @@ export function FileManagementPage({
   async function previewMusicBrainzAutoTags() {
     const scope = currentScope(scopedTrackIds);
     setAutoTagPreviewSource("musicbrainz");
+    const targetCount = scope?.length ?? 50;
+    beginAutoTagProgress(
+      "preview",
+      targetCount,
+      scope
+        ? `Previewing ${scope.length.toLocaleString()} selected track${scope.length === 1 ? "" : "s"}`
+        : "Previewing the default MusicBrainz target",
+    );
     setStatus(
       scope
         ? `Previewing MusicBrainz tags for ${scope.length.toLocaleString()} selected track${scope.length === 1 ? "" : "s"}...`
         : "Previewing MusicBrainz tags for the default tool target...",
     );
-    await onPreviewAutoTag(autoTagMode, autoTagMissingOnly, autoTagIncludeArtwork, scope);
+    try {
+      await onPreviewAutoTag(autoTagMode, autoTagMissingOnly, autoTagIncludeArtwork, scope);
+    } finally {
+      finishAutoTagProgress("MusicBrainz preview finished");
+    }
   }
 
   async function applyMusicBrainzAutoTags() {
     setAutoTagPreviewSource("musicbrainz");
+    const acceptedPreviews = autoTagPreview
+      ? autoTagPreview.previews.filter(
+        (preview) =>
+          acceptedAutoTagTrackIds.has(preview.track_id) &&
+          !preview.error &&
+          (preview.changed_fields.length > 0 || (autoTagSaveArtwork && Boolean(preview.artwork_url))),
+      )
+      : [];
     const scope = autoTagPreview
       ? Array.from(new Set([...autoTagChangedIds, ...(autoTagSaveArtwork ? autoTagArtworkIds : [])]))
       : currentScope(scopedTrackIds);
+    if (autoTagPreview && acceptedPreviews.length === 0) {
+      setStatus("No accepted MusicBrainz changes to apply.");
+      return;
+    }
+    const targetCount = acceptedPreviews.length || scope?.length || 200;
+    beginAutoTagProgress(
+      "apply",
+      targetCount,
+      `Applying ${targetCount.toLocaleString()} accepted MusicBrainz item${targetCount === 1 ? "" : "s"}`,
+    );
     setStatus(
       scope?.length
         ? `Applying MusicBrainz tags to ${scope.length.toLocaleString()} track${scope.length === 1 ? "" : "s"}...`
         : "Applying MusicBrainz tags to the default tool target...",
     );
-    await onApplyAutoTag(autoTagMode, autoTagMissingOnly, autoTagIncludeArtwork, autoTagSaveArtwork, autoTagWriteToFiles, scope);
+    try {
+      await onApplyAutoTag(
+        autoTagMode,
+        autoTagMissingOnly,
+        autoTagIncludeArtwork,
+        autoTagSaveArtwork,
+        autoTagWriteToFiles,
+        scope,
+        // Pass accepted rows back so Rust can apply the reviewed proposals
+        // directly instead of repeating the network lookup that built them.
+        { acceptedPreviews: acceptedPreviews.length ? acceptedPreviews : undefined },
+      );
+    } finally {
+      finishAutoTagProgress("MusicBrainz apply finished");
+    }
   }
 
   async function analyzeAcousticFingerprints() {
@@ -829,6 +940,14 @@ export function FileManagementPage({
       return;
     }
     setAutoTagPreviewSource("fingerprint");
+    const acceptedPreviews = autoTagPreview
+      ? autoTagPreview.previews.filter(
+        (preview) =>
+          acceptedAutoTagTrackIds.has(preview.track_id) &&
+          !preview.error &&
+          (preview.changed_fields.length > 0 || (fingerprintTagSaveArtwork && Boolean(preview.artwork_url))),
+      )
+      : [];
     setStatus(
       `Applying fingerprint tags to ${fingerprintAutoTagIds.length.toLocaleString()} track${fingerprintAutoTagIds.length === 1 ? "" : "s"}...`,
     );
@@ -839,7 +958,7 @@ export function FileManagementPage({
       fingerprintTagSaveArtwork,
       fingerprintTagWriteToFiles,
       fingerprintAutoTagIds,
-      { fingerprintOnly: true },
+      { fingerprintOnly: true, acceptedPreviews: acceptedPreviews.length ? acceptedPreviews : undefined },
     );
   }
 
@@ -877,13 +996,14 @@ export function FileManagementPage({
 
   const fileManagementPageModel = {
     initialFocusToolId, incomingTrackScopeIds, scopedTrackIds, visibleSectionIds, toolCategory, setToolCategory, toolSearch, setToolSearch, openFileManagementSection, setOpenFileManagementSection, showTool, openSignalFor, setToolTarget, onSelectLibraryTarget, onRefreshUndoLog,
+    targetSearch, setTargetSearch, targetSearchBusy, targetSearchResults, searchLibraryTargets, appendLibraryTarget, trackScopeText, setTrackScopeText, removeScopedTrackId,
     folderPath, playlists, setStatus, onClearArtistCache, onClearLibraryCaches, onAdvancedTagLibraryChanged, onClearTrackScope, onOpenApiKeysSettings,
     audioConversionSetup, audioConversionInstallProgress, audioConversionPreview, audioConversionProgress, onRefreshAudioConversionSetup, onSaveAudioConversionSetup, onInstallAudioConversionFfmpeg, onBrowseAudioConversionTarget, onPreviewAudioConversion, onStartAudioConversion, onCancelAudioConversion, openOptionalDependenciesSection,
-    onBrowseCdRipTarget, cdAutoLookupMetadata, currentCdPlaybackDriveId, isCdPlaybackActive, onPlayCdPreviewTrack, clapStatus, clapInstallProgress, isClapInstalling, onRefreshClapStatus, onInstallClap,
+    clapStatus, clapInstallProgress, isClapInstalling, onRefreshClapStatus, onInstallClap,
     filenameTagPreview, filenameTagPattern, setFilenameTagPattern, filenameTagMissingOnly, setFilenameTagMissingOnly, filenameTagPresets, allFilenameTagPresets, isCustomFilenameTagPreset, filenamePresetMessage, filenamePresetJson, setFilenamePresetJson, saveCurrentFilenameTagPreset, deleteCurrentFilenameTagPreset, exportFilenamePresets, importFilenamePresets, acceptedFilenameTrackIds, acceptedChangedFilenameIds, toggleAcceptedFilenameTrack, onPreviewFilenameTags, onApplyFilenameTags,
     tagRegexPreview, tagRegexField, setTagRegexField, tagRegexPattern, setTagRegexPattern, tagRegexReplacement, setTagRegexReplacement, tagRegexCaseSensitive, setTagRegexCaseSensitive, onPreviewTagRegex, onApplyTagRegex,
     fileWriteIncludeMetadata, setFileWriteIncludeMetadata, fileWriteIncludeRatings, setFileWriteIncludeRatings, fileWritePreview, fileWriteBusy, pendingFileWriteIds, previewDatabaseFileWrites, fileWriteChangeDetails,
-    autoTagPreview, autoTagMode, setAutoTagMode, autoTagMissingOnly, setAutoTagMissingOnly, autoTagIncludeArtwork, setAutoTagIncludeArtwork, autoTagSaveArtwork, setAutoTagSaveArtwork, autoTagWriteToFiles, setAutoTagWriteToFiles, acceptedAutoTagTrackIds, autoTagPreviewSource, autoTagChangedIds, autoTagArtworkIds, fingerprintAutoTagIds, previewMusicBrainzAutoTags, applyMusicBrainzAutoTags, toggleAutoTagTrack, autoTagFieldSummary, autoTagChangeDetails, fingerprintTagMissingOnly, setFingerprintTagMissingOnly, fingerprintTagSaveArtwork, setFingerprintTagSaveArtwork, fingerprintTagWriteToFiles, setFingerprintTagWriteToFiles, previewAcousticFingerprintTags, applyAcousticFingerprintTags,
+    autoTagPreview, autoTagMode, setAutoTagMode, autoTagMissingOnly, setAutoTagMissingOnly, autoTagIncludeArtwork, setAutoTagIncludeArtwork, autoTagSaveArtwork, setAutoTagSaveArtwork, autoTagWriteToFiles, setAutoTagWriteToFiles, acceptedAutoTagTrackIds, autoTagPreviewSource, autoTagBusy, autoTagProgress, autoTagChangedIds, autoTagArtworkIds, fingerprintAutoTagIds, previewMusicBrainzAutoTags, applyMusicBrainzAutoTags, toggleAutoTagTrack, autoTagFieldSummary, autoTagChangeDetails, fingerprintTagMissingOnly, setFingerprintTagMissingOnly, fingerprintTagSaveArtwork, setFingerprintTagSaveArtwork, fingerprintTagWriteToFiles, setFingerprintTagWriteToFiles, previewAcousticFingerprintTags, applyAcousticFingerprintTags,
     clapGenreMissingOnly, setClapGenreMissingOnly, clapGenreMinConfidence, setClapGenreMinConfidence, clapGenrePreview, clapGenreBusy, previewClapGenreTags,
     organizeTemplate, setOrganizeTemplate, organizeBaseFolder, setOrganizeBaseFolder, organizeCollisionStrategy, setOrganizeCollisionStrategy, organizeCleanupEmptyFolders, setOrganizeCleanupEmptyFolders, fileOrganizationPreview, fileOrganizationReport, organizationOptions, applyFileOrganization, onPreviewFileOrganization, onExportFileOrganizationReport,
     deviceSyncTarget, setDeviceSyncTarget, deviceSyncProfileId, setDeviceSyncProfileId, deviceSyncProfileName, setDeviceSyncProfileName, deviceSyncProfiles, deviceSyncPresets, deviceSyncDevices, deviceSyncDeviceKind, setDeviceSyncDeviceKind, deviceSyncMusicSubfolder, setDeviceSyncMusicSubfolder, deviceSyncPlaylistSubfolder, setDeviceSyncPlaylistSubfolder, deviceSyncPlaylistIds, setDeviceSyncPlaylistIds, deviceSyncCopyFiles, setDeviceSyncCopyFiles, deviceSyncExportPlaylists, setDeviceSyncExportPlaylists, deviceSyncPreserveStructure, setDeviceSyncPreserveStructure, applyDeviceSyncProfile, saveCurrentDeviceSyncProfile, deleteCurrentDeviceSyncProfile, useDetectedDevice, toggleDeviceSyncPlaylist, deviceSyncOptions, deviceSyncPreview, onDeviceSync, loadDeviceSyncSupport,

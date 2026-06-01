@@ -1,16 +1,16 @@
 // @ts-nocheck
 import type { MouseEvent as ReactMouseEvent } from "react";
+import {
+themeAccentLabels,
+themeOrder,
+} from "../../config/theme";
 import { placeFloatingMenu } from "../../lib/uiInteractions";
 import {
-  themeAccentLabels,
-  themeOrder,
-} from "../../config/theme";
-import {
-  APP_CONTEXT_MENU_HEIGHT,
-  APP_CONTEXT_MENU_WIDTH,
-  MENU_VIEWPORT_MARGIN,
-  QUEUE_HISTORY_LIMIT,
-  writeQuickStartDismissed,
+APP_CONTEXT_MENU_HEIGHT,
+APP_CONTEXT_MENU_WIDTH,
+MENU_VIEWPORT_MARGIN,
+QUEUE_HISTORY_LIMIT,
+writeQuickStartDismissed,
 } from "../shared";
 
 export function createUiActionHandlers(model: any) {

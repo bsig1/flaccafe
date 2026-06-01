@@ -1,36 +1,36 @@
 import type {
-  MutableRefObject,
-  UIEvent as ReactUIEvent,
+MutableRefObject,
+UIEvent as ReactUIEvent,
 } from "react";
 import {
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
+useEffect,
+useLayoutEffect,
+useMemo,
+useRef,
+useState,
 } from "react";
 
 import { LIBRARY_PAGE_SIZE } from "../../shared";
 import {
-  ALBUM_GRID_ROW_HEIGHT,
-  ALBUM_LIST_ROW_HEIGHT,
-  ARTIST_ROW_HEIGHT,
-  COMPLETION_COLLAPSED_ROW_HEIGHT,
-  COMPLETION_EXPANDED_ROW_ESTIMATE,
-  PLAYLIST_ROW_HEIGHT,
-  PLAYLIST_TOOLBAR_HEIGHT,
-  TRACK_VIRTUALIZATION_OVERSCAN,
-  TRACK_VIRTUALIZATION_THRESHOLD,
-  virtualCollectionWindow,
-  virtualVariableCollectionWindow,
+ALBUM_GRID_ROW_HEIGHT,
+ALBUM_LIST_ROW_HEIGHT,
+ARTIST_ROW_HEIGHT,
+COMPLETION_COLLAPSED_ROW_HEIGHT,
+COMPLETION_EXPANDED_ROW_ESTIMATE,
+PLAYLIST_ROW_HEIGHT,
+PLAYLIST_TOOLBAR_HEIGHT,
+TRACK_VIRTUALIZATION_OVERSCAN,
+TRACK_VIRTUALIZATION_THRESHOLD,
+virtualCollectionWindow,
+virtualVariableCollectionWindow,
 } from "./libraryViewUtils";
 
 export function useLibraryScrollController(model: any) {
   const {
     ArrowUp, albumGrid, albumMode, albumScrollTop, albums, artistScrollTop, artists, columnMenu, completionHeightVersion,
     completionOpenAlbumId, completionScrollTop, hasMoreTracks, isLoading, libraryActionsMenu, libraryView, loadMoreTracks,
-    loadTrackWindow, playlistScrollTop, playlists, scrollTop, setAlbumScrollTop, setArtistScrollTop, setColumnMenu,
-    setCompletionHeightVersion, setCompletionScrollTop, setContextMenu, setLibraryActionsMenu, setPlaylistScrollTop,
+    loadTrackWindow, playlistScrollTop, playlists, scrollTop, setColumnMenu,
+    setCompletionHeightVersion, setCompletionScrollTop, setContextMenu, setLibraryActionsMenu, 
     setScrollTop, totalTracks, trackIndexCache,
     trackRowHeight, tracks, visibleCompletionAlbums,
   } = model;

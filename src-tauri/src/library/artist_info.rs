@@ -7,6 +7,10 @@ const WIKIPEDIA_HIGH_CONFIDENCE: f64 = 0.85;
 const WIKIPEDIA_SEARCH_LIMIT: usize = 5;
 const WIKIPEDIA_MAX_CANDIDATE_SUMMARIES: usize = 8;
 
+fn artist_cache_key(value: &str) -> String {
+    format!("v3:{}", primary_artist_name(value).to_lowercase())
+}
+
 fn wikipedia_summary_url(title: &str) -> String {
     format!(
         "https://en.wikipedia.org/api/rest_v1/page/summary/{}",
@@ -522,6 +526,8 @@ fn track_matches_artist_lookup(track: &DesktopTrack, artist: &str) -> bool {
 fn fetch_artist_info(query: &str) -> Result<DesktopArtistInfoResponse, String> {
     let mut candidates: Vec<(i64, DesktopArtistInfoResponse)> = Vec::new();
     let mut seen_titles = HashSet::new();
+    // Try cheap exact-ish summaries first, then broaden into search results.
+    // The confidence gate prevents ambiguous names from showing the wrong page.
     if let Some(info) = wikipedia_page_summary(query)? {
         seen_titles.insert(info.artist_name.to_lowercase());
         let score = artist_summary_score(query, &info);
@@ -732,6 +738,8 @@ fn artist_info_inner(
     let fetched = match fetch_artist_info(&lookup_query) {
         Ok(info) => info,
         Err(error) => {
+            // Network/Wikipedia failures should not blank the page if a cached
+            // answer exists; return stale data with the refresh error attached.
             if let Some(mut stale) =
                 cached_artist_info_response(&connection, &key, &query, false)?
                     .map(|response| with_artist_confidence(&lookup_query, response))
@@ -770,13 +778,62 @@ fn save_artist_info_override_inner(
         return Err("Artist name is required".to_string());
     }
     let lookup_query = wikipedia_lookup_query(&query);
-    let title = wikipedia_title_from_input(&wikipedia_title_or_url)?;
-    let mut info = enrich_wikipedia_summary(
-        wikipedia_page_summary(&title)?
-            .ok_or_else(|| "Wikipedia page not found or has no usable summary".to_string())?,
-    )?;
+    let inputs = wikipedia_title_or_url
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if inputs.is_empty() {
+        return Err("Wikipedia title or URL is required".to_string());
+    }
+    let mut infos = Vec::new();
+    for input in &inputs {
+        let title = wikipedia_title_from_input(input)?;
+        let info = enrich_wikipedia_summary(
+            wikipedia_page_summary(&title)?
+                .ok_or_else(|| format!("Wikipedia page not found or has no usable summary: {title}"))?,
+        )?;
+        infos.push(info);
+    }
+    let mut info = infos
+        .into_iter()
+        .next()
+        .ok_or_else(|| "Wikipedia page not found or has no usable summary".to_string())?;
+    if inputs.len() > 1 {
+        let mut combined_sections = Vec::new();
+        combined_sections.push(format!(
+            "== {} ==\n\n{}",
+            info.artist_name,
+            info.summary
+                .as_deref()
+                .unwrap_or("No summary available for this page.")
+        ));
+        for input in inputs.iter().skip(1) {
+            let title = wikipedia_title_from_input(input)?;
+            let section_info = enrich_wikipedia_summary(
+                wikipedia_page_summary(&title)?
+                    .ok_or_else(|| format!("Wikipedia page not found or has no usable summary: {title}"))?,
+            )?;
+            combined_sections.push(format!(
+                "== {} ==\n\n{}",
+                section_info.artist_name,
+                section_info
+                    .summary
+                    .as_deref()
+                    .unwrap_or("No summary available for this page.")
+            ));
+            if info.image_url.is_none() {
+                info.image_url = section_info.image_url;
+            }
+        }
+        info.artist_name = query.clone();
+        info.summary = Some(combined_sections.join("\n\n"));
+        info.source = Some("Wikipedia:manual:multi".to_string());
+    } else {
+        info.source = Some("Wikipedia:manual".to_string());
+    }
     info.query = query.clone();
-    info.source = Some("Wikipedia:manual".to_string());
     info.confidence = 1.0;
     let connection = open_database()?;
     let key = artist_cache_key(&lookup_query);

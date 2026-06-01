@@ -70,7 +70,6 @@
         "secure_ripping_available": secure_available,
         "cd_text_available": cd_text_available,
         "accuraterip_available": accuraterip_available,
-        "active_playback_drive_ids": active_playback_drive_ids(),
         "active_rip_drive_ids": active_rip_drive_ids(),
         "message": if secure_available && ffmpeg.available {
             "CD tools are ready."

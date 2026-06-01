@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from typing import Any, Iterable
 
 from .config import database_path
 
@@ -35,20 +34,6 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     _apply_schema(conn)
     return conn
-
-
-def init_db(conn: sqlite3.Connection | None = None) -> None:
-    own_connection = conn is None
-    active = conn or connect()
-    try:
-        _apply_schema(active)
-    finally:
-        if own_connection:
-            active.close()
-
-
-def rows_to_dicts(rows: Iterable[sqlite3.Row]) -> list[dict[str, Any]]:
-    return [dict(row) for row in rows]
 
 
 def get_setting(conn: sqlite3.Connection, key: str) -> str | None:

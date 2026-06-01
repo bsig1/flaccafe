@@ -1,13 +1,13 @@
 import { describe,expect,it } from "vitest";
 
 import {
-  limitRecentItems,
-  placeFloatingMenu,
-  readBooleanFlag,
-  settingsDiagnosticLabel,
-  toggleOrderedValue,
-  undoBannerText,
-  writeBooleanFlag,
+limitRecentItems,
+placeFloatingMenu,
+readBooleanFlag,
+settingsDiagnosticLabel,
+toggleOrderedValue,
+undoBannerText,
+writeBooleanFlag,
 } from "./uiInteractions";
 
 describe("library and context menu interactions", () => {

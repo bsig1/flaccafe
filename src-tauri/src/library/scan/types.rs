@@ -24,6 +24,7 @@ static SCAN_JOBS: OnceLock<Mutex<HashMap<String, DesktopScanJob>>> = OnceLock::n
 struct ScanRequest {
     paths: Vec<PathBuf>,
     save_paths: Vec<PathBuf>,
+    cleanup_paths: Vec<PathBuf>,
     files: Option<Vec<AudioSnapshot>>,
     errors: Vec<String>,
 }

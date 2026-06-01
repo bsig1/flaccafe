@@ -121,6 +121,7 @@ pub(super) fn track_where_clause(
     artist: Option<&str>,
     album: Option<&str>,
     genre: Option<&str>,
+    mood: Option<&str>,
     path: Option<&str>,
     extension: Option<&str>,
     rating_state: Option<&str>,
@@ -135,7 +136,9 @@ pub(super) fn track_where_clause(
     let expression = "coalesce(title, '') || ' ' || coalesce(artist, '') || ' ' ||
                     coalesce(album, '') || ' ' || coalesce(album_artist, '') || ' ' ||
                     coalesce(genre, '') || ' ' || coalesce(analysis_genre, '') || ' ' ||
+                    coalesce(analysis_genre_tags, '') || ' ' ||
                     coalesce(analysis_mood, '') || ' ' ||
+                    coalesce(analysis_mood_tags, '') || ' ' ||
                     coalesce(path, '')";
     let compact_expression = compact_sql_expression(expression);
     let mut clauses = vec![music_only_clause().to_string()];
@@ -168,8 +171,14 @@ pub(super) fn track_where_clause(
     add_fuzzy_filter(
         &mut clauses,
         &mut params,
-        "coalesce(genre, '') || ' ' || coalesce(analysis_genre, '') || ' ' || coalesce(analysis_mood, '')",
+        "coalesce(genre, '') || ' ' || coalesce(analysis_genre, '') || ' ' || coalesce(analysis_genre_tags, '') || ' ' || coalesce(analysis_mood, '')",
         genre,
+    );
+    add_fuzzy_filter(
+        &mut clauses,
+        &mut params,
+        "coalesce(analysis_mood, '') || ' ' || coalesce(analysis_mood_tags, '')",
+        mood,
     );
     add_fuzzy_filter(&mut clauses, &mut params, "coalesce(path, '')", path);
     if let Some(extension) = extension
@@ -236,26 +245,38 @@ pub(super) fn track_where_clause(
     (format!("WHERE {}", clauses.join(" AND ")), params)
 }
 
-pub(super) fn sort_expression(sort_by: &str) -> &'static str {
+pub(super) fn article_sort_expression(expression: &str) -> String {
+    let normalized = format!("lower(trim(coalesce({expression}, '')))");
+    format!(
+        "CASE
+            WHEN {normalized} LIKE 'the %' THEN substr({normalized}, 5)
+            WHEN {normalized} LIKE 'an %' THEN substr({normalized}, 4)
+            WHEN {normalized} LIKE 'a %' THEN substr({normalized}, 3)
+            ELSE {normalized}
+         END"
+    )
+}
+
+pub(super) fn sort_expression(sort_by: &str) -> String {
     match sort_by {
-        "title" => "coalesce(title, '')",
-        "artist" => "coalesce(artist, '')",
-        "album" => "coalesce(album, '')",
-        "album_artist" => "coalesce(album_artist, '')",
-        "genre" => "coalesce(genre, '')",
-        "analysis_genre" => "coalesce(analysis_genre, '')",
-        "analysis_genre_confidence" => "coalesce(analysis_genre_confidence, -1)",
-        "analysis_mood" => "coalesce(analysis_mood, '')",
-        "analysis_mood_confidence" => "coalesce(analysis_mood_confidence, -1)",
-        "year" => "coalesce(year, -1)",
-        "duration" => "coalesce(duration_seconds, 0)",
-        "rating" => "coalesce(rating, -1)",
-        "play_count" => "coalesce(play_count, 0)",
-        "skip_count" => "coalesce(skip_count, 0)",
-        "last_played_at" => "coalesce(last_played_at, '')",
-        "date_added" => "coalesce(date_added, '')",
-        "path" => "coalesce(path, '')",
-        "bitrate" => "coalesce(bitrate, 0)",
-        _ => "lower(coalesce(artist, ''))",
+        "title" => article_sort_expression("title"),
+        "artist" => article_sort_expression("artist"),
+        "album" => article_sort_expression("album"),
+        "album_artist" => article_sort_expression("album_artist"),
+        "genre" => article_sort_expression("genre"),
+        "analysis_genre" => article_sort_expression("analysis_genre"),
+        "analysis_genre_confidence" => "coalesce(analysis_genre_confidence, -1)".to_string(),
+        "analysis_mood" => article_sort_expression("analysis_mood"),
+        "analysis_mood_confidence" => "coalesce(analysis_mood_confidence, -1)".to_string(),
+        "year" => "coalesce(year, -1)".to_string(),
+        "duration" => "coalesce(duration_seconds, 0)".to_string(),
+        "rating" => "coalesce(rating, -1)".to_string(),
+        "play_count" => "coalesce(play_count, 0)".to_string(),
+        "skip_count" => "coalesce(skip_count, 0)".to_string(),
+        "last_played_at" => "coalesce(last_played_at, '')".to_string(),
+        "date_added" => "coalesce(date_added, '')".to_string(),
+        "path" => article_sort_expression("path"),
+        "bitrate" => "coalesce(bitrate, 0)".to_string(),
+        _ => article_sort_expression("artist"),
     }
 }

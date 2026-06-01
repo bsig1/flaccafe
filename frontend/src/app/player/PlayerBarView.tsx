@@ -1,22 +1,26 @@
 import {
-  FileText,
-  ListMusic,
-  Pause,
-  Play,
-  Radio,
-  Repeat,
-  Repeat1,
-  Repeat2,
-  SkipBack,
-  SkipForward,
-  Volume2,
-  VolumeX,
+Activity,
+FileText,
+ListMusic,
+Pause,
+Play,
+Radio,
+Repeat,
+Repeat1,
+Repeat2,
+SkipBack,
+SkipForward,
+Volume2,
+VolumeX,
+X,
 } from "lucide-react";
-import type { CSSProperties } from "react";
+import type {
+CSSProperties,
+} from "react";
 
-import type { RadioStation, Track } from "../../types/api";
+import type { RadioStation,Track } from "../../types/api";
 import { RatingStars } from "../components/common";
-import { display, formatPlaybackTime } from "../shared";
+import { formatPlaybackTime } from "../shared";
 
 const PLAYBACK_SCRUB_STEP_SECONDS = 0.01;
 
@@ -24,17 +28,50 @@ export function PlayerBarView({ model }: { model: any }) {
   const currentTrack = model.currentTrack as Track | null;
   const currentRadioStation = model.currentRadioStation as RadioStation | null;
   const {
-    miniPlayer, artworkSrc, playerTitle, hideArtworkPreview, scheduleArtworkPreview, setArtworkFailed, isRadioSource, isPreviewTrack, isLibraryTrack, radioSubtitle, hasCurrentArtist, currentArtistLabel, onOpenCurrentArtist, onOpenCurrentArtistInfo, hasCurrentAlbum, currentAlbumLabel, onOpenCurrentAlbum, onOpenCurrentTrack, cdSkipIsSettling, hasPrevious, canPreviousAction, handlePreviousTrack, playRelative, isPlaying, hasPlayableSource, togglePlayback, hasNext, effectiveDuration, currentTime, progressPercent, progressFill, handleSeek, handleProgressKeyDown, playbackSeekStepSeconds, playbackMode, cycleRepeatMode, onOpenLyricsView, onOpenQueueView, muted, volume, handleVolumeWheel, toggleMuted, handleVolumeChange, volumePercentDraft, commitVolumePercent, setVolumePercentDraft, handleVolumePercentChange, handleVolumePercentKeyDown, onRating, showArtworkPreview,
+    miniPlayer, artworkSrc, playerTitle, hideArtworkPreview, scheduleArtworkPreview, setArtworkFailed, isRadioSource, isPreviewTrack, isLibraryTrack, radioSubtitle, hasCurrentArtist, currentArtistLabel, onOpenCurrentArtist, onOpenCurrentArtistInfo, hasCurrentAlbum, currentAlbumLabel, onOpenCurrentAlbum, onOpenCurrentTrack, cdSkipIsSettling, hasPrevious, canPreviousAction, handlePreviousTrack, playRelative, isPlaying, hasPlayableSource, togglePlayback, hasNext, effectiveDuration, currentTime, progressPercent, progressFill, handleSeek, handleProgressKeyDown, playbackSeekStepSeconds, playbackMode, cycleRepeatMode, onOpenLyricsView, onOpenQueueView, showOutputDiagnosticsButton, diagnosticsOpen, setDiagnosticsOpen, playbackDiagnostics, muted, volume, handleVolumeWheel, toggleMuted, handleVolumeChange, volumePercentDraft, commitVolumePercent, setVolumePercentDraft, handleVolumePercentChange, handleVolumePercentKeyDown, onRating, displayRatingsAsNumbers, showArtworkPreview,
   } = model;
 
   return (
     <section
-      className={`grid shrink-0 items-center border-t border-line bg-[rgb(var(--color-sidebar))] px-4 ${
+      className={`relative grid shrink-0 items-center border-t border-line bg-[rgb(var(--color-sidebar))] px-4 ${
         miniPlayer
           ? "h-20 grid-cols-[minmax(180px,280px)_1fr_minmax(120px,150px)] gap-3"
           : "h-28 grid-cols-[minmax(220px,340px)_1fr_minmax(260px,320px)] gap-5"
       }`}
     >
+      {diagnosticsOpen && (
+        <div className="absolute bottom-[calc(100%+0.5rem)] right-4 z-50 w-[min(30rem,calc(100vw-2rem))] rounded border border-line bg-[rgb(var(--color-popover))] p-3 text-xs shadow-2xl shadow-black/45">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <div className="font-semibold text-white">Output Diagnostics</div>
+            <button className="icon-button h-7 w-7" type="button" title="Close diagnostics" onClick={() => setDiagnosticsOpen(false)}>
+              <X size={13} />
+            </button>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div className="rounded border border-line/70 bg-ink px-3 py-2">
+              <div className="text-muted">Backend</div>
+              <div className="truncate text-neutral-100">{playbackDiagnostics?.output_backend ?? "not opened"}</div>
+            </div>
+            <div className="rounded border border-line/70 bg-ink px-3 py-2">
+              <div className="text-muted">Sample rate</div>
+              <div className="text-neutral-100">{playbackDiagnostics?.sample_rate ? `${playbackDiagnostics.sample_rate} Hz` : "unknown"}</div>
+            </div>
+            <div className="rounded border border-line/70 bg-ink px-3 py-2">
+              <div className="text-muted">Buffer</div>
+              <div className="text-neutral-100">{playbackDiagnostics?.buffer_frames ? `${playbackDiagnostics.buffer_frames} frames` : "default"}</div>
+            </div>
+            <div className="rounded border border-line/70 bg-ink px-3 py-2">
+              <div className="text-muted">Dropped frames</div>
+              <div className={playbackDiagnostics?.dropped_frames ? "text-ember" : "text-neutral-100"}>
+                {playbackDiagnostics?.dropped_frames ?? 0}
+              </div>
+            </div>
+          </div>
+          <div className="mt-2 truncate text-muted" title={playbackDiagnostics?.device_name ?? undefined}>
+            {playbackDiagnostics?.device_name ?? "No output device has been opened yet."}
+          </div>
+        </div>
+      )}
       <div className="flex min-w-0 items-center gap-3">
         <div className="relative shrink-0">
           <button
@@ -181,20 +218,22 @@ export function PlayerBarView({ model }: { model: any }) {
               />
             </div>
           ) : (
-            <input
-              aria-label="Playback position"
-              className="player-progress"
-              data-wheel-step={playbackSeekStepSeconds}
-              disabled={!currentTrack || effectiveDuration <= 0}
-              max={Math.max(effectiveDuration, 0)}
-              min={0}
-              step={PLAYBACK_SCRUB_STEP_SECONDS}
-              style={{ "--progress": `${progressPercent}%`, "--progress-fill": progressFill } as CSSProperties}
-              type="range"
-              value={effectiveDuration > 0 ? Math.min(currentTime, effectiveDuration) : 0}
-              onChange={handleSeek}
-              onKeyDown={handleProgressKeyDown}
-            />
+            <div className="relative min-w-0">
+              <input
+                aria-label="Playback position"
+                className="player-progress w-full"
+                data-wheel-step={playbackSeekStepSeconds}
+                disabled={!currentTrack || effectiveDuration <= 0}
+                max={Math.max(effectiveDuration, 0)}
+                min={0}
+                step={PLAYBACK_SCRUB_STEP_SECONDS}
+                style={{ "--progress": `${progressPercent}%`, "--progress-fill": progressFill } as CSSProperties}
+                type="range"
+                value={effectiveDuration > 0 ? Math.min(currentTime, effectiveDuration) : 0}
+                onChange={handleSeek}
+                onKeyDown={handleProgressKeyDown}
+              />
+            </div>
           )}
           {!isRadioSource && <span>{formatPlaybackTime(effectiveDuration)}</span>}
           <div className="flex items-center justify-end gap-1">
@@ -234,6 +273,16 @@ export function PlayerBarView({ model }: { model: any }) {
                 onClick={onOpenQueueView}
               >
                 <ListMusic size={14} />
+              </button>
+            )}
+            {showOutputDiagnosticsButton && (
+              <button
+                className={`icon-button h-8 w-8 ${diagnosticsOpen ? "border-moss text-moss" : ""}`}
+                type="button"
+                title="Output diagnostics"
+                onClick={() => setDiagnosticsOpen(!diagnosticsOpen)}
+              >
+                <Activity size={14} />
               </button>
             )}
           </div>
@@ -290,7 +339,7 @@ export function PlayerBarView({ model }: { model: any }) {
         <div className={`flex ${miniPlayer ? "w-[156px]" : "w-[188px]"} max-w-full items-center justify-end`}>
           {isLibraryTrack && currentTrack && !miniPlayer && (
             <div className="shrink min-w-0 scale-90 origin-right">
-              <RatingStars rating={currentTrack.rating} onChange={(rating) => onRating(currentTrack.id, rating)} />
+              <RatingStars rating={currentTrack.rating} displayAsNumber={displayRatingsAsNumbers} onChange={(rating) => onRating(currentTrack.id, rating)} />
             </div>
           )}
         </div>

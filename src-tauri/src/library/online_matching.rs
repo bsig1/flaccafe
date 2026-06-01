@@ -9,7 +9,7 @@ use super::{album_artwork, metadata, open_database, scan, DesktopLibraryState};
 const MUSICBRAINZ_ROOT: &str = "https://musicbrainz.org/ws/2";
 const ACOUSTID_ROOT: &str = "https://api.acoustid.org/v2";
 const COVER_ART_ARCHIVE_ROOT: &str = "https://coverartarchive.org";
-const USER_AGENT: &str = "FLAC Cafe/0.5 (https://github.com/bsig1/flaccafe)";
+const USER_AGENT: &str = "FLAC Cafe/0.6 (https://github.com/bsig1/flaccafe)";
 
 #[tauri::command]
 pub fn auto_tag_musicbrainz(
@@ -31,6 +31,23 @@ pub fn auto_tag_musicbrainz(
         .or_else(|| json_bool(&body, "writeToFile"))
         .unwrap_or(false);
     let limit = json_usize(&body, "limit").unwrap_or(50).clamp(1, 500);
+    let accepted_previews = body
+        .get("accepted_previews")
+        .or_else(|| body.get("acceptedPreviews"))
+        .cloned()
+        .and_then(|value| serde_json::from_value::<Vec<DesktopAutoTagPreview>>(value).ok())
+        .unwrap_or_default();
+    if apply && !accepted_previews.is_empty() {
+        // Apply Accepted should trust the preview the user already reviewed; this
+        // avoids a second MusicBrainz/AcoustID lookup pass during apply.
+        return apply_autotag_previews(
+            state,
+            accepted_previews,
+            missing_only,
+            write_to_file,
+            limit,
+        );
+    }
     let connection = open_database()?;
     let tracks = autotag_tracks(&connection, track_ids, album_id, limit)?;
     let acoustid_key = setting_text(&connection, "acoustid_api_key");
@@ -158,6 +175,81 @@ pub fn auto_tag_musicbrainz(
     })
 }
 
+fn apply_autotag_previews(
+    state: State<'_, DesktopLibraryState>,
+    accepted_previews: Vec<DesktopAutoTagPreview>,
+    missing_only: bool,
+    write_to_file: bool,
+    limit: usize,
+) -> Result<DesktopAutoTagResponse, String> {
+    let mut previews = Vec::new();
+    let mut errors = Vec::new();
+    let mut matched = 0i64;
+    let mut changed = 0i64;
+    let mut applied = 0i64;
+
+    for mut preview in accepted_previews.into_iter().take(limit) {
+        if preview.error.is_some() {
+            previews.push(preview);
+            continue;
+        }
+        let Some(proposed) = preview.proposed.as_object().cloned() else {
+            preview.error = Some("Accepted MusicBrainz preview did not include proposed metadata".to_string());
+            previews.push(preview);
+            continue;
+        };
+        if proposed.is_empty() {
+            preview.error = Some("Accepted MusicBrainz preview had no proposed metadata".to_string());
+            previews.push(preview);
+            continue;
+        }
+        matched += 1;
+        // Missing-only can change between preview and apply, so recalculate the
+        // actual write set instead of trusting the stale preview field list.
+        let changed_fields = changed_fields(&preview.current, &proposed, missing_only);
+        if !changed_fields.is_empty() {
+            changed += 1;
+            match apply_tag_proposal(
+                state.clone(),
+                preview.track_id,
+                &preview.path,
+                &preview.current,
+                &proposed,
+                &changed_fields,
+                write_to_file,
+            ) {
+                Ok(()) => {
+                    applied += 1;
+                    preview.applied = true;
+                    preview.changed_fields = changed_fields;
+                }
+                Err(error) => {
+                    errors.push(error.clone());
+                    preview.error = Some(error);
+                }
+            }
+        } else {
+            preview.changed_fields = changed_fields;
+        }
+        preview.artwork_saved = false;
+        previews.push(preview);
+    }
+
+    Ok(DesktopAutoTagResponse {
+        total: previews.len() as i64,
+        matched,
+        changed,
+        applied,
+        artwork_matches: previews
+            .iter()
+            .filter(|preview| preview.artwork_url.is_some())
+            .count() as i64,
+        artwork_saved: 0,
+        errors: errors.into_iter().take(10).collect(),
+        previews,
+    })
+}
+
 #[tauri::command]
 pub fn lookup_album_completion(
     _state: State<'_, DesktopLibraryState>,
@@ -266,15 +358,6 @@ pub fn search_album_artwork(album_id: i64) -> Result<JsonValue, String> {
         "album_id": album_id,
         "candidates": candidates,
         "errors": errors,
-    }))
-}
-
-pub fn artwork_collision_repair(body: JsonValue) -> Result<JsonValue, String> {
-    Ok(json!({
-        "apply": json_bool(&body, "apply").unwrap_or(false),
-        "issues": [],
-        "repaired": 0,
-        "errors": [],
     }))
 }
 

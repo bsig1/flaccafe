@@ -1,28 +1,28 @@
 import {
-  ArrowDown,
-  ArrowUp,
-  ChevronDown,
-  GripVertical,
-  Star,
+ArrowDown,
+ArrowUp,
+ChevronDown,
+GripVertical,
+Star,
 } from "lucide-react";
 import type {
-  DragEvent as ReactDragEvent,
-  MouseEvent as ReactMouseEvent,
-  ReactNode,
+DragEvent as ReactDragEvent,
+MouseEvent as ReactMouseEvent,
+ReactNode,
 } from "react";
 import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
+createContext,
+useCallback,
+useContext,
+useEffect,
+useMemo,
+useState,
 } from "react";
 
 import type {
-  DragGhost,
-  SortKey,
-  SortState,
+DragGhost,
+SortKey,
+SortState,
 } from "../shared";
 import { formatRating } from "../shared";
 
@@ -68,6 +68,7 @@ export function ResizableHeader({
   onColumnDragEnd?: () => void;
   onColumnPointerDragStart?: (event: ReactMouseEvent<HTMLButtonElement>, column: string) => void;
 }) {
+  const headerLabel = label || (column === "play" ? "Play" : column);
   function handleResizeStart(event: ReactMouseEvent<HTMLButtonElement>) {
     event.preventDefault();
     event.stopPropagation();
@@ -95,7 +96,7 @@ export function ResizableHeader({
       draggable={Boolean(draggableColumn)}
       data-library-column={draggableColumn}
       style={{ width }}
-      title={draggableColumn ? "Drag to move this column" : undefined}
+      title={draggableColumn ? `Drag to move ${headerLabel} column` : undefined}
       onDragStart={(event) => draggableColumn && onColumnDragStart?.(event, draggableColumn)}
       onDragOver={(event) => draggableColumn && onColumnDragOver?.(event, draggableColumn)}
       onDrop={(event) => draggableColumn && onColumnDrop?.(event, draggableColumn)}
@@ -105,7 +106,7 @@ export function ResizableHeader({
         <button
           type="button"
           className="absolute left-0 top-0 grid h-full w-4 cursor-grab place-items-center text-line hover:text-moss active:cursor-grabbing"
-          title={`Move ${label} column`}
+          title={`Move ${headerLabel} column`}
           onClick={(event) => event.stopPropagation()}
           onMouseDown={(event) => onColumnPointerDragStart?.(event, draggableColumn)}
         >
@@ -142,12 +143,46 @@ export function ResizableHeader({
 
 export function RatingStars({
   rating,
+  displayAsNumber = false,
   onChange,
 }: {
   rating: number | null;
+  displayAsNumber?: boolean;
   onChange: (rating: number | null) => void;
 }) {
   const currentRating = rating ?? 0;
+  const ratingNumber = rating === null || rating === undefined
+    ? "--"
+    : Number.isInteger(rating)
+      ? rating.toFixed(0)
+      : rating.toFixed(1);
+
+  if (displayAsNumber) {
+    return (
+      <div
+        className="relative flex h-7 w-16 items-center justify-center overflow-hidden rounded border border-line bg-panel text-sm font-semibold tabular-nums text-ember"
+        aria-label={`Rating ${formatRating(rating)}`}
+        title="Click across the control to set half-star ratings"
+      >
+        <span className={rating === null || rating === undefined ? "text-muted" : undefined}>{ratingNumber}</span>
+        <div className="absolute inset-0 grid grid-cols-10">
+          {Array.from({ length: 10 }, (_, index) => {
+            const nextRating = (index + 1) / 2;
+            return (
+              <button
+                key={nextRating}
+                type="button"
+                className="cursor-pointer transition hover:bg-white/10"
+                title={formatRating(nextRating)}
+                aria-label={`Set rating to ${formatRating(nextRating)}`}
+                onClick={() => onChange(rating === nextRating ? null : nextRating)}
+              />
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex w-36 items-center gap-1" aria-label={`Rating ${formatRating(rating)}`}>

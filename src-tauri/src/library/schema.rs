@@ -257,6 +257,10 @@ fn ensure_album_completion_columns(connection: &Connection) -> Result<(), String
         "albums",
         &[
             (
+                "artwork_locked",
+                "ALTER TABLE albums ADD COLUMN artwork_locked INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
                 "completion_expected_track_count",
                 "ALTER TABLE albums ADD COLUMN completion_expected_track_count INTEGER",
             ),

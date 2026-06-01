@@ -1,27 +1,27 @@
 import {
-  ArrowDown,
-  ArrowUp,
-  Clock,
-  GripVertical,
-  ListMusic,
-  Pencil,
-  Play,
-  Plus,
-  X,
+ArrowDown,
+ArrowUp,
+Clock,
+GripVertical,
+ListMusic,
+Pencil,
+Play,
+Plus,
+X,
 } from "lucide-react";
 import {
-  type PointerEvent as ReactPointerEvent,
-  useEffect,
-  useRef,
-  useState,
+type PointerEvent as ReactPointerEvent,
+useEffect,
+useRef,
+useState,
 } from "react";
 import {
-  type LrcBuilderLine,
-  formatLrcTimestamp,
-} from "./lyricsBuilder";
-import {
-  sendMiniPlayerCommand,
+sendMiniPlayerCommand,
 } from "../../shared";
+import {
+type LrcBuilderLine,
+formatLrcTimestamp,
+} from "./lyricsBuilder";
 
 const LRC_BUILDER_SEEK_SECONDS = 5;
 

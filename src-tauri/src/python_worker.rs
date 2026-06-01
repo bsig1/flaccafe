@@ -92,9 +92,12 @@ fn packaged_backend_exe() -> Option<PathBuf> {
     }
     let exe = std::env::current_exe().ok()?;
     let app_dir = exe.parent()?;
-    let candidate = app_dir
-        .join("flaccafe-backend")
-        .join("flaccafe-backend.exe");
+    let backend_binary = if cfg!(windows) {
+        "flaccafe-backend.exe"
+    } else {
+        "flaccafe-backend"
+    };
+    let candidate = app_dir.join("flaccafe-backend").join(backend_binary);
     candidate.exists().then_some(candidate)
 }
 

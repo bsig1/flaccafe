@@ -1,21 +1,21 @@
 // @ts-nocheck
-import { useEffect } from "react";
-import { updateLyrics } from "../../lib/api";
+import { updateAudiobookProgress, updateLyrics } from "../../lib/api";
 import type {
-  AutoDjSettings,
-  LyricsResponse,
-  LyricsUpdateRequest,
-  RadioStation,
-  Track,
+AutoDjSettings,
+LyricsResponse,
+LyricsUpdateRequest,
+RadioStation,
+Track,
 } from "../../types/api";
 import {
-  lyricsLookupCacheKey,
-  lyricsTrackCacheKey,
-  rememberLyricsResponse,
+lyricsLookupCacheKey,
+lyricsTrackCacheKey,
+rememberLyricsResponse,
 } from "./lyricsResponseCache";
 
 const PLAYBACK_QUEUE_CONTEXT_LIMIT = 600;
 const PLAYBACK_QUEUE_PREVIOUS_CONTEXT = 50;
+const RESUME_SAVE_INTERVAL_SECONDS = 15;
 
 function playbackQueueWindow(track: Track, queueItems: Track[]) {
   const source = queueItems.length ? queueItems : [track];
@@ -31,6 +31,31 @@ function playbackQueueWindow(track: Track, queueItems: Track[]) {
   const start = Math.max(0, Math.min(activeIndex - before, source.length - PLAYBACK_QUEUE_CONTEXT_LIMIT));
   const windowed = source.slice(start, start + PLAYBACK_QUEUE_CONTEXT_LIMIT);
   return windowed.some((item) => item.id === track.id) ? windowed : [track, ...windowed.slice(0, PLAYBACK_QUEUE_CONTEXT_LIMIT - 1)];
+}
+
+function isLongFormResumeTrack(track: Track) {
+  const genre = (track.genre ?? "").toLowerCase();
+  const path = (track.path ?? "").toLowerCase();
+  return (
+    genre.includes("audiobook") ||
+    genre.includes("podcast") ||
+    path.includes("\\audiobook") ||
+    path.includes("/audiobook") ||
+    path.includes("\\podcast") ||
+    path.includes("/podcast")
+  );
+}
+
+function normalizeLongFormResumePosition(track: Track, positionSeconds: number | null | undefined) {
+  const durationSeconds = track.duration_seconds ?? 0;
+  const position = Math.max(0, Math.floor(Number(positionSeconds ?? 0)));
+  if (position < 5) {
+    return 0;
+  }
+  if (durationSeconds > 0 && position >= Math.max(5, durationSeconds - 20)) {
+    return 0;
+  }
+  return durationSeconds > 0 ? Math.min(position, Math.max(0, Math.floor(durationSeconds - 1))) : position;
 }
 
 export function usePlaybackAutoDjController(model: any) {
@@ -228,11 +253,37 @@ export function usePlaybackAutoDjController(model: any) {
     });
   }
 
+  useEffect(() => {
+    if (!currentTrack || !isLongFormResumeTrack(currentTrack)) {
+      return;
+    }
+    const positionSeconds = normalizeLongFormResumePosition(currentTrack, playbackTime);
+    const bucket = Math.floor(positionSeconds / RESUME_SAVE_INTERVAL_SECONDS);
+    if (positionSeconds <= 0 && playbackTime > 0) {
+      return;
+    }
+    void updateAudiobookProgress(currentTrack.id, {
+      position_seconds: positionSeconds,
+      duration_seconds: currentTrack.duration_seconds ?? null,
+    }).catch(() => {
+      // Resume bookkeeping is intentionally soft; playback should never hitch on it.
+    });
+  }, [currentTrack?.id, Math.floor(Math.max(0, playbackTime) / RESUME_SAVE_INTERVAL_SECONDS)]);
+
   async function recordTrackExitQuiet(track: Track, listenedSeconds: number) {
     if (track.id <= 0 || track.is_preview) {
       return;
     }
     const durationSeconds = track.duration_seconds ?? 0;
+    if (isLongFormResumeTrack(track)) {
+      const positionSeconds = normalizeLongFormResumePosition(track, listenedSeconds);
+      void updateAudiobookProgress(track.id, {
+        position_seconds: positionSeconds,
+        duration_seconds: track.duration_seconds ?? null,
+      }).catch(() => {
+        // Resume bookkeeping is intentionally soft; playback should never hitch on it.
+      });
+    }
     try {
       const updated =
         shouldRecordTrackAsPlayed(listenedSeconds, durationSeconds, uiPreferences.skipThresholdPercent)
@@ -245,7 +296,7 @@ export function usePlaybackAutoDjController(model: any) {
     }
   }
 
-  type PlayTrackOptions = { suppressExitRecord?: boolean; cdPreviewPrepared?: boolean };
+  type PlayTrackOptions = { suppressExitRecord?: boolean; cdPreviewPrepared?: boolean; resumePositionSeconds?: number | null };
 
   function ensureLatestCdPlaybackRequest(requestId: number) {
     if (cdPlaybackPrepareRequestIdRef.current !== requestId) {
@@ -301,6 +352,11 @@ export function usePlaybackAutoDjController(model: any) {
     setCurrentRadioStation(null);
     setPlaybackQueue(playbackQueueItems);
     setAutoPlayOnTrackChange(true);
+    setRestoredPlaybackPosition(
+      options?.resumePositionSeconds !== undefined
+        ? normalizeLongFormResumePosition(track, options.resumePositionSeconds)
+        : null,
+    );
     setCurrentTrack(track);
     rememberRecommendationFeedback(track, "manual_play", 0.7);
   }
@@ -346,7 +402,7 @@ export function usePlaybackAutoDjController(model: any) {
     const playbackQueueItems = playbackQueueWindow(track, queueItems);
     const shouldFadeExistingSource =
       !options?.suppressExitRecord &&
-      uiPreferences.playerFadeMs > 0 &&
+      uiPreferences.crossfadeManualMs > 0 &&
       Boolean(currentRadioStation || (currentTrack && currentTrack.id !== track.id));
 
     if (shouldFadeExistingSource) {
@@ -355,6 +411,7 @@ export function usePlaybackAutoDjController(model: any) {
         id: externalTrackRequestIdRef.current,
         track,
         queue: playbackQueueItems,
+        resumePositionSeconds: options?.resumePositionSeconds ?? null,
       });
       return;
     }
@@ -363,11 +420,14 @@ export function usePlaybackAutoDjController(model: any) {
   }
 
   function handleCommitExternalTrackRequest(
-    request: { id: number; track: Track; queue: Track[] },
+    request: { id: number; track: Track; queue: Track[]; resumePositionSeconds?: number | null },
     options?: { suppressExitRecord?: boolean },
   ) {
     setExternalTrackRequest((current) => (current?.id === request.id ? null : current));
-    commitPlayTrack(request.track, request.queue, options);
+    commitPlayTrack(request.track, request.queue, {
+      ...options,
+      resumePositionSeconds: request.resumePositionSeconds ?? null,
+    });
   }
 
   function handlePlayCdPreviewTrack(track: Track, queueItems: Track[] = [track]) {

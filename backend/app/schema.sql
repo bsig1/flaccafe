@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS albums (
   album_artist TEXT,
   year INTEGER,
   artwork_path TEXT,
+  artwork_locked INTEGER NOT NULL DEFAULT 0,
   completion_expected_track_count INTEGER,
   completion_source TEXT,
   completion_release_id TEXT,

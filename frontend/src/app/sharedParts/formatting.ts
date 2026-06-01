@@ -1,22 +1,19 @@
-import type { FontChoice, ThemeAccent } from "../../config/theme";
 import type {
-  AudioAnalysisCoverage,
-  AudioAnalysisProgress,
-  AutoDjSettings,
-  ClapInstallProgress,
-  QueueTrack,
-  RecommendationDrift,
-  Track,
+AudioAnalysisCoverage,
+AudioAnalysisProgress,
+ClapInstallProgress,
+QueueTrack,
+Track
 } from "../../types/api";
-import type {
-  MiniPlayerCommand,
-  MiniPlayerSnapshot,
-  MiniPlayerTrackSnapshot,
-} from "./types";
 import {
-  miniPlayerChannelName,
-  storageKeys,
+miniPlayerChannelName,
+storageKeys,
 } from "./constants";
+import type {
+MiniPlayerCommand,
+MiniPlayerSnapshot,
+MiniPlayerTrackSnapshot,
+} from "./types";
 
 export function formatDuration(seconds: number | null): string {
   if (!seconds || seconds < 0) {
@@ -179,6 +176,8 @@ export function miniPlayerTrackSnapshot(track: Track): MiniPlayerTrackSnapshot {
 export function emptyMiniPlayerSnapshot(): MiniPlayerSnapshot {
   return {
     track: null,
+    queue: [],
+    currentIndex: -1,
     isPlaying: false,
     currentTime: 0,
     duration: 0,

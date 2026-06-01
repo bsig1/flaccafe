@@ -1,28 +1,28 @@
 import {
-  Bot,
-  CheckCircle2,
-  Download,
-  ExternalLink,
-  FolderOpen,
-  RefreshCw,
-  Wrench,
+Bot,
+CheckCircle2,
+Download,
+ExternalLink,
+FolderOpen,
+RefreshCw,
+Wrench,
 } from "lucide-react";
 import type {
-  ReactNode,
+ReactNode,
 } from "react";
 import {
-  useState,
+useState,
 } from "react";
 
 import type {
-  AudioConversionInstallProgress,
-  AudioConversionSetupResponse,
-  ClapInstallDevice,
-  ClapInstallProgress,
-  ClapStatusResponse,
+AudioConversionInstallProgress,
+AudioConversionSetupResponse,
+ClapInstallDevice,
+ClapInstallProgress,
+ClapStatusResponse,
 } from "../../../types/api";
 import {
-  DisclosureSection,
+DisclosureSection,
 } from "../../components/common";
 
 const CLAP_RUNTIME_SIZE_HINTS = {
