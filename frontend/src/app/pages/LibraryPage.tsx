@@ -139,6 +139,22 @@ import { useLibraryColumnController } from "./library/useLibraryColumnController
 import { useLibraryScrollController } from "./library/useLibraryScrollController";
 import { useLibrarySelectionController } from "./library/useLibrarySelectionController";
 
+const SIMILAR_RESULT_CACHE_LIMIT = 24;
+const similarAlbumResultCache = new Map<number, SimilarAlbum[]>();
+const similarArtistResultCache = new Map<string, SimilarArtist[]>();
+
+function rememberSimilarResult<K, V>(cache: Map<K, V[]>, key: K, rows: V[]) {
+  cache.delete(key);
+  cache.set(key, rows);
+  while (cache.size > SIMILAR_RESULT_CACHE_LIMIT) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey === undefined) {
+      break;
+    }
+    cache.delete(oldestKey);
+  }
+}
+
 export function LibraryPage({
   tracks,
   trackIndexCache,
@@ -293,8 +309,8 @@ export function LibraryPage({
   const contextSubmenuCloseTimer = useRef<number | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const completionLookupCancelRef = useRef(false);
-  const similarAlbumCacheRef = useRef<Map<number, SimilarAlbum[]>>(new Map());
-  const similarArtistCacheRef = useRef<Map<string, SimilarArtist[]>>(new Map());
+  const similarAlbumCacheRef = useRef(similarAlbumResultCache);
+  const similarArtistCacheRef = useRef(similarArtistResultCache);
 
   const advancedSearchActiveCount = Object.entries(advancedTrackSearch).filter(([key, value]) => {
     if (key === "rating_state") {
@@ -485,17 +501,19 @@ export function LibraryPage({
       return;
     }
     let cancelled = false;
+    const hasCachedResult = similarAlbumCacheRef.current.has(selectedAlbumId);
     const cached = similarAlbumCacheRef.current.get(selectedAlbumId);
-    if (cached) {
+    if (hasCachedResult && cached) {
       setSimilarAlbums(cached);
-    } else {
-      setSimilarAlbums([]);
+      setSimilarAlbumsLoading(false);
+      return;
     }
+    setSimilarAlbums([]);
     setSimilarAlbumsLoading(true);
     fetchSimilarAlbums(selectedAlbumId, 5)
       .then((rows) => {
         if (!cancelled) {
-          similarAlbumCacheRef.current.set(selectedAlbumId, rows);
+          rememberSimilarResult(similarAlbumCacheRef.current, selectedAlbumId, rows);
           setSimilarAlbums(rows);
         }
       })
@@ -521,17 +539,19 @@ export function LibraryPage({
     }
     let cancelled = false;
     const cacheKey = selectedArtistName.trim().toLowerCase();
+    const hasCachedResult = similarArtistCacheRef.current.has(cacheKey);
     const cached = similarArtistCacheRef.current.get(cacheKey);
-    if (cached) {
+    if (hasCachedResult && cached) {
       setSimilarArtists(cached);
-    } else {
-      setSimilarArtists([]);
+      setSimilarArtistsLoading(false);
+      return;
     }
+    setSimilarArtists([]);
     setSimilarArtistsLoading(true);
     fetchSimilarArtists(selectedArtistName, 6)
       .then((rows) => {
         if (!cancelled) {
-          similarArtistCacheRef.current.set(cacheKey, rows);
+          rememberSimilarResult(similarArtistCacheRef.current, cacheKey, rows);
           setSimilarArtists(rows);
         }
       })

@@ -1,6 +1,6 @@
 export function LibraryTrackBranch({ model }: { model: any }) {
-  const { FolderOpen, Search, SlidersHorizontal, X, librarySelectionColumnWidth, tracks, totalTracks, libraryView, setLibraryView, search, setSearch, loadMoreTracks, isLoading, hasMoreTracks, isScanning, suggestedMusicPath, onChooseMusicFolder, onUseSuggestedFolder, columnWidths, orderedTrackColumns, advancedSearchActiveCount, trackSearchActive, libraryHasAnyTracks, tableWidth, shouldVirtualizeTrackRows, renderedTrackList, virtualTopSpacerHeight, virtualBottomSpacerHeight, renderTableHeader, renderVirtualTrackRows, renderTrackRows, clearAdvancedTrackSearch } = model;
-  const trackTableColumnCount = orderedTrackColumns.length + 1;
+  const { FolderOpen, Search, SlidersHorizontal, X, librarySelectionColumnWidth, tracks, totalTracks, libraryView, setLibraryView, search, setSearch, loadMoreTracks, isLoading, hasMoreTracks, isScanning, suggestedMusicPath, onChooseMusicFolder, onUseSuggestedFolder, columnWidths, fixedTrackColumns, advancedSearchActiveCount, trackSearchActive, libraryHasAnyTracks, tableWidth, shouldVirtualizeTrackRows, renderedTrackList, virtualTopSpacerHeight, virtualBottomSpacerHeight, renderTableHeader, renderVirtualTrackRows, renderTrackRows, clearAdvancedTrackSearch } = model;
+  const trackTableColumnCount = fixedTrackColumns.length + 1;
   return (
     <>
               {libraryView === "tracks" && (
@@ -8,7 +8,7 @@ export function LibraryTrackBranch({ model }: { model: any }) {
                   <table className="library-track-table w-full table-fixed text-left text-sm" style={{ minWidth: tableWidth }}>
                     <colgroup>
                       <col style={{ width: librarySelectionColumnWidth }} />
-                      {orderedTrackColumns.map((columnKey: any) => (
+                      {fixedTrackColumns.map((columnKey: any) => (
                         <col key={columnKey} style={{ width: columnWidths[columnKey] }} />
                       ))}
                     </colgroup>
@@ -21,7 +21,7 @@ export function LibraryTrackBranch({ model }: { model: any }) {
                           <td colSpan={trackTableColumnCount} style={{ height: virtualTopSpacerHeight, padding: 0, border: 0 }} />
                         </tr>
                       )}
-                      {shouldVirtualizeTrackRows ? renderVirtualTrackRows() : renderTrackRows(renderedTrackList, { interactionList: tracks, reorderPlay: true })}
+                      {shouldVirtualizeTrackRows ? renderVirtualTrackRows() : renderTrackRows(renderedTrackList, { interactionList: tracks })}
                       {virtualBottomSpacerHeight > 0 && (
                         <tr aria-hidden="true">
                           <td colSpan={trackTableColumnCount} style={{ height: virtualBottomSpacerHeight, padding: 0, border: 0 }} />

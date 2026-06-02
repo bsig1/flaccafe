@@ -7,7 +7,7 @@
     context: DesktopDiagnosticContext,
 ) {
     if let Ok(mut entries) = diagnostics.lock() {
-        entries.push(PlaybackDiagnostic {
+        let entry = PlaybackDiagnostic {
             id: NEXT_DIAGNOSTIC_ID.fetch_add(1, Ordering::Relaxed),
             timestamp_ms: now_millis(),
             severity: severity.to_string(),
@@ -21,12 +21,82 @@
             sample_rate: context.sample_rate,
             channel_count: context.channel_count,
             sample_format: context.sample_format,
-        });
+        };
+        append_playback_diagnostic_log(&entry);
+        entries.push(entry);
         if entries.len() > DIAGNOSTIC_LIMIT {
             let overflow = entries.len() - DIAGNOSTIC_LIMIT;
             entries.drain(0..overflow);
         }
     }
+}
+
+fn append_playback_diagnostic_log(entry: &PlaybackDiagnostic) {
+    let Some(path) = playback_log_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if path
+        .metadata()
+        .map(|metadata| metadata.len() > 1_048_576)
+        .unwrap_or(false)
+    {
+        let rotated = path.with_extension("log.1");
+        let _ = std::fs::rename(&path, rotated);
+    }
+    let message = entry.message.replace('\r', " ").replace('\n', " ");
+    let mut file = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        Ok(file) => file,
+        Err(_) => return,
+    };
+    use std::io::Write as _;
+    let _ = writeln!(
+        file,
+        "{} [{}] {}/{}: {}{}{}{}{}{}",
+        entry.timestamp_ms,
+        entry.severity,
+        entry.category,
+        entry.operation,
+        message,
+        diagnostic_field(" path", entry.path.as_deref()),
+        diagnostic_field(" device", entry.device_name.as_deref()),
+        diagnostic_number_field(" buffer", entry.buffer_frames.map(u64::from)),
+        diagnostic_number_field(" rate", entry.sample_rate.map(u64::from)),
+        diagnostic_field(" format", entry.sample_format.as_deref()),
+    );
+}
+
+fn playback_log_path() -> Option<PathBuf> {
+    if let Ok(root) = std::env::var("LOCALAPPDATA") {
+        return Some(PathBuf::from(root).join("FLAC Cafe").join("logs").join("playback.log"));
+    }
+    std::env::var("HOME").ok().map(|home| {
+        PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("FLAC Cafe")
+            .join("logs")
+            .join("playback.log")
+    })
+}
+
+fn diagnostic_field(label: &str, value: Option<&str>) -> String {
+    value
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("{label}={value}"))
+        .unwrap_or_default()
+}
+
+fn diagnostic_number_field(label: &str, value: Option<u64>) -> String {
+    value
+        .map(|value| format!("{label}={value}"))
+        .unwrap_or_default()
 }
 
 fn diagnostic_error(
@@ -162,6 +232,7 @@ fn open_output_sink(
     output_backend: DesktopOutputBackendMode,
     requested_id: Option<&str>,
     buffer_frames: Option<u32>,
+    preferred_sample_rate: Option<u32>,
     stream_errors: Arc<Mutex<Vec<String>>>,
     diagnostics: Arc<Mutex<Vec<PlaybackDiagnostic>>>,
 ) -> Result<(DesktopOutputSink, ResolvedOutput), String> {
@@ -177,6 +248,7 @@ fn open_output_sink(
         DesktopOutputBackendMode::WasapiExclusive => match open_wasapi_exclusive_output_sink(
             requested_id,
             buffer_frames,
+            preferred_sample_rate,
             stream_errors.clone(),
             diagnostics.clone(),
         ) {
@@ -184,10 +256,10 @@ fn open_output_sink(
             Err(message) => {
                 remember_diagnostic(
                     &diagnostics,
-                    "warning",
+                    "info",
                     "wasapi",
                     "wasapi_exclusive_open_fallback",
-                    format!("WASAPI exclusive could not open cleanly; falling back to shared Rust output. {message}"),
+                    format!("WASAPI exclusive was unavailable for this device/session; using shared Rust output. {message}"),
                     DesktopDiagnosticContext {
                         device_id: requested_id.map(str::to_string),
                         buffer_frames,
@@ -287,12 +359,14 @@ fn open_shared_output_sink(
 fn open_wasapi_exclusive_output_sink(
     requested_id: Option<&str>,
     buffer_frames: Option<u32>,
+    preferred_sample_rate: Option<u32>,
     stream_errors: Arc<Mutex<Vec<String>>>,
     diagnostics: Arc<Mutex<Vec<PlaybackDiagnostic>>>,
 ) -> Result<(DesktopOutputSink, ResolvedOutput), String> {
     let (sink, resolved) = WasapiExclusiveSink::open(
         requested_id,
         buffer_frames,
+        preferred_sample_rate,
         stream_errors,
         diagnostics,
     )?;
@@ -303,6 +377,7 @@ fn open_wasapi_exclusive_output_sink(
 fn open_wasapi_exclusive_output_sink(
     requested_id: Option<&str>,
     buffer_frames: Option<u32>,
+    _preferred_sample_rate: Option<u32>,
     _stream_errors: Arc<Mutex<Vec<String>>>,
     diagnostics: Arc<Mutex<Vec<PlaybackDiagnostic>>>,
 ) -> Result<(DesktopOutputSink, ResolvedOutput), String> {

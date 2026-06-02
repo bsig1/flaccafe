@@ -36,7 +36,7 @@ pub fn play_source(
         .inner
         .lock()
         .map_err(|_| "Rust playback lock poisoned".to_string())?;
-    inner.ensure_sink(output_backend, device_id, buffer_frames)?;
+    inner.ensure_sink(output_backend, device_id, buffer_frames, Some(sample_rate))?;
     if let Ok(mut errors) = inner.stream_errors.lock() {
         errors.clear();
     }
@@ -61,11 +61,32 @@ pub fn play_source(
     );
     player.play();
 
-    inner.player = Some(PlaybackHandle {
+    inner.player = Some(PlaybackHandle::new(
         player,
         gain,
         sample_rate,
-    });
+        start_seconds.unwrap_or(0.0),
+    ));
+    remember_diagnostic(
+        &inner.diagnostics,
+        "info",
+        "playback",
+        "play_source",
+        format!(
+            "Started Rust playback at {:.3}s using {} output.",
+            start_seconds.unwrap_or(0.0),
+            inner.output_backend.id()
+        ),
+        DesktopDiagnosticContext {
+            path: Some(identity.clone()),
+            device_id: inner.device_id.clone(),
+            device_name: inner.device_name.clone(),
+            buffer_frames: inner.buffer_frames,
+            sample_rate: inner.sample_rate,
+            channel_count: inner.channel_count,
+            sample_format: inner.sample_format.clone(),
+        },
+    );
     inner.current_path = Some(identity);
     inner.current_reload_path = reload_path;
     inner.duration_seconds = duration_seconds;
@@ -112,7 +133,12 @@ pub fn crossfade_to_source(
         .inner
         .lock()
         .map_err(|_| "Rust playback lock poisoned".to_string())?;
-    inner.ensure_sink(output_backend, device_id, buffer_frames)?;
+    inner.ensure_sink(
+        output_backend,
+        device_id,
+        buffer_frames,
+        Some(new_sample_rate),
+    )?;
     if let Ok(mut errors) = inner.stream_errors.lock() {
         errors.clear();
     }
@@ -145,13 +171,34 @@ pub fn crossfade_to_source(
     );
     new_player.play();
 
-    let new_handle = PlaybackHandle {
-        player: new_player.clone(),
-        gain: new_gain.clone(),
-        sample_rate: new_sample_rate,
-    };
+    let new_handle = PlaybackHandle::new(
+        new_player.clone(),
+        new_gain.clone(),
+        new_sample_rate,
+        start_seconds.unwrap_or(0.0),
+    );
     let old_handle = inner.player.replace(new_handle);
     inner.fading_player = old_handle.clone();
+    remember_diagnostic(
+        &inner.diagnostics,
+        "info",
+        "playback",
+        "crossfade_to_source",
+        format!(
+            "Started Rust crossfade over {} ms using {} output.",
+            bounded_duration,
+            inner.output_backend.id()
+        ),
+        DesktopDiagnosticContext {
+            path: Some(identity.clone()),
+            device_id: inner.device_id.clone(),
+            device_name: inner.device_name.clone(),
+            buffer_frames: inner.buffer_frames,
+            sample_rate: inner.sample_rate,
+            channel_count: inner.channel_count,
+            sample_format: inner.sample_format.clone(),
+        },
+    );
     inner.current_path = Some(identity);
     inner.current_reload_path = reload_path;
     inner.duration_seconds = duration_seconds;
@@ -227,6 +274,7 @@ pub fn seek(state: State<'_, PlaybackState>, seconds: f64) -> Result<PlaybackSta
             .try_seek(Duration::from_secs_f64(bounded_seconds))
         {
             Ok(()) => {
+                player.set_position_offset_seconds(0.0);
                 player.gain.fade_to(
                     inner.volume,
                     Duration::from_millis(CLICKLESS_SEEK_RAMP_MS),
@@ -308,7 +356,7 @@ pub fn seek(state: State<'_, PlaybackState>, seconds: f64) -> Result<PlaybackSta
     let buffer_frames = inner.buffer_frames;
     let output_backend = inner.output_backend;
     let volume = inner.volume;
-    inner.ensure_sink(Some(output_backend), device_id, buffer_frames)?;
+    inner.ensure_sink(Some(output_backend), device_id, buffer_frames, Some(sample_rate))?;
     inner.stop();
 
     let mixer = inner
@@ -338,11 +386,12 @@ pub fn seek(state: State<'_, PlaybackState>, seconds: f64) -> Result<PlaybackSta
         sample_rate,
     );
 
-    inner.player = Some(PlaybackHandle {
+    inner.player = Some(PlaybackHandle::new(
         player,
         gain,
         sample_rate,
-    });
+        bounded_seconds,
+    ));
     inner.current_path = Some(identity);
     inner.current_reload_path = Some(reload_path);
     inner.duration_seconds = duration_seconds;

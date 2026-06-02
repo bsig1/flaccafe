@@ -436,7 +436,7 @@ export function HistoryPage({
             <div className="text-sm font-semibold text-white">Completed Albums</div>
             <div className="text-xs text-muted">Most recently finished local album groups.</div>
           </div>
-          <div className="grid max-h-80 gap-2 overflow-auto pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="grid max-h-[26rem] content-start gap-2 overflow-auto pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {completedAlbums.map((row) => renderAlbumCompletionRow(row, "completed"))}
             {completedAlbums.length === 0 && (
               <div className="rounded border border-line/70 bg-ink px-3 py-8 text-center text-xs text-muted">

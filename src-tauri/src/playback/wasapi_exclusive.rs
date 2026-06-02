@@ -14,12 +14,10 @@ use std::time::{Duration, Instant};
 
 use rodio::mixer::{mixer, Mixer, MixerSource};
 use rodio::{ChannelCount, SampleRate};
-use windows::core::{HRESULT, PCSTR, PCWSTR};
+use windows::core::{HRESULT, PCSTR};
 use windows::Win32::Devices::Properties;
-use windows::Win32::Foundation::{
-    CloseHandle, HANDLE, PROPERTYKEY, S_FALSE, S_OK, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
-};
-use windows::Win32::Media::{Audio, KernelStreaming, Multimedia};
+use windows::Win32::Foundation::{HANDLE, PROPERTYKEY, S_FALSE, S_OK};
+use windows::Win32::Media::{timeBeginPeriod, timeEndPeriod, Audio, KernelStreaming, Multimedia};
 use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PROPVARIANT};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
@@ -27,10 +25,9 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::System::Threading::{
     AvRevertMmThreadCharacteristics, AvSetMmThreadCharacteristicsA, AvSetMmThreadPriority,
-    CreateEventW, SetThreadPriority, WaitForSingleObject, AVRT_PRIORITY_CRITICAL,
-    THREAD_PRIORITY_TIME_CRITICAL,
+    SetThreadPriority, AVRT_PRIORITY_CRITICAL, THREAD_PRIORITY_TIME_CRITICAL,
 };
-use windows::Win32::System::Variant::VT_LPWSTR;
+use windows::Win32::System::Variant::{VT_BLOB, VT_LPWSTR};
 
 use super::{
     diagnostic_error, remember_diagnostic, remember_stream_error, DesktopDiagnosticContext,
@@ -40,12 +37,17 @@ use super::{
 const WASAPI_EXCLUSIVE_DEFAULT_BUFFER_MS: u32 = 250;
 const WASAPI_EXCLUSIVE_LATE_POLL_MS: u128 = 30;
 const WASAPI_EXCLUSIVE_TIMING_WARNING_MS: u64 = 5_000;
-const WASAPI_EXCLUSIVE_EVENT_WAIT_MS: u32 = 250;
+const WASAPI_EXCLUSIVE_POLL_INTERVAL_MS: u64 = 1;
+const WASAPI_EXCLUSIVE_RENDER_START_LOGS: u64 = 6;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum WasapiSampleFormat {
     F32,
     I16,
+    I24,
+    I24Padded,
+    I24In32,
+    I32,
 }
 
 impl WasapiSampleFormat {
@@ -53,6 +55,10 @@ impl WasapiSampleFormat {
         match self {
             WasapiSampleFormat::F32 => "F32",
             WasapiSampleFormat::I16 => "I16",
+            WasapiSampleFormat::I24 => "I24",
+            WasapiSampleFormat::I24Padded => "I24-padded",
+            WasapiSampleFormat::I24In32 => "I24-in-32",
+            WasapiSampleFormat::I32 => "I32",
         }
     }
 
@@ -60,15 +66,63 @@ impl WasapiSampleFormat {
         match self {
             WasapiSampleFormat::F32 => 4,
             WasapiSampleFormat::I16 => 2,
+            WasapiSampleFormat::I24 => 3,
+            WasapiSampleFormat::I24Padded
+            | WasapiSampleFormat::I24In32
+            | WasapiSampleFormat::I32 => 4,
+        }
+    }
+
+    fn bits_per_sample(self) -> u16 {
+        match self {
+            WasapiSampleFormat::I24Padded => 24,
+            _ => self.bytes_per_sample() * 8,
+        }
+    }
+
+    fn valid_bits_per_sample(self) -> u16 {
+        match self {
+            WasapiSampleFormat::I24Padded => 24,
+            WasapiSampleFormat::I24In32 => 24,
+            _ => self.bits_per_sample(),
         }
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WasapiFormatContainer {
+    Plain,
+    Extensible,
+}
+
+impl WasapiFormatContainer {
+    fn label(self) -> &'static str {
+        match self {
+            WasapiFormatContainer::Plain => "WAVEFORMATEX",
+            WasapiFormatContainer::Extensible => "WAVEFORMATEXTENSIBLE",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct WasapiFormat {
     channels: u16,
     sample_rate: u32,
     sample_format: WasapiSampleFormat,
+    container: WasapiFormatContainer,
+    channel_mask: Option<u32>,
+}
+
+impl WasapiFormat {
+    fn label(self) -> String {
+        let mut label = format!("{} {}", self.sample_format.label(), self.container.label());
+        if matches!(self.container, WasapiFormatContainer::Extensible) {
+            if let Some(mask) = self.channel_mask {
+                label.push_str(&format!(" mask=0x{mask:08x}"));
+            }
+        }
+        label
+    }
 }
 
 pub(super) struct WasapiExclusiveSink {
@@ -83,6 +137,7 @@ impl WasapiExclusiveSink {
     pub(super) fn open(
         requested_id: Option<&str>,
         buffer_frames: Option<u32>,
+        preferred_sample_rate: Option<u32>,
         stream_errors: Arc<Mutex<Vec<String>>>,
         diagnostics: Arc<Mutex<Vec<PlaybackDiagnostic>>>,
     ) -> Result<(Self, ResolvedOutput), String> {
@@ -100,6 +155,7 @@ impl WasapiExclusiveSink {
                 if let Err(message) = run_wasapi_exclusive_output(
                     requested_id,
                     buffer_frames,
+                    preferred_sample_rate,
                     thread_stop,
                     stream_errors,
                     thread_diagnostics,
@@ -178,42 +234,10 @@ impl Drop for WasapiExclusiveSink {
     }
 }
 
-struct EventHandle(HANDLE);
-
-impl EventHandle {
-    fn create(
-        diagnostics: &Arc<Mutex<Vec<PlaybackDiagnostic>>>,
-        context: DesktopDiagnosticContext,
-    ) -> Result<Self, String> {
-        let handle =
-            unsafe { CreateEventW(None, false, false, PCWSTR::null()) }.map_err(|error| {
-                diagnostic_error(
-                    diagnostics,
-                    "wasapi",
-                    "create_wasapi_exclusive_event",
-                    format!("Could not create WASAPI exclusive render event: {error}"),
-                    context,
-                )
-            })?;
-        Ok(Self(handle))
-    }
-
-    fn raw(&self) -> HANDLE {
-        self.0
-    }
-}
-
-impl Drop for EventHandle {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = CloseHandle(self.0);
-        }
-    }
-}
-
 fn run_wasapi_exclusive_output(
     requested_id: Option<String>,
     buffer_frames: Option<u32>,
+    preferred_sample_rate: Option<u32>,
     stop: Arc<AtomicBool>,
     stream_errors: Arc<Mutex<Vec<String>>>,
     diagnostics: Arc<Mutex<Vec<PlaybackDiagnostic>>>,
@@ -221,6 +245,7 @@ fn run_wasapi_exclusive_output(
 ) -> Result<(), String> {
     let _com = ComApartment::initialize(&diagnostics)?;
     let _mmcss = MmcssGuard::enable();
+    let _timer_period = TimerPeriodGuard::enable(1);
     unsafe {
         let _ = SetThreadPriority(
             windows::Win32::System::Threading::GetCurrentThread(),
@@ -229,8 +254,12 @@ fn run_wasapi_exclusive_output(
     }
 
     let selected_device = select_output_device(requested_id.as_deref(), &diagnostics)?;
-    let (format, buffer_duration) =
-        choose_exclusive_format(&selected_device.device, buffer_frames, &diagnostics)?;
+    let (format, buffer_duration) = choose_exclusive_format(
+        &selected_device.device,
+        buffer_frames,
+        preferred_sample_rate,
+        &diagnostics,
+    )?;
     let channels = ChannelCount::new(format.channels).ok_or_else(|| {
         diagnostic_error(
             &diagnostics,
@@ -265,16 +294,15 @@ fn run_wasapi_exclusive_output(
                 )
             })?
     };
-    let wave_format = wave_format_extensible(format);
-    let event_handle = EventHandle::create(&diagnostics, selected_device.context(buffer_frames))?;
+    let wave_format = wave_format(format);
     unsafe {
         audio_client
             .Initialize(
                 Audio::AUDCLNT_SHAREMODE_EXCLUSIVE,
-                Audio::AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                0,
                 buffer_duration,
-                buffer_duration,
-                &wave_format.Format,
+                0,
+                wave_format.as_ptr(),
                 None,
             )
             .map_err(|error| {
@@ -283,17 +311,6 @@ fn run_wasapi_exclusive_output(
                     "wasapi",
                     "initialize_wasapi_exclusive",
                     wasapi_initialize_error_message(error, format),
-                    selected_device.context(buffer_frames),
-                )
-            })?;
-        audio_client
-            .SetEventHandle(event_handle.raw())
-            .map_err(|error| {
-                diagnostic_error(
-                    &diagnostics,
-                    "wasapi",
-                    "set_wasapi_exclusive_event",
-                    format!("Could not set WASAPI exclusive event callback: {error}"),
                     selected_device.context(buffer_frames),
                 )
             })?;
@@ -323,6 +340,7 @@ fn run_wasapi_exclusive_output(
     fill_initial_silence(
         &render_client,
         buffer_size,
+        format,
         &diagnostics,
         selected_device.context(buffer_frames),
     )?;
@@ -344,9 +362,26 @@ fn run_wasapi_exclusive_output(
         device_name: selected_device.name,
         sample_rate: format.sample_rate,
         channel_count: format.channels,
-        sample_format: format!("{} exclusive", format.sample_format.label()),
+        sample_format: format!("{} exclusive", format.label()),
     };
     let ready_context = resolved.clone_context(buffer_frames);
+    remember_diagnostic(
+        &diagnostics,
+        "info",
+        "wasapi",
+        "open_wasapi_exclusive",
+        format!(
+            "Opened WASAPI exclusive output at {} Hz, {} channel(s), {}, {} frame buffer.",
+            format.sample_rate,
+            format.channels,
+            format.label(),
+            buffer_size
+        ),
+        DesktopDiagnosticContext {
+            buffer_frames: Some(buffer_size),
+            ..ready_context.clone()
+        },
+    );
     ready_tx
         .send(Ok((mixer.clone(), resolved)))
         .map_err(|error| format!("Could not report WASAPI exclusive output readiness: {error}"))?;
@@ -355,7 +390,6 @@ fn run_wasapi_exclusive_output(
         render_client,
         buffer_size,
         format,
-        event_handle,
         source,
         stop,
         stream_errors,
@@ -370,7 +404,6 @@ fn render_loop(
     render_client: Audio::IAudioRenderClient,
     buffer_size: u32,
     format: WasapiFormat,
-    event_handle: EventHandle,
     mut source: MixerSource,
     stop: Arc<AtomicBool>,
     stream_errors: Arc<Mutex<Vec<String>>>,
@@ -381,82 +414,37 @@ fn render_loop(
     let timing_warning_interval = Duration::from_millis(WASAPI_EXCLUSIVE_TIMING_WARNING_MS);
     let mut last_wake = Instant::now();
     let mut last_timing_warning = Instant::now();
-    // Let WASAPI wake the thread when the endpoint wants more data. Polling with
-    // sleep is much more prone to crackles because exclusive mode has no mixer
-    // cushion between this loop and the device.
+    let mut render_log_state = WasapiRenderLogState::new();
+    // Some Windows drivers accept event-callback exclusive streams but never
+    // keep signaling the event. Polling the exclusive padding is less elegant,
+    // but it is predictable across more USB/DAC-style devices.
     while !stop.load(Ordering::Acquire) {
-        let wait_result =
-            unsafe { WaitForSingleObject(event_handle.raw(), WASAPI_EXCLUSIVE_EVENT_WAIT_MS) };
+        thread::sleep(Duration::from_millis(WASAPI_EXCLUSIVE_POLL_INTERVAL_MS));
         if stop.load(Ordering::Acquire) {
             break;
-        }
-        if wait_result == WAIT_TIMEOUT {
-            continue;
-        }
-        if wait_result == WAIT_FAILED {
-            remember_stream_error(
-                &stream_errors,
-                &diagnostics,
-                "wasapi",
-                "exclusive_event_wait",
-                "WASAPI exclusive event wait failed".to_string(),
-                context.clone(),
-            );
-            break;
-        }
-        if wait_result != WAIT_OBJECT_0 {
-            continue;
         }
         let elapsed = last_wake.elapsed();
         last_wake = Instant::now();
         let Some(audio_client) = stop_audio_client.as_ref() else {
             break;
         };
-        let padding = match unsafe { audio_client.GetCurrentPadding() } {
-            Ok(value) => value,
-            Err(error) => {
-                remember_stream_error(
-                    &stream_errors,
-                    &diagnostics,
-                    "wasapi",
-                    "exclusive_padding_query",
-                    format!("WASAPI exclusive padding query failed: {error}"),
-                    context.clone(),
-                );
-                break;
-            }
-        };
-        let frames_available = buffer_size.saturating_sub(padding);
-        if (padding == 0 || elapsed.as_millis() >= WASAPI_EXCLUSIVE_LATE_POLL_MS)
-            && last_timing_warning.elapsed() >= timing_warning_interval
-        {
-            remember_diagnostic(
-                &diagnostics,
-                "warning",
-                "wasapi",
-                "exclusive_render_timing",
-                format!(
-                    "WASAPI exclusive render loop was late or drained. Wake: {} ms, buffer padding: {padding}/{buffer_size} frames.",
-                    elapsed.as_millis()
-                ),
-                context.clone(),
-            );
-            last_timing_warning = Instant::now();
-        }
-        if frames_available == 0 {
-            continue;
-        }
-        if let Err(error) =
-            write_output_buffer(&render_client, frames_available, format, &mut source)
-        {
-            remember_stream_error(
+        if matches!(
+            write_available_output(
+                audio_client,
+                &render_client,
+                buffer_size,
+                format,
+                &mut source,
                 &stream_errors,
                 &diagnostics,
-                "wasapi",
-                "exclusive_render_buffer",
-                format!("WASAPI exclusive render failed: {error}"),
-                context.clone(),
-            );
+                &context,
+                elapsed,
+                timing_warning_interval,
+                &mut last_timing_warning,
+                &mut render_log_state,
+            ),
+            WasapiRenderLoopAction::Break
+        ) {
             break;
         }
     }
@@ -468,39 +456,280 @@ fn render_loop(
     }
 }
 
+enum WasapiRenderWriteError {
+    Transient(String),
+    Fatal(String),
+}
+
+enum WasapiRenderLoopAction {
+    Idle,
+    Wrote,
+    Break,
+}
+
+struct WasapiRenderLogState {
+    last_activity_log: Instant,
+    write_count: u64,
+    nonzero_logged: bool,
+}
+
+impl WasapiRenderLogState {
+    fn new() -> Self {
+        Self {
+            last_activity_log: Instant::now(),
+            write_count: 0,
+            nonzero_logged: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct WasapiRenderStats {
+    frames: u32,
+    sample_count: usize,
+    nonzero_samples: usize,
+    peak: f32,
+}
+
+impl WasapiRenderStats {
+    fn observe(&mut self, sample: f32) {
+        let magnitude = sample.abs();
+        if magnitude > 0.000_001 {
+            self.nonzero_samples = self.nonzero_samples.saturating_add(1);
+        }
+        if magnitude > self.peak {
+            self.peak = magnitude;
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_available_output(
+    audio_client: &Audio::IAudioClient,
+    render_client: &Audio::IAudioRenderClient,
+    buffer_size: u32,
+    format: WasapiFormat,
+    source: &mut MixerSource,
+    stream_errors: &Arc<Mutex<Vec<String>>>,
+    diagnostics: &Arc<Mutex<Vec<PlaybackDiagnostic>>>,
+    context: &DesktopDiagnosticContext,
+    elapsed: Duration,
+    timing_warning_interval: Duration,
+    last_timing_warning: &mut Instant,
+    render_log_state: &mut WasapiRenderLogState,
+) -> WasapiRenderLoopAction {
+    let padding = match unsafe { audio_client.GetCurrentPadding() } {
+        Ok(value) => value,
+        Err(error) => {
+            remember_stream_error(
+                stream_errors,
+                diagnostics,
+                "wasapi",
+                "exclusive_padding_query",
+                format!("WASAPI exclusive padding query failed: {error}"),
+                context.clone(),
+            );
+            return WasapiRenderLoopAction::Break;
+        }
+    };
+    let frames_available = buffer_size.saturating_sub(padding);
+    if (padding == 0 || elapsed.as_millis() >= WASAPI_EXCLUSIVE_LATE_POLL_MS)
+        && last_timing_warning.elapsed() >= timing_warning_interval
+    {
+        remember_diagnostic(
+            diagnostics,
+            "warning",
+            "wasapi",
+            "exclusive_render_timing",
+            format!(
+                "WASAPI exclusive render loop was late or drained. Wake: {} ms, buffer padding: {padding}/{buffer_size} frames.",
+                elapsed.as_millis()
+            ),
+            context.clone(),
+        );
+        *last_timing_warning = Instant::now();
+    }
+    if frames_available == 0 {
+        if padding >= buffer_size && last_timing_warning.elapsed() >= timing_warning_interval {
+            remember_diagnostic(
+                diagnostics,
+                "warning",
+                "wasapi",
+                "exclusive_render_buffer_full",
+                format!(
+                    "WASAPI exclusive buffer stayed full at {padding}/{buffer_size} frames; the output device is not draining the stream."
+                ),
+                context.clone(),
+            );
+            *last_timing_warning = Instant::now();
+        }
+        return WasapiRenderLoopAction::Idle;
+    }
+    let frames_to_write = render_write_frames(frames_available, buffer_size, format);
+    if frames_to_write == 0 {
+        return WasapiRenderLoopAction::Idle;
+    }
+    match write_output_buffer(render_client, frames_to_write, format, source) {
+        Ok(stats) => {
+            log_render_write(diagnostics, context, render_log_state, stats);
+            WasapiRenderLoopAction::Wrote
+        }
+        Err(error) => match error {
+            WasapiRenderWriteError::Transient(message) => {
+                if last_timing_warning.elapsed() >= timing_warning_interval {
+                    remember_diagnostic(
+                        diagnostics,
+                        "warning",
+                        "wasapi",
+                        "exclusive_render_buffer_retry",
+                        message,
+                        context.clone(),
+                    );
+                    *last_timing_warning = Instant::now();
+                }
+                WasapiRenderLoopAction::Idle
+            }
+            WasapiRenderWriteError::Fatal(message) => {
+                remember_stream_error(
+                    stream_errors,
+                    diagnostics,
+                    "wasapi",
+                    "exclusive_render_buffer",
+                    format!("WASAPI exclusive render failed: {message}"),
+                    context.clone(),
+                );
+                WasapiRenderLoopAction::Break
+            }
+        },
+    }
+}
+
+fn render_write_frames(frames_available: u32, buffer_size: u32, format: WasapiFormat) -> u32 {
+    if frames_available == 0 {
+        return 0;
+    }
+    if frames_available >= buffer_size / 2 {
+        return frames_available;
+    }
+    let minimum_packet = match format.sample_format {
+        WasapiSampleFormat::I24 => 1024,
+        _ if format.sample_rate >= 88_200 => 512,
+        _ => 256,
+    };
+    if frames_available < minimum_packet {
+        0
+    } else {
+        frames_available
+    }
+}
+
+fn log_render_write(
+    diagnostics: &Arc<Mutex<Vec<PlaybackDiagnostic>>>,
+    context: &DesktopDiagnosticContext,
+    state: &mut WasapiRenderLogState,
+    stats: WasapiRenderStats,
+) {
+    state.write_count = state.write_count.saturating_add(1);
+    let should_log_start = state.write_count <= WASAPI_EXCLUSIVE_RENDER_START_LOGS;
+    let should_log_nonzero = stats.nonzero_samples > 0 && !state.nonzero_logged;
+    let should_log_activity =
+        stats.nonzero_samples > 0 && state.last_activity_log.elapsed() >= Duration::from_secs(5);
+    if should_log_start || should_log_nonzero || should_log_activity {
+        remember_diagnostic(
+            diagnostics,
+            "info",
+            "wasapi",
+            "exclusive_render_write",
+            format!(
+                "WASAPI exclusive wrote {} frame(s), peak {:.6}, nonzero samples {}/{}.",
+                stats.frames, stats.peak, stats.nonzero_samples, stats.sample_count
+            ),
+            context.clone(),
+        );
+        if stats.nonzero_samples > 0 {
+            state.nonzero_logged = true;
+            state.last_activity_log = Instant::now();
+        }
+    }
+}
+
 fn write_output_buffer(
     render_client: &Audio::IAudioRenderClient,
     frames_available: u32,
     format: WasapiFormat,
     source: &mut MixerSource,
-) -> Result<(), String> {
-    let buffer = unsafe { render_client.GetBuffer(frames_available) }
-        .map_err(|error| format!("GetBuffer failed: {error}"))?;
+) -> Result<WasapiRenderStats, WasapiRenderWriteError> {
+    let buffer = unsafe { render_client.GetBuffer(frames_available) }.map_err(|error| {
+        let message = format!("GetBuffer failed: {error}");
+        if error.code() == Audio::AUDCLNT_E_BUFFER_ERROR {
+            WasapiRenderWriteError::Transient(message)
+        } else {
+            WasapiRenderWriteError::Fatal(message)
+        }
+    })?;
     let sample_count = usize::from(format.channels).saturating_mul(frames_available as usize);
+    let mut stats = WasapiRenderStats {
+        frames: frames_available,
+        sample_count,
+        ..WasapiRenderStats::default()
+    };
     match format.sample_format {
         WasapiSampleFormat::F32 => unsafe {
             let samples = slice::from_raw_parts_mut(buffer as *mut f32, sample_count);
             for sample in samples {
-                *sample = next_sample(source);
+                *sample = next_sample_with_stats(source, &mut stats);
             }
         },
         WasapiSampleFormat::I16 => unsafe {
             let samples = slice::from_raw_parts_mut(buffer as *mut i16, sample_count);
             for sample in samples {
-                *sample = (next_sample(source) * i16::MAX as f32).round() as i16;
+                *sample = sample_to_i16(next_sample_with_stats(source, &mut stats));
+            }
+        },
+        WasapiSampleFormat::I24 => unsafe {
+            let samples = slice::from_raw_parts_mut(buffer as *mut u8, sample_count * 3);
+            for chunk in samples.chunks_exact_mut(3) {
+                let bytes = sample_to_i24(next_sample_with_stats(source, &mut stats)).to_le_bytes();
+                chunk.copy_from_slice(&bytes[..3]);
+            }
+        },
+        WasapiSampleFormat::I24Padded => unsafe {
+            let samples = slice::from_raw_parts_mut(buffer as *mut i32, sample_count);
+            for sample in samples {
+                *sample = sample_to_i24(next_sample_with_stats(source, &mut stats));
+            }
+        },
+        WasapiSampleFormat::I24In32 => unsafe {
+            let samples = slice::from_raw_parts_mut(buffer as *mut i32, sample_count);
+            for sample in samples {
+                *sample = sample_to_i24(next_sample_with_stats(source, &mut stats)) << 8;
+            }
+        },
+        WasapiSampleFormat::I32 => unsafe {
+            let samples = slice::from_raw_parts_mut(buffer as *mut i32, sample_count);
+            for sample in samples {
+                *sample = sample_to_i32(next_sample_with_stats(source, &mut stats));
             }
         },
     }
     unsafe {
         render_client
             .ReleaseBuffer(frames_available, 0)
-            .map_err(|error| format!("ReleaseBuffer failed: {error}"))?;
+            .map_err(|error| {
+                WasapiRenderWriteError::Fatal(format!("ReleaseBuffer failed: {error}"))
+            })?;
     }
-    Ok(())
+    Ok(stats)
 }
 
 fn next_sample(source: &mut MixerSource) -> f32 {
     output_safe_sample(source.next().unwrap_or(0.0))
+}
+
+fn next_sample_with_stats(source: &mut MixerSource, stats: &mut WasapiRenderStats) -> f32 {
+    let sample = next_sample(source);
+    stats.observe(sample);
+    sample
 }
 
 fn output_safe_sample(sample: f32) -> f32 {
@@ -516,13 +745,26 @@ fn output_safe_sample(sample: f32) -> f32 {
     sample.signum() * (threshold + (1.0 - threshold) * excess.tanh()).min(1.0)
 }
 
+fn sample_to_i16(sample: f32) -> i16 {
+    (output_safe_sample(sample) * i16::MAX as f32).round() as i16
+}
+
+fn sample_to_i24(sample: f32) -> i32 {
+    (output_safe_sample(sample) * 8_388_607.0).round() as i32
+}
+
+fn sample_to_i32(sample: f32) -> i32 {
+    (output_safe_sample(sample) * i32::MAX as f32).round() as i32
+}
+
 fn fill_initial_silence(
     render_client: &Audio::IAudioRenderClient,
     buffer_size: u32,
+    format: WasapiFormat,
     diagnostics: &Arc<Mutex<Vec<PlaybackDiagnostic>>>,
     context: DesktopDiagnosticContext,
 ) -> Result<(), String> {
-    let _buffer = unsafe { render_client.GetBuffer(buffer_size) }.map_err(|error| {
+    let buffer = unsafe { render_client.GetBuffer(buffer_size) }.map_err(|error| {
         diagnostic_error(
             diagnostics,
             "wasapi",
@@ -531,9 +773,15 @@ fn fill_initial_silence(
             context.clone(),
         )
     })?;
+    let bytes = buffer_size as usize
+        * usize::from(format.channels)
+        * usize::from(format.sample_format.bytes_per_sample());
+    unsafe {
+        ptr::write_bytes(buffer, 0, bytes);
+    }
     unsafe {
         render_client
-            .ReleaseBuffer(buffer_size, Audio::AUDCLNT_BUFFERFLAGS_SILENT.0 as u32)
+            .ReleaseBuffer(buffer_size, 0)
             .map_err(|error| {
                 diagnostic_error(
                     diagnostics,
@@ -739,100 +987,186 @@ fn select_output_device(
 fn choose_exclusive_format(
     device: &Audio::IMMDevice,
     requested_buffer_frames: Option<u32>,
+    preferred_sample_rate: Option<u32>,
     diagnostics: &Arc<Mutex<Vec<PlaybackDiagnostic>>>,
 ) -> Result<(WasapiFormat, i64), String> {
     let mix = default_mix_format(device).unwrap_or(WasapiFormat {
         channels: 2,
         sample_rate: 48_000,
         sample_format: WasapiSampleFormat::F32,
+        container: WasapiFormatContainer::Plain,
+        channel_mask: None,
     });
-    // Prefer the user's common high-resolution endpoint rate before the shared
-    // mix rate. Some Windows devices report a 48 kHz mix format even when the
-    // exclusive endpoint is configured at 96 kHz.
-    let sample_rates = unique_u32([
-        96_000,
-        mix.sample_rate,
-        48_000,
-        44_100,
-        88_200,
-        192_000,
-        176_400,
-    ]);
-    let channel_counts = unique_u16([2, mix.channels, 1]);
-    let sample_formats = [WasapiSampleFormat::F32, WasapiSampleFormat::I16];
+    let device_format = property_wave_format(device, &Audio::PKEY_AudioEngine_DeviceFormat);
+    let oem_format = property_wave_format(device, &Audio::PKEY_AudioEngine_OEMFormat);
+    let format_candidates = exclusive_format_candidates(mix, preferred_sample_rate);
     let mut first_initialize_error: Option<String> = None;
+    let mut high_quality_rejections: Vec<String> = Vec::new();
+    remember_diagnostic(
+        diagnostics,
+        "info",
+        "wasapi",
+        "choose_wasapi_exclusive_format",
+        format!(
+            "Probing WASAPI exclusive formats. Shared mix reports {} Hz, {} channel(s), {}.",
+            mix.sample_rate,
+            mix.channels,
+            mix.label()
+        ),
+        DesktopDiagnosticContext {
+            sample_rate: Some(mix.sample_rate),
+            channel_count: Some(mix.channels),
+            sample_format: Some(mix.label()),
+            ..DesktopDiagnosticContext::default()
+        },
+    );
+    if let Some(format) = device_format {
+        remember_diagnostic(
+            diagnostics,
+            "info",
+            "wasapi",
+            "choose_wasapi_exclusive_format",
+            format!(
+                "Windows endpoint device format reports {} Hz, {} channel(s), {}.",
+                format.sample_rate,
+                format.channels,
+                format.label()
+            ),
+            DesktopDiagnosticContext {
+                sample_rate: Some(format.sample_rate),
+                channel_count: Some(format.channels),
+                sample_format: Some(format.label()),
+                ..DesktopDiagnosticContext::default()
+            },
+        );
+    }
+    if let Some(format) = oem_format {
+        remember_diagnostic(
+            diagnostics,
+            "info",
+            "wasapi",
+            "choose_wasapi_exclusive_format",
+            format!(
+                "Windows endpoint OEM format reports {} Hz, {} channel(s), {}.",
+                format.sample_rate,
+                format.channels,
+                format.label()
+            ),
+            DesktopDiagnosticContext {
+                sample_rate: Some(format.sample_rate),
+                channel_count: Some(format.channels),
+                sample_format: Some(format.label()),
+                ..DesktopDiagnosticContext::default()
+            },
+        );
+    }
 
-    for sample_rate in sample_rates {
-        for channels in channel_counts.iter().copied() {
-            for sample_format in sample_formats {
-                let format = WasapiFormat {
-                    channels,
-                    sample_rate,
-                    sample_format,
-                };
-                let wave_format = wave_format_extensible(format);
-                let audio_client: Audio::IAudioClient = unsafe {
-                    match device.Activate(CLSCTX_ALL, None) {
-                        Ok(client) => client,
-                        Err(error) => {
-                            return Err(diagnostic_error(
-                                diagnostics,
-                                "wasapi",
-                                "activate_wasapi_audio_client",
-                                format!(
-                                    "Could not activate WASAPI exclusive audio client: {error}"
-                                ),
-                                DesktopDiagnosticContext::default(),
-                            ));
-                        }
-                    }
-                };
-                let supported = unsafe {
-                    audio_client.IsFormatSupported(
-                        Audio::AUDCLNT_SHAREMODE_EXCLUSIVE,
-                        &wave_format.Format,
-                        None,
-                    )
-                };
-                if supported != S_OK {
-                    continue;
+    for format in format_candidates {
+        let wave_format = wave_format(format);
+        let audio_client: Audio::IAudioClient = unsafe {
+            match device.Activate(CLSCTX_ALL, None) {
+                Ok(client) => client,
+                Err(error) => {
+                    return Err(diagnostic_error(
+                        diagnostics,
+                        "wasapi",
+                        "activate_wasapi_audio_client",
+                        format!("Could not activate WASAPI exclusive audio client: {error}"),
+                        DesktopDiagnosticContext::default(),
+                    ));
                 }
-                for buffer_frames in buffer_frame_candidates(requested_buffer_frames, sample_rate) {
-                    let test_client: Audio::IAudioClient = unsafe {
-                        match device.Activate(CLSCTX_ALL, None) {
-                            Ok(client) => client,
-                            Err(error) => {
-                                first_initialize_error.get_or_insert_with(|| error.to_string());
-                                continue;
-                            }
-                        }
-                    };
-                    let buffer_duration = buffer_duration_100ns(buffer_frames, sample_rate);
-                    let init_result = unsafe {
-                        test_client.Initialize(
-                            Audio::AUDCLNT_SHAREMODE_EXCLUSIVE,
-                            Audio::AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-                            buffer_duration,
-                            buffer_duration,
-                            &wave_format.Format,
-                            None,
-                        )
-                    };
-                    match init_result {
-                        Ok(()) => return Ok((format, buffer_duration)),
-                        Err(error) => {
-                            if error.code() == Audio::AUDCLNT_E_DEVICE_IN_USE {
-                                return Err(diagnostic_error(
-                                    diagnostics,
-                                    "wasapi",
-                                    "initialize_wasapi_exclusive",
-                                    wasapi_device_in_use_message(),
-                                    DesktopDiagnosticContext::default(),
-                                ));
-                            }
-                            first_initialize_error.get_or_insert_with(|| error.to_string());
-                        }
+            }
+        };
+        let _supported = unsafe {
+            audio_client.IsFormatSupported(
+                Audio::AUDCLNT_SHAREMODE_EXCLUSIVE,
+                wave_format.as_ptr(),
+                None,
+            )
+        };
+        for buffer_frames in buffer_frame_candidates(requested_buffer_frames, format.sample_rate) {
+            let test_client: Audio::IAudioClient = unsafe {
+                match device.Activate(CLSCTX_ALL, None) {
+                    Ok(client) => client,
+                    Err(error) => {
+                        first_initialize_error.get_or_insert_with(|| error.to_string());
+                        continue;
                     }
+                }
+            };
+            let buffer_duration = buffer_duration_100ns(buffer_frames, format.sample_rate);
+            let init_result = unsafe {
+                test_client.Initialize(
+                    Audio::AUDCLNT_SHAREMODE_EXCLUSIVE,
+                    0,
+                    buffer_duration,
+                    0,
+                    wave_format.as_ptr(),
+                    None,
+                )
+            };
+            match init_result {
+                Ok(()) => {
+                    if matches!(format.sample_format, WasapiSampleFormat::I16)
+                        && !high_quality_rejections.is_empty()
+                    {
+                        remember_diagnostic(
+                            diagnostics,
+                            "info",
+                            "wasapi",
+                            "choose_wasapi_exclusive_format",
+                            format!(
+                                "High-quality exclusive candidates were rejected before fallback: {}.",
+                                high_quality_rejections.join("; ")
+                            ),
+                            DesktopDiagnosticContext {
+                                sample_rate: Some(format.sample_rate),
+                                channel_count: Some(format.channels),
+                                sample_format: Some(format.label()),
+                                ..DesktopDiagnosticContext::default()
+                            },
+                        );
+                    }
+                    remember_diagnostic(
+                        diagnostics,
+                        "info",
+                        "wasapi",
+                        "choose_wasapi_exclusive_format",
+                        format!(
+                            "Selected WASAPI exclusive format: {} Hz, {} channel(s), {}, {} frame buffer.",
+                            format.sample_rate,
+                            format.channels,
+                            format.label(),
+                            buffer_frames
+                        ),
+                        DesktopDiagnosticContext {
+                            buffer_frames: Some(buffer_frames),
+                            sample_rate: Some(format.sample_rate),
+                            channel_count: Some(format.channels),
+                            sample_format: Some(format.label()),
+                            ..DesktopDiagnosticContext::default()
+                        },
+                    );
+                    return Ok((format, buffer_duration));
+                }
+                Err(error) => {
+                    if error.code() == Audio::AUDCLNT_E_DEVICE_IN_USE {
+                        return Err(wasapi_device_in_use_message());
+                    }
+                    if high_quality_rejections.len() < 16
+                        && format.channels == 2
+                        && (format.sample_rate == mix.sample_rate || format.sample_rate == 96_000)
+                        && !matches!(format.sample_format, WasapiSampleFormat::I16)
+                    {
+                        high_quality_rejections.push(format!(
+                            "{} Hz {} {} frames -> {}",
+                            format.sample_rate,
+                            format.label(),
+                            buffer_frames,
+                            error
+                        ));
+                    }
+                    first_initialize_error.get_or_insert_with(|| error.to_string());
                 }
             }
         }
@@ -841,15 +1175,11 @@ fn choose_exclusive_format(
     let reason = first_initialize_error
         .map(|error| format!(" Last WASAPI initialize error: {error}"))
         .unwrap_or_default();
-    Err(diagnostic_error(
-        diagnostics,
-        "wasapi",
-        "choose_wasapi_exclusive_format",
+    Err(
         format!(
-            "The selected output device did not accept FLAC Cafe's WASAPI exclusive formats. Try changing the device default format in Windows Sound settings or use shared mode.{reason}"
-        ),
-        DesktopDiagnosticContext::default(),
-    ))
+            "The selected output device rejected FLAC Cafe's stable WASAPI exclusive formats. Shared output will be used if available.{reason}"
+        )
+    )
 }
 
 fn wasapi_initialize_error_message(error: windows::core::Error, format: WasapiFormat) -> String {
@@ -860,7 +1190,7 @@ fn wasapi_initialize_error_message(error: windows::core::Error, format: WasapiFo
         "Could not open WASAPI exclusive output at {} Hz, {} channel(s), {}: {error}",
         format.sample_rate,
         format.channels,
-        format.sample_format.label()
+        format.label()
     )
 }
 
@@ -878,68 +1208,178 @@ fn default_mix_format(device: &Audio::IMMDevice) -> Option<WasapiFormat> {
     }
 }
 
+fn property_wave_format(device: &Audio::IMMDevice, key: &PROPERTYKEY) -> Option<WasapiFormat> {
+    unsafe {
+        let store = device.OpenPropertyStore(STGM_READ).ok()?;
+        let mut value = store.GetValue(key as *const PROPERTYKEY).ok()?;
+        let format = propvariant_wave_format(&mut value);
+        let _ = PropVariantClear(&mut value as *mut PROPVARIANT);
+        format
+    }
+}
+
+unsafe fn propvariant_wave_format(value: &mut PROPVARIANT) -> Option<WasapiFormat> {
+    let prop_variant = &value.Anonymous.Anonymous;
+    if prop_variant.vt != VT_BLOB {
+        return None;
+    }
+    let blob = prop_variant.Anonymous.blob;
+    if blob.pBlobData.is_null() || (blob.cbSize as usize) < mem::size_of::<Audio::WAVEFORMATEX>() {
+        return None;
+    }
+    parse_wave_format(blob.pBlobData as *const Audio::WAVEFORMATEX)
+}
+
 unsafe fn parse_wave_format(format_ptr: *const Audio::WAVEFORMATEX) -> Option<WasapiFormat> {
     if format_ptr.is_null() {
         return None;
     }
-    let base = *format_ptr;
-    let sample_format = if u32::from(base.wFormatTag) == Multimedia::WAVE_FORMAT_IEEE_FLOAT {
-        WasapiSampleFormat::F32
-    } else if u32::from(base.wFormatTag) == Audio::WAVE_FORMAT_PCM {
-        WasapiSampleFormat::I16
-    } else if u32::from(base.wFormatTag) == KernelStreaming::WAVE_FORMAT_EXTENSIBLE {
-        let extensible_ptr = format_ptr as *const Audio::WAVEFORMATEXTENSIBLE;
-        let sub_format = ptr::addr_of!((*extensible_ptr).SubFormat).read_unaligned();
-        if sub_format == Multimedia::KSDATAFORMAT_SUBTYPE_IEEE_FLOAT {
-            WasapiSampleFormat::F32
-        } else if sub_format == KernelStreaming::KSDATAFORMAT_SUBTYPE_PCM {
-            WasapiSampleFormat::I16
+    let base = ptr::read_unaligned(format_ptr);
+    let mut channel_mask = None;
+    let (sample_format, container) =
+        if u32::from(base.wFormatTag) == Multimedia::WAVE_FORMAT_IEEE_FLOAT {
+            (WasapiSampleFormat::F32, WasapiFormatContainer::Plain)
+        } else if u32::from(base.wFormatTag) == Audio::WAVE_FORMAT_PCM {
+            (
+                pcm_sample_format(
+                    base.wBitsPerSample,
+                    base.wBitsPerSample,
+                    base.nBlockAlign,
+                    base.nChannels,
+                )?,
+                WasapiFormatContainer::Plain,
+            )
+        } else if u32::from(base.wFormatTag) == KernelStreaming::WAVE_FORMAT_EXTENSIBLE {
+            let extensible_ptr = format_ptr as *const Audio::WAVEFORMATEXTENSIBLE;
+            let extensible = ptr::read_unaligned(extensible_ptr);
+            channel_mask = Some(extensible.dwChannelMask);
+            let sub_format = ptr::addr_of!((*extensible_ptr).SubFormat).read_unaligned();
+            if sub_format == Multimedia::KSDATAFORMAT_SUBTYPE_IEEE_FLOAT {
+                (WasapiSampleFormat::F32, WasapiFormatContainer::Extensible)
+            } else if sub_format == KernelStreaming::KSDATAFORMAT_SUBTYPE_PCM {
+                let valid_bits = extensible.Samples.wValidBitsPerSample;
+                (
+                    pcm_sample_format(
+                        base.wBitsPerSample,
+                        valid_bits,
+                        base.nBlockAlign,
+                        base.nChannels,
+                    )?,
+                    WasapiFormatContainer::Extensible,
+                )
+            } else {
+                return None;
+            }
         } else {
             return None;
-        }
-    } else {
-        return None;
-    };
+        };
     Some(WasapiFormat {
         channels: base.nChannels.max(1),
         sample_rate: base.nSamplesPerSec.max(1),
         sample_format,
+        container,
+        channel_mask,
     })
 }
 
-fn wave_format_extensible(format: WasapiFormat) -> Audio::WAVEFORMATEXTENSIBLE {
+enum WasapiWaveFormat {
+    Plain(Audio::WAVEFORMATEX),
+    Extensible(Audio::WAVEFORMATEXTENSIBLE),
+}
+
+impl WasapiWaveFormat {
+    fn as_ptr(&self) -> *const Audio::WAVEFORMATEX {
+        match self {
+            WasapiWaveFormat::Plain(format) => format as *const Audio::WAVEFORMATEX,
+            WasapiWaveFormat::Extensible(format) => &format.Format as *const Audio::WAVEFORMATEX,
+        }
+    }
+}
+
+fn wave_format(format: WasapiFormat) -> WasapiWaveFormat {
+    match format.container {
+        WasapiFormatContainer::Plain => WasapiWaveFormat::Plain(wave_format_plain(format)),
+        WasapiFormatContainer::Extensible => {
+            WasapiWaveFormat::Extensible(wave_format_extensible(format))
+        }
+    }
+}
+
+fn wave_format_plain(format: WasapiFormat) -> Audio::WAVEFORMATEX {
     let format_tag = match format.sample_format {
-        WasapiSampleFormat::I16 => Audio::WAVE_FORMAT_PCM,
-        WasapiSampleFormat::F32 => KernelStreaming::WAVE_FORMAT_EXTENSIBLE,
+        WasapiSampleFormat::F32 => Multimedia::WAVE_FORMAT_IEEE_FLOAT,
+        WasapiSampleFormat::I16 | WasapiSampleFormat::I24 | WasapiSampleFormat::I32 => {
+            Audio::WAVE_FORMAT_PCM
+        }
+        WasapiSampleFormat::I24Padded | WasapiSampleFormat::I24In32 => {
+            KernelStreaming::WAVE_FORMAT_EXTENSIBLE
+        }
     };
     let sample_bytes = format.sample_format.bytes_per_sample();
-    let bits_per_sample = sample_bytes * 8;
-    let cb_size = if format_tag == Audio::WAVE_FORMAT_PCM {
-        0
-    } else {
-        (mem::size_of::<Audio::WAVEFORMATEXTENSIBLE>() - mem::size_of::<Audio::WAVEFORMATEX>())
-            as u16
-    };
-    let waveformatex = Audio::WAVEFORMATEX {
+    let bits_per_sample = format.sample_format.bits_per_sample();
+    Audio::WAVEFORMATEX {
         wFormatTag: format_tag as u16,
         nChannels: format.channels,
         nSamplesPerSec: format.sample_rate,
         nAvgBytesPerSec: u32::from(format.channels) * format.sample_rate * u32::from(sample_bytes),
         nBlockAlign: format.channels * sample_bytes,
         wBitsPerSample: bits_per_sample,
-        cbSize: cb_size,
+        cbSize: 0,
+    }
+}
+
+fn wave_format_extensible(format: WasapiFormat) -> Audio::WAVEFORMATEXTENSIBLE {
+    let sample_bytes = format.sample_format.bytes_per_sample();
+    let bits_per_sample = format.sample_format.bits_per_sample();
+    let valid_bits_per_sample = format.sample_format.valid_bits_per_sample();
+    let waveformatex = Audio::WAVEFORMATEX {
+        wFormatTag: KernelStreaming::WAVE_FORMAT_EXTENSIBLE as u16,
+        nChannels: format.channels,
+        nSamplesPerSec: format.sample_rate,
+        nAvgBytesPerSec: u32::from(format.channels) * format.sample_rate * u32::from(sample_bytes),
+        nBlockAlign: format.channels * sample_bytes,
+        wBitsPerSample: bits_per_sample,
+        cbSize: (mem::size_of::<Audio::WAVEFORMATEXTENSIBLE>()
+            - mem::size_of::<Audio::WAVEFORMATEX>()) as u16,
     };
     let sub_format = match format.sample_format {
-        WasapiSampleFormat::I16 => KernelStreaming::KSDATAFORMAT_SUBTYPE_PCM,
+        WasapiSampleFormat::I16
+        | WasapiSampleFormat::I24
+        | WasapiSampleFormat::I24Padded
+        | WasapiSampleFormat::I24In32
+        | WasapiSampleFormat::I32 => KernelStreaming::KSDATAFORMAT_SUBTYPE_PCM,
         WasapiSampleFormat::F32 => Multimedia::KSDATAFORMAT_SUBTYPE_IEEE_FLOAT,
     };
     Audio::WAVEFORMATEXTENSIBLE {
         Format: waveformatex,
         Samples: Audio::WAVEFORMATEXTENSIBLE_0 {
-            wValidBitsPerSample: bits_per_sample,
+            wValidBitsPerSample: valid_bits_per_sample,
         },
-        dwChannelMask: channel_mask(format.channels),
+        dwChannelMask: format
+            .channel_mask
+            .unwrap_or_else(|| channel_mask(format.channels)),
         SubFormat: sub_format,
+    }
+}
+
+fn pcm_sample_format(
+    container_bits: u16,
+    valid_bits: u16,
+    block_align: u16,
+    channels: u16,
+) -> Option<WasapiSampleFormat> {
+    let bytes_per_sample = if channels > 0 {
+        block_align / channels
+    } else {
+        0
+    };
+    match (container_bits, valid_bits, bytes_per_sample) {
+        (16, _, _) => Some(WasapiSampleFormat::I16),
+        (24, _, 4) => Some(WasapiSampleFormat::I24Padded),
+        (24, _, _) => Some(WasapiSampleFormat::I24),
+        (32, 24, _) => Some(WasapiSampleFormat::I24In32),
+        (32, _, _) => Some(WasapiSampleFormat::I32),
+        _ => None,
     }
 }
 
@@ -980,15 +1420,140 @@ fn channel_mask(channels: u16) -> u32 {
     }
 }
 
+fn exclusive_format_candidates(
+    mix: WasapiFormat,
+    preferred_sample_rate: Option<u32>,
+) -> Vec<WasapiFormat> {
+    let sample_rates = unique_u32([
+        mix.sample_rate,
+        96_000,
+        48_000,
+        44_100,
+        88_200,
+        192_000,
+        176_400,
+        preferred_sample_rate.unwrap_or(0),
+    ]);
+    let channel_counts = unique_u16([mix.channels, 2, 1]);
+    let mut candidates = Vec::new();
+    push_unique_format(&mut candidates, mix);
+    for sample_rate in sample_rates.iter().copied() {
+        for channels in channel_counts.iter().copied() {
+            push_format_variants(
+                &mut candidates,
+                channels,
+                sample_rate,
+                WasapiSampleFormat::F32,
+            );
+            push_format_variants(
+                &mut candidates,
+                channels,
+                sample_rate,
+                WasapiSampleFormat::I24Padded,
+            );
+            push_format_variants(
+                &mut candidates,
+                channels,
+                sample_rate,
+                WasapiSampleFormat::I24In32,
+            );
+            push_format_variants(
+                &mut candidates,
+                channels,
+                sample_rate,
+                WasapiSampleFormat::I24,
+            );
+            push_format_variants(
+                &mut candidates,
+                channels,
+                sample_rate,
+                WasapiSampleFormat::I32,
+            );
+        }
+    }
+    for sample_rate in sample_rates.iter().copied() {
+        for channels in channel_counts.iter().copied() {
+            push_format_variants(
+                &mut candidates,
+                channels,
+                sample_rate,
+                WasapiSampleFormat::I16,
+            );
+        }
+    }
+    candidates
+}
+
+fn push_format_variants(
+    candidates: &mut Vec<WasapiFormat>,
+    channels: u16,
+    sample_rate: u32,
+    sample_format: WasapiSampleFormat,
+) {
+    if matches!(
+        sample_format,
+        WasapiSampleFormat::F32 | WasapiSampleFormat::I16 | WasapiSampleFormat::I24
+    ) {
+        push_unique_format(
+            candidates,
+            WasapiFormat {
+                channels,
+                sample_rate,
+                sample_format,
+                container: WasapiFormatContainer::Plain,
+                channel_mask: None,
+            },
+        );
+    }
+    for channel_mask in channel_mask_candidates(channels, sample_format) {
+        push_unique_format(
+            candidates,
+            WasapiFormat {
+                channels,
+                sample_rate,
+                sample_format,
+                container: WasapiFormatContainer::Extensible,
+                channel_mask,
+            },
+        );
+    }
+}
+
+fn push_unique_format(candidates: &mut Vec<WasapiFormat>, format: WasapiFormat) {
+    if !candidates.contains(&format) {
+        candidates.push(format);
+    }
+}
+
+fn channel_mask_candidates(channels: u16, sample_format: WasapiSampleFormat) -> Vec<Option<u32>> {
+    let mut masks = Vec::new();
+    if matches!(sample_format, WasapiSampleFormat::I24) && channels <= 2 {
+        masks.push(Some(0));
+        masks.push(None);
+        return masks;
+    }
+    masks.push(None);
+    if channels <= 2 {
+        masks.push(Some(0));
+    }
+    masks
+}
+
 fn buffer_frame_candidates(requested: Option<u32>, sample_rate: u32) -> Vec<u32> {
     let default_frames = ((sample_rate / 1000) * WASAPI_EXCLUSIVE_DEFAULT_BUFFER_MS)
         .next_power_of_two()
         .clamp(8192, 32_768);
+    let minimum_stable_frames = ((sample_rate / 1000) * 150)
+        .next_power_of_two()
+        .clamp(8192, 32_768);
     let mut candidates = Vec::new();
-    if let Some(requested) = requested.filter(|value| *value >= 8192 && *value <= 32_768) {
+    candidates.push(default_frames);
+    if let Some(requested) =
+        requested.filter(|value| *value >= minimum_stable_frames && *value <= 32_768)
+    {
         candidates.push(requested);
     }
-    for value in [default_frames, 16_384, 32_768, 8192] {
+    for value in [32_768, 16_384, 8192] {
         if !candidates.contains(&value) {
             candidates.push(value);
         }
@@ -1117,6 +1682,29 @@ impl Drop for MmcssGuard {
         if let Some(handle) = self.0.take() {
             unsafe {
                 let _ = AvRevertMmThreadCharacteristics(handle);
+            }
+        }
+    }
+}
+
+struct TimerPeriodGuard(Option<u32>);
+
+impl TimerPeriodGuard {
+    fn enable(milliseconds: u32) -> Self {
+        let result = unsafe { timeBeginPeriod(milliseconds) };
+        if result == 0 {
+            Self(Some(milliseconds))
+        } else {
+            Self(None)
+        }
+    }
+}
+
+impl Drop for TimerPeriodGuard {
+    fn drop(&mut self) {
+        if let Some(milliseconds) = self.0.take() {
+            unsafe {
+                let _ = timeEndPeriod(milliseconds);
             }
         }
     }

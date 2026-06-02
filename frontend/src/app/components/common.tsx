@@ -74,9 +74,10 @@ export function ResizableHeader({
     event.stopPropagation();
     const startX = event.clientX;
     const startWidth = width;
+    const minWidth = column === "play" ? 36 : 48;
 
     function handleMove(moveEvent: MouseEvent) {
-      onResize(column, Math.max(48, startWidth + moveEvent.clientX - startX));
+      onResize(column, Math.max(minWidth, startWidth + moveEvent.clientX - startX));
     }
 
     function handleUp() {

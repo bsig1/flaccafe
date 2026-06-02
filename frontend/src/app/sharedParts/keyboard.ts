@@ -21,7 +21,7 @@ export function normalizeLibraryColumns(value: unknown): LibraryColumnKey[] {
   if (metadataColumns.length === 0) {
     return defaultLibraryVisibleColumns;
   }
-  return unique.includes("play") ? unique : ["play", ...unique];
+  return ["play", ...metadataColumns];
 }
 
 export function normalizeKeyboardShortcuts(value: unknown): Record<KeyboardShortcutAction, KeyboardShortcut> {

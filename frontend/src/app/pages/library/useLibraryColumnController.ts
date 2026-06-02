@@ -49,7 +49,7 @@ export function useLibraryColumnController(model: any) {
     .filter((column): column is LibraryColumnDefinition => Boolean(column));
   const fixedTrackColumns: LibraryColumnKey[] = ["play", ...visibleMetadataColumnKeys];
   const orderedTrackColumns = visibleColumns;
-  const tableWidth = librarySelectionColumnWidth + orderedTrackColumns.reduce((total, column) => total + columnWidths[column], 0);
+  const tableWidth = librarySelectionColumnWidth + fixedTrackColumns.reduce((total, column) => total + columnWidths[column], 0);
 
   useEffect(() => {
     function closeMenu() {
@@ -169,7 +169,7 @@ export function useLibraryColumnController(model: any) {
   }
 
   function moveVisibleColumn(source: LibraryColumnKey, target: LibraryColumnKey, placement: "before" | "after") {
-    if (source === target) {
+    if (source === target || source === "play" || target === "play") {
       return;
     }
     const nextColumns = [...visibleColumns];
@@ -185,7 +185,7 @@ export function useLibraryColumnController(model: any) {
   }
 
   function handleColumnDragStart(event: any, column: string) {
-    if (!libraryTrackColumnKeySet.has(column as LibraryColumnKey)) {
+    if (column === "play" || !libraryTrackColumnKeySet.has(column as LibraryColumnKey)) {
       return;
     }
     event.dataTransfer.effectAllowed = "move";
@@ -196,7 +196,7 @@ export function useLibraryColumnController(model: any) {
   }
 
   function handleColumnDragOver(event: any, column: string) {
-    if (!draggedColumn || draggedColumn === column || !libraryTrackColumnKeySet.has(column as LibraryColumnKey)) {
+    if (!draggedColumn || draggedColumn === column || column === "play" || !libraryTrackColumnKeySet.has(column as LibraryColumnKey)) {
       return;
     }
     event.preventDefault();
@@ -207,7 +207,7 @@ export function useLibraryColumnController(model: any) {
   function handleColumnDrop(event: any, column: string) {
     event.preventDefault();
     const source = event.dataTransfer.getData("text/plain") || draggedColumn;
-    if (source && libraryTrackColumnKeySet.has(source as LibraryColumnKey) && libraryTrackColumnKeySet.has(column as LibraryColumnKey)) {
+    if (source && source !== "play" && column !== "play" && libraryTrackColumnKeySet.has(source as LibraryColumnKey) && libraryTrackColumnKeySet.has(column as LibraryColumnKey)) {
       const bounds = event.currentTarget.getBoundingClientRect();
       moveVisibleColumn(source as LibraryColumnKey, column as LibraryColumnKey, event.clientX > bounds.left + bounds.width / 2 ? "after" : "before");
     }
@@ -224,11 +224,11 @@ export function useLibraryColumnController(model: any) {
     const target = document.elementFromPoint(x, y) as HTMLElement | null;
     const header = target?.closest<HTMLElement>("[data-library-column]");
     const column = header?.dataset.libraryColumn;
-    return column && libraryTrackColumnKeySet.has(column as LibraryColumnKey) ? (column as LibraryColumnKey) : null;
+    return column && column !== "play" && libraryTrackColumnKeySet.has(column as LibraryColumnKey) ? (column as LibraryColumnKey) : null;
   }
 
   function handleColumnPointerDragStart(event: ReactMouseEvent<HTMLButtonElement>, column: string) {
-    if (!libraryTrackColumnKeySet.has(column as LibraryColumnKey)) {
+    if (column === "play" || !libraryTrackColumnKeySet.has(column as LibraryColumnKey)) {
       return;
     }
     event.preventDefault();

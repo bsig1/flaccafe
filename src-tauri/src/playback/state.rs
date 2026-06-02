@@ -39,11 +39,13 @@ struct PlaybackInner {
     current_reload_path: Option<String>,
     duration_seconds: Option<f64>,
     volume: f32,
+    requested_output_backend: DesktopOutputBackendMode,
     output_backend: DesktopOutputBackendMode,
     device_id: Option<String>,
     device_name: Option<String>,
     buffer_frames: Option<u32>,
     sample_rate: Option<u32>,
+    preferred_source_sample_rate: Option<u32>,
     channel_count: Option<u16>,
     sample_format: Option<String>,
     prepared_next_path: Option<String>,
@@ -101,6 +103,33 @@ struct PlaybackHandle {
     player: Arc<Player>,
     gain: DesktopGainControl,
     sample_rate: u32,
+    position_offset_seconds: Arc<AtomicU64>,
+}
+
+impl PlaybackHandle {
+    fn new(
+        player: Arc<Player>,
+        gain: DesktopGainControl,
+        sample_rate: u32,
+        position_offset_seconds: f64,
+    ) -> Self {
+        Self {
+            player,
+            gain,
+            sample_rate,
+            position_offset_seconds: Arc::new(AtomicU64::new(position_offset_seconds.max(0.0).to_bits())),
+        }
+    }
+
+    fn set_position_offset_seconds(&self, seconds: f64) {
+        self.position_offset_seconds
+            .store(seconds.max(0.0).to_bits(), Ordering::Relaxed);
+    }
+
+    fn logical_position_seconds(&self) -> f64 {
+        let offset = f64::from_bits(self.position_offset_seconds.load(Ordering::Relaxed)).max(0.0);
+        offset + self.player.get_pos().as_secs_f64()
+    }
 }
 
 #[derive(Clone)]
@@ -205,11 +234,13 @@ impl Default for PlaybackInner {
             current_reload_path: None,
             duration_seconds: None,
             volume: 1.0,
+            requested_output_backend: DesktopOutputBackendMode::default(),
             output_backend: DesktopOutputBackendMode::default(),
             device_id: None,
             device_name: None,
             buffer_frames: None,
             sample_rate: None,
+            preferred_source_sample_rate: None,
             channel_count: None,
             sample_format: None,
             prepared_next_path: None,

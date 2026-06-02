@@ -4,10 +4,13 @@
         output_backend: Option<DesktopOutputBackendMode>,
         device_id: Option<String>,
         buffer_frames: Option<u32>,
+        preferred_sample_rate: Option<u32>,
     ) -> Result<(), String> {
         let requested_backend = output_backend.unwrap_or_default();
         let requested_device_id = normalize_device_id(device_id);
         let requested_buffer_frames = normalize_buffer_frames(buffer_frames);
+        let requested_preferred_sample_rate =
+            normalize_preferred_sample_rate(requested_backend, preferred_sample_rate);
         let has_stream_errors = self
             .stream_errors
             .lock()
@@ -19,20 +22,29 @@
             .map(|sink| sink.is_usable())
             .unwrap_or(false)
             && !has_stream_errors;
+        let backend_matches = self.requested_output_backend == requested_backend
+            || (self.output_backend == DesktopOutputBackendMode::CpalShared
+                && requested_backend == DesktopOutputBackendMode::CpalShared);
+        let preferred_rate_matches = self.output_backend == DesktopOutputBackendMode::CpalShared
+            || self.preferred_source_sample_rate == requested_preferred_sample_rate;
         if sink_is_usable
-            && self.output_backend == requested_backend
+            && backend_matches
             && self.device_id == requested_device_id
             && self.buffer_frames == requested_buffer_frames
+            && preferred_rate_matches
         {
+            self.requested_output_backend = requested_backend;
             return Ok(());
         }
 
         self.stop();
         self.sink = None;
+        self.requested_output_backend = DesktopOutputBackendMode::default();
         self.output_backend = DesktopOutputBackendMode::default();
         self.device_id = None;
         self.device_name = None;
         self.sample_rate = None;
+        self.preferred_source_sample_rate = None;
         self.channel_count = None;
         self.sample_format = None;
         if let Ok(mut errors) = self.stream_errors.lock() {
@@ -42,16 +54,24 @@
             requested_backend,
             requested_device_id.as_deref(),
             requested_buffer_frames,
+            requested_preferred_sample_rate,
             self.stream_errors.clone(),
             self.diagnostics.clone(),
         )?;
         sink.log_on_drop(false);
         self.sink = Some(sink);
+        self.requested_output_backend = requested_backend;
         self.output_backend = resolved.output_backend;
         self.device_id = resolved.device_id;
         self.device_name = Some(resolved.device_name);
         self.buffer_frames = requested_buffer_frames;
         self.sample_rate = Some(resolved.sample_rate);
+        self.preferred_source_sample_rate = if resolved.output_backend == DesktopOutputBackendMode::WasapiExclusive
+        {
+            requested_preferred_sample_rate
+        } else {
+            None
+        };
         self.channel_count = Some(resolved.channel_count);
         self.sample_format = Some(resolved.sample_format);
         Ok(())
@@ -72,7 +92,12 @@
         let position_seconds = self
             .player
             .as_ref()
-            .map(|handle| handle.player.get_pos().as_secs_f64())
+            .map(|handle| {
+                let position = handle.logical_position_seconds();
+                self.duration_seconds
+                    .map(|duration| position.min(duration))
+                    .unwrap_or(position)
+            })
             .unwrap_or(0.0);
         let is_paused = self
             .player
@@ -189,11 +214,13 @@
             .unwrap_or(false)
         {
             self.sink = None;
+            self.requested_output_backend = DesktopOutputBackendMode::default();
             self.output_backend = DesktopOutputBackendMode::default();
             self.device_id = None;
             self.device_name = None;
             self.buffer_frames = None;
             self.sample_rate = None;
+            self.preferred_source_sample_rate = None;
             self.channel_count = None;
             self.sample_format = None;
         }
@@ -217,6 +244,17 @@ fn normalize_device_id(device_id: Option<String>) -> Option<String> {
 
 fn normalize_buffer_frames(buffer_frames: Option<u32>) -> Option<u32> {
     buffer_frames.filter(|value| *value >= 128 && *value <= 16_384)
+}
+
+fn normalize_preferred_sample_rate(
+    output_backend: DesktopOutputBackendMode,
+    preferred_sample_rate: Option<u32>,
+) -> Option<u32> {
+    match output_backend {
+        DesktopOutputBackendMode::WasapiExclusive => preferred_sample_rate
+            .filter(|value| (8_000..=384_000).contains(value)),
+        DesktopOutputBackendMode::CpalShared => None,
+    }
 }
 
 fn now_millis() -> u64 {

@@ -8,8 +8,25 @@ import {
 queuedFileTagWriteMessage,
 } from "./useDeferredFileTagWriter";
 
+function artistTrackCacheKey(artistName: string) {
+  return artistName.trim().toLowerCase();
+}
+
 export function createLibraryActionHandlers(model: any) {
-  const { tracks, trackIndexCacheRef, updateCachedTracks, updateTrackRating, queueFileTagWrite, setStatus, setTracks, commitTrackIndexCache, writeRatingsToFiles, findTracksByIds, supportsFileTagWriting, refreshTracks, setSelectedAlbumTracks, setSelectedArtistTracks, setSelectedPlaylistTracks, setInbox, setPlaybackQueue, setQueue, setCurrentTrack, setDetailTrack, setMetadataEditTrack, setLibraryTotal, setMetadataEditInitialField, metadataEditTrack, resolveTracksForAction, recycleFilesWithDesktop, deleteTrack, loadAlbums, loadArtists, loadPlaylists, loadLibraryStats, loadInbox, loadClapCoverage, showUndoAction, display, deleteTracks, readRememberedDeleteChoice, setDeletePrompt, deletePrompt, writeRememberedDeleteChoice, updateTrackMetadata, setSelectedAlbumId, fetchAlbumTracks, setSelectedArtistName, fetchArtistLocalTracks, fetchTracks, primaryArtistName, handlePlayTrack, replaceTrackEverywhere, removeTrackEverywhere, artistTracks, setSelectedPlaylistId, fetchPlaylistTracks, newPlaylistName, createPlaylist, setNewPlaylistName, setTargetPlaylistId, deletePlaylist, setPlaylists, targetPlaylistId, playlists, addTracksToPlaylist, selectedPlaylistId, removeTrackFromPlaylist, selectedPlaylistTracks, moveTrackInPlaylist, exportPlaylist, exportQueue, importPlaylistPath, importPlaylist, setImportPlaylistPath, setLibraryView, reviewAllInboxTracks, reviewInboxTracks, updateInboxNote, updateInboxAutoReviewRule, createInboxAutoReviewRule, deleteInboxAutoReviewRule } = model;
+  const { tracks, trackIndexCacheRef, updateCachedTracks, updateTrackRating, queueFileTagWrite, setStatus, setTracks, commitTrackIndexCache, writeRatingsToFiles, findTracksByIds, supportsFileTagWriting, refreshTracks, setSelectedAlbumTracks, selectedAlbumTracksCacheRef, setSelectedArtistTracks, selectedArtistTracksCacheRef, rememberCollectionTracks, setSelectedPlaylistTracks, setInbox, setPlaybackQueue, setQueue, setCurrentTrack, setDetailTrack, setMetadataEditTrack, setLibraryTotal, setMetadataEditInitialField, metadataEditTrack, resolveTracksForAction, recycleFilesWithDesktop, deleteTrack, loadAlbums, loadArtists, loadPlaylists, loadLibraryStats, loadInbox, loadClapCoverage, showUndoAction, display, deleteTracks, readRememberedDeleteChoice, setDeletePrompt, deletePrompt, writeRememberedDeleteChoice, updateTrackMetadata, setSelectedAlbumId, fetchAlbumTracks, setSelectedArtistName, fetchArtistLocalTracks, fetchTracks, primaryArtistName, handlePlayTrack, replaceTrackEverywhere, removeTrackEverywhere, artistTracks, setSelectedPlaylistId, fetchPlaylistTracks, newPlaylistName, createPlaylist, setNewPlaylistName, setTargetPlaylistId, deletePlaylist, setPlaylists, targetPlaylistId, playlists, addTracksToPlaylist, selectedPlaylistId, removeTrackFromPlaylist, selectedPlaylistTracks, moveTrackInPlaylist, exportPlaylist, exportQueue, importPlaylistPath, importPlaylist, setImportPlaylistPath, setLibraryView, reviewAllInboxTracks, reviewInboxTracks, updateInboxNote, updateInboxAutoReviewRule, createInboxAutoReviewRule, deleteInboxAutoReviewRule } = model;
+
+  function cacheSelectedAlbumTracks(albumId: number, albumTracks: any[]) {
+    rememberCollectionTracks(selectedAlbumTracksCacheRef.current, albumId, albumTracks);
+  }
+
+  function cacheSelectedArtistTracks(artistName: string, artistLocalTracks: any[]) {
+    rememberCollectionTracks(selectedArtistTracksCacheRef.current, artistTrackCacheKey(artistName), artistLocalTracks);
+  }
+
+  function clearSelectedCollectionTrackCaches() {
+    selectedAlbumTracksCacheRef.current.clear();
+    selectedArtistTracksCacheRef.current.clear();
+  }
   async function handleRating(trackId: number, rating: number | null) {
     const previous = tracks;
     const previousCache = new Map(trackIndexCacheRef.current);
@@ -160,6 +177,7 @@ export function createLibraryActionHandlers(model: any) {
       const shouldWriteToFile = metadata.write_to_file ?? writeRatingsToFiles;
       const metadataForDatabase = shouldWriteToFile ? { ...metadata, write_to_file: false } : metadata;
       const updated = await updateTrackMetadata(trackId, metadataForDatabase);
+      clearSelectedCollectionTrackCaches();
       replaceTrackEverywhere(updated);
       await Promise.all([loadAlbums(), loadArtists(), loadLibraryStats()]);
       setMetadataEditTrack(null);
@@ -182,6 +200,7 @@ export function createLibraryActionHandlers(model: any) {
       const shouldWriteToFile = metadata.write_to_file ?? writeRatingsToFiles;
       const metadataForDatabase = shouldWriteToFile ? { ...metadata, write_to_file: false } : metadata;
       const updatedTracks = await Promise.all(uniqueIds.map((trackId) => updateTrackMetadata(trackId, metadataForDatabase)));
+      clearSelectedCollectionTrackCaches();
       for (const updated of updatedTracks) {
         replaceTrackEverywhere(updated);
       }
@@ -198,8 +217,14 @@ export function createLibraryActionHandlers(model: any) {
 
   async function handleSelectAlbum(albumId: number) {
     setSelectedAlbumId(albumId);
+    if (selectedAlbumTracksCacheRef.current.has(albumId)) {
+      setSelectedAlbumTracks(selectedAlbumTracksCacheRef.current.get(albumId) ?? []);
+      return;
+    }
     try {
-      setSelectedAlbumTracks(await fetchAlbumTracks(albumId));
+      const albumTracks = await fetchAlbumTracks(albumId);
+      cacheSelectedAlbumTracks(albumId, albumTracks);
+      setSelectedAlbumTracks(albumTracks);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not load album");
     }
@@ -207,14 +232,20 @@ export function createLibraryActionHandlers(model: any) {
 
   async function handleSelectArtist(artistName: string) {
     setSelectedArtistName(artistName);
+    const cacheKey = artistTrackCacheKey(artistName);
+    if (selectedArtistTracksCacheRef.current.has(cacheKey)) {
+      setSelectedArtistTracks(selectedArtistTracksCacheRef.current.get(cacheKey) ?? []);
+      return;
+    }
     try {
-      setSelectedArtistTracks(await fetchArtistLocalTracks(artistName, 20000));
+      const artistLocalTracks = await fetchArtistLocalTracks(artistName, 20000);
+      cacheSelectedArtistTracks(artistName, artistLocalTracks);
+      setSelectedArtistTracks(artistLocalTracks);
     } catch (error) {
       try {
         const fallbackTracks = await fetchTracks("");
         const artistKey = artistName.toLowerCase();
-        setSelectedArtistTracks(
-          fallbackTracks
+        const artistLocalTracks = fallbackTracks
             .filter((track) => (primaryArtistName(track.artist) || display(track.artist, "")).toLowerCase() === artistKey)
             .sort((left, right) => {
               const albumDelta = display(left.album).localeCompare(display(right.album));
@@ -222,8 +253,9 @@ export function createLibraryActionHandlers(model: any) {
                 return albumDelta;
               }
               return (left.disc_number ?? 0) - (right.disc_number ?? 0) || (left.track_number ?? 0) - (right.track_number ?? 0);
-            }),
-        );
+            });
+        cacheSelectedArtistTracks(artistName, artistLocalTracks);
+        setSelectedArtistTracks(artistLocalTracks);
       } catch {
         setStatus(error instanceof Error ? error.message : "Could not load artist");
       }
@@ -233,7 +265,10 @@ export function createLibraryActionHandlers(model: any) {
   async function handlePlayAlbum(albumId: number) {
     setSelectedAlbumId(albumId);
     try {
-      const albumTracks = await fetchAlbumTracks(albumId);
+      const albumTracks = selectedAlbumTracksCacheRef.current.has(albumId)
+        ? selectedAlbumTracksCacheRef.current.get(albumId) ?? []
+        : await fetchAlbumTracks(albumId);
+      cacheSelectedAlbumTracks(albumId, albumTracks);
       setSelectedAlbumTracks(albumTracks);
       if (albumTracks.length === 0) {
         setStatus("No local tracks found for this album");
@@ -248,13 +283,17 @@ export function createLibraryActionHandlers(model: any) {
   async function handlePlayArtist(artistName: string) {
     setSelectedArtistName(artistName);
     try {
-      const artistTracks = await fetchArtistLocalTracks(artistName, 20000);
-      setSelectedArtistTracks(artistTracks);
-      if (artistTracks.length === 0) {
+      const cacheKey = artistTrackCacheKey(artistName);
+      const artistLocalTracks = selectedArtistTracksCacheRef.current.has(cacheKey)
+        ? selectedArtistTracksCacheRef.current.get(cacheKey) ?? []
+        : await fetchArtistLocalTracks(artistName, 20000);
+      cacheSelectedArtistTracks(artistName, artistLocalTracks);
+      setSelectedArtistTracks(artistLocalTracks);
+      if (artistLocalTracks.length === 0) {
         setStatus("No local tracks found for this artist");
         return;
       }
-      handlePlayTrack(artistTracks[0], artistTracks);
+      handlePlayTrack(artistLocalTracks[0], artistLocalTracks);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not play artist");
     }

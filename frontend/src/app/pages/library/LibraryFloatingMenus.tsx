@@ -79,7 +79,7 @@ export function LibraryFloatingMenus({ model }: { model: any }) {
                 <div className="mb-2 flex items-center justify-between gap-3">
                   <div>
                     <div className="font-semibold text-white">Visible Columns</div>
-                    <div className="text-xs text-muted">Drag headers to reorder. The play column stays visible and can be moved in Tracks.</div>
+                    <div className="text-xs text-muted">Drag headers to reorder metadata columns. The play column stays pinned.</div>
                   </div>
                   <button
                     className="rounded border border-line px-2 py-1 text-xs text-muted hover:text-white"

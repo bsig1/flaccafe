@@ -105,6 +105,7 @@ export function PlayerBar({
   const activeSourceKeyRef = useRef("empty");
   const lastOutputSettingsKeyRef = useRef<string | null>(null);
   const outputSwitchRequestRef = useRef(0);
+  const wasapiFallbackInFlightRef = useRef(false);
   const smtcActionRef = useRef<(payload: SmtcButtonPayload) => void>(() => {});
   const miniPlayerChannelRef = useRef<BroadcastChannel | null>(null);
   const miniPlayerCommandRef = useRef<(command: MiniPlayerCommand) => void>(() => {});
@@ -159,8 +160,8 @@ export function PlayerBar({
     if (!leftAlbum || leftAlbum !== rightAlbum) {
       return false;
     }
-    const leftArtist = (left.album_artist ?? left.artist ?? "").trim().toLowerCase();
-    const rightArtist = (right.album_artist ?? right.artist ?? "").trim().toLowerCase();
+    const leftArtist = (left.album_artist ?? "").trim().toLowerCase();
+    const rightArtist = (right.album_artist ?? "").trim().toLowerCase();
     return !leftArtist || !rightArtist || leftArtist === rightArtist;
   }
 
@@ -495,8 +496,18 @@ export function PlayerBar({
       );
     };
 
-    void switchOutput().catch((error) => {
+    void switchOutput().catch(async (error) => {
       if (cancelled || outputSwitchRequestRef.current !== requestId) {
+        return;
+      }
+      if (
+        desktopOutputBackend === "wasapiExclusive" &&
+        currentTrack &&
+        await recoverWasapiPlaybackWithSharedOutput(
+          currentTime,
+          "WASAPI exclusive could not switch cleanly.",
+        )
+      ) {
         return;
       }
       setIsPlaying(false);
@@ -591,6 +602,50 @@ export function PlayerBar({
     void desktopSeek(boundedTime).catch((error) => {
       setStatus(error instanceof Error ? error.message : "Rust seek failed.");
     });
+  }
+
+  async function recoverWasapiPlaybackWithSharedOutput(positionSeconds: number, reason: string) {
+    if (
+      wasapiFallbackInFlightRef.current ||
+      desktopOutputBackend !== "wasapiExclusive" ||
+      !currentTrack ||
+      !hasPlayableSource
+    ) {
+      return false;
+    }
+    wasapiFallbackInFlightRef.current = true;
+    try {
+      const startSeconds = clampSeekTime(
+        Number.isFinite(positionSeconds) && positionSeconds > 0
+          ? positionSeconds
+          : pendingResumePositionRef.current ?? currentTime,
+      );
+      suppressDesktopEarlyEndWarning(5000);
+      const status = await desktopPlaySource({
+        source: playbackSourceForTrack(currentTrack),
+        volume: outputVolume,
+        startSeconds,
+        outputBackend: "cpalShared",
+        deviceId: desktopOutputDeviceId,
+        bufferFrames: desktopBufferFrames,
+        dspSettings: currentPlaybackDspSettings(),
+      });
+      desktopLoadedTrackIdRef.current = currentTrack.id;
+      desktopEndedTrackIdRef.current = null;
+      lastPlaybackStreamErrorRef.current = null;
+      pendingResumePositionRef.current = null;
+      setDuration(status.duration_seconds ?? currentTrack.duration_seconds ?? 0);
+      setCurrentTime(status.position_seconds);
+      onPlaybackTime(status.position_seconds);
+      setIsPlaying(true);
+      setStatus(`${reason} Continuing with shared Rust output.`);
+      return true;
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "WASAPI stopped and shared output recovery failed.");
+      return false;
+    } finally {
+      wasapiFallbackInFlightRef.current = false;
+    }
   }
 
   async function togglePlayback() {
@@ -785,6 +840,29 @@ export function PlayerBar({
         if (canceled) {
           return;
         }
+        const latestStreamError = status.stream_errors.length
+          ? status.stream_errors[status.stream_errors.length - 1]
+          : null;
+        const loadedSourceId = currentRadioStation ? -currentRadioStation.id : currentTrack?.id ?? null;
+        if (
+          loadedSourceId !== null &&
+          desktopLoadedTrackIdRef.current === loadedSourceId &&
+          (!status.available || Boolean(latestStreamError))
+        ) {
+          if (
+            currentTrack &&
+            await recoverWasapiPlaybackWithSharedOutput(
+              status.position_seconds,
+              latestStreamError ?? "WASAPI exclusive output stopped.",
+            )
+          ) {
+            return;
+          }
+          desktopLoadedTrackIdRef.current = null;
+          desktopEndedTrackIdRef.current = null;
+          pendingResumePositionRef.current = status.position_seconds;
+          setIsPlaying(false);
+        }
         const waitingForPlaybackResume =
           pendingResumePositionRef.current !== null &&
           Boolean(currentTrack) &&
@@ -797,20 +875,6 @@ export function PlayerBar({
         }
         if (status.duration_seconds !== null) {
           setDuration(status.duration_seconds);
-        }
-        const latestStreamError = status.stream_errors.length
-          ? status.stream_errors[status.stream_errors.length - 1]
-          : null;
-        const loadedSourceId = currentRadioStation ? -currentRadioStation.id : currentTrack?.id ?? null;
-        if (
-          loadedSourceId !== null &&
-          desktopLoadedTrackIdRef.current === loadedSourceId &&
-          (!status.available || Boolean(latestStreamError))
-        ) {
-          desktopLoadedTrackIdRef.current = null;
-          desktopEndedTrackIdRef.current = null;
-          pendingResumePositionRef.current = status.position_seconds;
-          setIsPlaying(false);
         }
         if (latestStreamError && latestStreamError !== lastPlaybackStreamErrorRef.current) {
           lastPlaybackStreamErrorRef.current = latestStreamError;
@@ -863,7 +927,7 @@ export function PlayerBar({
       canceled = true;
       window.clearInterval(timer);
     };
-  }, [hasPlayableSource, currentTrack?.id, playbackMode, currentIndex, queue, naturalFadeMs, albumFadeMs, preloadedNextTrack?.id, canPreloadNextTrack, outputVolume]);
+  }, [hasPlayableSource, currentTrack?.id, playbackMode, currentIndex, queue, naturalFadeMs, albumFadeMs, preloadedNextTrack?.id, canPreloadNextTrack, outputVolume, outputSettingsKey]);
 
   useEffect(() => {
     if (!hasPlayableSource || !preloadedNextTrack || !canPreloadNextTrack || playbackMode === "stopAfterCurrent") {

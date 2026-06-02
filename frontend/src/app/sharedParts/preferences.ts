@@ -7,6 +7,7 @@ sidebarWidthMaxPx,
 sidebarWidthMinPx,
 sidebarWidthStepPx,
 themeColorKeys,
+themeColorSwatchKeys,
 } from "../../config/theme";
 import {
 limitRecentItems,
@@ -65,7 +66,7 @@ function normalizeThemeColorOverrides(value: unknown): UiPreferences["themeColor
     return {};
   }
   const source = value as Record<string, unknown>;
-  const validValues = new Set<string>(["theme", ...themeColorKeys]);
+  const validValues = new Set<string>(["theme", ...themeColorSwatchKeys]);
   const normalized: UiPreferences["themeColorOverrides"] = {};
   for (const key of themeColorKeys) {
     const override = source[key];

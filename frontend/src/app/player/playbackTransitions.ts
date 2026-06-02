@@ -129,6 +129,34 @@ export function createPlaybackTransitions(ctx: any) {
         fadePlaybackVolume(outputVolume, fadeDurationMs, undefined, 0);
       }
     } catch (error) {
+      if (desktopOutputBackend === "wasapiExclusive") {
+        try {
+          const status = await desktopPlaySource({
+            source: playbackSourceForTrack(track),
+            volume: startVolume,
+            startSeconds,
+            outputBackend: "cpalShared",
+            deviceId: desktopOutputDeviceId,
+            bufferFrames: desktopBufferFrames,
+            dspSettings: currentPlaybackDspSettings(),
+          });
+          desktopLoadedTrackIdRef.current = track.id;
+          desktopEndedTrackIdRef.current = null;
+          lastPlaybackStreamErrorRef.current = null;
+          setDuration(status.duration_seconds ?? track.duration_seconds ?? 0);
+          setCurrentTime(status.position_seconds);
+          onPlaybackTime(status.position_seconds);
+          pendingResumePositionRef.current = null;
+          setIsPlaying(true);
+          setStatus("WASAPI exclusive stopped; continuing with shared Rust output.");
+          if (fadeDurationMs > 0) {
+            fadePlaybackVolume(outputVolume, fadeDurationMs, undefined, 0);
+          }
+          return;
+        } catch {
+          // Report the original WASAPI failure below; the fallback was best effort.
+        }
+      }
       setIsPlaying(false);
       desktopLoadedTrackIdRef.current = null;
       setStatus(error instanceof Error ? error.message : "Rust playback could not start for this source.");
@@ -142,7 +170,8 @@ export function createPlaybackTransitions(ctx: any) {
     commitSelection = true,
     fadeDurationMs = fadeMs,
   ): Promise<boolean> {
-    if (!currentTrack || crossfadeTrackRef.current === currentTrack.id) {
+    const safeFadeDurationMs = Math.max(0, fadeDurationMs);
+    if (!currentTrack || safeFadeDurationMs <= 0 || crossfadeTrackRef.current === currentTrack.id) {
       return false;
     }
     crossfadeTrackRef.current = currentTrack.id;
@@ -151,7 +180,7 @@ export function createPlaybackTransitions(ctx: any) {
       const status = await desktopCrossfadeToSource({
         source: playbackSourceForTrack(nextTrack),
         volume: outputVolume,
-        durationMs: Math.max(0, fadeDurationMs),
+        durationMs: safeFadeDurationMs,
         outputBackend: desktopOutputBackend,
         deviceId: desktopOutputDeviceId,
         bufferFrames: desktopBufferFrames,
@@ -215,7 +244,10 @@ export function createPlaybackTransitions(ctx: any) {
     }
     const restartingEndedTrack = desktopEndedTrackIdRef.current === currentTrack.id;
     if (desktopLoadedTrackIdRef.current !== currentTrack.id || restartingEndedTrack) {
-      await startPlaybackTrack(currentTrack, restartingEndedTrack ? 0 : currentTime);
+      await startPlaybackTrack(
+        currentTrack,
+        restartingEndedTrack ? 0 : pendingResumePositionRef.current ?? currentTime,
+      );
       return;
     }
     try {

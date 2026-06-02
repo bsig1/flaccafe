@@ -1,5 +1,5 @@
 export function createLibraryTrackRenderers(model: any) {
-  const { Play, Volume2, RatingStars, ResizableHeader, display, fileName, formatBitrate, formatDuration, formatFingerprint, formatPercent, formatShortDate, trackGenre, tracks, trackIndexCache, libraryView, sort, onRating, onPlayTrack, detailTrack, currentTrackId, hideFilePaths, displayRatingsAsNumbers, columnWidths, selectedTrackIds, isSelectingAllTracks, draggedColumn, dragOverColumn, visibleColumns, visibleColumnDefs, fixedTrackColumns, orderedTrackColumns, rowPadding, trackRowHeight, virtualTrackStartIndex, virtualTrackEndIndex, selectableTrackCount, allViewSelected, handleSort, handleResize, selectTrackLikeWindows, handleHeaderSelectionChange, suppressCheckboxContextMenu, clearSelection, openTrackContextMenu, openColumnContextMenu, handleColumnDragStart, handleColumnDragOver, handleColumnDrop, handleColumnDragEnd, handleColumnPointerDragStart } = model;
+  const { Play, Volume2, RatingStars, ResizableHeader, display, fileName, formatBitrate, formatDuration, formatFingerprint, formatPercent, formatShortDate, trackGenre, tracks, trackIndexCache, libraryView, sort, onRating, onPlayTrack, detailTrack, currentTrackId, hideFilePaths, displayRatingsAsNumbers, columnWidths, selectedTrackIds, isSelectingAllTracks, draggedColumn, dragOverColumn, visibleColumns, visibleColumnDefs, fixedTrackColumns, rowPadding, trackRowHeight, virtualTrackStartIndex, virtualTrackEndIndex, selectableTrackCount, allViewSelected, handleSort, handleResize, selectTrackLikeWindows, handleHeaderSelectionChange, suppressCheckboxContextMenu, clearSelection, openTrackContextMenu, openColumnContextMenu, handleColumnDragStart, handleColumnDragOver, handleColumnDrop, handleColumnDragEnd, handleColumnPointerDragStart } = model;
   function columnTextClass(column: any) {
     return `${column.align === "right" ? "text-right tabular-nums" : "truncate"} ${
       column.key === "artist" ? "text-neutral-200" : column.key === "album" ? "text-neutral-300" : "text-muted"
@@ -153,8 +153,6 @@ export function createLibraryTrackRenderers(model: any) {
   }
 
   function renderTableHeader(sortable: boolean) {
-    const allowPlayReorder = sortable && libraryView === "tracks";
-    const headerColumns = allowPlayReorder ? orderedTrackColumns : fixedTrackColumns;
     return (
       <tr onContextMenu={openColumnContextMenu}>
         <th className="px-3 py-3">
@@ -169,7 +167,7 @@ export function createLibraryTrackRenderers(model: any) {
             onContextMenu={suppressCheckboxContextMenu}
           />
         </th>
-        {headerColumns.map((columnKey: any) => {
+        {fixedTrackColumns.map((columnKey: any) => {
           if (columnKey === "play") {
             return (
               <ResizableHeader
@@ -180,14 +178,6 @@ export function createLibraryTrackRenderers(model: any) {
                 sort={sort}
                 onSort={handleSort}
                 onResize={handleResize}
-                draggableColumn={allowPlayReorder ? "play" : undefined}
-                isDragging={draggedColumn === "play"}
-                isDragOver={dragOverColumn === "play"}
-                onColumnDragStart={handleColumnDragStart}
-                onColumnDragOver={handleColumnDragOver}
-                onColumnDrop={handleColumnDrop}
-                onColumnDragEnd={handleColumnDragEnd}
-                onColumnPointerDragStart={handleColumnPointerDragStart}
               />
             );
           }
@@ -235,8 +225,7 @@ export function createLibraryTrackRenderers(model: any) {
     }
   }
 
-  function renderTrackRow(track: any, interactionList: any[], removable = false, reorderPlay = false) {
-    const rowColumns = reorderPlay ? orderedTrackColumns : fixedTrackColumns;
+  function renderTrackRow(track: any, interactionList: any[], removable = false) {
     return (
       <tr
         key={track.id}
@@ -273,19 +262,18 @@ export function createLibraryTrackRenderers(model: any) {
             tabIndex={-1}
           />
         </td>
-        {rowColumns.map((columnKey: any) => renderTrackDataCell(track, interactionList, columnKey))}
+        {fixedTrackColumns.map((columnKey: any) => renderTrackDataCell(track, interactionList, columnKey))}
       </tr>
     );
   }
 
-  function renderTrackPlaceholderRow(index: number, reorderPlay = false) {
-    const rowColumns = reorderPlay ? orderedTrackColumns : fixedTrackColumns;
+  function renderTrackPlaceholderRow(index: number) {
     return (
       <tr key={`track-placeholder-${index}`} aria-hidden="true" style={{ height: trackRowHeight }} className="border-b border-line/40">
         <td className={rowPadding}>
           <div className="h-4 w-4 rounded border border-line/70 bg-white/[0.025]" />
         </td>
-        {rowColumns.map((columnKey: any, columnIndex: number) => renderPlaceholderDataCell(columnKey, columnIndex))}
+        {fixedTrackColumns.map((columnKey: any, columnIndex: number) => renderPlaceholderDataCell(columnKey, columnIndex))}
       </tr>
     );
   }
@@ -294,14 +282,14 @@ export function createLibraryTrackRenderers(model: any) {
     const rows = [];
     for (let index = virtualTrackStartIndex; index < virtualTrackEndIndex; index += 1) {
       const track = trackIndexCache.get(index);
-      rows.push(track ? renderTrackRow(track, tracks, false, true) : renderTrackPlaceholderRow(index, true));
+      rows.push(track ? renderTrackRow(track, tracks, false) : renderTrackPlaceholderRow(index));
     }
     return rows;
   }
 
-  function renderTrackRows(list: any[], options: { removable?: boolean; interactionList?: any[]; reorderPlay?: boolean } = {}) {
+  function renderTrackRows(list: any[], options: { removable?: boolean; interactionList?: any[] } = {}) {
     const interactionList = options.interactionList ?? list;
-    return list.map((track) => renderTrackRow(track, interactionList, Boolean(options.removable), Boolean(options.reorderPlay)));
+    return list.map((track) => renderTrackRow(track, interactionList, Boolean(options.removable)));
   }
 
   return {

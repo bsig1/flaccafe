@@ -1,6 +1,6 @@
 [package]
 name = "flac-cafe"
-version = "0.6.0"
+version = "0.6.25"
 description = "A smart local music player and AutoDJ for downloaded collections"
 authors = ["FLAC Cafe contributors"]
 edition = "2021"

@@ -41,7 +41,27 @@ export const themeColorKeys = [
   "scrollThumbHover",
 ] as const;
 export type ThemeColorKey = (typeof themeColorKeys)[number];
-export type ThemeColorOverrideValue = "theme" | ThemeColorKey;
+export const themeColorSwatchKeys = [
+  "swatchRed",
+  "swatchOrange",
+  "swatchAmber",
+  "swatchYellow",
+  "swatchGreen",
+  "swatchMoss",
+  "swatchTeal",
+  "swatchCyan",
+  "swatchBlue",
+  "swatchPurple",
+  "swatchPink",
+  "swatchRose",
+  "swatchBrown",
+  "swatchGray",
+  "swatchSlate",
+  "swatchBlack",
+  "swatchWhite",
+] as const;
+export type ThemeColorSwatchKey = (typeof themeColorSwatchKeys)[number];
+export type ThemeColorOverrideValue = "theme" | ThemeColorKey | ThemeColorSwatchKey;
 export type ThemeColorOverrides = Partial<Record<ThemeColorKey, ThemeColorOverrideValue>>;
 
 export const themeColorLabels: Record<ThemeColorKey, string> = {
@@ -90,6 +110,46 @@ export const themeColorCssVariables: Record<ThemeColorKey, string> = {
   scrollTrack: "--color-scroll-track",
   scrollThumb: "--color-scroll-thumb",
   scrollThumbHover: "--color-scroll-thumb-hover",
+};
+
+export const themeColorSwatchLabels: Record<ThemeColorSwatchKey, string> = {
+  swatchRed: "Red",
+  swatchOrange: "Orange",
+  swatchAmber: "Amber",
+  swatchYellow: "Yellow",
+  swatchGreen: "Green",
+  swatchMoss: "Moss",
+  swatchTeal: "Teal",
+  swatchCyan: "Cyan",
+  swatchBlue: "Blue",
+  swatchPurple: "Purple",
+  swatchPink: "Pink",
+  swatchRose: "Rose",
+  swatchBrown: "Brown",
+  swatchGray: "Gray",
+  swatchSlate: "Slate",
+  swatchBlack: "Black",
+  swatchWhite: "White",
+};
+
+export const themeColorSwatchValues: Record<ThemeColorSwatchKey, string> = {
+  swatchRed: "239 68 68",
+  swatchOrange: "249 115 22",
+  swatchAmber: "245 158 11",
+  swatchYellow: "234 179 8",
+  swatchGreen: "34 197 94",
+  swatchMoss: "118 171 150",
+  swatchTeal: "20 184 166",
+  swatchCyan: "6 182 212",
+  swatchBlue: "59 130 246",
+  swatchPurple: "168 85 247",
+  swatchPink: "236 72 153",
+  swatchRose: "244 63 94",
+  swatchBrown: "146 104 73",
+  swatchGray: "156 163 175",
+  swatchSlate: "100 116 139",
+  swatchBlack: "15 23 42",
+  swatchWhite: "245 245 244",
 };
 
 export interface ThemeMiniPlayerPreset {
@@ -158,8 +218,11 @@ export function resolveThemeColor(
   key: ThemeColorKey,
 ): string {
   const override = overrides?.[key];
+  if (override && override !== "theme" && override in themeColorSwatchValues) {
+    return themeColorSwatchValues[override as ThemeColorSwatchKey];
+  }
   const sourceKey = override && override !== "theme" ? override : key;
-  return palette[sourceKey] ?? palette[key];
+  return palette[sourceKey as ThemeColorKey] ?? palette[key];
 }
 
 // Add new themes here after creating frontend/src/config/themes/<theme>.json.

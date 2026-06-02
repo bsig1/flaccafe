@@ -25,6 +25,7 @@ FontChoice,
 ThemeAccent,
 ThemeColorKey,
 ThemeColorOverrideValue,
+ThemeColorSwatchKey,
 ThemePalette,
 } from "../../config/theme";
 import {
@@ -39,6 +40,9 @@ themeAccentValues,
 themeColorCssVariables,
 themeColorKeys,
 themeColorLabels,
+themeColorSwatchKeys,
+themeColorSwatchLabels,
+themeColorSwatchValues,
 themeOrder,
 } from "../../config/theme";
 import {
@@ -134,7 +138,8 @@ const libraryPreviewRows = [
 ];
 
 function themeColorSelectValue(preferences: UiPreferences, key: ThemeColorKey): ThemeColorOverrideValue {
-  return preferences.themeColorOverrides[key] ?? "theme";
+  const value = preferences.themeColorOverrides[key];
+  return value && themeColorSwatchKeys.includes(value as ThemeColorSwatchKey) ? value : "theme";
 }
 
 function setThemeColorOverride(
@@ -163,8 +168,8 @@ function rgbTripletToHex(value: string): string {
   return `#${channels.map((channel) => Math.max(0, Math.min(255, channel)).toString(16).padStart(2, "0")).join("").toUpperCase()}`;
 }
 
-function themeColorOptionLabel(themeDefaults: ThemePalette, key: ThemeColorKey): string {
-  return `${rgbTripletToHex(themeDefaults[key])} - ${themeColorLabels[key]}`;
+function themeColorSwatchOptionLabel(key: ThemeColorSwatchKey): string {
+  return `${themeColorSwatchLabels[key]} (${rgbTripletToHex(themeColorSwatchValues[key])})`;
 }
 
 function libraryPreviewStyle(
@@ -970,9 +975,9 @@ export function SettingsPage({
                             }
                           >
                             <option value="theme">Theme Default ({rgbTripletToHex(themeDefaults[colorKey])})</option>
-                            {themeColorKeys.map((optionKey) => (
+                            {themeColorSwatchKeys.map((optionKey) => (
                               <option key={optionKey} value={optionKey}>
-                                {themeColorOptionLabel(themeDefaults, optionKey)}
+                                {themeColorSwatchOptionLabel(optionKey)}
                               </option>
                             ))}
                           </select>
