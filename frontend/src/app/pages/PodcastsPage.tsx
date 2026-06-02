@@ -1,16 +1,4 @@
-import {
-Download,
-FolderOpen,
-ListPlus,
-Pencil,
-Play,
-Plus,
-Podcast,
-RefreshCw,
-Save,
-Trash2,
-X,
-} from "lucide-react";
+import { Download, FolderOpen, ListPlus, Pencil, Play, Plus, Podcast, RefreshCw, Save, Trash2, X } from "lucide-react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { useEffect,useMemo,useRef,useState } from "react";
 
@@ -47,6 +35,7 @@ type PodcastEpisodeView,
 type PodcastPanelMode,
 type PodcastSubscriptionContextMenu,
 type PodcastsPageProps,
+podcastEpisodeSelectionState,
 } from "./podcasts/podcastPageUtils";
 
 export function PodcastsPage({
@@ -80,21 +69,18 @@ export function PodcastsPage({
     ? episodes.filter((episode) => episode.local_path || episode.track_id || episode.download_status === "downloaded")
     : episodes;
   const episodeListTitle = episodeView === "library" ? "Podcast Library" : showingTotalFeed ? "All Episodes" : "Episodes";
-  const selectedEpisodes = visibleEpisodes.filter((episode) => selectedEpisodeIds.has(episode.id));
-  const selectedDownloadableEpisodes = selectedEpisodes.filter((episode) => !episode.local_path && !episode.track_id && Boolean(episode.audio_url));
-  const selectedDownloadedEpisodes = selectedEpisodes.filter((episode) => Boolean(episode.local_path));
-  const selectedPlayableEpisodes = selectedEpisodes.filter((episode) => Boolean(episode.local_path || episode.track_id));
-  const allVisibleEpisodesSelected = visibleEpisodes.length > 0 && visibleEpisodes.every((episode) => selectedEpisodeIds.has(episode.id));
-  const contextEpisodes =
-    episodeContextMenu && selectedEpisodeIds.has(episodeContextMenu.episode.id)
-      ? selectedEpisodes
-      : episodeContextMenu
-        ? [episodeContextMenu.episode]
-        : [];
-  const contextDownloadableEpisodes = contextEpisodes.filter((episode) => !episode.local_path && !episode.track_id && Boolean(episode.audio_url));
-  const contextDownloadedEpisodes = contextEpisodes.filter((episode) => Boolean(episode.local_path));
-  const contextPlayableEpisodes = contextEpisodes.filter((episode) => Boolean(episode.local_path || episode.track_id));
-  const contextBulk = contextEpisodes.length > 1;
+  const {
+    selectedEpisodes,
+    selectedDownloadableEpisodes,
+    selectedDownloadedEpisodes,
+    selectedPlayableEpisodes,
+    allVisibleEpisodesSelected,
+    contextEpisodes,
+    contextDownloadableEpisodes,
+    contextDownloadedEpisodes,
+    contextPlayableEpisodes,
+    contextBulk,
+  } = podcastEpisodeSelectionState(visibleEpisodes, selectedEpisodeIds, episodeContextMenu);
 
   function resetSubscriptionForm() {
     setTitle("");

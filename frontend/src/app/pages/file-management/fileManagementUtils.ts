@@ -1,3 +1,11 @@
+import type {
+  AlbumSummary,
+  ArtistSummary,
+  Track,
+} from "../../../types/api";
+
+export const FILE_WRITE_PREVIEW_LIMIT = 100_000;
+
 export const DEFAULT_FILENAME_TAG_PATTERNS = [
   "<Album Artist> - <Album> [<Year>]/<Track#> - <Artist> - <Title>",
   "<Album Artist>/<Album>/<Track#> - <Title>",
@@ -25,6 +33,18 @@ export type FileOrganizationOptions = {
   cleanupEmptyFolders?: boolean;
   trackIds?: number[] | null;
 };
+
+export type AutoTagProgressState = {
+  phase: "preview" | "apply";
+  label: string;
+  completed: number;
+  total: number;
+};
+
+export type LibraryTargetSearchResult =
+  | { kind: "track"; key: string; label: string; description: string; track: Track }
+  | { kind: "album"; key: string; label: string; description: string; album: AlbumSummary }
+  | { kind: "artist"; key: string; label: string; description: string; artist: ArtistSummary };
 
 export type CsvImportOptions = {
   trackIds?: number[] | null;

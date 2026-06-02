@@ -19,13 +19,10 @@ saveDeviceSyncProfile,
 writeTrackMetadataToFiles,
 } from "../../lib/api";
 import type {
-AlbumSummary,
-ArtistSummary,
 ClapGenreTagResponse,
 DeviceSyncDetectedDevice,
 DeviceSyncProfile,
 DeviceSyncProfilePayload,
-Track,
 TrackFileMetadataWriteResponse
 } from "../../types/api";
 import type {
@@ -38,13 +35,16 @@ filterFileManagementSections
 import type { FileManagementPageProps } from "./file-management/FileManagementPageTypes";
 import { FileManagementPageView } from "./file-management/FileManagementPageView";
 import type {
+AutoTagProgressState,
 CsvImportOptions,
 CsvImportProfile,
+LibraryTargetSearchResult,
 FileOrganizationOptions,
 } from "./file-management/fileManagementUtils";
 import {
 CSV_IMPORT_FIELDS,
 DEFAULT_FILENAME_TAG_PATTERNS,
+FILE_WRITE_PREVIEW_LIMIT,
 currentScope,
 formatJson,
 parseDuplicateGroups,
@@ -55,23 +55,6 @@ readFilenameTagPresets,
 writeCsvProfiles,
 writeFilenameTagPresets,
 } from "./file-management/fileManagementUtils";
-
-const FILE_WRITE_PREVIEW_LIMIT = 100_000;
-
-type AutoTagProgressState = {
-  phase: "preview" | "apply";
-  label: string;
-  completed: number;
-  total: number;
-};
-
-type LibraryTargetSearchResult =
-  | { kind: "track"; key: string; label: string; description: string; track: Track }
-  | { kind: "album"; key: string; label: string; description: string; album: AlbumSummary }
-  | { kind: "artist"; key: string; label: string; description: string; artist: ArtistSummary };
-
-
-
 
 export function FileManagementPage({
   initialFocusToolId,

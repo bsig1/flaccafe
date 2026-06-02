@@ -29,8 +29,21 @@ export const TRACK_VIRTUALIZATION_THRESHOLD = 260;
 export const TRACK_VIRTUALIZATION_OVERSCAN = 18;
 export const LIBRARY_ACTIONS_MENU_WIDTH = 288;
 export const LIBRARY_ACTIONS_MENU_HEIGHT = 270;
+export const SIMILAR_RESULT_CACHE_LIMIT = 24;
 
 export type ContextSubmenuKey = "tagging" | "rating" | "avoid" | "playlist";
+
+export function rememberSimilarResult<K, V>(cache: Map<K, V[]>, key: K, rows: V[]) {
+  cache.delete(key);
+  cache.set(key, rows);
+  while (cache.size > SIMILAR_RESULT_CACHE_LIMIT) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey === undefined) {
+      break;
+    }
+    cache.delete(oldestKey);
+  }
+}
 
 function albumYearsLabel(album: AlbumSummary): string {
   const years = Array.from(new Set(album.years ?? (album.year ? [album.year] : []))).sort((a, b) => a - b);

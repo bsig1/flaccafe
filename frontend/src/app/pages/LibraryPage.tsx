@@ -133,27 +133,15 @@ TRACK_VIRTUALIZATION_THRESHOLD,
 albumMetaLabel,
 artistMetaLabel,
 missingMetadataFields,
-missingMetadataFilters
+missingMetadataFilters,
+rememberSimilarResult
 } from "./library/libraryViewUtils";
 import { useLibraryColumnController } from "./library/useLibraryColumnController";
 import { useLibraryScrollController } from "./library/useLibraryScrollController";
 import { useLibrarySelectionController } from "./library/useLibrarySelectionController";
 
-const SIMILAR_RESULT_CACHE_LIMIT = 24;
 const similarAlbumResultCache = new Map<number, SimilarAlbum[]>();
 const similarArtistResultCache = new Map<string, SimilarArtist[]>();
-
-function rememberSimilarResult<K, V>(cache: Map<K, V[]>, key: K, rows: V[]) {
-  cache.delete(key);
-  cache.set(key, rows);
-  while (cache.size > SIMILAR_RESULT_CACHE_LIMIT) {
-    const oldestKey = cache.keys().next().value;
-    if (oldestKey === undefined) {
-      break;
-    }
-    cache.delete(oldestKey);
-  }
-}
 
 export function LibraryPage({
   tracks,

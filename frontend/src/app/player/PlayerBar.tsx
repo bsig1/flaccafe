@@ -2,7 +2,7 @@ import type { ChangeEvent,KeyboardEvent as ReactKeyboardEvent,WheelEvent as Reac
 import { useEffect,useRef,useState } from "react";
 
 import { albumArtworkUrl } from "../../lib/api";
-import type { DesktopPlaybackSource,PlaybackDiagnosticsResponse,desktopDspSettings } from "../../lib/desktopPlayback";
+import type { PlaybackDiagnosticsResponse } from "../../lib/desktopPlayback";
 import {
 desktopDiagnostics,
 desktopPause,
@@ -14,7 +14,6 @@ desktopStatus,
 desktopStop,
 } from "../../lib/desktopPlayback";
 import type { SmtcButtonPayload } from "../../lib/tauriMedia";
-import type { RadioStation,Track } from "../../types/api";
 import {
 MiniPlayerCommand,
 VISUALIZER_FRAME_EVENT,
@@ -22,15 +21,21 @@ VisualizerFrame,
 clampNumber,
 display,
 displayAlbumForTrack,
-normalizeEqualizerGains,
 readStoredMuted,
 readStoredVolume,
-replayGainMultiplier,
 shouldRecordTrackAsPlayed
 } from "../shared";
 import type { PlayerBarProps } from "./PlayerBarTypes";
 import { PlayerBarView } from "./PlayerBarView";
 import { playbackEndedEarly } from "./playbackEarlyEnd";
+import {
+crossfadeMsForTrackChange,
+desktopDspSettingsForTrack as buildDesktopDspSettingsForTrack,
+playbackSourceForRadio,
+playbackSourceForTrack,
+playbackSourceIdentity,
+replayGainForTrack as replayGainForTrackWithSettings,
+} from "./playbackSource";
 import { createPlaybackTransitions } from "./playbackTransitions";
 import { usePlayerBarAudioEffects } from "./usePlayerBarAudioEffects";
 import { usePlayerBarMediaEffects } from "./usePlayerBarMediaEffects";
@@ -150,98 +155,41 @@ export function PlayerBar({
   const naturalFadeMs = Math.max(0, crossfadeNaturalMs ?? fadeMs);
   const albumFadeMs = Math.max(0, crossfadeAlbumMs ?? 0);
   const radioFadeMs = Math.max(0, crossfadeRadioMs ?? fadeMs);
+  const replayGainSettings = {
+    mode: replayGainMode,
+    targetVolumePercent: replayGainTargetVolumePercent,
+    preampDb: replayGainPreampDb,
+    preventClipping: replayGainPreventClipping,
+  };
+  const dspSettings = {
+    ...replayGainSettings,
+    equalizerEnabled,
+    equalizerBandMode,
+    equalizerPreampDb,
+    equalizerGains,
+    limiterEnabled: dspLimiterEnabled,
+  };
+  const fadeDurations = {
+    manualMs: manualFadeMs,
+    naturalMs: naturalFadeMs,
+    albumMs: albumFadeMs,
+  };
 
-  function sameAlbumForCrossfade(left: Track | null, right: Track | null) {
-    if (!left || !right) {
-      return false;
-    }
-    const leftAlbum = (left.album ?? "").trim().toLowerCase();
-    const rightAlbum = (right.album ?? "").trim().toLowerCase();
-    if (!leftAlbum || leftAlbum !== rightAlbum) {
-      return false;
-    }
-    const leftArtist = (left.album_artist ?? "").trim().toLowerCase();
-    const rightArtist = (right.album_artist ?? "").trim().toLowerCase();
-    return !leftArtist || !rightArtist || leftArtist === rightArtist;
+  function fadeMsForTrackChange(context: "manual" | "natural", nextTrack: typeof currentTrack = null) {
+    return crossfadeMsForTrackChange(currentTrack, nextTrack, context, fadeDurations);
   }
 
-  function fadeMsForTrackChange(context: "manual" | "natural", nextTrack: Track | null = null) {
-    if (sameAlbumForCrossfade(currentTrack, nextTrack)) {
-      return albumFadeMs;
-    }
-    return context === "natural" ? naturalFadeMs : manualFadeMs;
-  }
-  function replayGainForTrack(track: Track | null) {
-    return replayGainMultiplier(
-      track,
-      replayGainMode,
-      replayGainPreampDb,
-      replayGainPreventClipping,
-      replayGainTargetVolumePercent,
-    );
-  }
-
-  const replayGain = replayGainForTrack(currentTrack);
+  const replayGain = replayGainForTrackWithSettings(currentTrack, replayGainSettings);
   const outputVolume = muted ? 0 : clampNumber(volume, 0, 1);
   const radioSubtitle = currentRadioStation ? display(currentRadioStation.genre, "Live web radio") : null;
   const visualizerTrackId = currentTrack?.id ?? (currentRadioStation ? -currentRadioStation.id : null);
   activeSourceKeyRef.current = activeSourceKey;
 
-  function playbackSourceForTrack(track: Track): DesktopPlaybackSource {
-    if (track.path.startsWith("cdda://")) {
-      const [driveId = "", trackText = "1"] = track.path.slice("cdda://".length).split("/track/");
-      const trackNumber = Number.parseInt(trackText, 10);
-      return {
-        kind: "cd_track",
-        drive_id: driveId,
-        track_number: Number.isFinite(trackNumber) && trackNumber > 0 ? trackNumber : track.track_number ?? 1,
-        title: track.title ?? null,
-      };
-    }
-    if (track.audio_url) {
-      return {
-        kind: "url",
-        url: track.audio_url,
-        cache_key: `track-${track.id}`,
-        title: track.title ?? null,
-        live: false,
-      };
-    }
-    return { kind: "file", path: track.path };
+  function desktopDspSettingsForTrack(track: typeof currentTrack) {
+    return buildDesktopDspSettingsForTrack(track, dspSettings);
   }
 
-  function playbackSourceForRadio(station: RadioStation): DesktopPlaybackSource {
-    return {
-      kind: "url",
-      url: station.stream_url,
-      cache_key: `radio-${station.id}`,
-      title: station.name ?? null,
-      live: true,
-    };
-  }
-
-  function playbackSourceIdentity(source: DesktopPlaybackSource): string {
-    if (source.kind === "file") {
-      return source.path;
-    }
-    if (source.kind === "url") {
-      return source.url;
-    }
-    return `cdda://${source.drive_id}/track/${String(source.track_number).padStart(2, "0")}`;
-  }
-
-  function desktopDspSettingsForTrack(track: Track | null): desktopDspSettings {
-    return {
-      normalizationGain: replayGainForTrack(track),
-      equalizerEnabled,
-      equalizerBandMode,
-      equalizerPreampDb,
-      equalizerGains: normalizeEqualizerGains(equalizerGains, equalizerBandMode),
-      limiterEnabled: dspLimiterEnabled,
-    };
-  }
-
-  function currentPlaybackDspSettings(): desktopDspSettings {
+  function currentPlaybackDspSettings() {
     return desktopDspSettingsForTrack(currentTrack);
   }
 

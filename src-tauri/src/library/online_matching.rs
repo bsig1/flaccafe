@@ -1,5 +1,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Map, Value as JsonValue};
+use std::collections::HashMap;
+use std::fs;
 use std::path::Path;
 use tauri::State;
 
@@ -30,6 +32,12 @@ pub fn auto_tag_musicbrainz(
     let write_to_file = json_bool(&body, "write_to_file")
         .or_else(|| json_bool(&body, "writeToFile"))
         .unwrap_or(false);
+    let include_artwork = json_bool(&body, "include_artwork")
+        .or_else(|| json_bool(&body, "includeArtwork"))
+        .unwrap_or(true);
+    let save_artwork = json_bool(&body, "save_artwork")
+        .or_else(|| json_bool(&body, "saveArtwork"))
+        .unwrap_or(false);
     let limit = json_usize(&body, "limit").unwrap_or(50).clamp(1, 500);
     let accepted_previews = body
         .get("accepted_previews")
@@ -44,6 +52,7 @@ pub fn auto_tag_musicbrainz(
             state,
             accepted_previews,
             missing_only,
+            save_artwork,
             write_to_file,
             limit,
         );
@@ -112,8 +121,8 @@ pub fn auto_tag_musicbrainz(
                     release_id: proposal.release_id,
                     release_title: proposal.release_title,
                     recording_id: proposal.recording_id,
-                    artwork_url: proposal.artwork_url,
-                    artwork_thumbnail_url: proposal.artwork_thumbnail_url,
+                    artwork_url: include_artwork.then_some(proposal.artwork_url).flatten(),
+                    artwork_thumbnail_url: include_artwork.then_some(proposal.artwork_thumbnail_url).flatten(),
                     applied: applied_here,
                     artwork_saved: false,
                     error: None,
@@ -160,6 +169,34 @@ pub fn auto_tag_musicbrainz(
             }
         }
     }
+    let mut artwork_cache = HashMap::new();
+    let mut artwork_saved = 0i64;
+    if apply && save_artwork {
+        for preview in &mut previews {
+            if preview.error.is_some() || preview.artwork_url.is_none() {
+                continue;
+            }
+            match apply_autotag_artwork(
+                preview.track_id,
+                &preview.path,
+                preview.artwork_url.as_deref(),
+                write_to_file,
+                &mut artwork_cache,
+            ) {
+                Ok(saved) => {
+                    preview.artwork_saved = saved;
+                    if saved {
+                        artwork_saved += 1;
+                    }
+                }
+                Err(error) => {
+                    errors.push(error.clone());
+                    preview.error = Some(error);
+                }
+            }
+        }
+    }
+
     Ok(DesktopAutoTagResponse {
         total: previews.len() as i64,
         matched,
@@ -169,7 +206,7 @@ pub fn auto_tag_musicbrainz(
             .iter()
             .filter(|preview| preview.artwork_url.is_some())
             .count() as i64,
-        artwork_saved: 0,
+        artwork_saved,
         errors: errors.into_iter().take(10).collect(),
         previews,
     })
@@ -179,6 +216,7 @@ fn apply_autotag_previews(
     state: State<'_, DesktopLibraryState>,
     accepted_previews: Vec<DesktopAutoTagPreview>,
     missing_only: bool,
+    save_artwork: bool,
     write_to_file: bool,
     limit: usize,
 ) -> Result<DesktopAutoTagResponse, String> {
@@ -187,6 +225,8 @@ fn apply_autotag_previews(
     let mut matched = 0i64;
     let mut changed = 0i64;
     let mut applied = 0i64;
+    let mut artwork_saved = 0i64;
+    let mut artwork_cache = HashMap::new();
 
     for mut preview in accepted_previews.into_iter().take(limit) {
         if preview.error.is_some() {
@@ -232,6 +272,26 @@ fn apply_autotag_previews(
             preview.changed_fields = changed_fields;
         }
         preview.artwork_saved = false;
+        if save_artwork && preview.error.is_none() && preview.artwork_url.is_some() {
+            match apply_autotag_artwork(
+                preview.track_id,
+                &preview.path,
+                preview.artwork_url.as_deref(),
+                write_to_file,
+                &mut artwork_cache,
+            ) {
+                Ok(saved) => {
+                    preview.artwork_saved = saved;
+                    if saved {
+                        artwork_saved += 1;
+                    }
+                }
+                Err(error) => {
+                    errors.push(error.clone());
+                    preview.error = Some(error);
+                }
+            }
+        }
         previews.push(preview);
     }
 
@@ -244,10 +304,107 @@ fn apply_autotag_previews(
             .iter()
             .filter(|preview| preview.artwork_url.is_some())
             .count() as i64,
-        artwork_saved: 0,
+        artwork_saved,
         errors: errors.into_iter().take(10).collect(),
         previews,
     })
+}
+
+fn apply_autotag_artwork(
+    track_id: i64,
+    track_path: &str,
+    artwork_url: Option<&str>,
+    write_to_file: bool,
+    artwork_cache: &mut HashMap<i64, Option<String>>,
+) -> Result<bool, String> {
+    let Some(artwork_url) = artwork_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(false);
+    };
+    let Some(album_id) = track_album_id(track_id)? else {
+        return Err("Track has no album row to attach artwork to".to_string());
+    };
+    let artwork_path = if let Some(cached_path) = artwork_cache.get(&album_id) {
+        cached_path.clone()
+    } else {
+        let update = album_artwork::update_album_artwork(
+            album_id,
+            json!({
+                "artwork_url": artwork_url,
+                "save_web_as_sidecar": true,
+                "sidecar_filename": "cover-musicbrainz",
+            }),
+        )?;
+        let saved_path = update.and_then(|response| response.artwork_path);
+        artwork_cache.insert(album_id, saved_path.clone());
+        saved_path
+    };
+    if write_to_file {
+        let Some(artwork_path) = artwork_path.as_deref() else {
+            return Ok(false);
+        };
+        embed_saved_artwork(track_id, track_path, artwork_path)?;
+    }
+    Ok(artwork_path.is_some())
+}
+
+fn track_album_id(track_id: i64) -> Result<Option<i64>, String> {
+    let connection = open_database()?;
+    connection
+        .query_row(
+            "SELECT album_id FROM tracks WHERE id = ?",
+            params![track_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| format!("Could not read track album for artwork save: {error}"))
+        .map(|value| value.flatten())
+}
+
+fn embed_saved_artwork(track_id: i64, track_path: &str, artwork_path: &str) -> Result<(), String> {
+    let artwork_path = Path::new(artwork_path);
+    let media_type = artwork_media_type(artwork_path)
+        .ok_or_else(|| "Saved artwork must be a jpg, png, or webp file".to_string())?;
+    let bytes = fs::read(artwork_path)
+        .map_err(|error| format!("Could not read saved artwork for file embedding: {error}"))?;
+    metadata::write_embedded_artwork(Path::new(track_path), bytes, media_type)?;
+    let modified_at = metadata::modified_time_iso(Path::new(track_path));
+    let path_key = super::normalized_path_key(track_path);
+    let versioned_path_key = format!("v2:{path_key}");
+    let connection = open_database()?;
+    connection
+        .execute(
+            "UPDATE tracks SET file_modified_at = coalesce(?, file_modified_at), updated_at = datetime('now') WHERE id = ?",
+            params![modified_at, track_id],
+        )
+        .map_err(|error| format!("Could not update artwork file timestamp: {error}"))?;
+    connection
+        .execute(
+            "DELETE FROM artwork_cache WHERE path_key = ? OR path_key = ?",
+            params![path_key, versioned_path_key],
+        )
+        .map_err(|error| format!("Could not clear artwork cache after file embedding: {error}"))?;
+    connection
+        .execute("DELETE FROM library_query_cache WHERE cache_key LIKE 'ui:%'", [])
+        .map_err(|error| format!("Could not clear library cache after artwork embedding: {error}"))?;
+    Ok(())
+}
+
+fn artwork_media_type(path: &Path) -> Option<&'static str> {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "png" => Some("image/png"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
 }
 
 #[tauri::command]

@@ -48,13 +48,18 @@ import {
 NowPlayingLyricsContent,
 } from "./now-playing/NowPlayingLyricsContent";
 import {
+NowPlayingLyricLine,
+} from "./now-playing/NowPlayingLyricLine";
+import {
 NowPlayingQueuePanel,
 } from "./now-playing/NowPlayingQueuePanel";
 import {
 LrcBuilderLine,
 LyricsEditMode,
 builderLinesFromLyricsText,
-lrcDraftFromBuilderLines
+lrcDraftFromBuilderLines,
+lyricsTextLooksSynced,
+preferredBuilderLineIndex,
 } from "./now-playing/lyricsBuilder";
 
 const QUEUE_VIRTUALIZATION_THRESHOLD = 160;
@@ -275,10 +280,6 @@ export function NowPlayingPage({
     }
   }
 
-  function lyricsTextLooksSynced(text: string): boolean {
-    return text.split("\n").some((line) => parseLyricTimestamp(line) !== null);
-  }
-
   function createBuilderLine(text = "", time: number | null = null, gap = false): LrcBuilderLine {
     const id = `lrc-line-${builderLineIdRef.current}`;
     builderLineIdRef.current += 1;
@@ -289,26 +290,13 @@ export function NowPlayingPage({
     return builderLinesFromLyricsText(text, createBuilderLine);
   }
 
-  function playbackBuilderLineIndex(lines: LrcBuilderLine[]): number {
-    return lines.reduce((activeIndex, line, index) => (line.time !== null && line.time <= playbackTime + 0.05 ? index : activeIndex), -1);
-  }
-
-  function preferredBuilderLineIndex(lines: LrcBuilderLine[]): number {
-    const playbackIndex = playbackBuilderLineIndex(lines);
-    if (playbackIndex >= 0) {
-      return playbackIndex;
-    }
-    const firstUnsynced = lines.findIndex((line) => line.time === null && !line.gap);
-    return firstUnsynced >= 0 ? firstUnsynced : 0;
-  }
-
   function resetLyricsEditorToSource(text = lyrics?.lyrics ?? "", syncedInput = Boolean(lyrics?.is_synced), mode: LyricsEditMode = "text") {
     const synced = syncedInput || lyricsTextLooksSynced(text);
     const nextLines = builderLinesFromText(text);
     setLyricsDraft(text);
     setLyricsSynced(synced);
     setLrcBuilderLines(nextLines);
-    setActiveBuilderLineIndex(mode === "sync" && synced ? preferredBuilderLineIndex(nextLines) : 0);
+    setActiveBuilderLineIndex(mode === "sync" && synced ? preferredBuilderLineIndex(nextLines, playbackTime) : 0);
     setLyricsEditMode(mode === "sync" && synced ? "sync" : "text");
     setLyricsTarget("database");
   }
@@ -324,7 +312,7 @@ export function NowPlayingPage({
 
   function openLrcBuilder() {
     const nextLines = builderLinesFromText(lyricsDraft);
-    commitBuilderLines(nextLines, preferredBuilderLineIndex(nextLines));
+    commitBuilderLines(nextLines, preferredBuilderLineIndex(nextLines, playbackTime));
     setLyricsEditMode("sync");
   }
 
@@ -406,31 +394,15 @@ export function NowPlayingPage({
   function renderLyricLine(line: string, index: number, spacious = false) {
     const active = activeLyricIndex === index;
     const setActiveNode = active ? (node: HTMLElement | null) => { activeLyricRef.current = node; } : undefined;
-    if (line.trim().length === 0) {
-      return <div key={`space-${index}`} className={spacious ? "h-4" : "h-3"} />;
-    }
-    if (isTimestampOnlyLyricLine(line)) {
-      return (
-        <div
-          key={`${index}-${line}`}
-          ref={setActiveNode}
-          className={`mx-auto my-2 h-px rounded-full transition ${
-            active ? "w-28 bg-moss/70" : "w-16 bg-line"
-          }`}
-          title="No lyrics in this section"
-        />
-      );
-    }
     return (
-      <p
+      <NowPlayingLyricLine
         key={`${index}-${line}`}
-        ref={setActiveNode}
-        className={`whitespace-pre-wrap transition ${
-          active ? `${spacious ? "scale-[1.02] " : ""}text-moss` : spacious ? "text-neutral-300" : "text-neutral-100"
-        }`}
-      >
-        {stripLyricTimestamp(line)}
-      </p>
+        line={line}
+        index={index}
+        active={active}
+        spacious={spacious}
+        setActiveNode={setActiveNode}
+      />
     );
   }
 

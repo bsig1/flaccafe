@@ -19,6 +19,19 @@ export interface PodcastEpisodeContextMenu {
   episode: PodcastEpisode;
 }
 
+export type PodcastEpisodeSelectionState = {
+  selectedEpisodes: PodcastEpisode[];
+  selectedDownloadableEpisodes: PodcastEpisode[];
+  selectedDownloadedEpisodes: PodcastEpisode[];
+  selectedPlayableEpisodes: PodcastEpisode[];
+  allVisibleEpisodesSelected: boolean;
+  contextEpisodes: PodcastEpisode[];
+  contextDownloadableEpisodes: PodcastEpisode[];
+  contextDownloadedEpisodes: PodcastEpisode[];
+  contextPlayableEpisodes: PodcastEpisode[];
+  contextBulk: boolean;
+};
+
 export type PodcastsPageProps = {
   setStatus: (message: string) => void;
   onPlayTrack: (track: Track, queueItems: Track[], options?: { resumePositionSeconds?: number | null }) => void;
@@ -42,4 +55,37 @@ export function formatDuration(seconds: number | null) {
   const minutes = Math.floor(total / 60);
   const remaining = total % 60;
   return `${minutes}:${remaining.toString().padStart(2, "0")}`;
+}
+
+export function podcastEpisodeSelectionState(
+  visibleEpisodes: PodcastEpisode[],
+  selectedEpisodeIds: Set<number>,
+  episodeContextMenu: PodcastEpisodeContextMenu | null,
+): PodcastEpisodeSelectionState {
+  const selectedEpisodes = visibleEpisodes.filter((episode) => selectedEpisodeIds.has(episode.id));
+  const selectedDownloadableEpisodes = selectedEpisodes.filter((episode) => !episode.local_path && !episode.track_id && Boolean(episode.audio_url));
+  const selectedDownloadedEpisodes = selectedEpisodes.filter((episode) => Boolean(episode.local_path));
+  const selectedPlayableEpisodes = selectedEpisodes.filter((episode) => Boolean(episode.local_path || episode.track_id));
+  const allVisibleEpisodesSelected = visibleEpisodes.length > 0 && visibleEpisodes.every((episode) => selectedEpisodeIds.has(episode.id));
+  const contextEpisodes =
+    episodeContextMenu && selectedEpisodeIds.has(episodeContextMenu.episode.id)
+      ? selectedEpisodes
+      : episodeContextMenu
+        ? [episodeContextMenu.episode]
+        : [];
+  const contextDownloadableEpisodes = contextEpisodes.filter((episode) => !episode.local_path && !episode.track_id && Boolean(episode.audio_url));
+  const contextDownloadedEpisodes = contextEpisodes.filter((episode) => Boolean(episode.local_path));
+  const contextPlayableEpisodes = contextEpisodes.filter((episode) => Boolean(episode.local_path || episode.track_id));
+  return {
+    selectedEpisodes,
+    selectedDownloadableEpisodes,
+    selectedDownloadedEpisodes,
+    selectedPlayableEpisodes,
+    allVisibleEpisodesSelected,
+    contextEpisodes,
+    contextDownloadableEpisodes,
+    contextDownloadedEpisodes,
+    contextPlayableEpisodes,
+    contextBulk: contextEpisodes.length > 1,
+  };
 }

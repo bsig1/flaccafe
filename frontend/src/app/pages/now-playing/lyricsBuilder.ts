@@ -36,6 +36,10 @@ export function lrcDraftFromBuilderLines(lines: LrcBuilderLine[]): string {
     .join("\n");
 }
 
+export function lyricsTextLooksSynced(text: string): boolean {
+  return text.split("\n").some((line) => parseLyricTimestamp(line) !== null);
+}
+
 export function builderLinesFromLyricsText(
   text: string,
   createBuilderLine: (text?: string, time?: number | null, gap?: boolean) => LrcBuilderLine,
@@ -46,4 +50,17 @@ export function builderLinesFromLyricsText(
     return createBuilderLine(lyricText, time, time !== null && lyricText.trim().length === 0);
   });
   return rows.length > 0 ? rows : [createBuilderLine()];
+}
+
+export function playbackBuilderLineIndex(lines: LrcBuilderLine[], playbackTime: number): number {
+  return lines.reduce((activeIndex, line, index) => (line.time !== null && line.time <= playbackTime + 0.05 ? index : activeIndex), -1);
+}
+
+export function preferredBuilderLineIndex(lines: LrcBuilderLine[], playbackTime: number): number {
+  const playbackIndex = playbackBuilderLineIndex(lines, playbackTime);
+  if (playbackIndex >= 0) {
+    return playbackIndex;
+  }
+  const firstUnsynced = lines.findIndex((line) => line.time === null && !line.gap);
+  return firstUnsynced >= 0 ? firstUnsynced : 0;
 }
