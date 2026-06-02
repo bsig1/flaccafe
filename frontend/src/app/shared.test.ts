@@ -242,9 +242,9 @@ describe("artist name splitting", () => {
     ]);
   });
 
-  it("normalizes movable play-button column layouts", () => {
+  it("normalizes fixed play-button column layouts", () => {
     expect(normalizeLibraryColumns(["title", "artist", "rating"])).toEqual(["play", "title", "artist", "rating"]);
-    expect(normalizeLibraryColumns(["title", "play", "artist", "play"])).toEqual(["title", "play", "artist"]);
+    expect(normalizeLibraryColumns(["title", "play", "artist", "play"])).toEqual(["play", "title", "artist"]);
     expect(normalizeLibraryColumns(["play"])).toEqual(["play", "title", "artist", "album", "genre", "rating", "duration_seconds"]);
   });
 });
